@@ -24,16 +24,16 @@ interface SidebarProps {
 }
 
 const ROUTE_MAP: Record<string, string> = {
-  dashboard: "/",
-  intake: "/intake",
-  tasks: "/tasks",
-  deals: "/deals",
-  templates: "/templates",
-  "stage-templates": "/templates",
-  "task-templates": "/templates/tasks",
-  "email-templates": "/templates/emails",
-  leads: "/leads",
-  settings: "/settings",
+  dashboard: "/admin/dashboard",
+  intake: "/admin/intake",
+  tasks: "/admin/tasks",
+  deals: "/admin/deals",
+  templates: "/admin/templates",
+  "stage-templates": "/admin/templates",
+  "task-templates": "/admin/templates/tasks",
+  "email-templates": "/admin/templates/emails",
+  leads: "/admin/leads",
+  settings: "/admin/settings",
 };
 
 const iconMap: Record<string, React.ReactNode> = {
@@ -59,7 +59,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {} }) => {
     return pathname === route || pathname.startsWith(route + "/");
   };
 
-  const isTemplateActive = pathname.startsWith("/templates");
+  const isTemplateActive = pathname.startsWith("/admin/templates");
 
   return (
     <div className="w-64 bg-slate-900 text-slate-300 flex flex-col h-screen fixed left-0 top-0 border-r border-slate-800 shadow-xl z-20">

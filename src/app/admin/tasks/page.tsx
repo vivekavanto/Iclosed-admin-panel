@@ -1,11 +1,11 @@
 "use client";
 import React from 'react';
-import DealList from '../../components/DealList';
+import Tasks from '@/components/Tasks';
 
 export default function Page() {
   return (
     <div className="p-8">
-      <DealList onSelectDeal={(id) => console.log('selected', id)} />
+      <Tasks />
     </div>
   );
 }

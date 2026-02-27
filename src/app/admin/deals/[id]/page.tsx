@@ -1,7 +1,7 @@
 "use client";
 import React from 'react';
-import DealDetail from '../../../components/DealDetail';
-import { MOCK_DEALS } from '../../../constants';
+import DealDetail from '@/components/DealDetail';
+import { MOCK_DEALS } from '@/constants';
 
 interface Props { params: { id: string } }
 
