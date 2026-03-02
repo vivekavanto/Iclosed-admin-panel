@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from 'react';
+import { supabase } from '@/lib/supabaseClient';
 import { 
   User, 
   Building2, 
@@ -60,6 +61,8 @@ interface IntakeState {
 
 const Intake: React.FC = () => {
   const [currentStep, setCurrentStep] = useState<Step>('SERVICE');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [data, setData] = useState<IntakeState>({
     service: null,
     subService: null,
@@ -71,6 +74,87 @@ const Intake: React.FC = () => {
     corporate: { name: '', incorporationNumber: '', jurisdiction: '', email: '' },
     corporateDocs: []
   });
+
+  const submitIntake = async () => {
+    setIsSubmitting(true);
+    setSubmitError(null);
+
+    try {
+      // Split "John Doe" → first_name: "John", last_name: "Doe"
+      const nameParts = data.contact.fullName.trim().split(' ');
+      const firstName = nameParts[0] || '';
+      const lastName = nameParts.slice(1).join(' ') || '';
+
+      // 1. Insert into leads
+      const { data: lead, error: leadError } = await supabase
+        .from('leads')
+        .insert({
+          first_name: firstName,
+          last_name: lastName,
+          email: data.contact.email,
+          phone: data.contact.phone,
+          service: data.service,
+          sub_service: data.subService,
+          purchase_price: data.price,
+          is_corporate: data.clientType === 'corporate',
+          corporate_name: data.corporate.name || null,
+          corporate_email: data.corporate.email || null,
+          inc_number: data.corporate.incorporationNumber || null,
+          address_street: data.address.street,
+          address_unit: data.address.unit || null,
+          address_city: data.address.city,
+          address_postal_code: data.address.postalCode,
+          address_province: data.address.province,
+          aps_signed: data.apsSigned === 'yes',
+        })
+        .select()
+        .single();
+
+      if (leadError) throw new Error(leadError.message);
+
+      // 2. Upload files + insert into lead_corporate_docs
+      for (const doc of data.corporateDocs) {
+        let fileUrl: string | null = null;
+        let fileName: string | null = null;
+
+        if (doc.file) {
+          const ext = doc.file.name.split('.').pop();
+          const filePath = `${lead.id}/${doc.id}.${ext}`;
+
+          const { error: uploadError } = await supabase.storage
+            .from('lead-documents')
+            .upload(filePath, doc.file, { upsert: true });
+
+          if (uploadError) throw new Error(`File upload failed: ${uploadError.message}`);
+
+          const { data: urlData } = supabase.storage
+            .from('lead-documents')
+            .getPublicUrl(filePath);
+
+          fileUrl = urlData.publicUrl;
+          fileName = doc.file.name;
+        }
+
+        const { error: docError } = await supabase
+          .from('lead_corporate_docs')
+          .insert({
+            lead_id: lead.id,
+            doc_type: doc.type,
+            custom_type: doc.customType || null,
+            file_url: fileUrl,
+            file_name: fileName,
+          });
+
+        if (docError) throw new Error(docError.message);
+      }
+
+      setCurrentStep('SUCCESS');
+    } catch (err: any) {
+      setSubmitError(err.message || 'Something went wrong. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   const nextStep = () => {
     const steps: Step[] = [
@@ -87,8 +171,43 @@ const Intake: React.FC = () => {
     ];
     const currentIndex = steps.indexOf(currentStep);
 
-    if (currentStep === "CONTACT" && data.clientType !== "corporate") {
+    // APS: Yes → show uploader, No → go straight to contact
+    if (currentStep === "APS") {
+      if (data.apsSigned === "yes") {
+        // Pre-add one upload field so the uploader is visible immediately
+        if (data.corporateDocs.length === 0) {
+          setData({
+            ...data,
+            corporateDocs: [{
+              id: Math.random().toString(36).substr(2, 9),
+              type: "Other",
+              customType: "APS Document",
+              file: null,
+            }],
+          });
+        }
+        setCurrentStep("TASKS");
+      } else {
+        setCurrentStep("CONTACT");
+      }
+      return;
+    }
+
+    // After uploading docs, proceed to contact entry
+    if (currentStep === "TASKS") {
+      setCurrentStep("CONTACT");
+      return;
+    }
+
+    // Contact always leads to schedule
+    if (currentStep === "CONTACT") {
       setCurrentStep("SCHEDULE");
+      return;
+    }
+
+    // Schedule: submit to Supabase, then go to success
+    if (currentStep === "SCHEDULE") {
+      submitIntake();
       return;
     }
 
@@ -112,7 +231,20 @@ const Intake: React.FC = () => {
     ];
     const currentIndex = steps.indexOf(currentStep);
 
-    if (currentStep === "SCHEDULE" && data.clientType !== "corporate") {
+    // Uploader always goes back to APS
+    if (currentStep === "TASKS") {
+      setCurrentStep("APS");
+      return;
+    }
+
+    // Contact goes back to uploader if APS was signed, otherwise back to APS
+    if (currentStep === "CONTACT") {
+      setCurrentStep(data.apsSigned === "yes" ? "TASKS" : "APS");
+      return;
+    }
+
+    // Schedule always goes back to contact
+    if (currentStep === "SCHEDULE") {
       setCurrentStep("CONTACT");
       return;
     }
@@ -200,32 +332,39 @@ const Intake: React.FC = () => {
         {subtitle && <p className="text-slate-500 mb-8">{subtitle}</p>}
         {children}
       </div>
-      <div className="px-10 py-6 bg-white border-t border-slate-50 flex justify-between items-center">
-        {showBack ? (
-          <button
-            onClick={prevStep}
-            className="flex items-center gap-2 px-6 py-2.5 rounded-lg border border-slate-200 text-slate-500 font-bold text-sm hover:bg-slate-50 transition-colors"
-          >
-            <ChevronLeft size={18} /> Previous
-          </button>
-        ) : (
-          <div></div>
+      <div className="px-10 py-6 bg-white border-t border-slate-50 flex flex-col gap-3">
+        {submitError && currentStep === "SCHEDULE" && (
+          <p className="text-xs text-red-500 font-medium text-right">{submitError}</p>
         )}
-        <button
-          onClick={nextStep}
-          disabled={
-            (currentStep === "SERVICE" && !data.service) ||
-            (currentStep === "SUB_SERVICE" && !data.subService) ||
-            (currentStep === "CLIENT_TYPE" && !data.clientType) ||
-            (currentStep === "APS" && !data.apsSigned) ||
-            (currentStep === "CLIENT_TYPE" &&
-              data.clientType === "corporate" &&
-              (!data.corporate.name || !data.corporate.email))
-          }
-          className="px-10 py-2.5 rounded-lg font-bold text-sm transition-all shadow-md active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed bg-brand-primary text-white hover:bg-brand-primaryHover"
-        >
-          {nextLabel}
-        </button>
+        <div className="flex justify-between items-center">
+          {showBack ? (
+            <button
+              onClick={prevStep}
+              disabled={isSubmitting}
+              className="flex items-center gap-2 px-6 py-2.5 rounded-lg border border-slate-200 text-slate-500 font-bold text-sm hover:bg-slate-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <ChevronLeft size={18} /> Previous
+            </button>
+          ) : (
+            <div></div>
+          )}
+          <button
+            onClick={nextStep}
+            disabled={
+              isSubmitting ||
+              (currentStep === "SERVICE" && !data.service) ||
+              (currentStep === "SUB_SERVICE" && !data.subService) ||
+              (currentStep === "CLIENT_TYPE" && !data.clientType) ||
+              (currentStep === "APS" && !data.apsSigned) ||
+              (currentStep === "CLIENT_TYPE" &&
+                data.clientType === "corporate" &&
+                (!data.corporate.name || !data.corporate.email))
+            }
+            className="px-10 py-2.5 rounded-lg font-bold text-sm transition-all shadow-md active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed bg-brand-primary text-white hover:bg-brand-primaryHover"
+          >
+            {isSubmitting && currentStep === "SCHEDULE" ? "Saving..." : nextLabel}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -638,8 +777,8 @@ const Intake: React.FC = () => {
       case "TASKS":
         return (
           <StepWrapper
-            title="Upload corporate files"
-            subtitle="Please upload your legal corporate documentation. (PDF format only)"
+            title={data.apsSigned === "yes" ? "Upload Agreement of Purchase and Sale" : "Upload corporate files"}
+            subtitle={data.apsSigned === "yes" ? "Please upload your signed APS document. (PDF format only)" : "Please upload your legal corporate documentation. (PDF format only)"}
           >
             <div className="space-y-8 pt-4">
               <div className="bg-slate-50 border border-slate-100 rounded-xl p-6">
