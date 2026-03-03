@@ -13,53 +13,16 @@ import {
   Check,
   ChevronDown,
   X,
+  Edit,
 } from "lucide-react";
 
 interface EmailTemplate {
   id: string;
   name: string;
+  body: string;
   is_active: boolean;
   created_at: string;
 }
-
-const MOCK_EMAIL_TEMPLATES: EmailTemplate[] = [
-  {
-    id: "1",
-    name: "Aligned with Seller -> Closing Date Coordination Completed Email",
-    is_active: true,
-    created_at: "Nov. 12, 2025, 2:11 p.m.",
-  },
-  {
-    id: "2",
-    name: "Financial Info Confirmed -> Mortgage Details Confirmed Email Completed",
-    is_active: true,
-    created_at: "Nov. 12, 2025, 2:13 p.m.",
-  },
-  {
-    id: "3",
-    name: "Financing Firm -> Mortgage Instructions Completed Email",
-    is_active: true,
-    created_at: "Nov. 12, 2025, 2:07 p.m.",
-  },
-  {
-    id: "4",
-    name: "Initial Intake Completed Email",
-    is_active: true,
-    created_at: "Nov. 12, 2025, 2:00 p.m.",
-  },
-  {
-    id: "5",
-    name: "Title Search Completed Email",
-    is_active: true,
-    created_at: "Nov. 12, 2025, 2:03 p.m.",
-  },
-  {
-    id: "6",
-    name: "Transaction Completed Email",
-    is_active: true,
-    created_at: "Nov. 12, 2025, 2:15 p.m.",
-  },
-];
 
 const EMAIL_VARIABLES = [
   { key: "{{ user.first_name }}", description: "Client's first name" },
@@ -84,6 +47,7 @@ const EmailTemplates: React.FC = () => {
   const [fetchError, setFetchError] = useState<string | null>(null);
 
   const [form, setForm] = useState({
+    id: "",
     name: "",
     body: "",
     is_active: true,
@@ -100,7 +64,17 @@ const EmailTemplates: React.FC = () => {
   };
 
   const resetForm = () => {
-    setForm({ name: "", body: "", is_active: true });
+    setForm({ id: "", name: "", body: "", is_active: true });
+  };
+
+  const handleEdit = (template: EmailTemplate) => {
+    setForm({
+      id: template.id,
+      name: template.name,
+      body: template.body,
+      is_active: template.is_active,
+    });
+    setIsModalOpen(true);
   };
 
   useEffect(() => {
@@ -128,32 +102,43 @@ const EmailTemplates: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
+
     try {
+      const method = form.id ? "PUT" : "POST";
+
       const res = await fetch("/api/admin/email-templates", {
-        method: "POST",
+        method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: form.name,
-          body: form.body,
-          is_active: form.is_active,
-        }),
+        body: JSON.stringify(form),
       });
 
-      if (!res.ok) throw new Error("Failed to create template");
+      if (!res.ok) throw new Error("Failed");
 
-      const created = await res.json();
-      setTemplates((prev) => [created, ...prev]);
+      const result = await res.json();
+
+      if (form.id) {
+        // UPDATE
+        setTemplates((prev) =>
+          prev.map((t) => (t.id === result.id ? result : t)),
+        );
+      } else {
+        // CREATE
+        setTemplates((prev) => [result, ...prev]);
+      }
+
       setIsModalOpen(false);
       resetForm();
     } catch (err) {
-      alert("Error creating template. Please try again.");
+      alert("Error saving template.");
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const filteredTemplates = templates.filter((t) =>
-    t.name.toLowerCase().includes(searchTerm.toLowerCase()),
+  const filteredTemplates = templates.filter(
+    (t) =>
+      t.is_active && // 👈 Only show active
+      t.name.toLowerCase().includes(searchTerm.toLowerCase()),
   );
 
   const inputClasses =
@@ -212,6 +197,7 @@ const EmailTemplates: React.FC = () => {
                 <th className="px-8 py-6">Name</th>
                 <th className="px-6 py-6 text-center w-32">Is Active</th>
                 <th className="px-8 py-6 w-48">Created At</th>
+                <th className="px-6 py-6 text-center w-32">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
@@ -241,6 +227,16 @@ const EmailTemplates: React.FC = () => {
                     <div className="flex items-center gap-2 text-slate-400 font-medium">
                       <Clock size={16} className="shrink-0" />
                       <span className="text-sm">{template.created_at}</span>
+                    </div>
+                  </td>
+                  <td className="px-6 py-6 text-center">
+                    <div className="flex justify-center">
+                      <button
+                        onClick={() => handleEdit(template)}
+                        className="text-brand-primary hover:text-brand-primaryHover transition-colors"
+                      >
+                        <Edit size={20} />
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -474,7 +470,11 @@ const EmailTemplates: React.FC = () => {
                   disabled={isSubmitting}
                   className="px-8 py-2.5 bg-brand-primary text-white rounded-xl font-bold text-sm shadow-lg shadow-brand-primary/20 hover:bg-brand-primaryHover transition-all active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  {isSubmitting ? "Creating..." : "Create Template"}
+                  {isSubmitting
+                    ? "Creating..."
+                    : form.id
+                      ? "Update Template"
+                      : "Create Template"}
                 </button>
               </div>
             </form>
