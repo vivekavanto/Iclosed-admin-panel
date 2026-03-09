@@ -209,11 +209,14 @@ export async function POST(req: Request) {
     // ── 8. Create Supabase Auth user + send invite email ──────────────────────
     let authUserId: string | null = null;
     let inviteSent = false;
+    let authError: string | null = null;
 
     try {
       // inviteUserByEmail sends a magic link — client sets their password via the email
       // We read the customer portal URL from the admin portal's env variable
       const customerPortalUrl = (process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ?? "https://iclosed-customer-application-rosy.vercel.app").replace(/\/+$/, "");
+
+      console.log(`[Inviting User] Email: ${lead.email}, Redirect: ${customerPortalUrl}/set-password`);
 
       const { data: inviteData, error: inviteError } = await supabaseAdmin.auth.admin.inviteUserByEmail(
         lead.email,
@@ -233,11 +236,11 @@ export async function POST(req: Request) {
           .eq("id", clientId);
       } else if (inviteError && inviteError.code === "user_already_exists") {
         // User already exists in the system.
-        console.log("User already exists, attempting to link and send reset/magic link instead.");
+        console.log(`[Invite] User ${lead.email} already exists, attempting to link and send reset link instead.`);
         
         // 1. Find the user ID
-        const { data: existingUsers } = await supabaseAdmin.auth.admin.listUsers();
-        const existingUser = existingUsers.users.find(u => u.email === lead.email.toLowerCase());
+        const { data: usersData } = await supabaseAdmin.auth.admin.listUsers();
+        const existingUser = usersData.users.find(u => u.email?.toLowerCase() === lead.email.toLowerCase());
         
         if (existingUser) {
           authUserId = existingUser.id;
@@ -247,9 +250,7 @@ export async function POST(req: Request) {
             .update({ auth_user_id: authUserId })
             .eq("id", clientId);
 
-          // 2. See if they need a password set. 
-          // If they already exist but we are dealing with a new lead, sending them a password reset 
-          // serves as a "Welcome back, set your password if you forgot it, or login" trigger.
+          // 2. Send password reset link which acts as a "set password" flow if they haven't set one
           const { error: resetError } = await supabaseAdmin.auth.resetPasswordForEmail(
             lead.email, 
             { redirectTo: `${customerPortalUrl}/set-password` }
@@ -257,14 +258,19 @@ export async function POST(req: Request) {
 
           if (!resetError) {
              inviteSent = true;
+          } else {
+             authError = `Already exists, but reset email failed: ${resetError.message}`;
+             console.error("[Invite] Reset failed:", resetError.message);
           }
         }
-      } else {
-        console.warn("Auth invite warning:", inviteError?.message);
+      } else if (inviteError) {
+        authError = inviteError.message;
+        console.warn("[Invite Error] Supabase rejected invite:", inviteError.message);
       }
-    } catch (err) {
+    } catch (err: any) {
       // Auth invite failing should not block deal creation
-      console.error("Auth invite failed (non-blocking):", err);
+      authError = err.message || "Unknown auth error";
+      console.error("[Invite Exception] Invite failed (non-blocking):", err);
     }
 
     // ── 9. Update lead status ──────────────────────────────────────────────────
@@ -279,9 +285,10 @@ export async function POST(req: Request) {
       file_number: generatedFileNumber,
       client_id: clientId,
       invite_sent: inviteSent,
+      auth_error: authError,
       message: inviteSent
         ? `Deal created and invite email sent to ${lead.email}`
-        : `Deal created. Auth invite could not be sent — create login manually.`,
+        : `Deal created, but invite could not be sent: ${authError || "Create login manually"}`,
     });
   } catch (err) {
     console.error("POST /api/admin/convert-lead error:", err);
