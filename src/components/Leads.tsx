@@ -30,9 +30,10 @@ import {
   Zap,
 } from "lucide-react";
 
-/* ── The customer portal URL where /api/admin/convert-lead lives ── */
-const CUSTOMER_PORTAL_URL =
-  process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ?? "http://localhost:3000";
+/* ── The customer portal URL where /api/admin/* routes live ── */
+const CUSTOMER_PORTAL_URL = (
+  process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ?? "http://localhost:3000"
+).replace(/\/+$/, ""); // strip any trailing slashes
 
 interface LeadUser {
   id: string;
