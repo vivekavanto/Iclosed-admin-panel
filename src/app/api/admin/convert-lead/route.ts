@@ -218,7 +218,7 @@ export async function POST(req: Request) {
       const { data: inviteData, error: inviteError } = await supabaseAdmin.auth.admin.inviteUserByEmail(
         lead.email,
         {
-          redirectTo: `${customerPortalUrl}/dashboard`,
+          redirectTo: `${customerPortalUrl}/set-password`,
         }
       );
 
@@ -231,6 +231,34 @@ export async function POST(req: Request) {
           .from("clients")
           .update({ auth_user_id: authUserId })
           .eq("id", clientId);
+      } else if (inviteError && inviteError.code === "user_already_exists") {
+        // User already exists in the system.
+        console.log("User already exists, attempting to link and send reset/magic link instead.");
+        
+        // 1. Find the user ID
+        const { data: existingUsers } = await supabaseAdmin.auth.admin.listUsers();
+        const existingUser = existingUsers.users.find(u => u.email === lead.email.toLowerCase());
+        
+        if (existingUser) {
+          authUserId = existingUser.id;
+          
+          await supabaseAdmin
+            .from("clients")
+            .update({ auth_user_id: authUserId })
+            .eq("id", clientId);
+
+          // 2. See if they need a password set. 
+          // If they already exist but we are dealing with a new lead, sending them a password reset 
+          // serves as a "Welcome back, set your password if you forgot it, or login" trigger.
+          const { error: resetError } = await supabaseAdmin.auth.resetPasswordForEmail(
+            lead.email, 
+            { redirectTo: `${customerPortalUrl}/set-password` }
+          );
+
+          if (!resetError) {
+             inviteSent = true;
+          }
+        }
       } else {
         console.warn("Auth invite warning:", inviteError?.message);
       }
