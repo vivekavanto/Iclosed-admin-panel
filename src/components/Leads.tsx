@@ -30,11 +30,6 @@ import {
   Zap,
 } from "lucide-react";
 
-/* ── The customer portal URL where /api/admin/* routes live ── */
-const CUSTOMER_PORTAL_URL = (
-  process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ?? "http://localhost:3000"
-).replace(/\/+$/, ""); // strip any trailing slashes
-
 interface LeadUser {
   id: string;
   firstName: string;
@@ -88,13 +83,14 @@ const Leads: React.FC = () => {
     "property-personal",
   ]);
 
-  // ── Fetch leads from Supabase via customer portal API ─────────────────────
+  // ── Fetch leads from local admin API ─────────────────────
   useEffect(() => {
     async function fetchLeads() {
       setLeadsLoading(true);
       setLeadsError(null);
       try {
-        const res = await fetch(`${CUSTOMER_PORTAL_URL}/api/admin/leads`);
+        // Use the admin portal's own API to fetch leads
+        const res = await fetch(`/api/admin/leads`);
         const data = await res.json();
         if (data.success) {
           const mapped: LeadUser[] = (data.leads ?? []).map((l: any) => ({
@@ -150,7 +146,7 @@ const Leads: React.FC = () => {
     setConverting(true);
     setConvertResult(null);
     try {
-      const res = await fetch(`${CUSTOMER_PORTAL_URL}/api/admin/convert-lead`, {
+      const res = await fetch(`/api/admin/convert-lead`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
