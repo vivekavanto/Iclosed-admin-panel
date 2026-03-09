@@ -213,7 +213,7 @@ export async function POST(req: Request) {
     try {
       // inviteUserByEmail sends a magic link — client sets their password via the email
       // We read the customer portal URL from the admin portal's env variable
-      const customerPortalUrl = (process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ?? "http://localhost:3000").replace(/\/+$/, "");
+      const customerPortalUrl = (process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ?? "https://vercel.com/viveks-projects-769edfcb/iclosed-customer-application/set-password").replace(/\/+$/, "");
 
       const { data: inviteData, error: inviteError } = await supabaseAdmin.auth.admin.inviteUserByEmail(
         lead.email,
