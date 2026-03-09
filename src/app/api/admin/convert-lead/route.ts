@@ -157,20 +157,49 @@ export async function POST(req: Request) {
       // Find first milestone to assign tasks to by default
       const firstMilestoneId = Object.values(milestoneMap)[0] ?? null;
 
+      // Extract milestone names for matching
+      const milestoneNameToId: Record<string, string> = {};
+      if (stages) {
+        for (const stage of stages) {
+          const cleanName = stage.name?.trim().replace(/^\t+/, "").replace(/^->?\s*/, "") ?? stage.name;
+          if (milestoneMap[stage.id]) {
+            milestoneNameToId[cleanName] = milestoneMap[stage.id];
+          }
+        }
+      }
+
+      const getMilestoneForTask = (taskName: string) => {
+        const tLower = taskName.trim().toLowerCase();
+        for (const [mName, mId] of Object.entries(milestoneNameToId)) {
+          const mLower = mName.trim().toLowerCase();
+          if (tLower === mLower || tLower.includes(mLower) || mLower.includes(tLower)) return mId;
+          
+          if (tLower.includes("personal") && mLower.includes("personal")) return mId;
+          if (tLower.includes("identifi") && mLower.includes("identifi")) return mId;
+          if (tLower.includes("insurance") && mLower.includes("insurance")) return mId;
+          if (tLower.includes("appointment") && mLower.includes("appointment")) return mId;
+          if (tLower.includes("agreement of purchase") && mLower.includes("agreement of purchase")) return mId;
+          if (tLower.includes("mortgage") && mLower.includes("mortgage")) return mId;
+        }
+        return firstMilestoneId;
+      };
+
       const taskRows = taskTemplates
         .filter((t) => {
           const role = (t.role_type ?? "").toLowerCase();
           return role === "client" || role === "both" || role === "";
         })
-        .map((t) => ({
-          deal_id: dealId,
-          milestone_id: firstMilestoneId,
-          task_template_id: t.id,
-          title: t.name?.trim() ?? t.name,
-          status: "Pending",
-          completed: false,
-          role_type: t.role_type ?? "client",
-        }));
+        .map((t) => {
+          const cleanTitle = t.name?.trim() ?? t.name;
+          return {
+            deal_id: dealId,
+            milestone_id: getMilestoneForTask(cleanTitle),
+            task_template_id: t.id,
+            title: cleanTitle,
+            status: "Pending",
+            completed: false,
+          };
+        });
 
       if (taskRows.length > 0) {
         await supabaseAdmin.from("tasks").insert(taskRows);
