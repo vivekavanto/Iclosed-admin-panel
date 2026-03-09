@@ -221,7 +221,7 @@ export async function POST(req: Request) {
       const { data: inviteData, error: inviteError } = await supabaseAdmin.auth.admin.inviteUserByEmail(
         lead.email,
         {
-          redirectTo: `${customerPortalUrl}/set-password`,
+          redirectTo: `${customerPortalUrl}/api/auth/callback?next=/set-password`,
         }
       );
 
@@ -253,7 +253,7 @@ export async function POST(req: Request) {
           // 2. Send password reset link which acts as a "set password" flow if they haven't set one
           const { error: resetError } = await supabaseAdmin.auth.resetPasswordForEmail(
             lead.email, 
-            { redirectTo: `${customerPortalUrl}/set-password` }
+            { redirectTo: `${customerPortalUrl}/api/auth/callback?next=/set-password` }
           );
 
           if (!resetError) {
