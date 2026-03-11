@@ -29,6 +29,7 @@ export interface Task {
   status?: 'Pending' | 'In Progress' | 'Completed';
   completedAt?: string;
   document?: { name: string; url: string };
+  clientId?: string;
 }
 
 export interface Milestone {

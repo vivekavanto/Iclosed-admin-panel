@@ -1,5 +1,4 @@
-import React, { useState } from 'react';
-import { MOCK_DEALS } from '../constants';
+import React, { useState, useEffect } from 'react';
 import { Deal, DealType, DealStatus } from '../types';
 import { Search } from 'lucide-react';
 
@@ -7,14 +6,42 @@ interface DealListProps {
   onSelectDeal?: (dealId: string) => void;
 }
 
-const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => {} }) => {
+const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   const [searchTerm, setSearchTerm] = useState('');
-  const countS = MOCK_DEALS.filter(d => d.type === DealType.SALE).length;
-  const countP = MOCK_DEALS.filter(d => d.type === DealType.PURCHASE).length;
-  const countR = MOCK_DEALS.filter(d => d.type === DealType.REFINANCE).length;
-  const totalFiles = MOCK_DEALS.length;
+  const [deals, setDeals] = useState<Deal[]>([]);
 
-  const filteredDeals = MOCK_DEALS.filter(deal => {
+  useEffect(() => {
+    fetch('/api/admin/deals')
+      .then(res => res.json())
+      .then((data: any[]) => {
+        const mapped: Deal[] = (data || []).map((d: any) => ({
+          id: d.id,
+          fileNumber: d.fileNumber ?? d.file_number ?? '',
+          client: d.client ?? { id: '', firstName: '', lastName: d.client_last_name ?? '', email: '', phone: '' },
+          type: d.type,
+          status: d.status,
+          propertyAddress: d.propertyAddress ?? d.property_address ?? '',
+          closingDate: d.closingDate ?? d.closing_date ?? '',
+          openingDate: d.openingDate ?? d.opening_date,
+          requisitionDate: d.requisitionDate ?? d.requisition_date,
+          price: d.price ?? 0,
+          progress: d.progress ?? 0,
+          tasks: d.tasks ?? [],
+          milestones: d.milestones ?? [],
+          documents: d.documents ?? [],
+          notes: d.notes ?? [],
+        }));
+        setDeals(mapped);
+      })
+      .catch(() => setDeals([]));
+  }, []);
+
+  const countS = deals.filter(d => d.type === DealType.SALE).length;
+  const countP = deals.filter(d => d.type === DealType.PURCHASE).length;
+  const countR = deals.filter(d => d.type === DealType.REFINANCE).length;
+  const totalFiles = deals.length;
+
+  const filteredDeals = deals.filter(deal => {
     if (!searchTerm) return true;
     const lowerTerm = searchTerm.toLowerCase();
     return (deal.fileNumber.toLowerCase().includes(lowerTerm) || deal.propertyAddress.toLowerCase().includes(lowerTerm) || deal.client.lastName.toLowerCase().includes(lowerTerm));
@@ -35,28 +62,28 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => {} }) => {
         </div>
 
         <div className="flex flex-1 w-full xl:w-auto items-center gap-3 justify-end">
-           <div className="relative flex-1 xl:flex-none xl:w-96">
-              <input type="text" placeholder="Search" className="w-full pl-3 pr-4 py-1.5 border border-slate-300 rounded text-sm focus:outline-none focus:border-brand-primary" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
-           </div>
+          <div className="relative flex-1 xl:flex-none xl:w-96">
+            <input type="text" placeholder="Search" className="w-full pl-3 pr-4 py-1.5 border border-slate-300 rounded text-sm focus:outline-none focus:border-brand-primary" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+          </div>
         </div>
       </div>
 
       <div className="px-6 pb-6 pt-2 space-y-4">
-         <div className="flex flex-wrap items-end gap-6 border-b border-slate-100 pb-4">
-            <div className="flex border border-slate-300 rounded overflow-hidden"><button className="px-3 py-1.5 text-xs font-medium transition-colors bg-brand-light text-brand-primary cursor-default">Closing date</button></div>
-            <div className="flex items-center gap-3">
-               <div><label className="block text-xs text-slate-500 mb-1">From</label><input type="date" className="border border-slate-300 rounded px-2 py-1 text-xs text-slate-700 focus:border-brand-primary outline-none" defaultValue="2026-02-01" /></div>
-               <div><label className="block text-xs text-slate-500 mb-1">To</label><input type="date" className="border border-slate-300 rounded px-2 py-1 text-xs text-slate-700 focus:border-brand-primary outline-none" defaultValue="2026-02-07" /></div>
-            </div>
-            <div className="flex gap-4 pb-1"><button className="text-xs font-medium text-brand-primary hover:underline">Today</button><button className="text-xs font-medium text-brand-primary hover:underline">This week</button><button className="text-xs font-medium text-brand-primary hover:underline">This month</button></div>
-         </div>
+        <div className="flex flex-wrap items-end gap-6 border-b border-slate-100 pb-4">
+          <div className="flex border border-slate-300 rounded overflow-hidden"><button className="px-3 py-1.5 text-xs font-medium transition-colors bg-brand-light text-brand-primary cursor-default">Closing date</button></div>
+          <div className="flex items-center gap-3">
+            <div><label className="block text-xs text-slate-500 mb-1">From</label><input type="date" className="border border-slate-300 rounded px-2 py-1 text-xs text-slate-700 focus:border-brand-primary outline-none" defaultValue="2026-02-01" /></div>
+            <div><label className="block text-xs text-slate-500 mb-1">To</label><input type="date" className="border border-slate-300 rounded px-2 py-1 text-xs text-slate-700 focus:border-brand-primary outline-none" defaultValue="2026-02-07" /></div>
+          </div>
+          <div className="flex gap-4 pb-1"><button className="text-xs font-medium text-brand-primary hover:underline">Today</button><button className="text-xs font-medium text-brand-primary hover:underline">This week</button><button className="text-xs font-medium text-brand-primary hover:underline">This month</button></div>
+        </div>
 
-         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div><label className="block text-xs text-slate-500 mb-1">File type</label><select className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"><option>All</option><option>Purchase</option><option>Sale</option><option>Refinance</option></select></div>
-            <div><label className="block text-xs text-slate-500 mb-1">Lawyer</label><select className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"><option>Choose a lawyer</option></select></div>
-            <div><label className="block text-xs text-slate-500 mb-1">Clerk</label><select className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"><option>Suganya Argeen</option></select></div>
-            <div><label className="block text-xs text-slate-500 mb-1">File status</label><select className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"><option>Choose a status</option><option>Active</option><option>Closed</option></select></div>
-         </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div><label className="block text-xs text-slate-500 mb-1">File type</label><select className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"><option>All</option><option>Purchase</option><option>Sale</option><option>Refinance</option></select></div>
+          <div><label className="block text-xs text-slate-500 mb-1">Lawyer</label><select className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"><option>Choose a lawyer</option></select></div>
+          <div><label className="block text-xs text-slate-500 mb-1">Clerk</label><select className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"><option>Suganya Argeen</option></select></div>
+          <div><label className="block text-xs text-slate-500 mb-1">File status</label><select className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"><option>Choose a status</option><option>Active</option><option>Closed</option></select></div>
+        </div>
       </div>
 
       <div className="overflow-x-auto">
@@ -79,7 +106,10 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => {} }) => {
               const isEven = index % 2 === 0;
               const rowClass = isEven ? 'bg-white' : 'bg-slate-50/80';
               return (
-                <tr key={deal.id} onClick={() => onSelectDeal(deal.id)} className={`${rowClass} hover:bg-brand-light/20 cursor-pointer transition-colors border-b border-slate-100 text-xs text-slate-700`}>
+                <tr key={deal.id} onClick={() => {
+                  console.log("Clicked deal id:", deal.id);
+                  onSelectDeal(deal.id);
+                }} className={`${rowClass} hover:bg-brand-light/20 cursor-pointer transition-colors border-b border-slate-100 text-xs text-slate-700`}>
                   <td className="px-4 py-3">{index + 1}</td>
                   <td className="px-4 py-3 font-medium">{deal.fileNumber}</td>
                   <td className="px-4 py-3">{deal.propertyAddress}</td>
