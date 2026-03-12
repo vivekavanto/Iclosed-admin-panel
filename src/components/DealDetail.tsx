@@ -21,10 +21,11 @@ import { useRouter } from "next/navigation";
 
 interface DealDetailProps {
   deal: Deal;
+  rawDeal?: Record<string, any> | null;
   onBack?: () => void;
 }
 
-const DealDetail: React.FC<DealDetailProps> = ({ deal, onBack }) => {
+const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const router = useRouter();
   const handleBack = onBack || (() => router.push("/deals"));
 
