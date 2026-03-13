@@ -70,9 +70,9 @@ const EmailTemplates: React.FC = () => {
   const handleEdit = (template: EmailTemplate) => {
     setForm({
       id: template.id,
-      name: template.name,
-      body: template.body,
-      is_active: template.is_active,
+      name: template.name ?? "",
+      body: template.body ?? "",
+      is_active: template.is_active ?? true,
     });
     setIsModalOpen(true);
   };

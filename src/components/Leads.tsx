@@ -77,6 +77,18 @@ const Leads: React.FC = () => {
     message: string;
   } | null>(null);
 
+  // Welcome email state
+  const [sendingWelcome, setSendingWelcome] = useState(false);
+  const [welcomeResult, setWelcomeResult] = useState<{
+    success: boolean;
+    message: string;
+  } | null>(null);
+  const [emailModalOpen, setEmailModalOpen] = useState(false);
+  const [emailTemplates, setEmailTemplates] = useState<
+    { id: string; name: string; body: string }[]
+  >([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+
   const [expandedSections, setExpandedSections] = useState<string[]>([
     "personal",
     "current-address",
@@ -186,6 +198,55 @@ const Leads: React.FC = () => {
     }
   }
 
+  // ── Fetch email templates for picker ────────────────────────────────────────
+  async function fetchEmailTemplates() {
+    try {
+      const res = await fetch("/api/admin/email-templates");
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setEmailTemplates(data.filter((t: any) => t.is_active && t.body));
+      }
+    } catch {
+      // silent
+    }
+  }
+
+  // ── Send Email with selected template ─────────────────────────────────────
+  async function sendWelcomeEmail(leadId: string, templateId?: string) {
+    setSendingWelcome(true);
+    setWelcomeResult(null);
+    try {
+      const payload: any = { lead_id: leadId };
+      if (templateId) payload.template_id = templateId;
+
+      const res = await fetch(`/api/admin/send-welcome-email`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setWelcomeResult({
+          success: true,
+          message: `Email sent to ${selectedLead?.email ?? "client"} (template: ${data.template_used})`,
+        });
+        setEmailModalOpen(false);
+      } else {
+        setWelcomeResult({
+          success: false,
+          message: data.error ?? "Failed to send email.",
+        });
+      }
+    } catch (err) {
+      setWelcomeResult({
+        success: false,
+        message: "Network error sending email.",
+      });
+    } finally {
+      setSendingWelcome(false);
+    }
+  }
+
   const inputClasses =
     "w-full px-4 py-2.5 border border-slate-300 rounded-xl focus:border-brand-primary focus:ring-4 focus:ring-brand-primary/5 outline-none text-sm font-bold text-black bg-white transition-all placeholder:text-slate-300";
   const selectClasses =
@@ -287,6 +348,17 @@ const Leads: React.FC = () => {
                 <Zap size={14} /> Convert to Deal
               </button>
             )}
+            <button
+              onClick={() => {
+                fetchEmailTemplates();
+                setSelectedTemplateId("");
+                setEmailModalOpen(true);
+              }}
+              disabled={sendingWelcome}
+              className="flex items-center gap-2 px-6 py-2.5 bg-emerald-600 text-white rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-emerald-700 transition-all shadow-lg active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              <Send size={14} /> Send Email
+            </button>
             <button className="flex items-center gap-2 px-6 py-2.5 bg-slate-900 text-white rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-slate-800 transition-all shadow-lg active:scale-95">
               <History size={14} /> View History
             </button>
@@ -308,6 +380,24 @@ const Leads: React.FC = () => {
               <AlertTriangle size={18} />
             )}
             {convertResult.message}
+          </div>
+        )}
+
+        {/* Welcome Email Result Banner */}
+        {welcomeResult && (
+          <div
+            className={`flex items-center gap-3 px-5 py-4 rounded-xl border text-sm font-semibold ${
+              welcomeResult.success
+                ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                : "bg-red-50 border-red-200 text-red-700"
+            }`}
+          >
+            {welcomeResult.success ? (
+              <Mail size={18} />
+            ) : (
+              <AlertTriangle size={18} />
+            )}
+            {welcomeResult.message}
           </div>
         )}
 
@@ -568,6 +658,108 @@ const Leads: React.FC = () => {
                   className="w-full py-3 border border-slate-200 text-slate-600 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all"
                 >
                   {convertResult?.success ? "Close" : "Cancel"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Send Email Template Picker Modal ── */}
+        {emailModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-6 animate-in fade-in duration-200">
+            <div
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+              onClick={() => !sendingWelcome && setEmailModalOpen(false)}
+            />
+            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md relative z-10 overflow-hidden animate-in zoom-in duration-200">
+              {/* Header */}
+              <div className="px-8 py-6 border-b border-slate-100 flex justify-between items-start">
+                <div>
+                  <h3 className="text-xl font-black text-slate-900">
+                    Send Email
+                  </h3>
+                  <p className="text-slate-500 text-sm font-medium mt-1">
+                    Pick a template to send to{" "}
+                    <span className="font-bold text-slate-700">
+                      {selectedLead?.email}
+                    </span>
+                  </p>
+                </div>
+                <button
+                  onClick={() => !sendingWelcome && setEmailModalOpen(false)}
+                  className="text-slate-300 hover:text-slate-600 transition-colors mt-1"
+                >
+                  <X size={22} />
+                </button>
+              </div>
+
+              {/* Template list */}
+              <div className="px-8 py-6 space-y-3 max-h-80 overflow-y-auto">
+                {emailTemplates.length === 0 ? (
+                  <p className="text-sm text-slate-400 text-center py-6">
+                    No active templates with content found. Create one in Email
+                    Templates first.
+                  </p>
+                ) : (
+                  emailTemplates.map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setSelectedTemplateId(t.id)}
+                      className={`w-full text-left px-5 py-4 rounded-xl border transition-all ${
+                        selectedTemplateId === t.id
+                          ? "border-emerald-500 bg-emerald-50 ring-2 ring-emerald-500/20"
+                          : "border-slate-200 hover:border-slate-300 hover:bg-slate-50"
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <Mail
+                          size={18}
+                          className={
+                            selectedTemplateId === t.id
+                              ? "text-emerald-600"
+                              : "text-slate-400"
+                          }
+                        />
+                        <span className="font-bold text-slate-800 text-sm">
+                          {t.name}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-1.5 ml-[30px] line-clamp-2">
+                        {t.body?.substring(0, 100)}
+                        {(t.body?.length ?? 0) > 100 ? "..." : ""}
+                      </p>
+                    </button>
+                  ))
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="px-8 pb-8 flex flex-col gap-3">
+                <button
+                  onClick={() =>
+                    selectedLead &&
+                    sendWelcomeEmail(selectedLead.id, selectedTemplateId || undefined)
+                  }
+                  disabled={sendingWelcome || !selectedTemplateId}
+                  className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-black text-sm uppercase tracking-widest shadow-xl shadow-emerald-600/20 hover:bg-emerald-700 transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {sendingWelcome ? (
+                    <>
+                      <Loader2 size={16} className="animate-spin" /> Sending...
+                    </>
+                  ) : (
+                    <>
+                      <Send size={16} /> Send Email
+                    </>
+                  )}
+                </button>
+                <button
+                  onClick={() => setEmailModalOpen(false)}
+                  disabled={sendingWelcome}
+                  className="w-full py-3 border border-slate-200 text-slate-600 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all"
+                >
+                  Cancel
                 </button>
               </div>
             </div>
