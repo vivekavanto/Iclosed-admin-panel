@@ -30,6 +30,7 @@ export interface Task {
   completedAt?: string;
   document?: { name: string; url: string };
   clientId?: string;
+  milestoneId?: string;
 }
 
 export interface Milestone {

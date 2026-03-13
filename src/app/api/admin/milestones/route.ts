@@ -12,7 +12,7 @@ export async function GET(req: Request) {
   }
 
   const { data, error } = await supabase
-    .from("milestones_duplicate")
+    .from("milestones")
     .select("*")
     .eq("deal_id", dealId)
     .order("created_at", { ascending: true });
@@ -29,8 +29,34 @@ export async function POST(req: Request) {
     const body = await req.json();
 
     const { data, error } = await supabase
-      .from("milestones_duplicate")
+      .from("milestones")
       .insert([body])
+      .select()
+      .single();
+
+    if (error) {
+      return NextResponse.json({ success: false, error: error.message }, { status: 400 });
+    }
+
+    return NextResponse.json({ success: true, data });
+  } catch (err: any) {
+    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  }
+}
+
+export async function PATCH(req: Request) {
+  try {
+    const body = await req.json();
+    const { id, ...updates } = body;
+
+    if (!id) {
+      return NextResponse.json({ error: "id is required" }, { status: 400 });
+    }
+
+    const { data, error } = await supabase
+      .from("milestones")
+      .update(updates)
+      .eq("id", id)
       .select()
       .single();
 
@@ -53,7 +79,7 @@ export async function DELETE(req: Request) {
   }
 
   const { error } = await supabase
-    .from("milestones_duplicate")
+    .from("milestones")
     .delete()
     .eq("id", id);
 

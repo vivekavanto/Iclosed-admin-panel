@@ -25,8 +25,7 @@ interface SidebarProps {
 
 const ROUTE_MAP: Record<string, string> = {
   dashboard: "/admin/dashboard",
-  intake: "/admin/intake",
-  tasks: "/admin/tasks",
+tasks: "/admin/tasks",
   deals: "/admin/deals",
   templates: "/admin/templates",
   "stage-templates": "/admin/templates",

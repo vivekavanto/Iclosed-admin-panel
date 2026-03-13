@@ -38,6 +38,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     assignee: t.assignee,
     completedAt: t.completed_at ?? t.completedAt,
     document: t.document_name ? { name: t.document_name, url: t.document_url ?? '#' } : undefined,
+    milestoneId: t.milestone_id ?? undefined,
   });
 
   // Use state to allow modification simulation
@@ -52,13 +53,36 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const dragMilestoneItem = useRef<number | null>(null);
   const dragMilestoneOverItem = useRef<number | null>(null);
 
+  const refetchData = async () => {
+    try {
+      const [tasksRes, milestonesRes] = await Promise.all([
+        fetch(`/api/admin/tasks?deal_id=${deal.id}`),
+        fetch(`/api/admin/milestones?deal_id=${deal.id}`),
+      ]);
+      const tasksData = await tasksRes.json();
+      const milestonesData = await milestonesRes.json();
+      if (Array.isArray(tasksData)) setTasks(tasksData.map(mapApiTask));
+      if (Array.isArray(milestonesData)) {
+        setMilestones(milestonesData.map((m: any): Milestone => ({
+          id: m.id,
+          title: m.title,
+          status: m.status ?? "",
+          milestoneDate: m.milestone_date ?? undefined,
+          completedAt: m.completed_at ?? undefined,
+          emailSent: m.email_sent ?? false,
+        })));
+      }
+    } catch {}
+  };
+
   // --- Handlers ---
 
   // Milestones
-  const handleMilestoneStatusChange = (
+  const handleMilestoneStatusChange = async (
     id: string,
     newStatus: Milestone["status"],
   ) => {
+    // Optimistic update
     setMilestones((prev) =>
       prev.map((m) => {
         if (m.id === id) {
@@ -76,6 +100,14 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         return m;
       }),
     );
+
+    // PATCH to DB then sync from DB
+    await fetch("/api/admin/milestones", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, status: newStatus }),
+    });
+    await refetchData();
   };
 
   const handleSortMilestones = () => {
@@ -94,26 +126,50 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   };
 
   // Tasks
-  const handleTaskStatusChange = (id: string, newStatus: Task["status"]) => {
-    setTasks((prev) =>
-      prev.map((t) => {
-        if (t.id === id) {
-          const isCompleted = newStatus === "Completed";
-          return {
-            ...t,
-            status: newStatus,
-            completed: isCompleted,
-            completedAt: isCompleted
-              ? new Date().toLocaleString("en-US", {
-                dateStyle: "medium",
-                timeStyle: "short",
-              })
-              : undefined,
-          };
-        }
-        return t;
-      }),
+  const handleTaskStatusChange = async (id: string, newStatus: Task["status"]) => {
+    const isCompleted = newStatus === "Completed";
+    const completedAt = isCompleted
+      ? new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })
+      : undefined;
+
+    // Optimistic local update
+    const updatedTasks = tasks.map((t) =>
+      t.id === id ? { ...t, status: newStatus, completed: isCompleted, completedAt } : t
     );
+    setTasks(updatedTasks);
+
+    // PATCH task in DB
+    await fetch("/api/admin/tasks", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, status: newStatus, completed: isCompleted }),
+    });
+
+    // Check if all tasks for this milestone are completed → auto-update milestone
+    const task = updatedTasks.find((t) => t.id === id);
+    if (task?.milestoneId) {
+      const milestoneId = task.milestoneId;
+      const milestoneTasks = updatedTasks.filter((t) => t.milestoneId === milestoneId);
+      const allDone = milestoneTasks.length > 0 && milestoneTasks.every((t) => t.status === "Completed");
+      const newMilestoneStatus = allDone ? "Completed" : milestoneTasks.some((t) => t.status === "In Progress" || t.status === "Completed") ? "In Progress" : "Pending";
+
+      setMilestones((prev) =>
+        prev.map((m) =>
+          m.id === milestoneId
+            ? { ...m, status: newMilestoneStatus as Milestone["status"], completedAt: allDone ? new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" }) : undefined }
+            : m
+        )
+      );
+
+      await fetch("/api/admin/milestones", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: milestoneId, status: newMilestoneStatus }),
+      });
+    }
+
+    // Re-fetch from DB to ensure UI reflects actual stored state
+    await refetchData();
   };
 
   const handleSortTasks = () => {
@@ -142,6 +198,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   };
 
   const handleDeleteMilestone = async (milestoneId: string) => {
+    if (!confirm("Are you sure you want to delete this stage?")) return;
     try {
       const res = await fetch(`/api/admin/milestones?id=${milestoneId}`, { method: 'DELETE' });
       const data = await res.json();
@@ -156,6 +213,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   };
 
   const handleDeleteTask = async (taskId: string) => {
+    if (!confirm("Are you sure you want to delete this task?")) return;
     try {
       const res = await fetch(`/api/admin/tasks?id=${taskId}`, { method: 'DELETE' });
       const data = await res.json();
@@ -185,7 +243,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         due_date: taskForm.deadlineDate || null,
         assignee: taskForm.partner || null,
         task_template_id: taskTemplates.find(t => t.name === taskForm.title)?.id || null,
-        milestone_id: null, // optional
+        milestone_id: taskForm.milestoneId || null,
         client: taskForm.client,
       };
 
@@ -211,6 +269,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           status: "Pending",
           deadlineDate: "",
           deadlineTime: "",
+          milestoneId: "",
         });
       } else {
         alert("Failed to save task: " + data.error);
@@ -230,6 +289,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     status: "Pending",
     deadlineDate: "",
     deadlineTime: "",
+    milestoneId: "",
   });
 
   const handleTaskFormChange = (
@@ -253,9 +313,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     client: "",
     status: "Pending",
     partner: "",
+    milestoneDate: "",
   });
 
-  const handleStageFormChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+  const handleStageFormChange = (e: React.ChangeEvent<HTMLSelectElement | HTMLInputElement>) => {
     const { name, value } = e.target;
     setStageForm((prev) => ({ ...prev, [name]: value }));
   };
@@ -268,6 +329,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         deal_id: deal.id,
         title: stageForm.stageTemplate,
         status: stageForm.status,
+        milestone_date: stageForm.milestoneDate || null,
       };
 
       const res = await fetch("/api/admin/milestones", {
@@ -287,7 +349,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         };
         setMilestones((prev) => [...prev, newMilestone]);
         setShowStageForm(false);
-        setStageForm({ stageTemplate: "", client: "", status: "Pending", partner: "" });
+        setStageForm({ stageTemplate: "", client: "", status: "Pending", partner: "", milestoneDate: "" });
       } else {
         alert("Failed to save stage: " + data.error);
       }
@@ -627,78 +689,81 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                         </td>
                       </tr>
                     ) : (
-                      milestones.map((milestone, index) => (
-                        <tr
-                          key={milestone.id}
-                          draggable
-                          onDragStart={() => (dragMilestoneItem.current = index)}
-                          onDragEnter={() => (dragMilestoneOverItem.current = index)}
-                          onDragEnd={handleSortMilestones}
-                          onDragOver={(e) => e.preventDefault()}
-                          className="hover:bg-slate-50 transition-colors group cursor-move"
-                        >
-                          <td className="px-3 py-2 text-slate-300">
-                            <GripVertical size={14} />
-                          </td>
+                      milestones.map((milestone, index) => {
+                        return (
+                          <React.Fragment key={milestone.id}>
+                            <tr
+                              draggable
+                              onDragStart={() => (dragMilestoneItem.current = index)}
+                              onDragEnter={() => (dragMilestoneOverItem.current = index)}
+                              onDragEnd={handleSortMilestones}
+                              onDragOver={(e) => e.preventDefault()}
+                              className="hover:bg-slate-50 transition-colors group cursor-move bg-slate-50/60"
+                            >
+                              <td className="px-3 py-2 text-slate-300">
+                                <GripVertical size={14} />
+                              </td>
 
-                          <td className="px-2 py-2 text-center text-[10px] text-slate-500 font-medium">
-                            {index + 1}
-                          </td>
+                              <td className="px-2 py-2 text-center text-[10px] text-slate-500 font-medium">
+                                {index + 1}
+                              </td>
 
-                          <td className="px-2 py-2">
-                            <div className="relative">
-                              <select
-                                className={`text-[10px] font-medium border rounded pl-2 pr-6 py-1 w-full outline-none cursor-pointer appearance-none truncate ${getStatusColor(milestone.status)}`}
-                                value={milestone.status}
-                                onChange={(e) =>
-                                  handleMilestoneStatusChange(
-                                    milestone.id,
-                                    e.target.value as any
-                                  )
-                                }
-                              >
-                                <option value="">Status</option>
-                                <option value="Pending">Pending</option>
-                                <option value="In Progress">In Progress</option>
-                                <option value="Completed">Completed</option>
-                              </select>
+                              <td className="px-2 py-2">
+                                <div className="relative">
+                                  <select
+                                    className={`text-[10px] font-medium border rounded pl-2 pr-6 py-1 w-full outline-none cursor-pointer appearance-none truncate ${getStatusColor(milestone.status)}`}
+                                    value={milestone.status}
+                                    onChange={(e) =>
+                                      handleMilestoneStatusChange(
+                                        milestone.id,
+                                        e.target.value as any
+                                      )
+                                    }
+                                  >
+                                    <option value="">Status</option>
+                                    <option value="Pending">Pending</option>
+                                    <option value="In Progress">In Progress</option>
+                                    <option value="Completed">Completed</option>
+                                  </select>
+                                  <div className="absolute inset-y-0 right-0 flex items-center pr-1.5 pointer-events-none text-slate-500">
+                                    <ChevronDown size={10} />
+                                  </div>
+                                </div>
+                              </td>
 
-                              <div className="absolute inset-y-0 right-0 flex items-center pr-1.5 pointer-events-none text-slate-500">
-                                <ChevronDown size={10} />
-                              </div>
-                            </div>
-                          </td>
+                              <td className="px-2 py-2">
+                                <span className="text-xs text-slate-800 font-semibold">
+                                  {milestone.title}
+                                </span>
+                              </td>
 
-                          <td className="px-2 py-2">
-                            <span className="text-xs text-slate-800 font-medium">
-                              {milestone.title}
-                            </span>
-                          </td>
+                              <td className="px-2 py-2">
+                                <input
+                                  type="date"
+                                  value={milestone.milestoneDate ?? ""}
+                                  onChange={() => {}}
+                                  className="text-[10px] border border-slate-200 rounded px-1 py-0.5 text-slate-600 bg-transparent focus:bg-white focus:border-brand-primary outline-none w-full"
+                                />
+                              </td>
 
-                          <td className="px-2 py-2">
-                            <input
-                              type="date"
-                              defaultValue={milestone.milestoneDate}
-                              className="text-[10px] border border-slate-200 rounded px-1 py-0.5 text-slate-600 bg-transparent focus:bg-white focus:border-brand-primary outline-none w-full"
-                            />
-                          </td>
+                              <td className="px-2 py-2 text-right">
+                                <div className="flex items-center justify-end gap-1">
+                                  <button
+                                    title="Send Email"
+                                    className="text-brand-primary hover:bg-brand-light p-1 rounded transition-colors"
+                                  >
+                                    <Mail size={12} />
+                                  </button>
+                                  <button onClick={() => handleDeleteMilestone(milestone.id)} className="text-slate-300 hover:text-red-600 p-1 rounded transition-colors">
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
 
-                          <td className="px-2 py-2 text-right">
-                            <div className="flex items-center justify-end gap-1">
-                              <button
-                                title="Send Email"
-                                className="text-brand-primary hover:bg-brand-light p-1 rounded transition-colors"
-                              >
-                                <Mail size={12} />
-                              </button>
-
-                              <button onClick={() => handleDeleteMilestone(milestone.id)} className="text-slate-300 hover:text-red-600 p-1 rounded transition-colors">
-                                <Trash2 size={14} />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))
+                          </React.Fragment>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -823,6 +888,20 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                 >
                   <option value="">Select Partner</option>
                 </select>
+              </div>
+
+              {/* Closing Date */}
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase">
+                  Closing Date
+                </label>
+                <input
+                  type="date"
+                  name="milestoneDate"
+                  value={stageForm.milestoneDate}
+                  onChange={handleStageFormChange}
+                  className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-primary outline-none"
+                />
               </div>
 
               {/* Buttons */}
@@ -1003,6 +1082,26 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
               </div>
 
+              {/* Milestone */}
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase">
+                  Milestone
+                </label>
+                <select
+                  name="milestoneId"
+                  value={taskForm.milestoneId}
+                  onChange={handleTaskFormChange}
+                  className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-primary outline-none"
+                >
+                  <option value="">No Milestone</option>
+                  {milestones.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.title}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               {/* Buttons */}
               <div className="flex justify-end gap-3 mt-6">
                 <button
@@ -1024,7 +1123,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           </div>
 
         </div>
-      )};
+      )}
     </div>
   );
 };
