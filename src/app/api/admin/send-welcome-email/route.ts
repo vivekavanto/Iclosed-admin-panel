@@ -268,6 +268,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Mark welcome email as sent on the lead
+    const { error: updateError } = await supabaseAdmin
+      .from("leads")
+      .update({ welcome_email_sent: true })
+      .eq("id", lead_id);
+
+    if (updateError) {
+      console.error("[Welcome Email] Failed to update welcome_email_sent:", updateError);
+    }
+
     console.log(
       `[Welcome Email] Sent to ${lead.email}, subject: "${subject}", id: ${sendResult?.id}`
     );
