@@ -8,6 +8,10 @@ interface DealListProps {
 
 const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   const [searchTerm, setSearchTerm] = useState('');
+  const [filterType, setFilterType] = useState('All');
+  const [filterStatus, setFilterStatus] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [deals, setDeals] = useState<Deal[]>([]);
 
   useEffect(() => {
@@ -42,10 +46,47 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   const totalFiles = deals.length;
 
   const filteredDeals = deals.filter(deal => {
-    if (!searchTerm) return true;
-    const lowerTerm = searchTerm.toLowerCase();
-    return (deal.fileNumber.toLowerCase().includes(lowerTerm) || deal.propertyAddress.toLowerCase().includes(lowerTerm) || deal.client.lastName.toLowerCase().includes(lowerTerm));
+    if (searchTerm) {
+      const lowerTerm = searchTerm.toLowerCase();
+      const matchesSearch =
+        deal.fileNumber.toLowerCase().includes(lowerTerm) ||
+        deal.propertyAddress.toLowerCase().includes(lowerTerm) ||
+        deal.type?.toLowerCase().includes(lowerTerm) ||
+        deal.status?.toLowerCase().includes(lowerTerm);
+      if (!matchesSearch) return false;
+    }
+    if (filterType && filterType !== 'All' && deal.type !== filterType) return false;
+    if (filterStatus && filterStatus !== '' && deal.status !== filterStatus) return false;
+    if (dateFrom || dateTo) {
+      const closing = deal.closingDate ? new Date(deal.closingDate) : null;
+      if (!closing) return false;
+      closing.setHours(0, 0, 0, 0);
+      if (dateFrom) { const from = new Date(dateFrom); from.setHours(0,0,0,0); if (closing < from) return false; }
+      if (dateTo) { const to = new Date(dateTo); to.setHours(23,59,59,999); if (closing > to) return false; }
+    }
+    return true;
   });
+
+  const applyPreset = (preset: 'today' | 'week' | 'month') => {
+    const now = new Date();
+    const toISO = (d: Date) => d.toISOString().split('T')[0];
+    if (preset === 'today') {
+      setDateFrom(toISO(now));
+      setDateTo(toISO(now));
+    } else if (preset === 'week') {
+      const start = new Date(now);
+      start.setDate(now.getDate() - now.getDay());
+      const end = new Date(start);
+      end.setDate(start.getDate() + 6);
+      setDateFrom(toISO(start));
+      setDateTo(toISO(end));
+    } else if (preset === 'month') {
+      const start = new Date(now.getFullYear(), now.getMonth(), 1);
+      const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      setDateFrom(toISO(start));
+      setDateTo(toISO(end));
+    }
+  };
 
   const formatDate = (dateString?: string) => {
     if (!dateString) return '';
@@ -72,17 +113,18 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
         <div className="flex flex-wrap items-end gap-6 border-b border-slate-100 pb-4">
           <div className="flex border border-slate-300 rounded overflow-hidden"><button className="px-3 py-1.5 text-xs font-medium transition-colors bg-brand-light text-brand-primary cursor-default">Closing date</button></div>
           <div className="flex items-center gap-3">
-            <div><label className="block text-xs text-slate-500 mb-1">From</label><input type="date" className="border border-slate-300 rounded px-2 py-1 text-xs text-slate-700 focus:border-brand-primary outline-none" defaultValue="2026-02-01" /></div>
-            <div><label className="block text-xs text-slate-500 mb-1">To</label><input type="date" className="border border-slate-300 rounded px-2 py-1 text-xs text-slate-700 focus:border-brand-primary outline-none" defaultValue="2026-02-07" /></div>
+            <div><label className="block text-xs text-slate-500 mb-1">From</label><input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="border border-slate-300 rounded px-2 py-1 text-xs text-slate-700 focus:border-brand-primary outline-none" /></div>
+            <div><label className="block text-xs text-slate-500 mb-1">To</label><input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="border border-slate-300 rounded px-2 py-1 text-xs text-slate-700 focus:border-brand-primary outline-none" /></div>
+            {(dateFrom || dateTo) && <button onClick={() => { setDateFrom(''); setDateTo(''); }} className="text-xs text-slate-400 hover:text-red-500 pb-0.5 mt-4">✕ Clear</button>}
           </div>
-          <div className="flex gap-4 pb-1"><button className="text-xs font-medium text-brand-primary hover:underline">Today</button><button className="text-xs font-medium text-brand-primary hover:underline">This week</button><button className="text-xs font-medium text-brand-primary hover:underline">This month</button></div>
+          <div className="flex gap-4 pb-1"><button onClick={() => applyPreset('today')} className="text-xs font-medium text-brand-primary hover:underline">Today</button><button onClick={() => applyPreset('week')} className="text-xs font-medium text-brand-primary hover:underline">This week</button><button onClick={() => applyPreset('month')} className="text-xs font-medium text-brand-primary hover:underline">This month</button></div>
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div><label className="block text-xs text-slate-500 mb-1">File type</label><select className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"><option>All</option><option>Purchase</option><option>Sale</option><option>Refinance</option></select></div>
+          <div><label className="block text-xs text-slate-500 mb-1">File type</label><select value={filterType} onChange={e => setFilterType(e.target.value)} className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"><option value="All">All</option><option value="Purchase">Purchase</option><option value="Sale">Sale</option><option value="Refinance">Refinance</option></select></div>
           <div><label className="block text-xs text-slate-500 mb-1">Lawyer</label><select className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"><option>Choose a lawyer</option></select></div>
           <div><label className="block text-xs text-slate-500 mb-1">Clerk</label><select className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"><option>Suganya Argeen</option></select></div>
-          <div><label className="block text-xs text-slate-500 mb-1">File status</label><select className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"><option>Choose a status</option><option>Active</option><option>Closed</option></select></div>
+          <div><label className="block text-xs text-slate-500 mb-1">File status</label><select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"><option value="">Choose a status</option><option value="Active">Active</option><option value="Closed">Closed</option></select></div>
         </div>
       </div>
 

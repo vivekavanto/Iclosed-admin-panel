@@ -614,7 +614,8 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                       <td className="px-2 py-2">
                         <input
                           type="date"
-                          defaultValue={task.dueDate}
+                          value={task.dueDate ?? ""}
+                          onChange={() => {}}
                           className="text-[10px] border border-slate-200 rounded px-1 py-0.5 text-slate-600 bg-transparent focus:bg-white focus:border-brand-primary outline-none w-full"
                         />
                       </td>
