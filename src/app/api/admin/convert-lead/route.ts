@@ -116,97 +116,7 @@ export async function POST(req: Request) {
 
     const dealId = deal.id;
 
-    // ── 6. Copy milestones from stage_templates ───────────────────────────────
-    const leadType = lead.lead_type ?? "Purchase";
-
-    const { data: stages } = await supabaseAdmin
-      .from("stage_templates")
-      .select("id, name, order_index")
-      .eq("lead_type", leadType)
-      .order("order_index", { ascending: true });
-
-    const milestoneMap: Record<string, string> = {}; // stage_template_id → milestone_id
-
-    if (stages && stages.length > 0) {
-      for (const stage of stages) {
-        const cleanName = stage.name?.trim().replace(/^\t+/, "").replace(/^->?\s*/, "") ?? stage.name;
-
-        const { data: ms } = await supabaseAdmin
-          .from("milestones")
-          .insert({
-            deal_id: dealId,
-            title: cleanName,
-            status: stage.order_index === 1 ? "In Progress" : "Pending",
-            order_index: stage.order_index,
-          })
-          .select("id")
-          .single();
-
-        if (ms) milestoneMap[stage.id] = ms.id;
-      }
-    }
-
-    // ── 7. Copy tasks from task_templates ─────────────────────────────────────
-    const { data: taskTemplates } = await supabaseAdmin
-      .from("task_templates")
-      .select("id, name, role_type, order_index, deadline_rule")
-      .eq("lead_type", leadType)
-      .order("order_index", { ascending: true });
-
-    if (taskTemplates && taskTemplates.length > 0) {
-      // Find first milestone to assign tasks to by default
-      const firstMilestoneId = Object.values(milestoneMap)[0] ?? null;
-
-      // Extract milestone names for matching
-      const milestoneNameToId: Record<string, string> = {};
-      if (stages) {
-        for (const stage of stages) {
-          const cleanName = stage.name?.trim().replace(/^\t+/, "").replace(/^->?\s*/, "") ?? stage.name;
-          if (milestoneMap[stage.id]) {
-            milestoneNameToId[cleanName] = milestoneMap[stage.id];
-          }
-        }
-      }
-
-      const getMilestoneForTask = (taskName: string) => {
-        const tLower = taskName.trim().toLowerCase();
-        for (const [mName, mId] of Object.entries(milestoneNameToId)) {
-          const mLower = mName.trim().toLowerCase();
-          if (tLower === mLower || tLower.includes(mLower) || mLower.includes(tLower)) return mId;
-          
-          if (tLower.includes("personal") && mLower.includes("personal")) return mId;
-          if (tLower.includes("identifi") && mLower.includes("identifi")) return mId;
-          if (tLower.includes("insurance") && mLower.includes("insurance")) return mId;
-          if (tLower.includes("appointment") && mLower.includes("appointment")) return mId;
-          if (tLower.includes("agreement of purchase") && mLower.includes("agreement of purchase")) return mId;
-          if (tLower.includes("mortgage") && mLower.includes("mortgage")) return mId;
-        }
-        return firstMilestoneId;
-      };
-
-      const taskRows = taskTemplates
-        .filter((t) => {
-          const role = (t.role_type ?? "").toLowerCase();
-          return role === "client" || role === "both" || role === "";
-        })
-        .map((t) => {
-          const cleanTitle = t.name?.trim() ?? t.name;
-          return {
-            deal_id: dealId,
-            milestone_id: getMilestoneForTask(cleanTitle),
-            task_template_id: t.id,
-            title: cleanTitle,
-            status: "Pending",
-            completed: false,
-          };
-        });
-
-      if (taskRows.length > 0) {
-        await supabaseAdmin.from("tasks").insert(taskRows);
-      }
-    }
-
-    // ── 8. Create Supabase Auth user + send invite email ──────────────────────
+    // ── 6. Create Supabase Auth user + send invite email ──────────────────────
     let authUserId: string | null = null;
     let inviteSent = false;
     let authError: string | null = null;
@@ -273,7 +183,7 @@ export async function POST(req: Request) {
       console.error("[Invite Exception] Invite failed (non-blocking):", err);
     }
 
-    // ── 9. Update lead status ──────────────────────────────────────────────────
+    // ── 7. Update lead status ──────────────────────────────────────────────────
     await supabaseAdmin
       .from("leads")
       .update({ status: "Converted" })
