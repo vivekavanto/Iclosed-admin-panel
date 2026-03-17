@@ -72,7 +72,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           emailSent: m.email_sent ?? false,
         })));
       }
-    } catch {}
+    } catch { }
   };
 
   // --- Handlers ---
@@ -82,7 +82,8 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     id: string,
     newStatus: Milestone["status"],
   ) => {
-    // Optimistic update
+
+    // Optimistic UI update (already exists)
     setMilestones((prev) =>
       prev.map((m) => {
         if (m.id === id) {
@@ -101,13 +102,47 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       }),
     );
 
-    // PATCH to DB then sync from DB
-    await fetch("/api/admin/milestones", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, status: newStatus }),
-    });
+    // 🔥 CALL SPECIAL API WHEN COMPLETED
+    if (newStatus === "Completed") {
+      await fetch("/api/admin/send-milestone-email", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          milestoneId: id,
+          dealId: deal.id,
+        }),
+      });
+    } else {
+      // normal update
+      await fetch("/api/admin/milestones", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, status: newStatus }),
+      });
+    }
+
     await refetchData();
+  };
+
+  const handleSendMilestoneEmail = async (milestoneId: string) => {
+    const milestone = milestones.find((m) => m.id === milestoneId);
+    if (milestone?.status !== "Completed") {
+      alert("Email can only be sent for completed stages.");
+      return;
+    }
+    const res = await fetch("/api/admin/send-milestone-email", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ milestoneId, dealId: deal.id }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      await refetchData();
+    } else {
+      alert("Failed to send email: " + (data.error || data.message));
+    }
   };
 
   const handleSortMilestones = () => {
@@ -161,11 +196,19 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         )
       );
 
-      await fetch("/api/admin/milestones", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: milestoneId, status: newMilestoneStatus }),
-      });
+      if (allDone) {
+        await fetch("/api/admin/send-milestone-email", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ milestoneId, dealId: deal.id }),
+        });
+      } else {
+        await fetch("/api/admin/milestones", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: milestoneId, status: newMilestoneStatus }),
+        });
+      }
     }
 
     // Re-fetch from DB to ensure UI reflects actual stored state
@@ -263,7 +306,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         // Reset form
         setShowTaskForm(false);
         setTaskForm({
-          client: "",
+          client: rawDeal?.client_id ?? "",
           partner: "",
           title: "",
           status: "Pending",
@@ -283,7 +326,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const [showTaskForm, setShowTaskForm] = useState(false);
 
   const [taskForm, setTaskForm] = useState({
-    client: "",
+    client: rawDeal?.client_id ?? "",
     partner: "",
     title: "",
     status: "Pending",
@@ -304,21 +347,33 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
   const [clients, setClients] = useState<any[]>([]);
   const [taskTemplates, setTaskTemplates] = useState<any[]>([]);
+  const [taskFileDocs, setTaskFileDocs] = useState<any[]>([]);
 
   // Stage form state
   const [showStageForm, setShowStageForm] = useState(false);
   const [stageTemplates, setStageTemplates] = useState<any[]>([]);
+  const [emailTemplates, setEmailTemplates] = useState<any[]>([]);
   const [stageForm, setStageForm] = useState({
     stageTemplate: "",
-    client: "",
+    client: rawDeal?.client_id ?? "",
     status: "Pending",
     partner: "",
     milestoneDate: "",
+    emailTemplateId: "",
   });
 
   const handleStageFormChange = (e: React.ChangeEvent<HTMLSelectElement | HTMLInputElement>) => {
     const { name, value } = e.target;
-    setStageForm((prev) => ({ ...prev, [name]: value }));
+    if (name === "stageTemplate") {
+      const selected = stageTemplates.find(t => t.name === value);
+      setStageForm((prev) => ({
+        ...prev,
+        stageTemplate: value,
+        emailTemplateId: selected?.email_template_id ?? "",
+      }));
+    } else {
+      setStageForm((prev) => ({ ...prev, [name]: value }));
+    }
   };
 
   const handleSaveStage = async () => {
@@ -330,6 +385,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         title: stageForm.stageTemplate,
         status: stageForm.status,
         milestone_date: stageForm.milestoneDate || null,
+        email_template_id: stageForm.emailTemplateId || null,
       };
 
       const res = await fetch("/api/admin/milestones", {
@@ -349,7 +405,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         };
         setMilestones((prev) => [...prev, newMilestone]);
         setShowStageForm(false);
-        setStageForm({ stageTemplate: "", client: "", status: "Pending", partner: "", milestoneDate: "" });
+        setStageForm({ stageTemplate: "", client: rawDeal?.client_id ?? "", status: "Pending", partner: "", milestoneDate: "", emailTemplateId: "" });
       } else {
         alert("Failed to save stage: " + data.error);
       }
@@ -365,7 +421,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       .then((data: any[]) => {
         if (Array.isArray(data)) setTasks(data.map(mapApiTask));
       })
-      .catch(() => {});
+      .catch(() => { });
   }, [deal.id]);
 
   useEffect(() => {
@@ -383,7 +439,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           })));
         }
       })
-      .catch(() => {});
+      .catch(() => { });
   }, [deal.id]);
 
   useEffect(() => {
@@ -426,6 +482,21 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     }
     fetchStageTemplates();
   }, []);
+
+  useEffect(() => {
+    fetch("/api/admin/email-templates")
+      .then(res => res.json())
+      .then(data => { if (Array.isArray(data)) setEmailTemplates(data); })
+      .catch(() => { });
+  }, []);
+
+
+  useEffect(() => {
+    fetch(`/api/admin/task-responses?deal_id=${deal.id}`)
+      .then(res => res.json())
+      .then(data => { if (Array.isArray(data)) setTaskFileDocs(data); })
+      .catch(() => { });
+  }, [deal.id]);
 
   return (
     <div className="flex flex-col h-full bg-slate-50">
@@ -544,7 +615,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                     <th className="px-2 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider min-w-[180px]">
                       Task Name
                     </th>
-                    <th className="px-2 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-12 text-center">
+                    <th className="px-2 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider min-w-[120px]">
                       Doc
                     </th>
                     <th className="px-2 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-20">
@@ -598,24 +669,30 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                           {task.title}
                         </span>
                       </td>
-                      <td className="px-2 py-2 text-center">
-                        {task.document ? (
-                          <a
-                            href={task.document.url}
-                            title={task.document.name}
-                            className="inline-flex items-center justify-center text-brand-primary hover:text-brand-primaryHover"
-                          >
-                            <FileText size={14} />
-                          </a>
-                        ) : (
-                          <span className="text-slate-300 text-[10px]">-</span>
-                        )}
+                      <td className="px-2 py-2">
+                        {(() => {
+                          const matched = taskFileDocs.find(d => d.task_id === task.id);
+                          return matched ? (
+                            <a
+                              href={matched.file_url}
+                              title={matched.file_name}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-1 text-[10px] text-brand-primary hover:underline"
+                            >
+                              <FileText size={11} className="shrink-0" />
+                              <span className="truncate max-w-[110px]">{matched.file_name}</span>
+                            </a>
+                          ) : (
+                            <span className="text-slate-300 text-[10px]">-</span>
+                          );
+                        })()}
                       </td>
                       <td className="px-2 py-2">
                         <input
                           type="date"
                           value={task.dueDate ?? ""}
-                          onChange={() => {}}
+                          onChange={() => { }}
                           className="text-[10px] border border-slate-200 rounded px-1 py-0.5 text-slate-600 bg-transparent focus:bg-white focus:border-brand-primary outline-none w-full"
                         />
                       </td>
@@ -742,7 +819,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                                 <input
                                   type="date"
                                   value={milestone.milestoneDate ?? ""}
-                                  onChange={() => {}}
+                                  onChange={() => { }}
                                   className="text-[10px] border border-slate-200 rounded px-1 py-0.5 text-slate-600 bg-transparent focus:bg-white focus:border-brand-primary outline-none w-full"
                                 />
                               </td>
@@ -750,8 +827,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                               <td className="px-2 py-2 text-right">
                                 <div className="flex items-center justify-end gap-1">
                                   <button
-                                    title="Send Email"
-                                    className="text-brand-primary hover:bg-brand-light p-1 rounded transition-colors"
+                                    title={milestone.emailSent ? "Email already sent" : "Send Email"}
+                                    onClick={() => handleSendMilestoneEmail(milestone.id)}
+                                    className={`p-1 rounded transition-colors ${milestone.emailSent ? "text-green-600 hover:bg-green-50" : "text-brand-primary hover:bg-brand-light"}`}
                                   >
                                     <Mail size={12} />
                                   </button>
@@ -903,6 +981,24 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                   onChange={handleStageFormChange}
                   className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-primary outline-none"
                 />
+              </div>
+
+              {/* Email Template */}
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase">
+                  Email Template
+                </label>
+                <select
+                  name="emailTemplateId"
+                  value={stageForm.emailTemplateId}
+                  onChange={handleStageFormChange}
+                  className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-primary outline-none"
+                >
+                  <option value="">Select Email Template</option>
+                  {emailTemplates.map(t => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
+                </select>
               </div>
 
               {/* Buttons */}

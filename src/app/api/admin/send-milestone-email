@@ -1,0 +1,73 @@
+import { NextResponse } from "next/server"
+import { createClient } from "@supabase/supabase-js"
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+)
+
+export async function POST(req: Request) {
+  try {
+    const { milestoneId, dealId } = await req.json()
+
+    // 1️⃣ Get milestone
+    const { data: milestone } = await supabase
+      .from("milestones")
+      .select("*")
+      .eq("id", milestoneId)
+      .single()
+
+    if (!milestone) throw new Error("Milestone not found")
+
+    // ❌ prevent duplicate emails
+    if (milestone.email_sent) {
+      return NextResponse.json({ success: true, message: "Already sent" })
+    }
+
+    // 2️⃣ Get deal + client email
+    const { data: deal } = await supabase
+      .from("deals")
+      .select("*, clients(email)")
+      .eq("id", dealId)
+      .single()
+
+    const email = deal?.clients?.email
+    if (!email) throw new Error("Client email not found")
+
+    // 3️⃣ Update milestone status
+    await supabase
+      .from("milestones")
+      .update({
+        status: "Completed",
+        completed_at: new Date(),
+      })
+      .eq("id", milestoneId)
+
+    // 4️⃣ Send Email (example)
+    await fetch("https://your-email-service.com/send", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        to: email,
+        subject: "Milestone Completed 🎉",
+        message: `Your milestone "${milestone.title}" is completed.`,
+      }),
+    })
+
+    // 5️⃣ Mark email_sent = true
+    await supabase
+      .from("milestones")
+      .update({ email_sent: true })
+      .eq("id", milestoneId)
+
+    return NextResponse.json({ success: true })
+
+  } catch (error: any) {
+    return NextResponse.json({
+      success: false,
+      error: error.message,
+    })
+  }
+}
