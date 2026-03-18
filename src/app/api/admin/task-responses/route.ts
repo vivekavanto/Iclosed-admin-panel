@@ -32,5 +32,31 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
+  // Step 3: if file_url is null, look up from lead_corporate_docs via deal's lead_id
+  const hasNullUrls = (data ?? []).some((d) => !d.file_url);
+  if (hasNullUrls) {
+    const { data: deal } = await supabaseAdmin
+      .from("deals")
+      .select("lead_id")
+      .eq("id", dealId)
+      .single();
+
+    if (deal?.lead_id) {
+      const { data: docs } = await supabaseAdmin
+        .from("lead_corporate_docs")
+        .select("file_name, file_url")
+        .eq("lead_id", deal.lead_id);
+
+      if (docs?.length) {
+        const docMap = new Map(docs.map((d) => [d.file_name, d.file_url]));
+        for (const item of data ?? []) {
+          if (!item.file_url && item.file_name) {
+            item.file_url = docMap.get(item.file_name) ?? null;
+          }
+        }
+      }
+    }
+  }
+
   return NextResponse.json(data ?? []);
 }

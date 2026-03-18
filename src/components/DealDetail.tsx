@@ -715,16 +715,19 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                         {(() => {
                           const matched = taskFileDocs.find(d => d.task_id === task.id);
                           return matched ? (
-                            <a
-                              href={matched.file_url}
+                            <button
+                              type="button"
                               title={matched.file_name}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="flex items-center gap-1 text-[10px] text-brand-primary hover:underline"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                window.open(matched.file_url, "_blank");
+                              }}
+                              className="flex items-center gap-1 text-[10px] text-brand-primary hover:underline cursor-pointer relative z-10 bg-transparent border-none p-0"
                             >
                               <FileText size={11} className="shrink-0" />
                               <span className="truncate max-w-[110px]">{matched.file_name}</span>
-                            </a>
+                            </button>
                           ) : (
                             <span className="text-slate-300 text-[10px]">-</span>
                           );
