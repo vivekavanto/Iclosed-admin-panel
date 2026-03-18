@@ -47,6 +47,17 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     deal.milestones || [],
   );
 
+  // Toast state
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+  const showToast = (message: string, type: "success" | "error" = "success") => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  // Documents modal state
+  const [showDocuments, setShowDocuments] = useState(false);
+  const taskDocuments = tasks.filter((t) => t.document);
+
   // Drag and Drop State
   const dragTaskItem = useRef<number | null>(null);
   const dragTaskOverItem = useRef<number | null>(null);
@@ -104,16 +115,26 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
     // 🔥 CALL SPECIAL API WHEN COMPLETED
     if (newStatus === "Completed") {
-      await fetch("/api/admin/send-milestone-email", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          milestoneId: id,
-          dealId: deal.id,
-        }),
-      });
+      try {
+        const res = await fetch("/api/admin/send-milestone-email", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            milestoneId: id,
+            dealId: deal.id,
+          }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast("Milestone email sent successfully!");
+        } else {
+          showToast(data.error || "Failed to send milestone email", "error");
+        }
+      } catch {
+        showToast("Failed to send milestone email", "error");
+      }
     } else {
       // normal update
       await fetch("/api/admin/milestones", {
@@ -139,9 +160,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     });
     const data = await res.json();
     if (data.success) {
+      showToast("Milestone email sent successfully!");
       await refetchData();
     } else {
-      alert("Failed to send email: " + (data.error || data.message));
+      showToast(data.error || "Failed to send milestone email", "error");
     }
   };
 
@@ -197,11 +219,17 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       );
 
       if (allDone) {
-        await fetch("/api/admin/send-milestone-email", {
+        const res = await fetch("/api/admin/send-milestone-email", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ milestoneId, dealId: deal.id }),
         });
+        const data = await res.json();
+        if (data.success) {
+          showToast("Milestone email sent successfully!");
+        } else {
+          showToast(data.error || "Failed to send milestone email", "error");
+        }
       } else {
         await fetch("/api/admin/milestones", {
           method: "PATCH",
@@ -500,6 +528,17 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
   return (
     <div className="flex flex-col h-full bg-slate-50">
+      {/* Toast */}
+      {toast && (
+        <div
+          className={`fixed top-6 right-6 z-50 px-5 py-3 rounded-lg shadow-lg text-sm font-medium text-white transition-all ${
+            toast.type === "success" ? "bg-green-600" : "bg-red-600"
+          }`}
+        >
+          {toast.message}
+        </div>
+      )}
+
       {/* Top Navigation & Actions */}
       <div className="mb-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <button
@@ -510,8 +549,11 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         </button>
 
         <div className="flex gap-3">
-          <button className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm">
-            View Documents
+          <button
+            onClick={() => setShowDocuments(true)}
+            className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2"
+          >
+            <FileText size={16} /> View Documents
           </button>
         </div>
       </div>
@@ -906,8 +948,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                   className="flex-1 min-w-0 w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-primary outline-none"
                 >
                   <option value="">Select Stage Template</option>
-                  {stageTemplates.map((t) => {
-                    const label = `${t.lead_type} - ${t.role} - ${t.name}`;
+                  {stageTemplates
+                    .filter((t) => !deal.type || t.lead_type?.toLowerCase() === deal.type.toLowerCase())
+                    .map((t) => {
+                    const label = `${t.lead_type}-${t.role}-${t.name}`;
                     return (
                       <option key={t.id} value={t.name} title={label}>
                         {label.length > 55 ? label.slice(0, 55) + "…" : label}
@@ -992,12 +1036,18 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                   name="emailTemplateId"
                   value={stageForm.emailTemplateId}
                   onChange={handleStageFormChange}
-                  className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-primary outline-none"
+                  disabled={!stageForm.emailTemplateId}
+                  className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-primary outline-none disabled:bg-slate-100 disabled:text-slate-400"
                 >
-                  <option value="">Select Email Template</option>
-                  {emailTemplates.map(t => (
-                    <option key={t.id} value={t.id}>{t.name}</option>
-                  ))}
+                  {stageForm.emailTemplateId ? (
+                    emailTemplates
+                      .filter(t => t.id === stageForm.emailTemplateId)
+                      .map(t => (
+                        <option key={t.id} value={t.id}>{t.name}</option>
+                      ))
+                  ) : (
+                    <option value="">No email template</option>
+                  )}
                 </select>
               </div>
 
@@ -1219,6 +1269,49 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
             </div>
           </div>
 
+        </div>
+      )}
+      {/* Documents Modal */}
+      {showDocuments && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
+              <h3 className="text-lg font-bold text-slate-900">Documents</h3>
+              <button
+                onClick={() => setShowDocuments(false)}
+                className="text-slate-400 hover:text-slate-600 text-xl font-bold"
+              >
+                &times;
+              </button>
+            </div>
+            <div className="px-6 py-4 overflow-y-auto flex-1">
+              {taskDocuments.length === 0 ? (
+                <p className="text-sm text-slate-400 text-center py-8">No documents uploaded yet.</p>
+              ) : (
+                <ul className="space-y-3">
+                  {taskDocuments.map((t) => (
+                    <li key={t.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <FileText size={16} className="text-slate-400 shrink-0" />
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-slate-800 truncate">{t.document!.name}</p>
+                          <p className="text-xs text-slate-400 truncate">Task: {t.title}</p>
+                        </div>
+                      </div>
+                      <a
+                        href={t.document!.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs font-medium text-brand-primary hover:underline shrink-0 ml-3"
+                      >
+                        View
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
