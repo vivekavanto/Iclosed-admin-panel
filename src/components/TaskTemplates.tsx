@@ -21,9 +21,16 @@ interface TaskTemplate {
   order: number;
   deadlineRule: string | null;
   isApsTask: boolean;
+  is_default: boolean;
 }
 
 const LEAD_TYPES = ["Purchase", "Sale", "Refinance"];
+
+const DEADLINE_RULES = [
+  "N business days after task creation",
+  "N days before lead closing date",
+  "N days before lead requisition date",
+];
 
 const emptyForm = {
   id: "",
@@ -31,9 +38,11 @@ const emptyForm = {
   roleType: "Client",
   name: "",
   order: 1,
-  deadlineRule: "",
+  deadlineRule: DEADLINE_RULES[0],
   isApsTask: false,
+  is_default: false,
 };
+
 
 const TaskTemplates: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState("");
@@ -69,6 +78,7 @@ const TaskTemplates: React.FC = () => {
             order: t.order_index,
             deadlineRule: t.deadline_rule,
             isApsTask: t.is_aps_task,
+            is_default: t.is_default ?? false,
           })),
         );
       } catch (err: any) {
@@ -88,8 +98,9 @@ const TaskTemplates: React.FC = () => {
       roleType: task.roleType,
       name: task.name,
       order: task.order,
-      deadlineRule: task.deadlineRule || "",
+      deadlineRule: task.deadlineRule || DEADLINE_RULES[0],
       isApsTask: task.isApsTask,
+      is_default: task.is_default,
     });
     setIsModalOpen(true);
   };
@@ -114,7 +125,6 @@ const TaskTemplates: React.FC = () => {
 
     try {
       const method = form.id ? "PUT" : "POST";
-
       const res = await fetch("/api/admin/task-templates", {
         method,
         headers: { "Content-Type": "application/json" },
@@ -133,6 +143,7 @@ const TaskTemplates: React.FC = () => {
         order: result.order_index,
         deadlineRule: result.deadline_rule,
         isApsTask: result.is_aps_task,
+        is_default: result.is_default ?? false,
       };
 
       if (form.id) {
@@ -150,8 +161,6 @@ const TaskTemplates: React.FC = () => {
     }
   };
 
-  const inputClasses =
-    "w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm font-medium text-slate-800 outline-none focus:border-brand-primary focus:ring-2 focus:ring-brand-primary/10 transition-all bg-white placeholder:text-slate-300";
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
@@ -299,164 +308,114 @@ const TaskTemplates: React.FC = () => {
 
       {/* Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-6 animate-in fade-in duration-200">
-          <div
-            className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
-            onClick={() => {
-              setIsModalOpen(false);
-              resetForm();
-            }}
-          />
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg relative z-10 overflow-hidden animate-in zoom-in-95 duration-200">
-            {/* Modal Header */}
-            <div className="p-8 border-b border-slate-100 flex justify-between items-start">
-              <div>
-                <h3 className="text-2xl font-black text-slate-900 leading-none">
-                  {form.id ? "Edit Task Template" : "New Task Template"}
-                </h3>
-                <p className="text-slate-500 font-medium mt-2">
-                  {form.id
-                    ? "Update the task template details."
-                    : "Create a new task template for a lead type."}
-                </p>
-              </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-slate-200">
+              <h3 className="text-lg font-bold text-slate-900">
+                {form.id ? "Edit Task Template" : "New Task Template"}
+              </h3>
               <button
                 onClick={() => {
                   setIsModalOpen(false);
                   resetForm();
                 }}
-                className="text-slate-300 hover:text-slate-600 transition-colors mt-1"
+                className="text-slate-400 hover:text-slate-600"
               >
-                <X size={24} />
+                <X size={20} />
               </button>
             </div>
 
-            {/* Modal Form */}
-            <form onSubmit={handleSubmit} className="p-8 space-y-5">
-              {/* Lead Type */}
-              <div className="space-y-2">
-                <label className="block text-[11px] font-black text-slate-500 uppercase tracking-widest">
-                  Lead Type <span className="text-red-500">*</span>
-                </label>
-                <select
-                  required
-                  className={inputClasses}
-                  value={form.leadType}
-                  onChange={(e) =>
-                    setForm((prev) => ({ ...prev, leadType: e.target.value }))
-                  }
-                >
-                  {LEAD_TYPES.map((lt) => (
-                    <option key={lt} value={lt}>
-                      {lt}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Role Type */}
-              <div className="space-y-2">
-                <label className="block text-[11px] font-black text-slate-500 uppercase tracking-widest">
-                  Role Type <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Client, Agent, Lawyer"
-                  className={inputClasses}
-                  value={form.roleType}
-                  onChange={(e) =>
-                    setForm((prev) => ({ ...prev, roleType: e.target.value }))
-                  }
-                />
-              </div>
-
-              {/* Name */}
-              <div className="space-y-2">
-                <label className="block text-[11px] font-black text-slate-500 uppercase tracking-widest">
-                  Task Name <span className="text-red-500">*</span>
-                </label>
+            <form onSubmit={handleSubmit} className="px-4 sm:px-6 py-4 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Task Name *</label>
                 <input
                   type="text"
                   required
                   placeholder="e.g. Upload Signed APS"
-                  className={inputClasses}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
                   value={form.name}
-                  onChange={(e) =>
-                    setForm((prev) => ({ ...prev, name: e.target.value }))
-                  }
+                  onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
                 />
               </div>
 
-              {/* Order */}
-              <div className="space-y-2">
-                <label className="block text-[11px] font-black text-slate-500 uppercase tracking-widest">
-                  Order Index <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="number"
-                  required
-                  min={1}
-                  className={inputClasses}
-                  value={form.order}
-                  onChange={(e) =>
-                    setForm((prev) => ({
-                      ...prev,
-                      order: parseInt(e.target.value) || 1,
-                    }))
-                  }
-                />
-              </div>
-
-              {/* Deadline Rule */}
-              <div className="space-y-2">
-                <label className="block text-[11px] font-black text-slate-500 uppercase tracking-widest">
-                  Deadline Rule{" "}
-                  <span className="text-slate-300 font-medium normal-case">
-                    (optional)
-                  </span>
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. 3 days before closing"
-                  className={inputClasses}
-                  value={form.deadlineRule}
-                  onChange={(e) =>
-                    setForm((prev) => ({
-                      ...prev,
-                      deadlineRule: e.target.value,
-                    }))
-                  }
-                />
-              </div>
-
-              {/* Is APS Task Toggle */}
-              <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-100">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <p className="text-sm font-bold text-slate-800">
-                    Upload APS Task
-                  </p>
-                  <p className="text-xs text-slate-500 font-medium">
-                    Mark if this task requires uploading an APS document.
-                  </p>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Lead Type *</label>
+                  <select
+                    required
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
+                    value={form.leadType}
+                    onChange={(e) => setForm((prev) => ({ ...prev, leadType: e.target.value }))}
+                  >
+                    {LEAD_TYPES.map((lt) => (
+                      <option key={lt} value={lt}>{lt}</option>
+                    ))}
+                  </select>
                 </div>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setForm((prev) => ({
-                      ...prev,
-                      isApsTask: !prev.isApsTask,
-                    }))
-                  }
-                  className={`relative w-12 h-6 rounded-full transition-colors duration-200 focus:outline-none ${form.isApsTask ? "bg-brand-primary" : "bg-slate-300"}`}
-                >
-                  <span
-                    className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ${form.isApsTask ? "translate-x-6" : "translate-x-0"}`}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Role Type *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Client, Agent, Lawyer"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
+                    value={form.roleType}
+                    onChange={(e) => setForm((prev) => ({ ...prev, roleType: e.target.value }))}
                   />
-                </button>
+                </div>
               </div>
 
-              {/* Actions */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Order *</label>
+                  <input
+                    type="number"
+                    required
+                    min={1}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
+                    value={form.order}
+                    onChange={(e) => setForm((prev) => ({ ...prev, order: parseInt(e.target.value) || 1 }))}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Deadline Rule</label>
+                  <select
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
+                    value={form.deadlineRule}
+                    onChange={(e) => setForm((prev) => ({ ...prev, deadlineRule: e.target.value }))}
+                  >
+                    {DEADLINE_RULES.map((rule) => (
+                      <option key={rule} value={rule}>{rule}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="flex items-end pb-1">
+                  <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={form.isApsTask}
+                      onChange={() => setForm((prev) => ({ ...prev, isApsTask: !prev.isApsTask }))}
+                      className="rounded border-slate-300"
+                    />
+                    APS Task
+                  </label>
+                </div>
+                <div className="flex items-end pb-1">
+                  <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={form.is_default}
+                      onChange={() => setForm((prev) => ({ ...prev, is_default: !prev.is_default }))}
+                      className="rounded border-slate-300"
+                    />
+                    Default
+                  </label>
+                </div>
+              </div>
+
               <div className="flex justify-end gap-3 pt-2">
                 <button
                   type="button"
@@ -464,14 +423,14 @@ const TaskTemplates: React.FC = () => {
                     setIsModalOpen(false);
                     resetForm();
                   }}
-                  className="px-6 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-bold text-sm hover:bg-slate-50 transition-all"
+                  className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="px-8 py-2.5 bg-brand-primary text-white rounded-xl font-bold text-sm shadow-lg shadow-brand-primary/20 hover:bg-brand-primaryHover transition-all active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="flex items-center gap-2 bg-brand-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-brand-primary/90 transition-colors disabled:opacity-50"
                 >
                   {isSubmitting
                     ? "Saving..."

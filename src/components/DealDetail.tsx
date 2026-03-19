@@ -47,6 +47,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     deal.milestones || [],
   );
 
+  // Extended display types with template flag
+  type DisplayTask = Task & { isTemplate?: boolean };
+  type DisplayMilestone = Milestone & { isTemplate?: boolean };
+
   // Toast state
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
   const showToast = (message: string, type: "success" | "error" = "success") => {
@@ -56,7 +60,6 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
   // Documents modal state
   const [showDocuments, setShowDocuments] = useState(false);
-  const taskDocuments = tasks.filter((t) => t.document);
 
   // Drag and Drop State
   const dragTaskItem = useRef<number | null>(null);
@@ -85,6 +88,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       }
     } catch { }
   };
+
+  // Documents use only user-added tasks (not templates) for doc matching
+  const taskDocuments = tasks.filter((t) => t.document);
 
   // --- Handlers ---
 
@@ -443,6 +449,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     }
   };
 
+  // Fetch user-added tasks from DB
   useEffect(() => {
     fetch(`/api/admin/tasks?deal_id=${deal.id}`)
       .then(res => res.json())
@@ -452,6 +459,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       .catch(() => { });
   }, [deal.id]);
 
+  // Fetch user-added milestones from DB
   useEffect(() => {
     fetch(`/api/admin/milestones?deal_id=${deal.id}`)
       .then(res => res.json())
@@ -470,6 +478,60 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       .catch(() => { });
   }, [deal.id]);
 
+  // Fetch task templates for predefined rows + add-task form
+  useEffect(() => {
+    fetch("/api/admin/task-templates")
+      .then(res => res.json())
+      .then((data: any[]) => {
+        if (Array.isArray(data)) setTaskTemplates(data);
+      })
+      .catch(() => { });
+  }, []);
+
+  // Fetch stage templates for predefined rows + add-stage form
+  useEffect(() => {
+    fetch("/api/admin/milestone-templates")
+      .then(res => res.json())
+      .then((data: any[]) => {
+        if (Array.isArray(data)) setStageTemplates(data);
+      })
+      .catch(() => { });
+  }, []);
+
+  // Combine predefined templates + user-added data for display (deduped by title)
+  const dealType = deal.type?.toLowerCase();
+
+  const displayTasks: DisplayTask[] = (() => {
+    const userTitles = new Set(tasks.map(t => t.title.toLowerCase()));
+    const templateRows: DisplayTask[] = taskTemplates
+      .filter((t: any) => t.is_default)
+      .filter((t: any) => !userTitles.has(t.name.toLowerCase()))
+      .map((t: any): DisplayTask => ({
+        id: `tpl-${t.id}`,
+        title: t.name,
+        completed: false,
+        status: "Pending",
+        isTemplate: true,
+      }));
+    const userRows: DisplayTask[] = tasks.map(t => ({ ...t, isTemplate: false }));
+    return [...templateRows, ...userRows];
+  })();
+
+  const displayMilestones: DisplayMilestone[] = (() => {
+    const userTitles = new Set(milestones.map(m => m.title.toLowerCase()));
+    const templateRows: DisplayMilestone[] = stageTemplates
+      .filter((t: any) => !dealType || t.lead_type?.toLowerCase() === dealType)
+      .filter((t: any) => !userTitles.has(t.name.toLowerCase()))
+      .map((t: any): DisplayMilestone => ({
+        id: `tpl-${t.id}`,
+        title: t.name,
+        status: "Pending",
+        isTemplate: true,
+      }));
+    const userRows: DisplayMilestone[] = milestones.map(m => ({ ...m, isTemplate: false }));
+    return [...templateRows, ...userRows];
+  })();
+
   useEffect(() => {
     async function fetchClients() {
       try {
@@ -485,31 +547,6 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     fetchClients();
   }, []);
 
-  useEffect(() => {
-    async function fetchTaskTemplates() {
-      try {
-        const res = await fetch("/api/admin/task-templates");
-        const data = await res.json();
-        setTaskTemplates(data);
-      } catch (err) {
-        console.error("Failed to fetch templates:", err);
-      }
-    }
-    fetchTaskTemplates();
-  }, []);
-
-  useEffect(() => {
-    async function fetchStageTemplates() {
-      try {
-        const res = await fetch("/api/admin/milestone-templates");
-        const data = await res.json();
-        if (Array.isArray(data)) setStageTemplates(data);
-      } catch (err) {
-        console.error("Failed to fetch stage templates:", err);
-      }
-    }
-    fetchStageTemplates();
-  }, []);
 
   useEffect(() => {
     fetch("/api/admin/email-templates")
@@ -670,41 +707,47 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {tasks.map((task, index) => (
+                  {displayTasks.map((task, index) => (
                     <tr
                       key={task.id}
-                      draggable
-                      onDragStart={() => (dragTaskItem.current = index)}
-                      onDragEnter={() => (dragTaskOverItem.current = index)}
-                      onDragEnd={handleSortTasks}
+                      draggable={!task.isTemplate}
+                      onDragStart={() => !task.isTemplate && (dragTaskItem.current = index)}
+                      onDragEnter={() => !task.isTemplate && (dragTaskOverItem.current = index)}
+                      onDragEnd={!task.isTemplate ? handleSortTasks : undefined}
                       onDragOver={(e) => e.preventDefault()}
-                      className="hover:bg-slate-50 transition-colors group cursor-move"
+                      className={`hover:bg-slate-50 transition-colors group ${task.isTemplate ? "opacity-60" : "cursor-move"}`}
                     >
                       <td className="px-3 py-2 text-slate-300">
-                        <GripVertical size={14} />
+                        {!task.isTemplate && <GripVertical size={14} />}
                       </td>
                       <td className="px-2 py-2 text-center text-[10px] text-slate-500 font-medium">
                         {index + 1}
                       </td>
                       <td className="px-2 py-2">
-                        <div className="relative">
-                          <select
-                            className={`text-[10px] font-medium border rounded pl-2 pr-6 py-1 w-full outline-none cursor-pointer appearance-none truncate ${getStatusColor(task.status)}`}
-                            value={task.status || "Pending"}
-                            onChange={(e) =>
-                              handleTaskStatusChange(
-                                task.id,
-                                e.target.value as any,
-                              )
-                            }
-                          >
-                            <option value="Pending">Pending</option>
-                            <option value="Completed">Completed</option>
-                          </select>
-                          <div className="absolute inset-y-0 right-0 flex items-center pr-1.5 pointer-events-none text-slate-500">
-                            <ChevronDown size={10} />
+                        {task.isTemplate ? (
+                          <span className={`text-[10px] font-medium border rounded px-2 py-1 inline-block ${getStatusColor("Pending")}`}>
+                            Pending
+                          </span>
+                        ) : (
+                          <div className="relative">
+                            <select
+                              className={`text-[10px] font-medium border rounded pl-2 pr-6 py-1 w-full outline-none cursor-pointer appearance-none truncate ${getStatusColor(task.status)}`}
+                              value={task.status || "Pending"}
+                              onChange={(e) =>
+                                handleTaskStatusChange(
+                                  task.id,
+                                  e.target.value as any,
+                                )
+                              }
+                            >
+                              <option value="Pending">Pending</option>
+                              <option value="Completed">Completed</option>
+                            </select>
+                            <div className="absolute inset-y-0 right-0 flex items-center pr-1.5 pointer-events-none text-slate-500">
+                              <ChevronDown size={10} />
+                            </div>
                           </div>
-                        </div>
+                        )}
                       </td>
                       <td className="px-2 py-2">
                         <span className="text-xs font-medium text-slate-800 block leading-tight">
@@ -712,7 +755,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                         </span>
                       </td>
                       <td className="px-2 py-2">
-                        {(() => {
+                        {task.isTemplate ? (
+                          <span className="text-slate-300 text-[10px]">-</span>
+                        ) : (() => {
                           const matched = taskFileDocs.find(d => d.task_id === task.id);
                           return matched ? (
                             <button
@@ -734,26 +779,32 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                         })()}
                       </td>
                       <td className="px-2 py-2">
-                        <input
-                          type="date"
-                          value={task.dueDate ?? ""}
-                          onChange={() => { }}
-                          className="text-[10px] border border-slate-200 rounded px-1 py-0.5 text-slate-600 bg-transparent focus:bg-white focus:border-brand-primary outline-none w-full"
-                        />
+                        {task.isTemplate ? (
+                          <span className="text-slate-300 text-[10px]">-</span>
+                        ) : (
+                          <input
+                            type="date"
+                            value={task.dueDate ?? ""}
+                            onChange={() => { }}
+                            className="text-[10px] border border-slate-200 rounded px-1 py-0.5 text-slate-600 bg-transparent focus:bg-white focus:border-brand-primary outline-none w-full"
+                          />
+                        )}
                       </td>
                       <td className="px-2 py-2">
                         <span className="text-[10px] text-slate-400">
-                          {task.completedAt || "-"}
+                          {task.isTemplate ? "-" : (task.completedAt || "-")}
                         </span>
                       </td>
                       <td className="px-2 py-2 text-center">
-                        <button onClick={() => handleDeleteTask(task.id)} className="text-slate-300 hover:text-red-600 p-1 transition-colors">
-                          <Trash2 size={14} />
-                        </button>
+                        {!task.isTemplate && (
+                          <button onClick={() => handleDeleteTask(task.id)} className="text-slate-300 hover:text-red-600 p-1 transition-colors">
+                            <Trash2 size={14} />
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}
-                  {tasks.length === 0 && (
+                  {displayTasks.length === 0 && (
                     <tr>
                       <td
                         colSpan={8}
@@ -805,26 +856,26 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {milestones.length === 0 ? (
+                    {displayMilestones.length === 0 ? (
                       <tr>
                         <td colSpan={6} className="text-center py-8 text-sm text-slate-400">
                           No milestones added
                         </td>
                       </tr>
                     ) : (
-                      milestones.map((milestone, index) => {
+                      displayMilestones.map((milestone, index) => {
                         return (
                           <React.Fragment key={milestone.id}>
                             <tr
-                              draggable
-                              onDragStart={() => (dragMilestoneItem.current = index)}
-                              onDragEnter={() => (dragMilestoneOverItem.current = index)}
-                              onDragEnd={handleSortMilestones}
+                              draggable={!milestone.isTemplate}
+                              onDragStart={() => !milestone.isTemplate && (dragMilestoneItem.current = index)}
+                              onDragEnter={() => !milestone.isTemplate && (dragMilestoneOverItem.current = index)}
+                              onDragEnd={!milestone.isTemplate ? handleSortMilestones : undefined}
                               onDragOver={(e) => e.preventDefault()}
-                              className="hover:bg-slate-50 transition-colors group cursor-move bg-slate-50/60"
+                              className={`hover:bg-slate-50 transition-colors group bg-slate-50/60 ${milestone.isTemplate ? "opacity-60" : "cursor-move"}`}
                             >
                               <td className="px-3 py-2 text-slate-300">
-                                <GripVertical size={14} />
+                                {!milestone.isTemplate && <GripVertical size={14} />}
                               </td>
 
                               <td className="px-2 py-2 text-center text-[10px] text-slate-500 font-medium">
@@ -832,26 +883,32 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                               </td>
 
                               <td className="px-2 py-2">
-                                <div className="relative">
-                                  <select
-                                    className={`text-[10px] font-medium border rounded pl-2 pr-6 py-1 w-full outline-none cursor-pointer appearance-none truncate ${getStatusColor(milestone.status)}`}
-                                    value={milestone.status}
-                                    onChange={(e) =>
-                                      handleMilestoneStatusChange(
-                                        milestone.id,
-                                        e.target.value as any
-                                      )
-                                    }
-                                  >
-                                    <option value="">Status</option>
-                                    <option value="Pending">Pending</option>
-                                    <option value="In Progress">In Progress</option>
-                                    <option value="Completed">Completed</option>
-                                  </select>
-                                  <div className="absolute inset-y-0 right-0 flex items-center pr-1.5 pointer-events-none text-slate-500">
-                                    <ChevronDown size={10} />
+                                {milestone.isTemplate ? (
+                                  <span className={`text-[10px] font-medium border rounded px-2 py-1 inline-block ${getStatusColor("Pending")}`}>
+                                    Pending
+                                  </span>
+                                ) : (
+                                  <div className="relative">
+                                    <select
+                                      className={`text-[10px] font-medium border rounded pl-2 pr-6 py-1 w-full outline-none cursor-pointer appearance-none truncate ${getStatusColor(milestone.status)}`}
+                                      value={milestone.status}
+                                      onChange={(e) =>
+                                        handleMilestoneStatusChange(
+                                          milestone.id,
+                                          e.target.value as any
+                                        )
+                                      }
+                                    >
+                                      <option value="">Status</option>
+                                      <option value="Pending">Pending</option>
+                                      <option value="In Progress">In Progress</option>
+                                      <option value="Completed">Completed</option>
+                                    </select>
+                                    <div className="absolute inset-y-0 right-0 flex items-center pr-1.5 pointer-events-none text-slate-500">
+                                      <ChevronDown size={10} />
+                                    </div>
                                   </div>
-                                </div>
+                                )}
                               </td>
 
                               <td className="px-2 py-2">
@@ -861,12 +918,16 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                               </td>
 
                               <td className="px-2 py-2">
-                                <input
-                                  type="date"
-                                  value={milestone.milestoneDate ?? ""}
-                                  onChange={() => { }}
-                                  className="text-[10px] border border-slate-200 rounded px-1 py-0.5 text-slate-600 bg-transparent focus:bg-white focus:border-brand-primary outline-none w-full"
-                                />
+                                {milestone.isTemplate ? (
+                                  <span className="text-slate-300 text-[10px]">-</span>
+                                ) : (
+                                  <input
+                                    type="date"
+                                    value={milestone.milestoneDate ?? ""}
+                                    onChange={() => { }}
+                                    className="text-[10px] border border-slate-200 rounded px-1 py-0.5 text-slate-600 bg-transparent focus:bg-white focus:border-brand-primary outline-none w-full"
+                                  />
+                                )}
                               </td>
 
                               <td className="px-2 py-2 text-right">

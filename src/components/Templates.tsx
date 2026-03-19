@@ -1,95 +1,170 @@
 "use client";
 
-import React, { useState } from 'react';
-import { 
-  ChevronDown, 
-  FileText, 
-  Download, 
-  Edit3, 
+import React, { useState, useEffect } from 'react';
+import {
+  ChevronDown,
   Search,
   FileStack,
-  Info,
   Mail,
   CheckCircle2,
   XCircle,
-  MoreVertical
+  Plus,
+  X,
+  Loader2,
+  Trash2
 } from 'lucide-react';
 
-interface WorkflowItem {
+interface StageTemplate {
   id: string;
-  order: number;
   name: string;
-  emailTemplate?: string;
-  isShared: boolean;
+  lead_type: LeadType;
+  order_index: number;
   role: string;
+  is_shared: boolean;
+  email_template_id: string | null;
+  email_templates: { id: string; name: string } | null;
 }
+
+interface EmailTemplate {
+  id: string;
+  name: string;
+}
+
+type LeadType = 'Purchase' | 'Sale' | 'Refinance' | 'Status Certificate Review';
 
 interface TemplateSection {
   title: string;
-  type: 'Purchase' | 'Sale' | 'Refinance';
-  items: WorkflowItem[];
+  type: LeadType;
+  items: StageTemplate[];
 }
 
-const PURCHASE_WORKFLOW: WorkflowItem[] = [
-  { id: '1', order: 1, name: 'Agreement of Purchase and Sale', role: 'Client', isShared: true },
-  { id: '2', order: 2, name: 'Initial Call', role: 'Client', emailTemplate: 'Initial Intake Completed Email', isShared: true },
-  { id: '3', order: 3, name: 'Personal Information', role: 'Client', isShared: false },
-  { id: '4', order: 4, name: 'Identification', role: 'Client', isShared: false },
-  { id: '5', order: 5, name: 'Title Search', role: 'Client', emailTemplate: 'Title Search Completed Email', isShared: true },
-  { id: '6', order: 6, name: 'Financing Firm → Mortgage Instructions', role: 'Client', emailTemplate: 'Financing Firm → Mortgage Instructions Completed Email', isShared: true },
-  { id: '7', order: 7, name: 'Aligned with Seller → Closing Date Coordination', role: 'Client', emailTemplate: 'Aligned with Seller → Closing Date Coordination Completed Email', isShared: true },
-  { id: '8', order: 8, name: 'Financial Info Confirmed → Mortgage Details Confirmed', role: 'Client', emailTemplate: 'Financial Info Confirmed → Mortgage Details Confirmed Email Completed', isShared: true },
-  { id: '9', order: 9, name: 'Home Insurance', role: 'Client', isShared: false },
-  { id: '10', order: 10, name: 'Appointment Scheduled', role: 'Client', isShared: false },
-  { id: '11', order: 11, name: 'Documents Signed', role: 'Client', isShared: false },
-  { id: '12', order: 12, name: 'Funds received', role: 'Client', isShared: false },
-  { id: '14', order: 14, name: 'Transaction Completed', role: 'Client', emailTemplate: 'Transaction Completed Email', isShared: true },
-  { id: '15', order: 15, name: 'Final Report Received', role: 'Client', isShared: false },
-];
-
-const SALE_WORKFLOW: WorkflowItem[] = [
-  { id: 's1', order: 1, name: 'Agreement of Purchase and Sale', role: 'Client', isShared: true },
-  { id: 's2', order: 2, name: 'Initial Call & Email', role: 'Client', isShared: true },
-  { id: 's3', order: 3, name: 'Financial Info Confirmed & Preparation of Documents', role: 'Client', isShared: true },
-  { id: 's4', order: 4, name: 'Documents Signing', role: 'Client', isShared: true },
-  { id: 's5', order: 5, name: 'Funds Received', role: 'Client', isShared: true },
-  { id: 's6', order: 6, name: 'Transaction Completed', role: 'Client', isShared: false },
-];
-
-const REFINANCE_WORKFLOW: WorkflowItem[] = [
-  { id: 'r1', order: 1, name: 'Financing -> Mortgage Instructions & Review of Mortgage Terms', role: 'Client', isShared: false },
-  { id: 'r2', order: 2, name: 'Title Search', role: 'Client', isShared: false },
-  { id: 'r3', order: 3, name: 'Initial Call & Intake Email', role: 'Client', isShared: false },
-  { id: 'r4', order: 4, name: 'Review of Documents provided by you & Follow up for any outstanding documents', role: 'Client', isShared: false },
-  { id: 'r5', order: 5, name: 'Documents Signed -> Signing Documents', role: 'Client', isShared: false },
-  { id: 'r6', order: 6, name: 'Review/Upload Documents to the Lender to obtain file complete', role: 'Client', isShared: false },
-  { id: 'r7', order: 7, name: 'Financial Info Confirmed -> Mortgage Details Confirmed', role: 'Client', isShared: false },
-  { id: 'r8', order: 8, name: 'Closing Day', role: 'Client', isShared: false },
-  { id: 'r9', order: 9, name: 'Final Report', role: 'Client', isShared: false },
-  { id: 'r10', order: 1, name: 'Mortgage Instructions Initiated', role: 'Lender', isShared: false },
-  { id: 'r11', order: 2, name: 'Borrowers Documents Requested', role: 'Lender', isShared: false },
-  { id: 'r12', order: 3, name: 'Review of Borrowers Stage 1 Documents', role: 'Lender', isShared: false },
-  { id: 'r13', order: 4, name: 'Signing Documents Sent to Borrowers Lawyer', role: 'Lender', isShared: false },
-  { id: 'r14', order: 5, name: 'Stage 2 Documents Received and Verified', role: 'Lender', isShared: false },
-  { id: 'r15', order: 6, name: 'Funds Release by the Lender', role: 'Lender', isShared: false },
-  { id: 'r16', order: 7, name: 'Deal completed (Funding For refinance)', role: 'Lender', isShared: false },
-  { id: 'r17', order: 8, name: 'Deal completed (Funding For Refinance)', role: 'Lender', isShared: false },
-];
-
-const MOCK_SECTIONS: TemplateSection[] = [
-  { title: 'Purchase Template', type: 'Purchase', items: PURCHASE_WORKFLOW },
-  { title: 'Sale Template', type: 'Sale', items: SALE_WORKFLOW },
-  { title: 'Refinance Template', type: 'Refinance', items: REFINANCE_WORKFLOW }
+const SECTION_TYPES: { title: string; type: LeadType }[] = [
+  { title: 'Purchase Template', type: 'Purchase' },
+  { title: 'Sale Template', type: 'Sale' },
+  { title: 'Refinance Template', type: 'Refinance' },
+  { title: 'Status Certificate Review Template', type: 'Status Certificate Review' },
 ];
 
 const Templates: React.FC = () => {
   const [expandedSections, setExpandedSections] = useState<string[]>(['Purchase']);
   const [searchTerm, setSearchTerm] = useState('');
-  const toggleSection = (title: string) => setExpandedSections(prev => prev.includes(title) ? prev.filter(s => s !== title) : [...prev, title]);
-  const filteredSections = MOCK_SECTIONS.map(section => ({ ...section, items: section.items.filter(item => item.name.toLowerCase().includes(searchTerm.toLowerCase()) || (item.emailTemplate && item.emailTemplate.toLowerCase().includes(searchTerm.toLowerCase()))) }));
+  const [stageTemplates, setStageTemplates] = useState<StageTemplate[]>([]);
+  const [emailTemplates, setEmailTemplates] = useState<EmailTemplate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+
+  // Form state
+  const [formData, setFormData] = useState({
+    name: '',
+    description: { short: '', modal: '', task: '' },
+    lead_type: 'Purchase' as LeadType,
+    order_index: 1,
+    role: 'Client',
+    is_shared: false,
+    email_template_id: '',
+  });
+
+  const showToast = (message: string, type: "success" | "error" = "success") => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  const fetchData = async () => {
+    setLoading(true);
+    try {
+      const [stageRes, emailRes] = await Promise.all([
+        fetch('/api/admin/milestone-templates'),
+        fetch('/api/admin/email-templates'),
+      ]);
+      const stages = await stageRes.json();
+      const emails = await emailRes.json();
+      setStageTemplates(Array.isArray(stages) ? stages : []);
+      setEmailTemplates(Array.isArray(emails) ? emails : []);
+    } catch {
+      showToast('Failed to load templates', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchData(); }, []);
+
+  const toggleSection = (type: string) =>
+    setExpandedSections(prev => prev.includes(type) ? prev.filter(s => s !== type) : [...prev, type]);
+
+  const sections: TemplateSection[] = SECTION_TYPES.map(s => ({
+    ...s,
+    items: stageTemplates
+      .filter(t => t.lead_type === s.type)
+      .sort((a, b) => a.order_index - b.order_index),
+  }));
+
+  const filteredSections = sections.map(section => ({
+    ...section,
+    items: section.items.filter(item =>
+      item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (item.email_templates?.name && item.email_templates.name.toLowerCase().includes(searchTerm.toLowerCase()))
+    ),
+  }));
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.name.trim()) return;
+
+    setSubmitting(true);
+    try {
+      const res = await fetch('/api/admin/milestone-templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...formData,
+          email_template_id: formData.email_template_id || null,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to create');
+      }
+
+      showToast('Stage template created successfully');
+      setShowAddForm(false);
+      setFormData({ name: '', description: { short: '', modal: '', task: '' }, lead_type: 'Purchase', order_index: 1, role: 'Client', is_shared: false, email_template_id: '' });
+      fetchData();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to create stage template', 'error');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDelete = async (id: string, name: string) => {
+    if (!confirm(`Delete stage template "${name}"?`)) return;
+
+    try {
+      const res = await fetch(`/api/admin/milestone-templates?id=${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to delete');
+      }
+      showToast('Stage template deleted');
+      fetchData();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to delete', 'error');
+    }
+  };
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
+      {/* Toast */}
+      {toast && (
+        <div className={`fixed top-6 right-6 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium text-white ${toast.type === 'success' ? 'bg-green-500' : 'bg-red-500'}`}>
+          {toast.message}
+        </div>
+      )}
+
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 flex items-center">
@@ -100,83 +175,251 @@ const Templates: React.FC = () => {
             Configure standardized milestones, email triggers, and client sharing for Nava Wilson files.
           </p>
         </div>
-        <div className="relative w-full md:w-80">
-          <input 
-            type="text" 
-            placeholder="Search tasks or emails..." 
-            className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary transition-colors bg-white shadow-sm"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
-          <Search className="absolute left-3 top-2.5 text-slate-400" size={18} />
+        <div className="flex items-center gap-3">
+          <div className="relative w-full md:w-80">
+            <input
+              type="text"
+              placeholder="Search tasks or emails..."
+              className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary transition-colors bg-white shadow-sm"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+            <Search className="absolute left-3 top-2.5 text-slate-400" size={18} />
+          </div>
+          <button
+            onClick={() => setShowAddForm(true)}
+            className="flex items-center gap-2 bg-brand-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-brand-primary/90 transition-colors shadow-sm whitespace-nowrap"
+          >
+            <Plus size={16} /> Add Stage
+          </button>
         </div>
       </div>
 
-      <div className="space-y-4">
-        {filteredSections.map((section) => {
-          const isExpanded = expandedSections.includes(section.type);
-          return (
-            <div key={section.title} className="rounded-xl overflow-hidden shadow-sm border border-slate-200 bg-white">
-              <button
-                onClick={() => toggleSection(section.type)}
-                className={`w-full flex items-center justify-between px-6 py-5 transition-all duration-300 group ${
-                  isExpanded ? 'bg-brand-primary text-white' : 'bg-white text-slate-800 hover:bg-slate-50'
-                }`}
-              >
-                <div className="flex items-center gap-4">
-                  <div className={`w-8 h-8 rounded flex items-center justify-center font-bold text-sm ${
-                    isExpanded ? 'bg-white/20' : 'bg-brand-primary/10 text-brand-primary'
-                  }`}>
-                    {section.type[0]}
-                  </div>
-                  <span className="font-bold text-lg tracking-tight">{section.title}</span>
-                </div>
-                <ChevronDown size={24} className={`transition-transform duration-300 ${isExpanded ? 'rotate-180' : ''}`} />
+      {/* Add Stage Template Modal */}
+      {showAddForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-slate-200">
+              <h3 className="text-lg font-bold text-slate-900">Add Stage Template</h3>
+              <button onClick={() => setShowAddForm(false)} className="text-slate-400 hover:text-slate-600">
+                <X size={20} />
               </button>
+            </div>
+            <form onSubmit={handleSubmit} className="px-4 sm:px-6 py-4 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Stage Name *</label>
+                <input
+                  type="text"
+                  value={formData.name}
+                  onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
+                  placeholder="e.g. Initial Call"
+                  required
+                />
+              </div>
 
-              <div className={`transition-all duration-300 ease-in-out ${isExpanded ? 'max-h-[2500px] opacity-100' : 'max-h-0 opacity-0 overflow-hidden'}`}>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-sm">
-                    <thead>
-                      <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                        <th className="px-6 py-3 w-16 text-center">Order</th>
-                        <th className="px-6 py-3">Task Name</th>
-                        <th className="px-6 py-3">Role</th>
-                        <th className="px-6 py-3">Email Template</th>
-                        <th className="px-6 py-3 text-center">Shared</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {section.items.map((item) => (
-                        <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
-                          <td className="px-6 py-4 text-center font-mono text-xs text-slate-400">{item.order}</td>
-                          <td className="px-6 py-4 font-bold text-slate-800">{item.name}</td>
-                          <td className="px-6 py-4">
-                            <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-tight ${item.role === 'Lender' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500'}`}>
-                              {item.role}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4">
-                            {item.emailTemplate ? (
-                              <div className="flex items-center gap-2 text-brand-primary font-medium text-xs">
-                                <Mail size={14} />
-                                <span className="underline decoration-dotted">{item.emailTemplate}</span>
-                              </div>
-                            ) : <span className="text-slate-300">—</span>}
-                          </td>
-                          <td className="px-6 py-4 text-center">
-                            {item.isShared ? <CheckCircle2 className="mx-auto text-green-500" size={16} /> : <XCircle className="mx-auto text-slate-200" size={16} />}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Short Description</label>
+                <input
+                  type="text"
+                  value={formData.description.short}
+                  onChange={(e) => setFormData(prev => ({ ...prev, description: { ...prev.description, short: e.target.value } }))}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
+                  placeholder="Brief one-line description..."
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Modal Description</label>
+                <textarea
+                  value={formData.description.modal}
+                  onChange={(e) => setFormData(prev => ({ ...prev, description: { ...prev.description, modal: e.target.value } }))}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary resize-none"
+                  placeholder="Description shown in the modal..."
+                  rows={2}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Task Description</label>
+                <textarea
+                  value={formData.description.task}
+                  onChange={(e) => setFormData(prev => ({ ...prev, description: { ...prev.description, task: e.target.value } }))}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary resize-none"
+                  placeholder="Description for the task view..."
+                  rows={2}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Lead Type *</label>
+                  <select
+                    value={formData.lead_type}
+                    onChange={(e) => setFormData(prev => ({ ...prev, lead_type: e.target.value as any }))}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
+                  >
+                    <option value="Purchase">Purchase</option>
+                    <option value="Sale">Sale</option>
+                    <option value="Refinance">Refinance</option>
+                    <option value="Status Certificate Review">Status Certificate Review</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Order</label>
+                  <input
+                    type="number"
+                    value={formData.order_index}
+                    onChange={(e) => setFormData(prev => ({ ...prev, order_index: parseInt(e.target.value) || 1 }))}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
+                    min={1}
+                  />
                 </div>
               </div>
-            </div>
-          );
-        })}
-      </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Role</label>
+                  <select
+                    value={formData.role}
+                    onChange={(e) => setFormData(prev => ({ ...prev, role: e.target.value as any }))}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
+                  >
+                    <option value="Client">Client</option>
+                    <option value="Lender">Lender</option>
+                    <option value="Realtor">Realtor</option>
+                    <option value="Mortgage Agent">Mortgage Agent</option>
+                    <option value="Opposing Counsel">Opposing Counsel</option>
+                  </select>
+                </div>
+                <div className="flex items-end pb-1">
+                  <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={formData.is_shared}
+                      onChange={(e) => setFormData(prev => ({ ...prev, is_shared: e.target.checked }))}
+                      className="rounded border-slate-300"
+                    />
+                    Shared with client
+                  </label>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Email Template</label>
+                <select
+                  value={formData.email_template_id}
+                  onChange={(e) => setFormData(prev => ({ ...prev, email_template_id: e.target.value }))}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
+                >
+                  <option value="">None</option>
+                  {emailTemplates.map(et => (
+                    <option key={et.id} value={et.id}>{et.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAddForm(false)}
+                  className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="flex items-center gap-2 bg-brand-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-brand-primary/90 transition-colors disabled:opacity-50"
+                >
+                  {submitting ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
+                  {submitting ? 'Creating...' : 'Create'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="flex items-center justify-center py-20">
+          <Loader2 size={24} className="animate-spin text-brand-primary" />
+          <span className="ml-3 text-sm text-slate-500">Loading templates...</span>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {filteredSections.map((section) => {
+            const isExpanded = expandedSections.includes(section.type);
+            return (
+              <div key={section.type} className="rounded-xl overflow-hidden shadow-sm border border-slate-200 bg-white">
+                <button
+                  onClick={() => toggleSection(section.type)}
+                  className={`w-full flex items-center justify-between px-6 py-5 transition-all duration-300 group ${
+                    isExpanded ? 'bg-brand-primary text-white' : 'bg-white text-slate-800 hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="flex items-center gap-4">
+                    <div className={`w-8 h-8 rounded flex items-center justify-center font-bold text-sm ${
+                      isExpanded ? 'bg-white/20' : 'bg-brand-primary/10 text-brand-primary'
+                    }`}>
+                      {section.type[0]}
+                    </div>
+                    <span className="font-bold text-lg tracking-tight">{section.title}</span>
+                    <span className={`text-xs font-medium ${isExpanded ? 'text-white/70' : 'text-slate-400'}`}>
+                      ({section.items.length} stages)
+                    </span>
+                  </div>
+                  <ChevronDown size={24} className={`transition-transform duration-300 ${isExpanded ? 'rotate-180' : ''}`} />
+                </button>
+
+                <div className={`transition-all duration-300 ease-in-out ${isExpanded ? 'max-h-[2500px] opacity-100' : 'max-h-0 opacity-0 overflow-hidden'}`}>
+                  <div className="overflow-x-auto">
+                    {section.items.length === 0 ? (
+                      <p className="text-sm text-slate-400 text-center py-8">No stage templates for this type.</p>
+                    ) : (
+                      <table className="w-full text-left text-sm">
+                        <thead>
+                          <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                            <th className="px-6 py-3 w-16 text-center">Order</th>
+                            <th className="px-6 py-3">Stage Name</th>
+                            <th className="px-6 py-3">Role</th>
+                            <th className="px-6 py-3">Email Template</th>
+                            <th className="px-6 py-3 text-center">Shared</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {section.items.map((item) => (
+                            <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
+                              <td className="px-6 py-4 text-center font-mono text-xs text-slate-400">{item.order_index}</td>
+                              <td className="px-6 py-4 font-bold text-slate-800">{item.name}</td>
+                              <td className="px-6 py-4">
+                                <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-tight ${item.role === 'Lender' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                                  {item.role}
+                                </span>
+                              </td>
+                              <td className="px-6 py-4">
+                                {item.email_templates?.name ? (
+                                  <div className="flex items-center gap-2 text-brand-primary font-medium text-xs">
+                                    <Mail size={14} />
+                                    <span className="underline decoration-dotted">{item.email_templates.name}</span>
+                                  </div>
+                                ) : <span className="text-slate-300">&mdash;</span>}
+                              </td>
+                              <td className="px-6 py-4 text-center">
+                                {item.is_shared ? <CheckCircle2 className="mx-auto text-green-500" size={16} /> : <XCircle className="mx-auto text-slate-200" size={16} />}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };

@@ -21,7 +21,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const body = await req.json();
 
-  const { leadType, roleType, name, order, deadlineRule, isApsTask } = body;
+  const { leadType, roleType, name, order, deadlineRule, isApsTask, is_default } = body;
 
   if (!leadType || !name || order === undefined) {
     return NextResponse.json({ error: 'Required fields missing' }, { status: 400 });
@@ -37,6 +37,7 @@ export async function POST(req: NextRequest) {
         order_index: order,
         deadline_rule: deadlineRule || null,
         is_aps_task: isApsTask ?? false,
+        is_default: is_default ?? false,
       },
     ])
     .select()
@@ -54,7 +55,7 @@ export async function PUT(req: NextRequest) {
   try {
     const body = await req.json();
 
-    const { id, leadType, roleType, name, order, deadlineRule, isApsTask } = body;
+    const { id, leadType, roleType, name, order, deadlineRule, isApsTask, is_default } = body;
 
     if (!id) {
       return NextResponse.json({ error: 'ID required' }, { status: 400 });
@@ -69,6 +70,7 @@ export async function PUT(req: NextRequest) {
         order_index: order,
         deadline_rule: deadlineRule || null,
         is_aps_task: isApsTask,
+        is_default: is_default ?? false,
       })
       .eq('id', id)
       .select()
