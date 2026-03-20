@@ -9,12 +9,20 @@ const supabase = createClient(
 export async function GET() {
   const { data, error } = await supabase
     .from("deals")
-    .select("*")
+    .select("*, tasks(id, status)")
     .order("created_at", { ascending: false });
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json(data);
+  const result = (data ?? []).map((deal: any) => {
+    const tasks = deal.tasks ?? [];
+    const totalTasks = tasks.length;
+    const completedTasks = tasks.filter((t: any) => t.status === "Completed").length;
+    const { tasks: _tasks, ...rest } = deal;
+    return { ...rest, totalTasks, completedTasks };
+  });
+
+  return NextResponse.json(result);
 }

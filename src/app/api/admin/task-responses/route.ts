@@ -12,7 +12,7 @@ export async function GET(req: Request) {
   // Step 1: get all task IDs for this deal
   const { data: tasks, error: tasksError } = await supabaseAdmin
     .from("tasks")
-    .select("id")
+    .select("id, title")
     .eq("deal_id", dealId);
 
   if (tasksError || !tasks?.length) {
@@ -20,6 +20,7 @@ export async function GET(req: Request) {
   }
 
   const taskIds = tasks.map((t) => t.id);
+  const taskMap = new Map(tasks.map((t) => [t.id, t.title]));
 
   // Step 2: get file-type responses for those tasks
   const { data, error } = await supabaseAdmin
@@ -58,5 +59,10 @@ export async function GET(req: Request) {
     }
   }
 
-  return NextResponse.json(data ?? []);
+  const result = (data ?? []).map((d) => ({
+    ...d,
+    task_title: taskMap.get(d.task_id) ?? "Unknown Task",
+  }));
+
+  return NextResponse.json(result);
 }

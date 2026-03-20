@@ -190,8 +190,8 @@ const EmailTemplates: React.FC = () => {
 
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 items-start">
         {/* Main List */}
-        <div className="xl:col-span-8 bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-          <table className="w-full text-left text-sm">
+        <div className="xl:col-span-8 bg-white rounded-2xl shadow-sm border border-slate-200 overflow-x-auto">
+          <table className="w-full min-w-[600px] text-left text-sm">
             <thead className="bg-slate-50/30 border-b border-slate-100">
               <tr className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">
                 <th className="px-8 py-6">Name</th>
@@ -344,7 +344,7 @@ const EmailTemplates: React.FC = () => {
 
       {/* Create Template Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-6 animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-200">
           <div
             className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
             onClick={() => {
@@ -352,7 +352,7 @@ const EmailTemplates: React.FC = () => {
               resetForm();
             }}
           />
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl relative z-10 overflow-hidden animate-in zoom-in-95 duration-200">
+          <div className="bg-white rounded-2xl sm:rounded-3xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto relative z-10 animate-in zoom-in-95 duration-200">
             {/* Modal Header */}
             <div className="p-8 border-b border-slate-100 flex justify-between items-start">
               <div>

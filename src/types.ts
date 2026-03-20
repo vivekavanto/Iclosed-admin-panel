@@ -40,6 +40,7 @@ export interface Milestone {
   milestoneDate?: string;
   completedAt?: string;
   emailSent?: boolean;
+  emailTemplateId?: string | null;
 }
 
 export interface DealDocument { id: string; name: string; type: string; uploadDate: string; status: 'Draft' | 'Review' | 'Signed' | 'Registered'; }
@@ -60,6 +61,8 @@ export interface Deal {
   milestones?: Milestone[];
   documents: DealDocument[];
   notes: string[];
+  completedTasks?: number;
+  totalTasks?: number;
 }
 
 export interface User { id: string; name: string; role: 'Admin' | 'Clerk' | 'Lawyer'; avatarUrl?: string; }

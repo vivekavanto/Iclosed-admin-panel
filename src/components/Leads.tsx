@@ -806,7 +806,7 @@ const Leads: React.FC = () => {
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-x-auto">
         {leadsLoading ? (
           <div className="flex items-center justify-center py-20 gap-3 text-slate-400">
             <Loader2 size={20} className="animate-spin" />
@@ -826,7 +826,7 @@ const Leads: React.FC = () => {
             </p>
           </div>
         ) : (
-          <table className="w-full text-left">
+          <table className="w-full min-w-[700px] text-left">
             <thead>
               <tr className="bg-slate-50/50 border-b border-slate-200 text-[11px] font-black text-slate-400 uppercase tracking-widest">
                 <th className="px-8 py-5">Client Name</th>

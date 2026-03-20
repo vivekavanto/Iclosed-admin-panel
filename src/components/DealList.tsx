@@ -30,6 +30,8 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           requisitionDate: d.requisitionDate ?? d.requisition_date,
           price: d.price ?? 0,
           progress: d.progress ?? 0,
+          completedTasks: d.completedTasks ?? 0,
+          totalTasks: d.totalTasks ?? 0,
           tasks: d.tasks ?? [],
           milestones: d.milestones ?? [],
           documents: d.documents ?? [],
@@ -129,7 +131,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full text-left border-t border-slate-200">
+        <table className="w-full min-w-[900px] text-left border-t border-slate-200">
           <thead>
             <tr className="bg-white text-slate-800 text-xs font-bold border-b border-slate-200">
               <th className="px-4 py-3 w-12">No.</th>
@@ -140,6 +142,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
               <th className="px-4 py-3 w-64">Address</th>
               <th className="px-4 py-3 w-32">Closing date</th>
               <th className="px-4 py-3 w-32">Requisition date</th>
+              <th className="px-4 py-3 w-40">Steps</th>
               <th className="px-4 py-3 w-32">File status</th>
             </tr>
           </thead>
@@ -151,7 +154,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                 <tr key={deal.id} onClick={() => {
                   console.log("Clicked deal id:", deal.id);
                   onSelectDeal(deal.id);
-                }} className={`${rowClass} hover:bg-brand-light/20 cursor-pointer transition-colors border-b border-slate-100 text-xs text-slate-700`}>
+                }} className={`${rowClass} hover:bg-brand-light/20 cursor-pointer transition-colors border-b border-slate-100 text-xs text-slate-700 whitespace-nowrap`}>
                   <td className="px-4 py-3">{index + 1}</td>
                   <td className="px-4 py-3 font-medium">{deal.fileNumber}</td>
                   <td className="px-4 py-3">{deal.propertyAddress}</td>
@@ -160,11 +163,22 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                   <td className="px-4 py-3 truncate max-w-xs" title={deal.propertyAddress}>{deal.propertyAddress}</td>
                   <td className="px-4 py-3">{formatDate(deal.closingDate)}</td>
                   <td className="px-4 py-3">{formatDate(deal.requisitionDate)}</td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <div className="w-16 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-red-500 rounded-full transition-all"
+                          style={{ width: `${deal.totalTasks ? (deal.completedTasks! / deal.totalTasks) * 100 : 0}%` }}
+                        />
+                      </div>
+                      <span className="text-[11px] text-slate-500 font-medium">{deal.completedTasks ?? 0}/{deal.totalTasks ?? 0}</span>
+                    </div>
+                  </td>
                   <td className="px-4 py-3">{deal.status === DealStatus.CLOSED ? (<span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 text-green-700 border border-green-200 shadow-sm"><span className="mr-1">✓</span> Closed</span>) : (<span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-white text-green-600 border border-green-400">Active</span>)}</td>
                 </tr>
               );
             }) : (
-              <tr><td colSpan={9} className="px-6 py-12 text-center text-slate-500"><p>No files found.</p></td></tr>
+              <tr><td colSpan={10} className="px-6 py-12 text-center text-slate-500"><p>No files found.</p></td></tr>
             )}
           </tbody>
         </table>

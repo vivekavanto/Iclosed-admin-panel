@@ -41,20 +41,12 @@ export async function POST(req: Request) {
             .eq("id", milestone.email_template_id)
             .single()
 
-        const DEFAULT_EMAIL_BODY = `Hi,
+        if (!template?.body) {
+            return NextResponse.json({ success: false, error: "Email template has no content" }, { status: 400 })
+        }
 
-Thank you for your patience. We are pleased to inform you that the ${milestone.title} stage of your file has been completed.
-
-Our team will be in touch shortly to guide you through the next steps.
-
-If you have any questions in the meantime, please do not hesitate to reach out.
-
-Warm regards,
-
-iClosed by Nava Wilson`
-
-        const emailBody = template?.body || DEFAULT_EMAIL_BODY
-        const emailSubject = template?.name || "Milestone Completed"
+        const emailBody = template.body
+        const emailSubject = template.name || "Milestone Completed"
 
         // 5️⃣ Get deal + client email
         const { data: deal } = await supabaseAdmin

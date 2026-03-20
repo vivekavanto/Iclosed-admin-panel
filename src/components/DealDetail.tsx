@@ -60,6 +60,8 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
   // Documents modal state
   const [showDocuments, setShowDocuments] = useState(false);
+  const [dealDocuments, setDealDocuments] = useState<{ task_id: string; file_name: string; file_url: string; task_title: string }[]>([]);
+  const [loadingDocs, setLoadingDocs] = useState(false);
 
   // Drag and Drop State
   const dragTaskItem = useRef<number | null>(null);
@@ -84,13 +86,24 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           milestoneDate: m.milestone_date ?? undefined,
           completedAt: m.completed_at ?? undefined,
           emailSent: m.email_sent ?? false,
+          emailTemplateId: m.email_template_id ?? null,
         })));
       }
     } catch { }
   };
 
-  // Documents use only user-added tasks (not templates) for doc matching
-  const taskDocuments = tasks.filter((t) => t.document);
+  const fetchDealDocuments = async () => {
+    setLoadingDocs(true);
+    try {
+      const res = await fetch(`/api/admin/task-responses?deal_id=${deal.id}`);
+      const data = await res.json();
+      if (Array.isArray(data)) setDealDocuments(data);
+    } catch {
+      setDealDocuments([]);
+    } finally {
+      setLoadingDocs(false);
+    }
+  };
 
   // --- Handlers ---
 
@@ -436,6 +449,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           title: data.data.title,
           status: data.data.status ?? "Pending",
           milestoneDate: data.data.milestone_date ?? undefined,
+          emailTemplateId: data.data.email_template_id ?? null,
         };
         setMilestones((prev) => [...prev, newMilestone]);
         setShowStageForm(false);
@@ -472,6 +486,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
             milestoneDate: m.milestone_date ?? undefined,
             completedAt: m.completed_at ?? undefined,
             emailSent: m.email_sent ?? false,
+            emailTemplateId: m.email_template_id ?? null,
           })));
         }
       })
@@ -527,6 +542,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         title: t.name,
         status: "Pending",
         isTemplate: true,
+        emailTemplateId: t.email_template_id ?? null,
       }));
     const userRows: DisplayMilestone[] = milestones.map(m => ({ ...m, isTemplate: false }));
     return [...templateRows, ...userRows];
@@ -587,7 +603,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
         <div className="flex gap-3">
           <button
-            onClick={() => setShowDocuments(true)}
+            onClick={() => { setShowDocuments(true); fetchDealDocuments(); }}
             className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2"
           >
             <FileText size={16} /> View Documents
@@ -684,26 +700,26 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
               <table className="w-full text-left min-w-[600px]">
                 <thead className="bg-slate-50 border-b border-slate-200">
                   <tr>
-                    <th className="px-3 py-2 w-8"></th>
-                    <th className="px-2 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-8 text-center">
+                    <th className="px-3 py-3 w-8"></th>
+                    <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider w-8 text-center">
                       #
                     </th>
-                    <th className="px-2 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-32">
+                    <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider w-32">
                       Status
                     </th>
-                    <th className="px-2 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider min-w-[180px]">
+                    <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider min-w-[180px]">
                       Task Name
                     </th>
-                    <th className="px-2 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider min-w-[120px]">
+                    <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider min-w-[120px]">
                       Doc
                     </th>
-                    <th className="px-2 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-20">
+                    <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider w-20">
                       Deadline
                     </th>
-                    <th className="px-2 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-28">
+                    <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider w-28">
                       Completed
                     </th>
-                    <th className="px-2 py-2 w-8"></th>
+                    <th className="px-2 py-3 w-8"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -717,21 +733,21 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                       onDragOver={(e) => e.preventDefault()}
                       className={`hover:bg-slate-50 transition-colors group ${task.isTemplate ? "opacity-60" : "cursor-move"}`}
                     >
-                      <td className="px-3 py-2 text-slate-300">
-                        {!task.isTemplate && <GripVertical size={14} />}
+                      <td className="px-3 py-3 text-slate-300">
+                        {!task.isTemplate && <GripVertical size={16} />}
                       </td>
-                      <td className="px-2 py-2 text-center text-[10px] text-slate-500 font-medium">
+                      <td className="px-2 py-3 text-center text-xs text-slate-600 font-medium">
                         {index + 1}
                       </td>
-                      <td className="px-2 py-2">
+                      <td className="px-2 py-3">
                         {task.isTemplate ? (
-                          <span className={`text-[10px] font-medium border rounded px-2 py-1 inline-block ${getStatusColor("Pending")}`}>
+                          <span className={`text-xs font-semibold border rounded px-2 py-1 inline-block ${getStatusColor("Pending")}`}>
                             Pending
                           </span>
                         ) : (
                           <div className="relative">
                             <select
-                              className={`text-[10px] font-medium border rounded pl-2 pr-6 py-1 w-full outline-none cursor-pointer appearance-none truncate ${getStatusColor(task.status)}`}
+                              className={`text-xs font-semibold border rounded pl-2 pr-6 py-1 w-full outline-none cursor-pointer appearance-none truncate ${getStatusColor(task.status)}`}
                               value={task.status || "Pending"}
                               onChange={(e) =>
                                 handleTaskStatusChange(
@@ -749,14 +765,14 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                           </div>
                         )}
                       </td>
-                      <td className="px-2 py-2">
-                        <span className="text-xs font-medium text-slate-800 block leading-tight">
+                      <td className="px-2 py-3">
+                        <span className="text-sm font-semibold text-slate-800 block leading-tight">
                           {task.title}
                         </span>
                       </td>
-                      <td className="px-2 py-2">
+                      <td className="px-2 py-3">
                         {task.isTemplate ? (
-                          <span className="text-slate-300 text-[10px]">-</span>
+                          <span className="text-slate-300 text-xs">-</span>
                         ) : (() => {
                           const matched = taskFileDocs.find(d => d.task_id === task.id);
                           return matched ? (
@@ -768,37 +784,37 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                                 e.stopPropagation();
                                 window.open(matched.file_url, "_blank");
                               }}
-                              className="flex items-center gap-1 text-[10px] text-brand-primary hover:underline cursor-pointer relative z-10 bg-transparent border-none p-0"
+                              className="flex items-center gap-1 text-xs text-brand-primary hover:underline cursor-pointer relative z-10 bg-transparent border-none p-0"
                             >
-                              <FileText size={11} className="shrink-0" />
+                              <FileText size={13} className="shrink-0" />
                               <span className="truncate max-w-[110px]">{matched.file_name}</span>
                             </button>
                           ) : (
-                            <span className="text-slate-300 text-[10px]">-</span>
+                            <span className="text-slate-300 text-xs">-</span>
                           );
                         })()}
                       </td>
-                      <td className="px-2 py-2">
+                      <td className="px-2 py-3">
                         {task.isTemplate ? (
-                          <span className="text-slate-300 text-[10px]">-</span>
+                          <span className="text-slate-300 text-xs">-</span>
                         ) : (
                           <input
                             type="date"
                             value={task.dueDate ?? ""}
                             onChange={() => { }}
-                            className="text-[10px] border border-slate-200 rounded px-1 py-0.5 text-slate-600 bg-transparent focus:bg-white focus:border-brand-primary outline-none w-full"
+                            className="text-xs border border-slate-200 rounded px-1.5 py-1 text-slate-700 bg-transparent focus:bg-white focus:border-brand-primary outline-none w-full"
                           />
                         )}
                       </td>
-                      <td className="px-2 py-2">
-                        <span className="text-[10px] text-slate-400">
+                      <td className="px-2 py-3">
+                        <span className="text-xs text-slate-500">
                           {task.isTemplate ? "-" : (task.completedAt || "-")}
                         </span>
                       </td>
-                      <td className="px-2 py-2 text-center">
+                      <td className="px-2 py-3 text-center">
                         {!task.isTemplate && (
                           <button onClick={() => handleDeleteTask(task.id)} className="text-slate-300 hover:text-red-600 p-1 transition-colors">
-                            <Trash2 size={14} />
+                            <Trash2 size={16} />
                           </button>
                         )}
                       </td>
@@ -839,20 +855,20 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                 <table className="w-full text-left min-w-[500px]">
                   <thead className="bg-slate-50 border-b border-slate-200">
                     <tr>
-                      <th className="px-3 py-2 w-8"></th>
-                      <th className="px-2 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-8 text-center">
+                      <th className="px-3 py-3 w-8"></th>
+                      <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider w-8 text-center">
                         #
                       </th>
-                      <th className="px-2 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-32">
+                      <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider w-32">
                         Status
                       </th>
-                      <th className="px-2 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                      <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">
                         Milestone Name
                       </th>
-                      <th className="px-2 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider w-20">
+                      <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider w-20">
                         Deadline
                       </th>
-                      <th className="px-2 py-2 w-16"></th>
+                      <th className="px-2 py-3 w-16"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -874,23 +890,23 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                               onDragOver={(e) => e.preventDefault()}
                               className={`hover:bg-slate-50 transition-colors group bg-slate-50/60 ${milestone.isTemplate ? "opacity-60" : "cursor-move"}`}
                             >
-                              <td className="px-3 py-2 text-slate-300">
-                                {!milestone.isTemplate && <GripVertical size={14} />}
+                              <td className="px-3 py-3 text-slate-300">
+                                {!milestone.isTemplate && <GripVertical size={16} />}
                               </td>
 
-                              <td className="px-2 py-2 text-center text-[10px] text-slate-500 font-medium">
+                              <td className="px-2 py-3 text-center text-xs text-slate-600 font-medium">
                                 {index + 1}
                               </td>
 
-                              <td className="px-2 py-2">
+                              <td className="px-2 py-3">
                                 {milestone.isTemplate ? (
-                                  <span className={`text-[10px] font-medium border rounded px-2 py-1 inline-block ${getStatusColor("Pending")}`}>
+                                  <span className={`text-xs font-semibold border rounded px-2 py-1 inline-block ${getStatusColor("Pending")}`}>
                                     Pending
                                   </span>
                                 ) : (
                                   <div className="relative">
                                     <select
-                                      className={`text-[10px] font-medium border rounded pl-2 pr-6 py-1 w-full outline-none cursor-pointer appearance-none truncate ${getStatusColor(milestone.status)}`}
+                                      className={`text-xs font-semibold border rounded pl-2 pr-6 py-1 w-full outline-none cursor-pointer appearance-none truncate ${getStatusColor(milestone.status)}`}
                                       value={milestone.status}
                                       onChange={(e) =>
                                         handleMilestoneStatusChange(
@@ -911,36 +927,38 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                                 )}
                               </td>
 
-                              <td className="px-2 py-2">
-                                <span className="text-xs text-slate-800 font-semibold">
+                              <td className="px-2 py-3">
+                                <span className="text-sm text-slate-800 font-semibold">
                                   {milestone.title}
                                 </span>
                               </td>
 
-                              <td className="px-2 py-2">
+                              <td className="px-2 py-3">
                                 {milestone.isTemplate ? (
-                                  <span className="text-slate-300 text-[10px]">-</span>
+                                  <span className="text-slate-300 text-xs">-</span>
                                 ) : (
                                   <input
                                     type="date"
                                     value={milestone.milestoneDate ?? ""}
                                     onChange={() => { }}
-                                    className="text-[10px] border border-slate-200 rounded px-1 py-0.5 text-slate-600 bg-transparent focus:bg-white focus:border-brand-primary outline-none w-full"
+                                    className="text-xs border border-slate-200 rounded px-1.5 py-1 text-slate-700 bg-transparent focus:bg-white focus:border-brand-primary outline-none w-full"
                                   />
                                 )}
                               </td>
 
-                              <td className="px-2 py-2 text-right">
+                              <td className="px-2 py-3 text-right">
                                 <div className="flex items-center justify-end gap-1">
-                                  <button
-                                    title={milestone.emailSent ? "Email already sent" : "Send Email"}
-                                    onClick={() => handleSendMilestoneEmail(milestone.id)}
-                                    className={`p-1 rounded transition-colors ${milestone.emailSent ? "text-green-600 hover:bg-green-50" : "text-brand-primary hover:bg-brand-light"}`}
-                                  >
-                                    <Mail size={12} />
-                                  </button>
+                                  {milestone.emailTemplateId && (
+                                    <button
+                                      title={milestone.emailSent ? "Email already sent" : "Send Email"}
+                                      onClick={() => handleSendMilestoneEmail(milestone.id)}
+                                      className={`p-1 rounded transition-colors ${milestone.emailSent ? "text-green-600 hover:bg-green-50" : "text-brand-primary hover:bg-brand-light"}`}
+                                    >
+                                      <Mail size={14} />
+                                    </button>
+                                  )}
                                   <button onClick={() => handleDeleteMilestone(milestone.id)} className="text-slate-300 hover:text-red-600 p-1 rounded transition-colors">
-                                    <Trash2 size={14} />
+                                    <Trash2 size={16} />
                                   </button>
                                 </div>
                               </td>
@@ -1349,27 +1367,33 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
               </button>
             </div>
             <div className="px-6 py-4 overflow-y-auto flex-1">
-              {taskDocuments.length === 0 ? (
+              {loadingDocs ? (
+                <p className="text-sm text-slate-400 text-center py-8">Loading documents...</p>
+              ) : dealDocuments.length === 0 ? (
                 <p className="text-sm text-slate-400 text-center py-8">No documents uploaded yet.</p>
               ) : (
                 <ul className="space-y-3">
-                  {taskDocuments.map((t) => (
-                    <li key={t.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
+                  {dealDocuments.map((doc, idx) => (
+                    <li key={`${doc.task_id}-${idx}`} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
                       <div className="flex items-center gap-3 min-w-0">
                         <FileText size={16} className="text-slate-400 shrink-0" />
                         <div className="min-w-0">
-                          <p className="text-sm font-medium text-slate-800 truncate">{t.document!.name}</p>
-                          <p className="text-xs text-slate-400 truncate">Task: {t.title}</p>
+                          <p className="text-sm font-medium text-slate-800 truncate">{doc.file_name}</p>
+                          <p className="text-xs text-slate-400 truncate">Task: {doc.task_title}</p>
                         </div>
                       </div>
-                      <a
-                        href={t.document!.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-xs font-medium text-brand-primary hover:underline shrink-0 ml-3"
-                      >
-                        View
-                      </a>
+                      {doc.file_url ? (
+                        <a
+                          href={doc.file_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs font-medium text-brand-primary hover:underline shrink-0 ml-3"
+                        >
+                          View
+                        </a>
+                      ) : (
+                        <span className="text-xs text-slate-400 shrink-0 ml-3">No file</span>
+                      )}
                     </li>
                   ))}
                 </ul>
