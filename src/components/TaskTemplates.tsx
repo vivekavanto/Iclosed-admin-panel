@@ -8,10 +8,10 @@ import {
   XCircle,
   ClipboardList,
   ArrowUpDown,
-  X,
   Edit,
   Trash2,
 } from "lucide-react";
+import TaskTemplateFormModal from "@/components/shared/TaskTemplateFormModal";
 
 interface TaskTemplate {
   id: string;
@@ -26,35 +26,13 @@ interface TaskTemplate {
   stageName: string | null;
 }
 
-const LEAD_TYPES = ["Purchase", "Sale", "Refinance"];
-
-const DEADLINE_RULES = [
-  "N business days after task creation",
-  "N days before lead closing date",
-  "N days before lead requisition date",
-];
-
-const emptyForm = {
-  id: "",
-  leadType: "Purchase",
-  roleType: "Client",
-  name: "",
-  order: 1,
-  deadlineRule: DEADLINE_RULES[0],
-  isApsTask: false,
-  is_default: false,
-  stageTemplateId: "",
-};
-
-
 const TaskTemplates: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [tasks, setTasks] = useState<TaskTemplate[]>([]);
   const [stageTemplates, setStageTemplates] = useState<{ id: string; name: string; lead_type: string }[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [editingTask, setEditingTask] = useState<TaskTemplate | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
-  const [form, setForm] = useState({ ...emptyForm });
 
   const filteredTasks = tasks.filter(
     (task) =>
@@ -100,20 +78,8 @@ const TaskTemplates: React.FC = () => {
       .catch(() => {});
   }, []);
 
-  const resetForm = () => setForm({ ...emptyForm });
-
   const handleEdit = (task: TaskTemplate) => {
-    setForm({
-      id: task.id,
-      leadType: task.leadType,
-      roleType: task.roleType,
-      name: task.name,
-      order: task.order,
-      deadlineRule: task.deadlineRule || DEADLINE_RULES[0],
-      isApsTask: task.isApsTask,
-      is_default: task.is_default,
-      stageTemplateId: task.stageTemplateId || "",
-    });
+    setEditingTask(task);
     setIsModalOpen(true);
   };
 
@@ -131,50 +97,27 @@ const TaskTemplates: React.FC = () => {
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    setIsSubmitting(true);
+  const handleTaskSaved = (result: any, isEdit: boolean) => {
+    const mapped: TaskTemplate = {
+      id: result.id,
+      leadType: result.lead_type,
+      roleType: result.role_type,
+      name: result.name,
+      order: result.order_index,
+      deadlineRule: result.deadline_rule,
+      isApsTask: result.is_aps_task,
+      is_default: result.is_default ?? false,
+      stageTemplateId: result.stage_template_id ?? null,
+      stageName: result.stage_templates?.name ?? null,
+    };
 
-    try {
-      const method = form.id ? "PUT" : "POST";
-      const res = await fetch("/api/admin/task-templates", {
-        method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
-      });
-
-      if (!res.ok) throw new Error("Failed to save");
-
-      const result = await res.json();
-
-      const mapped: TaskTemplate = {
-        id: result.id,
-        leadType: result.lead_type,
-        roleType: result.role_type,
-        name: result.name,
-        order: result.order_index,
-        deadlineRule: result.deadline_rule,
-        isApsTask: result.is_aps_task,
-        is_default: result.is_default ?? false,
-        stageTemplateId: result.stage_template_id ?? null,
-        stageName: result.stage_templates?.name ?? null,
-      };
-
-      if (form.id) {
-        setTasks((prev) => prev.map((t) => (t.id === mapped.id ? mapped : t)));
-      } else {
-        setTasks((prev) => [...prev, mapped]);
-      }
-
-      setIsModalOpen(false);
-      resetForm();
-    } catch {
-      alert("Error saving task template.");
-    } finally {
-      setIsSubmitting(false);
+    if (isEdit) {
+      setTasks((prev) => prev.map((t) => (t.id === mapped.id ? mapped : t)));
+    } else {
+      setTasks((prev) => [...prev, mapped]);
     }
+    setEditingTask(null);
   };
-
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
@@ -217,7 +160,7 @@ const TaskTemplates: React.FC = () => {
           </div>
           <button
             onClick={() => {
-              resetForm();
+              setEditingTask(null);
               setIsModalOpen(true);
             }}
             className="bg-brand-primary text-white px-5 py-2.5 rounded-xl flex items-center gap-2 font-bold text-sm shadow-lg shadow-brand-primary/20 hover:bg-brand-primaryHover transition-all active:scale-95 whitespace-nowrap"
@@ -330,159 +273,24 @@ const TaskTemplates: React.FC = () => {
         </table>
       </div>
 
-      {/* Modal */}
-      {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-slate-200">
-              <h3 className="text-lg font-bold text-slate-900">
-                {form.id ? "Edit Task Template" : "New Task Template"}
-              </h3>
-              <button
-                onClick={() => {
-                  setIsModalOpen(false);
-                  resetForm();
-                }}
-                className="text-slate-400 hover:text-slate-600"
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            <form onSubmit={handleSubmit} className="px-4 sm:px-6 py-4 space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Task Name *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Upload Signed APS"
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
-                  value={form.name}
-                  onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Lead Type *</label>
-                  <select
-                    required
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
-                    value={form.leadType}
-                    onChange={(e) => setForm((prev) => ({ ...prev, leadType: e.target.value }))}
-                  >
-                    {LEAD_TYPES.map((lt) => (
-                      <option key={lt} value={lt}>{lt}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Role Type *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Client, Agent, Lawyer"
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
-                    value={form.roleType}
-                    onChange={(e) => setForm((prev) => ({ ...prev, roleType: e.target.value }))}
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Order *</label>
-                  <input
-                    type="number"
-                    required
-                    min={1}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
-                    value={form.order}
-                    onChange={(e) => setForm((prev) => ({ ...prev, order: parseInt(e.target.value) || 1 }))}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Deadline Rule</label>
-                  <select
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
-                    value={form.deadlineRule}
-                    onChange={(e) => setForm((prev) => ({ ...prev, deadlineRule: e.target.value }))}
-                  >
-                    {DEADLINE_RULES.map((rule) => (
-                      <option key={rule} value={rule}>{rule}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Stage (Milestone)</label>
-                <select
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
-                  value={form.stageTemplateId}
-                  onChange={(e) => setForm((prev) => ({ ...prev, stageTemplateId: e.target.value }))}
-                >
-                  <option value="">No Stage</option>
-                  {stageTemplates
-                    .filter((s) => s.lead_type === form.leadType)
-                    .map((s) => (
-                      <option key={s.id} value={s.id}>{s.name}</option>
-                    ))}
-                </select>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="flex items-end pb-1">
-                  <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={form.isApsTask}
-                      onChange={() => setForm((prev) => ({ ...prev, isApsTask: !prev.isApsTask }))}
-                      className="rounded border-slate-300"
-                    />
-                    APS Task
-                  </label>
-                </div>
-                <div className="flex items-end pb-1">
-                  <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={form.is_default}
-                      onChange={() => setForm((prev) => ({ ...prev, is_default: !prev.is_default }))}
-                      className="rounded border-slate-300"
-                    />
-                    Default
-                  </label>
-                </div>
-              </div>
-
-              <div className="flex justify-end gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsModalOpen(false);
-                    resetForm();
-                  }}
-                  className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="flex items-center gap-2 bg-brand-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-brand-primary/90 transition-colors disabled:opacity-50"
-                >
-                  {isSubmitting
-                    ? "Saving..."
-                    : form.id
-                      ? "Update Task"
-                      : "Create Task"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Shared Task Template Form Modal */}
+      <TaskTemplateFormModal
+        open={isModalOpen}
+        onClose={() => { setIsModalOpen(false); setEditingTask(null); }}
+        onSaved={handleTaskSaved}
+        stageTemplates={stageTemplates}
+        editData={editingTask ? {
+          id: editingTask.id,
+          leadType: editingTask.leadType,
+          roleType: editingTask.roleType,
+          name: editingTask.name,
+          order: editingTask.order,
+          deadlineRule: editingTask.deadlineRule,
+          isApsTask: editingTask.isApsTask,
+          is_default: editingTask.is_default,
+          stageTemplateId: editingTask.stageTemplateId,
+        } : null}
+      />
     </div>
   );
 };
