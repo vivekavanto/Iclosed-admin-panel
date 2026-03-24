@@ -16,6 +16,9 @@ import {
   ChevronDown,
   Pencil,
   Eye,
+  Download,
+  Copy,
+  ExternalLink,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 
@@ -395,6 +398,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const [clients, setClients] = useState<any[]>([]);
   const [taskTemplates, setTaskTemplates] = useState<any[]>([]);
   const [taskFileDocs, setTaskFileDocs] = useState<any[]>([]);
+  const [taskDocsPopup, setTaskDocsPopup] = useState<{ taskTitle: string; docs: any[] } | null>(null);
 
   // Stage form state
   const [showStageForm, setShowStageForm] = useState(false);
@@ -681,9 +685,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-8 items-start">
-        {/* Left Column - Tasks */}
-        <div className="flex-1 space-y-4">
+      <div className="space-y-8">
+        {/* Tasks Section */}
+        <div className="space-y-4">
           <div className="flex justify-between items-center">
             <h2 className="text-lg font-bold text-slate-900">Tasks</h2>
             <button
@@ -697,29 +701,31 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="w-full text-left min-w-[600px]">
+              <table className="w-full text-left">
                 <thead className="bg-slate-50 border-b border-slate-200">
                   <tr>
-                    <th className="px-3 py-3 w-8"></th>
+                    <th className="px-2 sm:px-3 py-3 w-8 hidden sm:table-cell"></th>
                     <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider w-8 text-center">
                       #
                     </th>
-                    <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider w-32">
+                    <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider w-24 sm:w-32">
                       Status
                     </th>
-                    <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider min-w-[180px]">
+                    <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">
                       Task Name
                     </th>
-                    <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider min-w-[120px]">
+                    <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider w-12 sm:w-16">
                       Doc
                     </th>
-                    <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider w-20">
+                    <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider w-20 hidden md:table-cell">
                       Deadline
                     </th>
-                    <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider w-28">
+                    <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider w-28 hidden lg:table-cell">
                       Completed
                     </th>
-                    <th className="px-2 py-3 w-8"></th>
+                    <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider w-16 text-center">
+                      Action
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -733,7 +739,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                       onDragOver={(e) => e.preventDefault()}
                       className={`hover:bg-slate-50 transition-colors group ${task.isTemplate ? "opacity-60" : "cursor-move"}`}
                     >
-                      <td className="px-3 py-3 text-slate-300">
+                      <td className="px-2 sm:px-3 py-3 text-slate-300 hidden sm:table-cell">
                         {!task.isTemplate && <GripVertical size={16} />}
                       </td>
                       <td className="px-2 py-3 text-center text-xs text-slate-600 font-medium">
@@ -774,27 +780,27 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                         {task.isTemplate ? (
                           <span className="text-slate-300 text-xs">-</span>
                         ) : (() => {
-                          const matched = taskFileDocs.find(d => d.task_id === task.id);
-                          return matched ? (
+                          const matched = taskFileDocs.filter(d => d.task_id === task.id);
+                          return matched.length > 0 ? (
                             <button
                               type="button"
-                              title={matched.file_name}
                               onClick={(e) => {
                                 e.preventDefault();
                                 e.stopPropagation();
-                                window.open(matched.file_url, "_blank");
+                                setTaskDocsPopup({ taskTitle: task.title, docs: matched });
                               }}
-                              className="flex items-center gap-1 text-xs text-brand-primary hover:underline cursor-pointer relative z-10 bg-transparent border-none p-0"
+                              className="flex items-center gap-1.5 text-xs text-brand-primary hover:text-brand-primaryHover cursor-pointer relative z-10 bg-transparent border-none p-0 transition-colors"
+                              title={`${matched.length} document${matched.length !== 1 ? "s" : ""}`}
                             >
-                              <FileText size={13} className="shrink-0" />
-                              <span className="truncate max-w-[110px]">{matched.file_name}</span>
+                              <FileText size={14} className="shrink-0" />
+                              <span className="font-medium">{matched.length}</span>
                             </button>
                           ) : (
                             <span className="text-slate-300 text-xs">-</span>
                           );
                         })()}
                       </td>
-                      <td className="px-2 py-3">
+                      <td className="px-2 py-3 hidden md:table-cell">
                         {task.isTemplate ? (
                           <span className="text-slate-300 text-xs">-</span>
                         ) : (
@@ -806,7 +812,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                           />
                         )}
                       </td>
-                      <td className="px-2 py-3">
+                      <td className="px-2 py-3 hidden lg:table-cell">
                         <span className="text-xs text-slate-500">
                           {task.isTemplate ? "-" : (task.completedAt || "-")}
                         </span>
@@ -836,8 +842,8 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           </div>
         </div>
 
-        {/* Right Column - Milestones & Partner */}
-        <div className="flex-1 space-y-6">
+        {/* Milestones & Partner Section */}
+        <div className="space-y-6">
           {/* Milestones */}
           <div>
             <div className="flex justify-between items-center mb-4">
@@ -852,23 +858,25 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
               <div className="overflow-x-auto">
-                <table className="w-full text-left min-w-[500px]">
+                <table className="w-full text-left">
                   <thead className="bg-slate-50 border-b border-slate-200">
                     <tr>
-                      <th className="px-3 py-3 w-8"></th>
+                      <th className="px-2 sm:px-3 py-3 w-8 hidden sm:table-cell"></th>
                       <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider w-8 text-center">
                         #
                       </th>
-                      <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider w-32">
+                      <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider w-24 sm:w-32">
                         Status
                       </th>
                       <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider">
                         Milestone Name
                       </th>
-                      <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider w-20">
+                      <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider w-20 hidden md:table-cell">
                         Deadline
                       </th>
-                      <th className="px-2 py-3 w-16"></th>
+                      <th className="px-2 py-3 text-xs font-bold text-slate-600 uppercase tracking-wider w-16 text-center">
+                        Action
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -888,9 +896,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                               onDragEnter={() => !milestone.isTemplate && (dragMilestoneOverItem.current = index)}
                               onDragEnd={!milestone.isTemplate ? handleSortMilestones : undefined}
                               onDragOver={(e) => e.preventDefault()}
-                              className={`hover:bg-slate-50 transition-colors group bg-slate-50/60 ${milestone.isTemplate ? "opacity-60" : "cursor-move"}`}
+                              className={`hover:bg-slate-50 transition-colors group bg-white ${milestone.isTemplate ? "opacity-60" : "cursor-move"}`}
                             >
-                              <td className="px-3 py-3 text-slate-300">
+                              <td className="px-2 sm:px-3 py-3 text-slate-300 hidden sm:table-cell">
                                 {!milestone.isTemplate && <GripVertical size={16} />}
                               </td>
 
@@ -933,7 +941,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                                 </span>
                               </td>
 
-                              <td className="px-2 py-3">
+                              <td className="px-2 py-3 hidden md:table-cell">
                                 {milestone.isTemplate ? (
                                   <span className="text-slate-300 text-xs">-</span>
                                 ) : (
@@ -1372,32 +1380,86 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
               ) : dealDocuments.length === 0 ? (
                 <p className="text-sm text-slate-400 text-center py-8">No documents uploaded yet.</p>
               ) : (
-                <ul className="space-y-3">
-                  {dealDocuments.map((doc, idx) => (
-                    <li key={`${doc.task_id}-${idx}`} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <FileText size={16} className="text-slate-400 shrink-0" />
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-slate-800 truncate">{doc.file_name}</p>
-                          <p className="text-xs text-slate-400 truncate">Task: {doc.task_title}</p>
-                        </div>
-                      </div>
-                      {doc.file_url ? (
-                        <a
-                          href={doc.file_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-xs font-medium text-brand-primary hover:underline shrink-0 ml-3"
-                        >
-                          View
-                        </a>
-                      ) : (
-                        <span className="text-xs text-slate-400 shrink-0 ml-3">No file</span>
-                      )}
-                    </li>
+                <div className="space-y-5">
+                  {Object.entries(
+                    dealDocuments.reduce((acc: Record<string, any[]>, doc) => {
+                      const key = doc.task_title || "Unknown Task";
+                      if (!acc[key]) acc[key] = [];
+                      acc[key].push(doc);
+                      return acc;
+                    }, {})
+                  ).map(([taskTitle, docs]) => (
+                    <div key={taskTitle}>
+                      <h4 className="text-sm font-bold text-slate-700 mb-2">{taskTitle}</h4>
+                      <ul className="space-y-2">
+                        {docs.map((doc: any, idx: number) => (
+                          <li key={`${doc.task_id}-${idx}`} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <FileText size={16} className="text-slate-400 shrink-0" />
+                              <p className="text-sm font-medium text-slate-800 truncate">{doc.file_name}</p>
+                            </div>
+                            {doc.file_url ? (
+                              <a
+                                href={doc.file_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-xs font-medium text-brand-primary hover:underline shrink-0 ml-3"
+                              >
+                                View
+                              </a>
+                            ) : (
+                              <span className="text-xs text-slate-400 shrink-0 ml-3">No file</span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   ))}
-                </ul>
+                </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Task Documents Popup */}
+      {taskDocsPopup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
+              <div className="min-w-0">
+                <h3 className="text-base font-bold text-slate-900">Documents</h3>
+                <p className="text-xs text-slate-500 truncate mt-0.5">{taskDocsPopup.taskTitle}</p>
+              </div>
+              <button
+                onClick={() => setTaskDocsPopup(null)}
+                className="text-slate-400 hover:text-slate-600 text-xl font-bold shrink-0 ml-3"
+              >
+                &times;
+              </button>
+            </div>
+            <div className="px-5 py-4 overflow-y-auto flex-1">
+              <ul className="space-y-2">
+                {taskDocsPopup.docs.map((doc: any, i: number) => (
+                  <li key={i} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <FileText size={16} className="text-slate-400 shrink-0" />
+                      <p className="text-sm font-medium text-slate-800 truncate">{doc.file_name}</p>
+                    </div>
+                    {doc.file_url ? (
+                      <a
+                        href={doc.file_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs font-medium text-brand-primary hover:underline shrink-0 ml-3"
+                      >
+                        View
+                      </a>
+                    ) : (
+                      <span className="text-xs text-slate-400 shrink-0 ml-3">No file</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
             </div>
           </div>
         </div>
