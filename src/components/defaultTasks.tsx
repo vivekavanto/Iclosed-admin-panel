@@ -12,6 +12,7 @@ import {
   Workflow,
   Layers,
   ClipboardList,
+  Pencil,
 } from "lucide-react";
 import StageTemplateFormModal from "@/components/shared/StageTemplateFormModal";
 import TaskTemplateFormModal from "@/components/shared/TaskTemplateFormModal";
@@ -60,7 +61,9 @@ const DefaultTasks: React.FC = () => {
   // Shared form modals
   const [showTaskForm, setShowTaskForm] = useState(false);
   const [taskFormStageId, setTaskFormStageId] = useState<string | null>(null);
+  const [editingTask, setEditingTask] = useState<TaskTemplate | null>(null);
   const [showStageForm, setShowStageForm] = useState(false);
+  const [editingStage, setEditingStage] = useState<StageTemplate | null>(null);
 
   useEffect(() => {
     async function fetchData() {
@@ -159,15 +162,22 @@ const DefaultTasks: React.FC = () => {
     }
   };
 
-  // Callback when shared stage form creates a stage
-  const handleStageCreated = (result: any) => {
-    setStages((prev) => [...prev, result]);
-    setExpandedStages((prev) => new Set([...prev, result.id]));
+  // Callback when shared stage form creates or updates a stage
+  const handleStageSaved = (result: any) => {
+    if (editingStage) {
+      // Update existing stage in state
+      setStages((prev) => prev.map((s) => (s.id === result.id ? result : s)));
+      setEditingStage(null);
+    } else {
+      // New stage
+      setStages((prev) => [...prev, result]);
+      setExpandedStages((prev) => new Set([...prev, result.id]));
+    }
   };
 
-  // Callback when shared task form creates a task
-  const handleTaskSaved = (result: any) => {
-    const newTask: TaskTemplate = {
+  // Callback when shared task form creates or updates a task
+  const handleTaskSaved = (result: any, isEdit: boolean) => {
+    const mapped: TaskTemplate = {
       id: result.id,
       lead_type: result.lead_type,
       role_type: result.role_type,
@@ -181,7 +191,12 @@ const DefaultTasks: React.FC = () => {
         ? { id: result.stage_template_id, name: stages.find((s) => s.id === result.stage_template_id)?.name || "" }
         : null,
     };
-    setTasks((prev) => [...prev, newTask]);
+    if (isEdit) {
+      setTasks((prev) => prev.map((t) => (t.id === mapped.id ? mapped : t)));
+      setEditingTask(null);
+    } else {
+      setTasks((prev) => [...prev, mapped]);
+    }
     setTaskFormStageId(null);
   };
 
@@ -224,10 +239,14 @@ const DefaultTasks: React.FC = () => {
       <td className="px-2 sm:px-3 py-3">
         <div className="flex items-center justify-end gap-2">
           <button
-            onClick={() => setAssignModal({ taskId: task.id, currentStageId: task.stage_template_id })}
-            className="text-xs text-brand-primary hover:text-brand-primaryHover font-medium hover:underline whitespace-nowrap"
+            onClick={() => {
+              setEditingTask(task);
+              setShowTaskForm(true);
+            }}
+            className="text-slate-400 hover:text-brand-primary transition-colors p-1"
+            title="Edit task"
           >
-            {task.stage_template_id ? "Reassign" : "Assign"}
+            <Pencil size={14} />
           </button>
           <button
             onClick={() => handleDeleteTask(task.id)}
@@ -379,6 +398,16 @@ const DefaultTasks: React.FC = () => {
                   </span>
                   <button
                     onClick={() => {
+                      setEditingStage(stage);
+                      setShowStageForm(true);
+                    }}
+                    className="text-slate-400 hover:text-brand-primary hover:bg-brand-light p-1.5 rounded-md transition-colors"
+                    title="Edit stage"
+                  >
+                    <Pencil size={14} />
+                  </button>
+                  <button
+                    onClick={() => {
                       setTaskFormStageId(stage.id);
                       setShowTaskForm(true);
                     }}
@@ -523,23 +552,35 @@ const DefaultTasks: React.FC = () => {
       {/* Shared Task Template Form Modal */}
       <TaskTemplateFormModal
         open={showTaskForm}
-        onClose={() => { setShowTaskForm(false); setTaskFormStageId(null); }}
+        onClose={() => { setShowTaskForm(false); setTaskFormStageId(null); setEditingTask(null); }}
         onSaved={handleTaskSaved}
         stageTemplates={stages.map((s) => ({ id: s.id, name: s.name, lead_type: s.lead_type }))}
         defaultLeadType={activeLeadType}
         defaultStageTemplateId={taskFormStageId}
         hideLeadType
+        editData={editingTask ? {
+          id: editingTask.id,
+          leadType: editingTask.lead_type,
+          roleType: editingTask.role_type,
+          name: editingTask.name,
+          order: editingTask.order_index,
+          deadlineRule: editingTask.deadline_rule,
+          isApsTask: editingTask.is_aps_task,
+          is_default: editingTask.is_default,
+          stageTemplateId: editingTask.stage_template_id,
+        } : null}
       />
 
       {/* Shared Stage Template Form Modal */}
       <StageTemplateFormModal
         open={showStageForm}
-        onClose={() => setShowStageForm(false)}
-        onCreated={handleStageCreated}
+        onClose={() => { setShowStageForm(false); setEditingStage(null); }}
+        onCreated={handleStageSaved}
         emailTemplates={emailTemplates}
         defaultLeadType={activeLeadType}
         defaultOrderIndex={filteredStages.length + 1}
         hideLeadType
+        editData={editingStage}
       />
     </div>
   );

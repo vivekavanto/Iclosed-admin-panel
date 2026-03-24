@@ -1,4 +1,4 @@
-import DefaultTasks from "@/components/defaultTasks";
+import DefaultTasks from "@/components/DefaultTasks";
 
 export default function DefaultTasksPage() {
   return <DefaultTasks />;

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { X, Plus, Loader2 } from "lucide-react";
+import { X, Plus, Loader2, Save } from "lucide-react";
 
 type LeadType = "Purchase" | "Sale" | "Refinance" | "Status Certificate Review";
 
@@ -15,17 +15,27 @@ interface StageFormData {
   email_template_id: string;
 }
 
+interface EditStageData {
+  id: string;
+  name: string;
+  description: { short?: string; modal?: string; task?: string } | null;
+  lead_type: string;
+  order_index: number;
+  role: string;
+  is_shared?: boolean;
+  email_template_id: string | null;
+}
+
 interface StageTemplateFormModalProps {
   open: boolean;
   onClose: () => void;
   onCreated: (result: any) => void;
   emailTemplates: { id: string; name: string }[];
-  /** Pre-fill lead_type (e.g. from the active tab in DefaultTasks) */
   defaultLeadType?: LeadType;
-  /** Pre-fill order_index */
   defaultOrderIndex?: number;
-  /** Hide lead_type selector when it's implied by context */
   hideLeadType?: boolean;
+  /** Pass existing stage data to enable edit mode */
+  editData?: EditStageData | null;
 }
 
 const INITIAL_FORM: StageFormData = {
@@ -46,24 +56,38 @@ export default function StageTemplateFormModal({
   defaultLeadType,
   defaultOrderIndex,
   hideLeadType = false,
+  editData = null,
 }: StageTemplateFormModalProps) {
-  const [form, setForm] = useState<StageFormData>({
-    ...INITIAL_FORM,
-    lead_type: defaultLeadType ?? "Purchase",
-    order_index: defaultOrderIndex ?? 1,
-  });
+  const isEditMode = !!editData;
+
+  const [form, setForm] = useState<StageFormData>(INITIAL_FORM);
   const [submitting, setSubmitting] = useState(false);
 
-  // Reset form when modal opens with new defaults
   React.useEffect(() => {
     if (open) {
-      setForm({
-        ...INITIAL_FORM,
-        lead_type: defaultLeadType ?? "Purchase",
-        order_index: defaultOrderIndex ?? 1,
-      });
+      if (editData) {
+        setForm({
+          name: editData.name,
+          description: {
+            short: editData.description?.short ?? "",
+            modal: editData.description?.modal ?? "",
+            task: editData.description?.task ?? "",
+          },
+          lead_type: editData.lead_type as LeadType,
+          order_index: editData.order_index,
+          role: editData.role,
+          is_shared: editData.is_shared ?? false,
+          email_template_id: editData.email_template_id ?? "",
+        });
+      } else {
+        setForm({
+          ...INITIAL_FORM,
+          lead_type: defaultLeadType ?? "Purchase",
+          order_index: defaultOrderIndex ?? 1,
+        });
+      }
     }
-  }, [open, defaultLeadType, defaultOrderIndex]);
+  }, [open, editData, defaultLeadType, defaultOrderIndex]);
 
   if (!open) return null;
 
@@ -73,25 +97,27 @@ export default function StageTemplateFormModal({
 
     setSubmitting(true);
     try {
+      const method = isEditMode ? "PUT" : "POST";
+      const payload = isEditMode
+        ? { id: editData!.id, ...form, email_template_id: form.email_template_id || null }
+        : { ...form, email_template_id: form.email_template_id || null };
+
       const res = await fetch("/api/admin/milestone-templates", {
-        method: "POST",
+        method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...form,
-          email_template_id: form.email_template_id || null,
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (!res.ok) {
         const err = await res.json();
-        throw new Error(err.error || "Failed to create");
+        throw new Error(err.error || `Failed to ${isEditMode ? "update" : "create"}`);
       }
 
       const result = await res.json();
       onCreated(result);
       onClose();
     } catch (err: any) {
-      alert(err.message || "Failed to create stage template");
+      alert(err.message || `Failed to ${isEditMode ? "update" : "create"} stage template`);
     } finally {
       setSubmitting(false);
     }
@@ -101,7 +127,9 @@ export default function StageTemplateFormModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
       <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-slate-200">
-          <h3 className="text-lg font-bold text-slate-900">Add Stage Template</h3>
+          <h3 className="text-lg font-bold text-slate-900">
+            {isEditMode ? "Edit Stage Template" : "Add Stage Template"}
+          </h3>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
             <X size={20} />
           </button>
@@ -137,7 +165,7 @@ export default function StageTemplateFormModal({
               onChange={(e) => setForm((p) => ({ ...p, description: { ...p.description, modal: e.target.value } }))}
               className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary resize-none"
               placeholder="Description shown in the modal..."
-              rows={2}
+              rows={3}
             />
           </div>
 
@@ -235,8 +263,14 @@ export default function StageTemplateFormModal({
               disabled={submitting}
               className="flex items-center gap-2 bg-brand-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-brand-primary/90 transition-colors disabled:opacity-50"
             >
-              {submitting ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
-              {submitting ? "Creating..." : "Create"}
+              {submitting ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : isEditMode ? (
+                <Save size={16} />
+              ) : (
+                <Plus size={16} />
+              )}
+              {submitting ? (isEditMode ? "Saving..." : "Creating...") : isEditMode ? "Save Changes" : "Create"}
             </button>
           </div>
         </form>
