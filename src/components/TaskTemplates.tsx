@@ -22,6 +22,8 @@ interface TaskTemplate {
   deadlineRule: string | null;
   isApsTask: boolean;
   is_default: boolean;
+  stageTemplateId: string | null;
+  stageName: string | null;
 }
 
 const LEAD_TYPES = ["Purchase", "Sale", "Refinance"];
@@ -41,12 +43,14 @@ const emptyForm = {
   deadlineRule: DEADLINE_RULES[0],
   isApsTask: false,
   is_default: false,
+  stageTemplateId: "",
 };
 
 
 const TaskTemplates: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [tasks, setTasks] = useState<TaskTemplate[]>([]);
+  const [stageTemplates, setStageTemplates] = useState<{ id: string; name: string; lead_type: string }[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
@@ -79,6 +83,8 @@ const TaskTemplates: React.FC = () => {
             deadlineRule: t.deadline_rule,
             isApsTask: t.is_aps_task,
             is_default: t.is_default ?? false,
+            stageTemplateId: t.stage_template_id ?? null,
+            stageName: t.stage_templates?.name ?? null,
           })),
         );
       } catch (err: any) {
@@ -87,6 +93,11 @@ const TaskTemplates: React.FC = () => {
     };
 
     fetchTasks();
+
+    fetch("/api/admin/milestone-templates")
+      .then((res) => res.json())
+      .then((data) => { if (Array.isArray(data)) setStageTemplates(data); })
+      .catch(() => {});
   }, []);
 
   const resetForm = () => setForm({ ...emptyForm });
@@ -101,6 +112,7 @@ const TaskTemplates: React.FC = () => {
       deadlineRule: task.deadlineRule || DEADLINE_RULES[0],
       isApsTask: task.isApsTask,
       is_default: task.is_default,
+      stageTemplateId: task.stageTemplateId || "",
     });
     setIsModalOpen(true);
   };
@@ -144,6 +156,8 @@ const TaskTemplates: React.FC = () => {
         deadlineRule: result.deadline_rule,
         isApsTask: result.is_aps_task,
         is_default: result.is_default ?? false,
+        stageTemplateId: result.stage_template_id ?? null,
+        stageName: result.stage_templates?.name ?? null,
       };
 
       if (form.id) {
@@ -234,6 +248,7 @@ const TaskTemplates: React.FC = () => {
                 </div>
               </th>
               <th className="px-6 py-5">Deadline Rule</th>
+              <th className="px-6 py-5">Stage</th>
               <th className="px-6 py-5 text-center">APS Task</th>
               <th className="px-6 py-5 text-center">Actions</th>
             </tr>
@@ -260,6 +275,15 @@ const TaskTemplates: React.FC = () => {
                 </td>
                 <td className="px-6 py-5 italic text-slate-500 font-medium">
                   {task.deadlineRule || "—"}
+                </td>
+                <td className="px-6 py-5">
+                  {task.stageName ? (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-brand-light text-brand-primary border border-brand-primary/20">
+                      {task.stageName}
+                    </span>
+                  ) : (
+                    <span className="text-slate-300 text-xs">—</span>
+                  )}
                 </td>
                 <td className="px-6 py-5 text-center">
                   <div className="flex justify-center">
@@ -295,7 +319,7 @@ const TaskTemplates: React.FC = () => {
             {filteredTasks.length === 0 && (
               <tr>
                 <td
-                  colSpan={7}
+                  colSpan={8}
                   className="px-6 py-12 text-center text-slate-400 italic"
                 >
                   No task templates found.
@@ -389,6 +413,22 @@ const TaskTemplates: React.FC = () => {
                     ))}
                   </select>
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Stage (Milestone)</label>
+                <select
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
+                  value={form.stageTemplateId}
+                  onChange={(e) => setForm((prev) => ({ ...prev, stageTemplateId: e.target.value }))}
+                >
+                  <option value="">No Stage</option>
+                  {stageTemplates
+                    .filter((s) => s.lead_type === form.leadType)
+                    .map((s) => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                </select>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

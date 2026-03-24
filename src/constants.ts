@@ -253,5 +253,12 @@ export const NAV_ITEMS = [
     ]
   },
   { label: 'Leads', id: 'leads', icon: 'Users' },
-  { label: 'Settings', id: 'settings', icon: 'Settings' },
+  {
+    label: 'Settings',
+    id: 'settings',
+    icon: 'Settings',
+    children: [
+      { label: 'Workflow Setup', id: 'workflow-setup' },
+    ]
+  },
 ];

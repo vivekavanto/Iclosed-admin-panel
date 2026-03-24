@@ -33,6 +33,7 @@ tasks: "/admin/tasks",
   "email-templates": "/admin/templates/emails",
   leads: "/admin/leads",
   settings: "/admin/settings",
+  "workflow-setup": "/admin/settings/workflow",
 };
 
 const iconMap: Record<string, React.ReactNode> = {
