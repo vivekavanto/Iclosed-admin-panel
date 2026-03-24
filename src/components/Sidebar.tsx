@@ -60,7 +60,6 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {} }) => {
   };
 
   const isTemplateActive = pathname.startsWith("/admin/templates");
-  const isSettingsActive = pathname.startsWith("/admin/settings");
 
   const [openMenus, setOpenMenus] = useState<Set<string>>(() => {
     const initial = new Set<string>();
@@ -113,7 +112,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {} }) => {
             );
           }
 
-          const isOpen = openMenus.has(item.id) || active;
+          const isOpen = openMenus.has(item.id);
 
           if (hasChildren) {
             return (
