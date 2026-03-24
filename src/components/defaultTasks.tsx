@@ -47,7 +47,7 @@ const DEADLINE_RULES = [
   "N days before lead requisition date",
 ];
 
-const WorkflowSetup: React.FC = () => {
+const DefaultTasks: React.FC = () => {
   const [stages, setStages] = useState<StageTemplate[]>([]);
   const [tasks, setTasks] = useState<TaskTemplate[]>([]);
   const [emailTemplates, setEmailTemplates] = useState<{ id: string; name: string }[]>([]);
@@ -332,9 +332,9 @@ const WorkflowSetup: React.FC = () => {
             <Workflow className="text-brand-primary" size={32} />
           </div>
           <div>
-            <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">Workflow Setup</h1>
+            <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">Default Tasks</h1>
             <p className="text-sm text-slate-500 mt-1">
-              Map task templates to stage milestones. See the full workflow at a glance.
+              Map default task templates to stage milestones for each lead type.
             </p>
           </div>
         </div>
@@ -347,7 +347,7 @@ const WorkflowSetup: React.FC = () => {
             className="bg-brand-primary text-white px-4 py-2 rounded-xl flex items-center gap-2 font-bold text-sm shadow-lg shadow-brand-primary/20 hover:bg-brand-primaryHover transition-all active:scale-95 whitespace-nowrap"
           >
             <Plus size={16} />
-            <span className="hidden sm:inline">Add Stage</span>
+            <span className="hidden sm:inline">Add Stage Templates</span>
             <span className="sm:hidden">Stage</span>
           </button>
           <button
@@ -359,7 +359,7 @@ const WorkflowSetup: React.FC = () => {
             className="bg-white border border-slate-300 text-slate-700 px-4 py-2 rounded-xl flex items-center gap-2 font-bold text-sm hover:bg-slate-50 transition-all active:scale-95 whitespace-nowrap"
           >
             <Plus size={16} />
-            <span className="hidden sm:inline">Add Task</span>
+            <span className="hidden sm:inline">Add Task Templates</span>
             <span className="sm:hidden">Task</span>
           </button>
         </div>
@@ -525,7 +525,7 @@ const WorkflowSetup: React.FC = () => {
 
         {filteredStages.length === 0 && unassignedTasks.length === 0 && (
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 px-6 py-16 text-center">
-            <p className="text-slate-400 text-sm">No workflow data for {activeLeadType} lead type.</p>
+            <p className="text-slate-400 text-sm">No default tasks for {activeLeadType} lead type.</p>
           </div>
         )}
       </div>
@@ -767,7 +767,7 @@ const WorkflowSetup: React.FC = () => {
                   onClick={handleAddStage}
                   className="bg-brand-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-brand-primary/90 transition-colors"
                 >
-                  Add Stage
+                  Add Stage Templates
                 </button>
               </div>
             </div>
@@ -778,4 +778,4 @@ const WorkflowSetup: React.FC = () => {
   );
 };
 
-export default WorkflowSetup;
+export default DefaultTasks;

@@ -258,7 +258,7 @@ export const NAV_ITEMS = [
     id: 'settings',
     icon: 'Settings',
     children: [
-      { label: 'Workflow Setup', id: 'workflow-setup' },
+      { label: 'Default Tasks', id: 'default-tasks' },
     ]
   },
 ];
