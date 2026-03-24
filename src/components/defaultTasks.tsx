@@ -24,6 +24,7 @@ interface StageTemplate {
   role: string;
   email_template_id: string | null;
   email_templates: { id: string; name: string } | null;
+  description: { short?: string; modal?: string; task?: string } | null;
 }
 
 interface TaskTemplate {
@@ -364,6 +365,9 @@ const DefaultTasks: React.FC = () => {
                         </span>
                       )}
                     </p>
+                    {stage.description?.short && (
+                      <p className="text-xs text-slate-500 mt-1 line-clamp-2">{stage.description.short}</p>
+                    )}
                   </div>
                 </button>
                 <div className="flex items-center gap-2 shrink-0 ml-2">

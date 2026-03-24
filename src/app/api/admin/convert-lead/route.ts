@@ -135,6 +135,7 @@ export async function POST(req: Request) {
           order_index: st.order_index,
           email_template_id: st.email_template_id ?? null,
           stage_template_id: st.id,
+          description: st.description ?? null,
         }));
 
         const { data: milestones, error: msError } = await supabaseAdmin
