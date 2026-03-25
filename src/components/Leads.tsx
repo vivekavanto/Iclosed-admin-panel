@@ -359,9 +359,9 @@ const Leads: React.FC = () => {
             >
               <Send size={14} /> Send Email
             </button>
-            <button className="flex items-center gap-2 px-6 py-2.5 bg-slate-900 text-white rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-slate-800 transition-all shadow-lg active:scale-95">
+            {/* <button className="flex items-center gap-2 px-6 py-2.5 bg-slate-900 text-white rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-slate-800 transition-all shadow-lg active:scale-95">
               <History size={14} /> View History
-            </button>
+            </button> */}
           </div>
         </div>
 

@@ -32,7 +32,7 @@ tasks: "/admin/tasks",
   "task-templates": "/admin/templates/tasks",
   "email-templates": "/admin/templates/emails",
   leads: "/admin/leads",
-  settings: "/admin/settings",
+  settings: "/admin/settings/workflow",
   "workflow-setup": "/admin/settings/workflow",
 };
 
