@@ -4,7 +4,8 @@ import React from "react";
 import Sidebar from "../components/Sidebar";
 import SearchDrawer from "../components/SearchDrawer";
 import { useNavigation } from "./providers";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
+import { useAuth } from "@/lib/AuthProvider";
 
 export default function ClientLayout({
   children,
@@ -13,6 +14,27 @@ export default function ClientLayout({
 }) {
   const { isSearchOpen, openSearch, closeSearch } = useNavigation();
   const router = useRouter();
+  const pathname = usePathname();
+  const { user, loading } = useAuth();
+
+  // Show loading spinner while checking auth
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-red-500" />
+      </div>
+    );
+  }
+
+  // Login page — no sidebar
+  if (pathname === "/admin/login") {
+    return <>{children}</>;
+  }
+
+  // Not authenticated — don't render anything (redirect happens in AuthProvider)
+  if (!user) {
+    return null;
+  }
 
   return (
     <div className="bg-slate-50 min-h-screen font-sans text-slate-900 flex">

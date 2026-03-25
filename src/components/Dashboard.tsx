@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { MOCK_DEALS } from "../constants";
+import { useAuth } from "@/lib/AuthProvider";
 import { DealType, DealStatus } from "../types";
 import {
   ChevronLeft,
@@ -13,8 +14,14 @@ import {
 } from "lucide-react";
 
 const Dashboard: React.FC = () => {
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = useState("All");
   const [viewedTab, setViewedTab] = useState("All");
+
+  // Dynamic greeting based on time of day
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+  const displayName = (user?.user_metadata?.display_name as string) || (user?.user_metadata?.name as string) || user?.email?.split("@")[0] || "Admin";
 
   // Specific data slicing to match the visual layout
   const topDeals = MOCK_DEALS.slice(0, 3);
@@ -117,7 +124,7 @@ const Dashboard: React.FC = () => {
       {/* Header */}
       <div className="flex justify-between items-center">
         <h1 className="text-2xl font-bold text-slate-800">
-          Good afternoon, Suganya!
+          {greeting}, {displayName}!
         </h1>
         <div className="relative">
           <button className="flex items-center space-x-2 bg-white border border-slate-200 text-sm font-medium px-4 py-2 rounded-lg text-slate-700 hover:border-brand-primary hover:text-brand-primary transition-colors">

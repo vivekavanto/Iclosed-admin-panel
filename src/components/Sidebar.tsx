@@ -16,8 +16,10 @@ import {
   ChevronDown,
   ClipboardCheck,
   ListTodo,
+  KeyRound,
 } from "lucide-react";
-import { NAV_ITEMS, CURRENT_USER } from "../constants";
+import { NAV_ITEMS } from "../constants";
+import { useAuth } from "@/lib/AuthProvider";
 
 interface SidebarProps {
   onSearchClick?: () => void;
@@ -52,6 +54,7 @@ const iconMap: Record<string, React.ReactNode> = {
 
 const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {} }) => {
   const pathname = usePathname();
+  const { user, signOut } = useAuth();
 
   const isActive = (itemId: string) => {
     const route = ROUTE_MAP[itemId];
@@ -179,23 +182,34 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {} }) => {
           );
         })}
       </nav>
-      <div className="p-4 border-t border-slate-800">
-        <div className="flex items-center space-x-3 px-4 py-3 rounded-lg bg-slate-800/50 hover:bg-slate-800 transition-colors cursor-pointer">
-          <img
-            src={CURRENT_USER.avatarUrl}
-            alt={CURRENT_USER.name}
-            className="w-10 h-10 rounded-full border-2 border-slate-600"
-          />
+      <div className="p-4 border-t border-slate-800 space-y-2">
+        <div className="flex items-center space-x-3 px-4 py-3 rounded-lg bg-slate-800/50">
+          <div className="w-10 h-10 rounded-full border-2 border-slate-600 bg-slate-700 flex items-center justify-center text-white font-semibold text-sm">
+            {user?.email?.charAt(0).toUpperCase() ?? "A"}
+          </div>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium text-white truncate">
-              {CURRENT_USER.name}
+              {user?.email ?? "Admin"}
             </p>
-            <p className="text-xs text-slate-500 truncate">
-              {CURRENT_USER.role}
+            <p className="text-xs text-slate-500 truncate capitalize">
+              {(user?.user_metadata?.role as string) ?? "Admin"}
             </p>
           </div>
-          <button className="text-slate-400 hover:text-white">
-            <LogOut size={18} />
+        </div>
+        <div className="flex gap-2 px-2">
+          <Link
+            href="/admin/change-password"
+            className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+          >
+            <KeyRound size={14} />
+            Change Password
+          </Link>
+          <button
+            onClick={signOut}
+            className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs text-slate-400 hover:text-red-400 hover:bg-slate-800 transition-colors"
+          >
+            <LogOut size={14} />
+            Logout
           </button>
         </div>
       </div>
