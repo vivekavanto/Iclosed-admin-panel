@@ -54,6 +54,24 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   type DisplayTask = Task & { isTemplate?: boolean };
   type DisplayMilestone = Milestone & { isTemplate?: boolean };
 
+  // View task detail modal
+  const [viewingTask, setViewingTask] = useState<DisplayTask | null>(null);
+  const [viewTaskResponses, setViewTaskResponses] = useState<any[]>([]);
+  const [loadingTaskResponses, setLoadingTaskResponses] = useState(false);
+
+  const openTaskView = async (task: DisplayTask) => {
+    setViewingTask(task);
+    setViewTaskResponses([]);
+    if (task.isTemplate) return;
+    setLoadingTaskResponses(true);
+    try {
+      const res = await fetch(`/api/admin/task-responses?task_id=${task.id}`);
+      const data = await res.json();
+      if (Array.isArray(data)) setViewTaskResponses(data);
+    } catch { }
+    setLoadingTaskResponses(false);
+  };
+
   // Toast state
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
   const showToast = (message: string, type: "success" | "error" = "success") => {
@@ -862,11 +880,16 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                         </span>
                       </td>
                       <td className="px-2 py-3 text-center">
-                        {!task.isTemplate && (
-                          <button onClick={() => handleDeleteTask(task.id)} className="text-slate-300 hover:text-red-600 p-1 transition-colors">
-                            <Trash2 size={16} />
+                        <div className="flex items-center justify-center gap-1">
+                          <button onClick={() => openTaskView(task)} className="text-slate-400 hover:text-brand-primary p-1 transition-colors" title="View details">
+                            <Eye size={16} />
                           </button>
-                        )}
+                          {!task.isTemplate && (
+                            <button onClick={() => handleDeleteTask(task.id)} className="text-slate-300 hover:text-red-600 p-1 transition-colors">
+                              <Trash2 size={16} />
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1521,6 +1544,102 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                   </li>
                 ))}
               </ul>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* View Task Detail Modal */}
+      {viewingTask && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={() => setViewingTask(null)}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+              <h3 className="text-lg font-bold text-slate-900">Task Details</h3>
+              <button onClick={() => setViewingTask(null)} className="text-slate-400 hover:text-slate-600 transition-colors">
+                <span className="sr-only">Close</span>&times;
+              </button>
+            </div>
+            <div className="px-6 py-5 space-y-4 max-h-[70vh] overflow-y-auto">
+              <div>
+                <p className="text-[11px] uppercase tracking-wider text-slate-400 font-bold">Task Name</p>
+                <p className="text-sm font-semibold text-slate-800 mt-0.5">{viewingTask.title}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-[11px] uppercase tracking-wider text-slate-400 font-bold">Status</p>
+                  <span className={`inline-block mt-1 text-xs font-semibold border rounded px-2 py-1 ${getStatusColor(viewingTask.status || "Pending")}`}>
+                    {viewingTask.status || "Pending"}
+                  </span>
+                </div>
+                <div>
+                  <p className="text-[11px] uppercase tracking-wider text-slate-400 font-bold">Due Date</p>
+                  <p className="text-sm text-slate-700 mt-0.5">
+                    {viewingTask.dueDate
+                      ? new Date(viewingTask.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                      : "—"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] uppercase tracking-wider text-slate-400 font-bold">Completed At</p>
+                  <p className="text-sm text-slate-700 mt-0.5">
+                    {viewingTask.completedAt
+                      ? new Date(viewingTask.completedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })
+                      : "—"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] uppercase tracking-wider text-slate-400 font-bold">Milestone</p>
+                  <p className="text-sm text-slate-700 mt-0.5">
+                    {viewingTask.milestoneId
+                      ? milestones.find((m) => m.id === viewingTask.milestoneId)?.title || "—"
+                      : "—"}
+                  </p>
+                </div>
+              </div>
+
+              {/* Client-submitted responses */}
+              <div className="border-t border-slate-100 pt-4">
+                <p className="text-[11px] uppercase tracking-wider text-slate-400 font-bold mb-3">Client Responses</p>
+                {loadingTaskResponses ? (
+                  <div className="flex items-center gap-2 py-4">
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-brand-primary"></div>
+                    <span className="text-xs text-slate-400">Loading...</span>
+                  </div>
+                ) : viewTaskResponses.length > 0 ? (
+                  <div className="space-y-3">
+                    {viewTaskResponses.map((resp: any, i: number) => (
+                      <div key={i} className="bg-slate-50 rounded-lg px-4 py-3">
+                        <p className="text-[11px] uppercase tracking-wider text-slate-400 font-bold">
+                          {resp.field_label || resp.field_name || `Field ${i + 1}`}
+                        </p>
+                        {resp.field_type === "file" ? (
+                          <div className="flex items-center gap-2 mt-1">
+                            <FileText size={14} className="text-brand-primary shrink-0" />
+                            {resp.file_url ? (
+                              <a href={resp.file_url} target="_blank" rel="noopener noreferrer" className="text-sm text-brand-primary hover:underline truncate">
+                                {resp.file_name || "View file"}
+                              </a>
+                            ) : (
+                              <span className="text-sm text-slate-500">{resp.file_name || "File uploaded (no URL)"}</span>
+                            )}
+                          </div>
+                        ) : (
+                          <p className="text-sm text-slate-700 mt-0.5 break-words">
+                            {resp.value || resp.text_value || "—"}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-400 italic">No responses submitted yet.</p>
+                )}
+              </div>
+            </div>
+            <div className="px-6 py-3 border-t border-slate-100 flex justify-end">
+              <button onClick={() => setViewingTask(null)} className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors">
+                Close
+              </button>
             </div>
           </div>
         </div>

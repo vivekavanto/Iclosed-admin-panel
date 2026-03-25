@@ -4,9 +4,23 @@ import supabaseAdmin from "@/lib/supabaseAdmin";
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const dealId = searchParams.get("deal_id");
+  const taskId = searchParams.get("task_id");
+
+  // If task_id is provided, return ALL responses for that specific task
+  if (taskId) {
+    const { data, error } = await supabaseAdmin
+      .from("task_responses")
+      .select("*")
+      .eq("task_id", taskId);
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    return NextResponse.json(data ?? []);
+  }
 
   if (!dealId) {
-    return NextResponse.json({ error: "deal_id is required" }, { status: 400 });
+    return NextResponse.json({ error: "deal_id or task_id is required" }, { status: 400 });
   }
 
   // Step 1: get all task IDs for this deal
