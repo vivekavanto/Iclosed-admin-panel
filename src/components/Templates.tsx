@@ -131,7 +131,7 @@ const Templates: React.FC = () => {
         <div>
           <h1 className="text-2xl font-bold text-slate-900 flex items-center">
             <FileStack className="mr-3 text-brand-primary" size={28} />
-            Default tasks Templates
+            Stage Templates
           </h1>
           <p className="text-sm text-slate-500 mt-1">
             Configure standardized milestones, email triggers, and client sharing for Nava Wilson files.

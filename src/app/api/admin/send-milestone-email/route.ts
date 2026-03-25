@@ -15,12 +15,7 @@ export async function POST(req: Request) {
 
         if (!milestone) throw new Error("Milestone not found")
 
-        // ❌ prevent duplicate emails
-        if (milestone.email_sent) {
-            return NextResponse.json({ success: true, message: "Already sent" })
-        }
-
-        // 2️⃣ Update milestone status
+        // 2️⃣ Always update milestone status to Completed
         await supabaseAdmin
             .from("milestones")
             .update({
@@ -32,6 +27,11 @@ export async function POST(req: Request) {
         // 3️⃣ If no email template linked, just mark completed (no email)
         if (!milestone.email_template_id) {
             return NextResponse.json({ success: true, message: "Status updated, no email template linked" })
+        }
+
+        // ❌ prevent duplicate emails (but status is already updated above)
+        if (milestone.email_sent) {
+            return NextResponse.json({ success: true, alreadySent: true, message: "Email already sent" })
         }
 
         // 4️⃣ Get email template
@@ -59,12 +59,31 @@ export async function POST(req: Request) {
 
         const { data: client } = await supabaseAdmin
             .from("clients")
-            .select("email")
+            .select("email, first_name, last_name")
             .eq("id", deal.client_id)
             .single()
 
         const email = client?.email
         if (!email) throw new Error("Client email not found")
+
+        // 5.5️⃣ Replace placeholders in email body
+        const fullName = `${client.first_name ?? ""} ${client.last_name ?? ""}`.trim()
+        const placeholders: Record<string, string> = {
+            "{{ user.first_name }}": client.first_name ?? "",
+            "{{ user.last_name }}": client.last_name ?? "",
+            "{{ user.full_name }}": fullName,
+            "{{ user.email }}": email,
+            // Also handle without spaces
+            "{{user.first_name}}": client.first_name ?? "",
+            "{{user.last_name}}": client.last_name ?? "",
+            "{{user.full_name}}": fullName,
+            "{{user.email}}": email,
+        }
+
+        let processedBody = emailBody
+        for (const [key, value] of Object.entries(placeholders)) {
+            processedBody = processedBody.replaceAll(key, value)
+        }
 
         // 6️⃣ Send Email via Resend
         if (!process.env.RESEND_API_KEY) {
@@ -81,7 +100,7 @@ export async function POST(req: Request) {
 
         const htmlBody = `
       <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:32px;color:#1e293b;line-height:1.8;font-size:14px;">
-        ${emailBody.split("\n").map((line: string) => line.trim() === "" ? "<br/>" : `<p style="margin:0 0 4px 0;">${line}</p>`).join("\n")}
+        ${processedBody.split("\n").map((line: string) => line.trim() === "" ? "<br/>" : `<p style="margin:0 0 4px 0;">${line}</p>`).join("\n")}
       </div>
     `
 

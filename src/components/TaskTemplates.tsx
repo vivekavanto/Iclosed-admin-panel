@@ -128,13 +128,13 @@ const TaskTemplates: React.FC = () => {
       )}
 
       {/* Header Section */}
-      <div className="flex justify-between items-start">
+      <div className="flex flex-col gap-4 sm:flex-row sm:justify-between sm:items-start">
         <div className="flex items-start gap-4">
-          <div className="bg-brand-primary/10 p-2.5 rounded-lg">
+          <div className="bg-brand-primary/10 p-2.5 rounded-lg shrink-0">
             <ClipboardList className="text-brand-primary" size={32} />
           </div>
           <div>
-            <h1 className="text-3xl font-bold text-slate-900 tracking-tight">
+            <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">
               Task Templates
             </h1>
             <p className="text-sm text-slate-500 mt-1">
@@ -144,8 +144,8 @@ const TaskTemplates: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex items-center gap-4">
-          <div className="relative w-72">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4">
+          <div className="relative w-full sm:w-72">
             <input
               type="text"
               placeholder="Search tasks..."
@@ -163,7 +163,7 @@ const TaskTemplates: React.FC = () => {
               setEditingTask(null);
               setIsModalOpen(true);
             }}
-            className="bg-brand-primary text-white px-5 py-2.5 rounded-xl flex items-center gap-2 font-bold text-sm shadow-lg shadow-brand-primary/20 hover:bg-brand-primaryHover transition-all active:scale-95 whitespace-nowrap"
+            className="bg-brand-primary text-white px-5 py-2.5 rounded-xl flex items-center justify-center gap-2 font-bold text-sm shadow-lg shadow-brand-primary/20 hover:bg-brand-primaryHover transition-all active:scale-95 whitespace-nowrap"
           >
             <Plus size={20} />
             New Task
@@ -171,106 +171,177 @@ const TaskTemplates: React.FC = () => {
         </div>
       </div>
 
-      {/* Table Section */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-slate-50/50 border-b border-slate-100">
-            <tr className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-              <th className="px-6 py-5">
-                <div className="flex items-center gap-2">
-                  <span>Lead Type</span>
-                  <ArrowUpDown size={12} className="text-slate-300" />
-                </div>
-              </th>
-              <th className="px-6 py-5">Role Type</th>
-              <th className="px-6 py-5">Name</th>
-              <th className="px-6 py-5">
-                <div className="flex items-center gap-2">
-                  <span>Order</span>
-                  <ArrowUpDown size={12} className="text-slate-300" />
-                </div>
-              </th>
-              <th className="px-6 py-5">Deadline Rule</th>
-              <th className="px-6 py-5">Stage</th>
-              <th className="px-6 py-5 text-center">APS Task</th>
-              <th className="px-6 py-5 text-center">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-50">
-            {filteredTasks.map((task) => (
-              <tr
-                key={task.id}
-                className="hover:bg-slate-50/50 transition-colors"
-              >
-                <td className="px-6 py-5 font-bold text-brand-primary">
-                  {task.leadType}
-                </td>
-                <td className="px-6 py-5 text-slate-600 font-medium">
-                  {task.roleType}
-                </td>
-                <td className="px-6 py-5">
-                  <span className="font-bold text-slate-800 leading-tight block max-w-md">
-                    {task.name}
-                  </span>
-                </td>
-                <td className="px-6 py-5 text-slate-600 font-medium">
-                  {task.order}
-                </td>
-                <td className="px-6 py-5 italic text-slate-500 font-medium">
-                  {task.deadlineRule || "—"}
-                </td>
-                <td className="px-6 py-5">
-                  {task.stageName ? (
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-brand-light text-brand-primary border border-brand-primary/20">
-                      {task.stageName}
-                    </span>
-                  ) : (
-                    <span className="text-slate-300 text-xs">—</span>
-                  )}
-                </td>
-                <td className="px-6 py-5 text-center">
-                  <div className="flex justify-center">
-                    {task.isApsTask ? (
-                      <div className="text-green-500 bg-green-50 p-1 rounded-full">
-                        <CheckCircle2 size={20} />
-                      </div>
-                    ) : (
-                      <div className="text-slate-300 bg-slate-50 p-1 rounded-full">
-                        <XCircle size={20} />
-                      </div>
-                    )}
+      {/* Table Section – visible on lg and up */}
+      <div className="hidden lg:block bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-slate-50/50 border-b border-slate-100">
+              <tr className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                <th className="px-6 py-5">
+                  <div className="flex items-center gap-2">
+                    <span>Lead Type</span>
+                    <ArrowUpDown size={12} className="text-slate-300" />
                   </div>
-                </td>
-                <td className="px-6 py-5">
-                  <div className="flex justify-center items-center gap-3">
-                    <button
-                      onClick={() => handleEdit(task)}
-                      className="text-brand-primary hover:text-brand-primaryHover transition-colors"
-                    >
-                      <Edit size={18} />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(task.id)}
-                      className="text-red-400 hover:text-red-600 transition-colors"
-                    >
-                      <Trash2 size={18} />
-                    </button>
+                </th>
+                <th className="px-6 py-5">Role Type</th>
+                <th className="px-6 py-5">Name</th>
+                <th className="px-6 py-5">
+                  <div className="flex items-center gap-2">
+                    <span>Order</span>
                   </div>
-                </td>
+                </th>
+                <th className="px-6 py-5">Deadline Rule</th>
+                <th className="px-6 py-5">Stage</th>
+                <th className="px-6 py-5 text-center">APS Task</th>
+                <th className="px-6 py-5 text-center">Actions</th>
               </tr>
-            ))}
-            {filteredTasks.length === 0 && (
-              <tr>
-                <td
-                  colSpan={8}
-                  className="px-6 py-12 text-center text-slate-400 italic"
+            </thead>
+            <tbody className="divide-y divide-slate-50">
+              {filteredTasks.map((task) => (
+                <tr
+                  key={task.id}
+                  className="hover:bg-slate-50/50 transition-colors"
                 >
-                  No task templates found.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+                  <td className="px-6 py-5 font-bold text-brand-primary">
+                    {task.leadType}
+                  </td>
+                  <td className="px-6 py-5 text-slate-600 font-medium">
+                    {task.roleType}
+                  </td>
+                  <td className="px-6 py-5">
+                    <span className="font-bold text-slate-800 leading-tight block max-w-md">
+                      {task.name}
+                    </span>
+                  </td>
+                  <td className="px-6 py-5 text-slate-600 font-medium">
+                    {task.order}
+                  </td>
+                  <td className="px-6 py-5 italic text-slate-500 font-medium">
+                    {task.deadlineRule || "—"}
+                  </td>
+                  <td className="px-6 py-5">
+                    {task.stageName ? (
+                      <span className="inline-flex items-center px-2.5 py-1 rounded-md text-[11px] font-bold bg-brand-light text-brand-primary border border-brand-primary/20">
+                        {task.stageName}
+                      </span>
+                    ) : (
+                      <span className="text-slate-300 text-xs">—</span>
+                    )}
+                  </td>
+                  <td className="px-6 py-5 text-center">
+                    <div className="flex justify-center">
+                      {task.isApsTask ? (
+                        <div className="text-green-500 bg-green-50 p-1 rounded-full">
+                          <CheckCircle2 size={20} />
+                        </div>
+                      ) : (
+                        <div className="text-slate-300 bg-slate-50 p-1 rounded-full">
+                          <XCircle size={20} />
+                        </div>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-6 py-5">
+                    <div className="flex justify-center items-center gap-3">
+                      <button
+                        onClick={() => handleEdit(task)}
+                        className="text-brand-primary hover:text-brand-primaryHover transition-colors"
+                      >
+                        <Edit size={18} />
+                      </button>
+                      <button
+                        onClick={() => handleDelete(task.id)}
+                        className="text-red-400 hover:text-red-600 transition-colors"
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {filteredTasks.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={8}
+                    className="px-6 py-12 text-center text-slate-400 italic"
+                  >
+                    No task templates found.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Card Layout – visible below lg */}
+      <div className="lg:hidden space-y-3">
+        {filteredTasks.map((task) => (
+          <div
+            key={task.id}
+            className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 space-y-3"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="font-bold text-slate-800 leading-tight">
+                  {task.name}
+                </p>
+                <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                  <span className="text-xs font-bold text-brand-primary">
+                    {task.leadType}
+                  </span>
+                  <span className="text-slate-300">·</span>
+                  <span className="text-xs text-slate-500 font-medium">
+                    {task.roleType}
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={() => handleEdit(task)}
+                  className="text-brand-primary hover:text-brand-primaryHover transition-colors p-1"
+                >
+                  <Edit size={18} />
+                </button>
+                <button
+                  onClick={() => handleDelete(task.id)}
+                  className="text-red-400 hover:text-red-600 transition-colors p-1"
+                >
+                  <Trash2 size={18} />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500">
+              <span>
+                <span className="font-semibold text-slate-600">Order:</span>{" "}
+                {task.order}
+              </span>
+              <span>
+                <span className="font-semibold text-slate-600">Deadline:</span>{" "}
+                <span className="italic">{task.deadlineRule || "—"}</span>
+              </span>
+              {task.stageName && (
+                <span className="inline-flex items-center px-2.5 py-1 rounded-md text-[11px] font-bold bg-brand-light text-brand-primary border border-brand-primary/20">
+                  {task.stageName}
+                </span>
+              )}
+              <span className="inline-flex items-center gap-1">
+                <span className="font-semibold text-slate-600">APS:</span>
+                {task.isApsTask ? (
+                  <CheckCircle2 size={14} className="text-green-500" />
+                ) : (
+                  <XCircle size={14} className="text-slate-300" />
+                )}
+              </span>
+            </div>
+          </div>
+        ))}
+        {filteredTasks.length === 0 && (
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 px-6 py-12 text-center text-slate-400 italic">
+            No task templates found.
+          </div>
+        )}
       </div>
 
       {/* Shared Task Template Form Modal */}

@@ -135,34 +135,39 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       }),
     );
 
-    // 🔥 CALL SPECIAL API WHEN COMPLETED
     if (newStatus === "Completed") {
-      try {
-        const res = await fetch("/api/admin/send-milestone-email", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            milestoneId: id,
-            dealId: deal.id,
-          }),
-        });
-        const data = await res.json();
-        if (data.success) {
-          showToast("Milestone email sent successfully!");
-        } else {
-          showToast(data.error || "Failed to send milestone email", "error");
+      const milestone = milestones.find((m) => m.id === id);
+      if (milestone?.emailTemplateId) {
+        // Send email + update status (the email API handles completed_at)
+        try {
+          const res = await fetch("/api/admin/send-milestone-email", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ milestoneId: id, dealId: deal.id }),
+          });
+          const data = await res.json();
+          if (data.success) {
+            showToast(data.alreadySent ? "Email was already sent for this milestone." : "Milestone email sent successfully!");
+          } else {
+            showToast(data.error || "Failed to send milestone email", "error");
+          }
+        } catch {
+          showToast("Failed to send milestone email", "error");
         }
-      } catch {
-        showToast("Failed to send milestone email", "error");
+      } else {
+        // No email template — update status + completed_at
+        await fetch("/api/admin/milestones", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id, status: newStatus, completed_at: new Date().toISOString() }),
+        });
       }
     } else {
-      // normal update
+      // Moving away from Completed — clear completed_at and reset email_sent
       await fetch("/api/admin/milestones", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, status: newStatus }),
+        body: JSON.stringify({ id, status: newStatus, completed_at: null, email_sent: false }),
       });
     }
 
@@ -182,7 +187,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     });
     const data = await res.json();
     if (data.success) {
-      showToast("Milestone email sent successfully!");
+      showToast(data.alreadySent ? "Email was already sent for this milestone." : "Milestone email sent successfully!");
       await refetchData();
     } else {
       showToast(data.error || "Failed to send milestone email", "error");
@@ -221,7 +226,12 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     await fetch("/api/admin/tasks", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, status: newStatus, completed: isCompleted }),
+      body: JSON.stringify({
+        id,
+        status: newStatus,
+        completed: isCompleted,
+        completed_at: isCompleted ? new Date().toISOString() : null,
+      }),
     });
 
     // Check if all tasks for this milestone are completed → auto-update milestone
@@ -241,22 +251,35 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       );
 
       if (allDone) {
-        const res = await fetch("/api/admin/send-milestone-email", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ milestoneId, dealId: deal.id }),
-        });
-        const data = await res.json();
-        if (data.success) {
-          showToast("Milestone email sent successfully!");
+        const milestone = milestones.find((m) => m.id === milestoneId);
+        if (milestone?.emailTemplateId) {
+          try {
+            const res = await fetch("/api/admin/send-milestone-email", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ milestoneId, dealId: deal.id }),
+            });
+            const data = await res.json();
+            if (data.success) {
+              showToast(data.alreadySent ? "Email was already sent for this milestone." : "Milestone email sent successfully!");
+            } else {
+              showToast(data.error || "Failed to send milestone email", "error");
+            }
+          } catch {
+            showToast("Failed to send milestone email", "error");
+          }
         } else {
-          showToast(data.error || "Failed to send milestone email", "error");
+          await fetch("/api/admin/milestones", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: milestoneId, status: "Completed", completed_at: new Date().toISOString() }),
+          });
         }
       } else {
         await fetch("/api/admin/milestones", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: milestoneId, status: newMilestoneStatus }),
+          body: JSON.stringify({ id: milestoneId, status: newMilestoneStatus, completed_at: null, email_sent: false }),
         });
       }
     }
@@ -804,17 +827,38 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                         {task.isTemplate ? (
                           <span className="text-slate-300 text-xs">-</span>
                         ) : (
-                          <input
-                            type="date"
-                            value={task.dueDate ?? ""}
-                            onChange={() => { }}
-                            className="text-xs border border-slate-200 rounded px-1.5 py-1 text-slate-700 bg-transparent focus:bg-white focus:border-brand-primary outline-none w-full"
-                          />
+                          <div className="relative">
+                            <input
+                              type="date"
+                              value={task.dueDate ?? ""}
+                              onChange={async (e) => {
+                                const newDate = e.target.value || null;
+                                setTasks((prev) => prev.map((t) => t.id === task.id ? { ...t, dueDate: newDate ?? undefined } : t));
+                                await fetch("/api/admin/tasks", {
+                                  method: "PATCH",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ id: task.id, due_date: newDate }),
+                                });
+                              }}
+                              className="absolute inset-0 opacity-0 cursor-pointer w-full"
+                            />
+                            {task.dueDate ? (
+                              <span className="text-xs font-medium text-slate-700">
+                                {new Date(task.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                              </span>
+                            ) : (
+                              <span className="text-xs text-slate-300">—</span>
+                            )}
+                          </div>
                         )}
                       </td>
                       <td className="px-2 py-3 hidden lg:table-cell">
                         <span className="text-xs text-slate-500">
-                          {task.isTemplate ? "-" : (task.completedAt || "-")}
+                          {task.isTemplate
+                            ? "-"
+                            : task.completedAt
+                              ? new Date(task.completedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                              : "-"}
                         </span>
                       </td>
                       <td className="px-2 py-3 text-center">
@@ -945,12 +989,29 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                                 {milestone.isTemplate ? (
                                   <span className="text-slate-300 text-xs">-</span>
                                 ) : (
-                                  <input
-                                    type="date"
-                                    value={milestone.milestoneDate ?? ""}
-                                    onChange={() => { }}
-                                    className="text-xs border border-slate-200 rounded px-1.5 py-1 text-slate-700 bg-transparent focus:bg-white focus:border-brand-primary outline-none w-full"
-                                  />
+                                  <div className="relative">
+                                    <input
+                                      type="date"
+                                      value={milestone.milestoneDate ?? ""}
+                                      onChange={async (e) => {
+                                        const newDate = e.target.value || null;
+                                        setMilestones((prev) => prev.map((m) => m.id === milestone.id ? { ...m, milestoneDate: newDate ?? undefined } : m));
+                                        await fetch("/api/admin/milestones", {
+                                          method: "PATCH",
+                                          headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify({ id: milestone.id, milestone_date: newDate }),
+                                        });
+                                      }}
+                                      className="absolute inset-0 opacity-0 cursor-pointer w-full"
+                                    />
+                                    {milestone.milestoneDate ? (
+                                      <span className="text-xs font-medium text-slate-700">
+                                        {new Date(milestone.milestoneDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                                      </span>
+                                    ) : (
+                                      <span className="text-xs text-slate-300">—</span>
+                                    )}
+                                  </div>
                                 )}
                               </td>
 

@@ -101,16 +101,39 @@ const DefaultTasks: React.FC = () => {
   const filteredTasks = tasks.filter((t) => t.lead_type === activeLeadType);
 
   const search = searchTerm.toLowerCase();
-  const matchesSearch = (name: string) => !search || name.toLowerCase().includes(search);
+  const taskMatchesSearch = (t: TaskTemplate) =>
+    !search ||
+    t.name.toLowerCase().includes(search) ||
+    t.role_type.toLowerCase().includes(search) ||
+    (t.deadline_rule && t.deadline_rule.toLowerCase().includes(search));
+
+  const stageMatchesSearch = (s: StageTemplate) =>
+    !search ||
+    s.name.toLowerCase().includes(search) ||
+    s.role.toLowerCase().includes(search);
 
   const getTasksForStage = (stageId: string) =>
     filteredTasks
-      .filter((t) => t.stage_template_id === stageId && matchesSearch(t.name))
+      .filter((t) => t.stage_template_id === stageId && taskMatchesSearch(t))
+      .sort((a, b) => a.order_index - b.order_index);
+
+  const getAllTasksForStage = (stageId: string) =>
+    filteredTasks
+      .filter((t) => t.stage_template_id === stageId)
       .sort((a, b) => a.order_index - b.order_index);
 
   const unassignedTasks = filteredTasks
-    .filter((t) => !t.stage_template_id && matchesSearch(t.name))
+    .filter((t) => !t.stage_template_id && taskMatchesSearch(t))
     .sort((a, b) => a.order_index - b.order_index);
+
+  // When searching, only show stages that match or have matching tasks
+  const visibleStages = search
+    ? filteredStages.filter(
+        (stage) =>
+          stageMatchesSearch(stage) ||
+          getTasksForStage(stage.id).length > 0
+      )
+    : filteredStages;
 
   const toggleStage = (stageId: string) => {
     setExpandedStages((prev) => {
@@ -340,20 +363,32 @@ const DefaultTasks: React.FC = () => {
         <div className="relative w-full sm:w-72">
           <input
             type="text"
-            placeholder="Search tasks..."
-            className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary/20 focus:border-brand-primary transition-all shadow-sm"
+            placeholder="Search stages or tasks..."
+            className="w-full pl-10 pr-9 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary/20 focus:border-brand-primary transition-all shadow-sm"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
           <Search className="absolute left-3 top-3 text-slate-400" size={20} />
+          {searchTerm && (
+            <button
+              onClick={() => setSearchTerm("")}
+              className="absolute right-3 top-3 text-slate-400 hover:text-slate-600"
+            >
+              <X size={16} />
+            </button>
+          )}
         </div>
       </div>
 
       {/* Workflow Sections */}
       <div className="space-y-4">
-        {filteredStages.map((stage) => {
-          const stageTasks = getTasksForStage(stage.id);
-          const isExpanded = expandedStages.has(stage.id);
+        {visibleStages.map((stage) => {
+          // If stage name matches search, show all its tasks; otherwise only matching tasks
+          const stageTasks =
+            search && stageMatchesSearch(stage)
+              ? getAllTasksForStage(stage.id)
+              : getTasksForStage(stage.id);
+          const isExpanded = expandedStages.has(stage.id) || !!search;
 
           return (
             <div
@@ -361,84 +396,93 @@ const DefaultTasks: React.FC = () => {
               className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden"
             >
               {/* Stage Header */}
-              <div className="flex items-center justify-between px-3 sm:px-5 py-3 sm:py-4 hover:bg-slate-50 transition-colors">
-                <button
-                  onClick={() => toggleStage(stage.id)}
-                  className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0"
-                >
-                  {isExpanded ? (
-                    <ChevronDown size={18} className="text-slate-400 shrink-0" />
-                  ) : (
-                    <ChevronRight size={18} className="text-slate-400 shrink-0" />
-                  )}
-                  <div className="bg-brand-primary/10 p-1.5 rounded-md shrink-0">
-                    <Layers size={16} className="text-brand-primary" />
-                  </div>
-                  <div className="text-left min-w-0">
-                    <h3 className="text-sm font-bold text-slate-800 truncate">{stage.name}</h3>
-                    <p className="text-xs text-slate-400 mt-0.5 truncate">
-                      {stage.role} &middot; Order: {stage.order_index}
-                      {stage.email_templates && (
-                        <span className="ml-2 text-brand-primary">
-                          &middot; Email: {stage.email_templates.name}
-                        </span>
-                      )}
-                    </p>
-                    {stage.description?.short && (
-                      <p className="text-xs text-slate-500 mt-1 line-clamp-2">{stage.description.short}</p>
+              <div className="px-3 sm:px-5 py-3 sm:py-4 hover:bg-slate-50 transition-colors">
+                <div className="flex items-center justify-between">
+                  <button
+                    onClick={() => toggleStage(stage.id)}
+                    className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0"
+                  >
+                    {isExpanded ? (
+                      <ChevronDown size={18} className="text-slate-400 shrink-0" />
+                    ) : (
+                      <ChevronRight size={18} className="text-slate-400 shrink-0" />
                     )}
+                    <div className="bg-brand-primary/10 p-1.5 rounded-md shrink-0">
+                      <Layers size={16} className="text-brand-primary" />
+                    </div>
+                    <div className="text-left min-w-0">
+                      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+                        <h3 className="text-sm font-bold text-slate-800">{stage.name}</h3>
+                        <div className="flex items-center gap-x-2">
+                          <span className="text-[11px] text-slate-400 font-medium">{stage.role}</span>
+                          <span className="text-slate-300 text-[10px]">&middot;</span>
+                          <span className="text-[11px] text-slate-400">Order: {stage.order_index}</span>
+                          {stage.email_templates && (
+                            <>
+                              <span className="text-slate-300 text-[10px]">&middot;</span>
+                              <span className="text-[11px] text-brand-primary font-medium">
+                                Email: {stage.email_templates.name}
+                              </span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      {stage.description?.short && (
+                        <p className="text-[11px] italic text-slate-400 mt-1 line-clamp-1">{stage.description.short}</p>
+                      )}
+                    </div>
+                  </button>
+                  <div className="flex items-center gap-2 shrink-0 ml-2">
+                    <span className="text-xs font-bold text-slate-500 bg-slate-100 px-2.5 py-1 rounded-full hidden sm:inline">
+                      {stageTasks.length} task{stageTasks.length !== 1 ? "s" : ""}
+                    </span>
+                    <span className="text-xs font-bold text-slate-500 bg-slate-100 px-2 py-1 rounded-full sm:hidden">
+                      {stageTasks.length}
+                    </span>
+                    <button
+                      onClick={() => {
+                        setEditingStage(stage);
+                        setShowStageForm(true);
+                      }}
+                      className="text-slate-400 hover:text-brand-primary hover:bg-brand-light p-1.5 rounded-md transition-colors"
+                      title="Edit stage"
+                    >
+                      <Pencil size={14} />
+                    </button>
+                    <button
+                      onClick={() => {
+                        setTaskFormStageId(stage.id);
+                        setShowTaskForm(true);
+                      }}
+                      className="text-brand-primary hover:bg-brand-light p-1.5 rounded-md transition-colors"
+                      title="Add task to this stage"
+                    >
+                      <Plus size={16} />
+                    </button>
                   </div>
-                </button>
-                <div className="flex items-center gap-2 shrink-0 ml-2">
-                  <span className="text-xs font-bold text-slate-500 bg-slate-100 px-2.5 py-1 rounded-full hidden sm:inline">
-                    {stageTasks.length} task{stageTasks.length !== 1 ? "s" : ""}
-                  </span>
-                  <span className="text-xs font-bold text-slate-500 bg-slate-100 px-2 py-1 rounded-full sm:hidden">
-                    {stageTasks.length}
-                  </span>
-                  <button
-                    onClick={() => {
-                      setEditingStage(stage);
-                      setShowStageForm(true);
-                    }}
-                    className="text-slate-400 hover:text-brand-primary hover:bg-brand-light p-1.5 rounded-md transition-colors"
-                    title="Edit stage"
-                  >
-                    <Pencil size={14} />
-                  </button>
-                  <button
-                    onClick={() => {
-                      setTaskFormStageId(stage.id);
-                      setShowTaskForm(true);
-                    }}
-                    className="text-brand-primary hover:bg-brand-light p-1.5 rounded-md transition-colors"
-                    title="Add task to this stage"
-                  >
-                    <Plus size={16} />
-                  </button>
                 </div>
               </div>
 
               {/* Tasks Table */}
               {isExpanded && (
                 <div className="border-t border-slate-100">
-                  {stageTasks.length > 0 ? (
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left min-w-[400px]">
-                        <TaskTableHeader />
-                        <tbody className="divide-y divide-slate-50">
-                          {stageTasks.map((task, i) => (
-                            <TaskRow key={task.id} task={task} index={i} />
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <div className="px-5 py-8 text-center text-sm text-slate-400 italic">
-                      No tasks assigned to this stage.
-                    </div>
-                  )}
-                </div>
+                    {stageTasks.length > 0 ? (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left min-w-[400px]">
+                          <TaskTableHeader />
+                          <tbody className="divide-y divide-slate-50">
+                            {stageTasks.map((task, i) => (
+                              <TaskRow key={task.id} task={task} index={i} />
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <div className="px-5 py-8 text-center text-sm text-slate-400 italic">
+                        No tasks assigned to this stage.
+                      </div>
+                    )}
+                  </div>
               )}
             </div>
           );
@@ -489,9 +533,13 @@ const DefaultTasks: React.FC = () => {
           </div>
         )}
 
-        {filteredStages.length === 0 && unassignedTasks.length === 0 && (
+        {visibleStages.length === 0 && unassignedTasks.length === 0 && (
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 px-6 py-16 text-center">
-            <p className="text-slate-400 text-sm">No default tasks for {activeLeadType} lead type.</p>
+            <p className="text-slate-400 text-sm">
+              {search
+                ? `No results found for "${searchTerm}".`
+                : `No default tasks for ${activeLeadType} lead type.`}
+            </p>
           </div>
         )}
       </div>
