@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -32,8 +32,9 @@ tasks: "/admin/tasks",
   "task-templates": "/admin/templates/tasks",
   "email-templates": "/admin/templates/emails",
   leads: "/admin/leads",
-  settings: "/admin/settings/workflow",
-  "workflow-setup": "/admin/settings/workflow",
+
+  settings: "/admin/settings",
+  "default-tasks": "/admin/settings/default-tasks",
 };
 
 const iconMap: Record<string, React.ReactNode> = {
@@ -60,6 +61,22 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {} }) => {
   };
 
   const isTemplateActive = pathname.startsWith("/admin/templates");
+
+  const [openMenus, setOpenMenus] = useState<Set<string>>(() => {
+    const initial = new Set<string>();
+    if (pathname.startsWith("/admin/templates")) initial.add("templates");
+    if (pathname.startsWith("/admin/settings")) initial.add("settings");
+    return initial;
+  });
+
+  const toggleMenu = (id: string) => {
+    setOpenMenus((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   return (
     <div className="w-64 bg-slate-900 text-slate-300 flex flex-col h-screen fixed left-0 top-0 border-r border-slate-800 shadow-xl z-20">
@@ -96,6 +113,53 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {} }) => {
             );
           }
 
+          const isOpen = openMenus.has(item.id);
+
+          if (hasChildren) {
+            return (
+              <div key={item.id} className="space-y-1">
+                <button
+                  onClick={() => toggleMenu(item.id)}
+                  className={`w-full flex items-center justify-between px-4 py-3 rounded-lg transition-all duration-200 ${
+                    active
+                      ? "bg-brand-primary text-white shadow-md shadow-brand-primary/20"
+                      : "hover:bg-slate-800 hover:text-white"
+                  }`}
+                >
+                  <div className="flex items-center space-x-3">
+                    {iconMap[item.icon]}
+                    <span className="font-medium">{item.label}</span>
+                  </div>
+                  <ChevronDown
+                    size={14}
+                    className={`transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`}
+                  />
+                </button>
+                {isOpen && (
+                  <div className="ml-9 space-y-1 py-1">
+                    {item.children!.map((child) => {
+                      const childRoute = ROUTE_MAP[child.id] || "/";
+                      const childActive = pathname === childRoute;
+                      return (
+                        <Link
+                          key={child.id}
+                          href={childRoute}
+                          className={`block w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${
+                            childActive
+                              ? "text-white bg-slate-800 font-bold"
+                              : "text-slate-400 hover:text-white hover:bg-slate-800/50"
+                          }`}
+                        >
+                          {child.label}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          }
+
           return (
             <div key={item.id} className="space-y-1">
               <Link
@@ -110,34 +174,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {} }) => {
                   {iconMap[item.icon]}
                   <span className="font-medium">{item.label}</span>
                 </div>
-                {hasChildren && (
-                  <ChevronDown
-                    size={14}
-                    className={`transition-transform duration-200 ${active ? "rotate-180" : ""}`}
-                  />
-                )}
               </Link>
-              {hasChildren && active && (
-                <div className="ml-9 space-y-1 py-1">
-                  {item.children!.map((child) => {
-                    const childRoute = ROUTE_MAP[child.id] || "/";
-                    const childActive = pathname === childRoute;
-                    return (
-                      <Link
-                        key={child.id}
-                        href={childRoute}
-                        className={`block w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${
-                          childActive
-                            ? "text-white bg-slate-800 font-bold"
-                            : "text-slate-400 hover:text-white hover:bg-slate-800/50"
-                        }`}
-                      >
-                        {child.label}
-                      </Link>
-                    );
-                  })}
-                </div>
-              )}
             </div>
           );
         })}

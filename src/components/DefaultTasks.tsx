@@ -12,7 +12,10 @@ import {
   Workflow,
   Layers,
   ClipboardList,
+  Pencil,
 } from "lucide-react";
+import StageTemplateFormModal from "@/components/shared/StageTemplateFormModal";
+import TaskTemplateFormModal from "@/components/shared/TaskTemplateFormModal";
 
 interface StageTemplate {
   id: string;
@@ -22,6 +25,7 @@ interface StageTemplate {
   role: string;
   email_template_id: string | null;
   email_templates: { id: string; name: string } | null;
+  description: { short?: string; modal?: string; task?: string } | null;
 }
 
 interface TaskTemplate {
@@ -41,13 +45,8 @@ type LeadType = "Purchase" | "Sale" | "Refinance";
 
 const LEAD_TYPES: LeadType[] = ["Purchase", "Sale", "Refinance"];
 
-const DEADLINE_RULES = [
-  "N business days after task creation",
-  "N days before lead closing date",
-  "N days before lead requisition date",
-];
 
-const WorkflowSetup: React.FC = () => {
+const DefaultTasks: React.FC = () => {
   const [stages, setStages] = useState<StageTemplate[]>([]);
   const [tasks, setTasks] = useState<TaskTemplate[]>([]);
   const [emailTemplates, setEmailTemplates] = useState<{ id: string; name: string }[]>([]);
@@ -59,26 +58,12 @@ const WorkflowSetup: React.FC = () => {
   // Assign modal
   const [assignModal, setAssignModal] = useState<{ taskId: string; currentStageId: string | null } | null>(null);
 
-  // Add task form
-  const [taskFormStageId, setTaskFormStageId] = useState<string | null>(null);
+  // Shared form modals
   const [showTaskForm, setShowTaskForm] = useState(false);
-  const [taskForm, setTaskForm] = useState({
-    name: "",
-    roleType: "Client",
-    order: 1,
-    deadlineRule: DEADLINE_RULES[0],
-    isApsTask: false,
-    is_default: true,
-  });
-
-  // Add stage form
+  const [taskFormStageId, setTaskFormStageId] = useState<string | null>(null);
+  const [editingTask, setEditingTask] = useState<TaskTemplate | null>(null);
   const [showStageForm, setShowStageForm] = useState(false);
-  const [stageForm, setStageForm] = useState({
-    name: "",
-    role: "Client",
-    order_index: 1,
-    emailTemplateId: "",
-  });
+  const [editingStage, setEditingStage] = useState<StageTemplate | null>(null);
 
   useEffect(() => {
     async function fetchData() {
@@ -177,73 +162,42 @@ const WorkflowSetup: React.FC = () => {
     }
   };
 
-  // Add task
-  const handleAddTask = async () => {
-    if (!taskForm.name.trim()) return;
-    try {
-      const res = await fetch("/api/admin/task-templates", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          leadType: activeLeadType,
-          roleType: taskForm.roleType,
-          name: taskForm.name,
-          order: taskForm.order,
-          deadlineRule: taskForm.deadlineRule,
-          isApsTask: taskForm.isApsTask,
-          is_default: taskForm.is_default,
-          stageTemplateId: taskFormStageId,
-        }),
-      });
-      if (!res.ok) throw new Error("Failed");
-      const result = await res.json();
-      const newTask: TaskTemplate = {
-        id: result.id,
-        lead_type: result.lead_type,
-        role_type: result.role_type,
-        name: result.name,
-        order_index: result.order_index,
-        deadline_rule: result.deadline_rule,
-        is_aps_task: result.is_aps_task,
-        is_default: result.is_default ?? false,
-        stage_template_id: result.stage_template_id ?? null,
-        stage_templates: taskFormStageId
-          ? { id: taskFormStageId, name: stages.find((s) => s.id === taskFormStageId)?.name || "" }
-          : null,
-      };
-      setTasks((prev) => [...prev, newTask]);
-      setShowTaskForm(false);
-      setTaskForm({ name: "", roleType: "Client", order: 1, deadlineRule: DEADLINE_RULES[0], isApsTask: false, is_default: true });
-      setTaskFormStageId(null);
-    } catch {
-      alert("Error adding task template.");
+  // Callback when shared stage form creates or updates a stage
+  const handleStageSaved = (result: any) => {
+    if (editingStage) {
+      // Update existing stage in state
+      setStages((prev) => prev.map((s) => (s.id === result.id ? result : s)));
+      setEditingStage(null);
+    } else {
+      // New stage
+      setStages((prev) => [...prev, result]);
+      setExpandedStages((prev) => new Set([...prev, result.id]));
     }
   };
 
-  // Add stage
-  const handleAddStage = async () => {
-    if (!stageForm.name.trim()) return;
-    try {
-      const res = await fetch("/api/admin/milestone-templates", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: stageForm.name,
-          lead_type: activeLeadType,
-          role: stageForm.role,
-          order_index: stageForm.order_index,
-          email_template_id: stageForm.emailTemplateId || null,
-        }),
-      });
-      if (!res.ok) throw new Error("Failed");
-      const result = await res.json();
-      setStages((prev) => [...prev, result]);
-      setExpandedStages((prev) => new Set([...prev, result.id]));
-      setShowStageForm(false);
-      setStageForm({ name: "", role: "Client", order_index: 1, emailTemplateId: "" });
-    } catch {
-      alert("Error adding stage template.");
+  // Callback when shared task form creates or updates a task
+  const handleTaskSaved = (result: any, isEdit: boolean) => {
+    const mapped: TaskTemplate = {
+      id: result.id,
+      lead_type: result.lead_type,
+      role_type: result.role_type,
+      name: result.name,
+      order_index: result.order_index,
+      deadline_rule: result.deadline_rule,
+      is_aps_task: result.is_aps_task,
+      is_default: result.is_default ?? false,
+      stage_template_id: result.stage_template_id ?? null,
+      stage_templates: result.stage_template_id
+        ? { id: result.stage_template_id, name: stages.find((s) => s.id === result.stage_template_id)?.name || "" }
+        : null,
+    };
+    if (isEdit) {
+      setTasks((prev) => prev.map((t) => (t.id === mapped.id ? mapped : t)));
+      setEditingTask(null);
+    } else {
+      setTasks((prev) => [...prev, mapped]);
     }
+    setTaskFormStageId(null);
   };
 
   // Delete task
@@ -285,10 +239,14 @@ const WorkflowSetup: React.FC = () => {
       <td className="px-2 sm:px-3 py-3">
         <div className="flex items-center justify-end gap-2">
           <button
-            onClick={() => setAssignModal({ taskId: task.id, currentStageId: task.stage_template_id })}
-            className="text-xs text-brand-primary hover:text-brand-primaryHover font-medium hover:underline whitespace-nowrap"
+            onClick={() => {
+              setEditingTask(task);
+              setShowTaskForm(true);
+            }}
+            className="text-slate-400 hover:text-brand-primary transition-colors p-1"
+            title="Edit task"
           >
-            {task.stage_template_id ? "Reassign" : "Assign"}
+            <Pencil size={14} />
           </button>
           <button
             onClick={() => handleDeleteTask(task.id)}
@@ -332,34 +290,30 @@ const WorkflowSetup: React.FC = () => {
             <Workflow className="text-brand-primary" size={32} />
           </div>
           <div>
-            <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">Workflow Setup</h1>
+            <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">Default Tasks</h1>
             <p className="text-sm text-slate-500 mt-1">
-              Map task templates to stage milestones. See the full workflow at a glance.
+              Map default task templates to stage milestones for each lead type.
             </p>
           </div>
         </div>
         <div className="flex gap-2">
           <button
-            onClick={() => {
-              setStageForm({ name: "", role: "Client", order_index: filteredStages.length + 1, emailTemplateId: "" });
-              setShowStageForm(true);
-            }}
+            onClick={() => setShowStageForm(true)}
             className="bg-brand-primary text-white px-4 py-2 rounded-xl flex items-center gap-2 font-bold text-sm shadow-lg shadow-brand-primary/20 hover:bg-brand-primaryHover transition-all active:scale-95 whitespace-nowrap"
           >
             <Plus size={16} />
-            <span className="hidden sm:inline">Add Stage</span>
+            <span className="hidden sm:inline">Add Stage Templates</span>
             <span className="sm:hidden">Stage</span>
           </button>
           <button
             onClick={() => {
               setTaskFormStageId(null);
-              setTaskForm({ name: "", roleType: "Client", order: 1, deadlineRule: DEADLINE_RULES[0], isApsTask: false, is_default: true });
               setShowTaskForm(true);
             }}
             className="bg-white border border-slate-300 text-slate-700 px-4 py-2 rounded-xl flex items-center gap-2 font-bold text-sm hover:bg-slate-50 transition-all active:scale-95 whitespace-nowrap"
           >
             <Plus size={16} />
-            <span className="hidden sm:inline">Add Task</span>
+            <span className="hidden sm:inline">Add Task Templates</span>
             <span className="sm:hidden">Task</span>
           </button>
         </div>
@@ -430,6 +384,9 @@ const WorkflowSetup: React.FC = () => {
                         </span>
                       )}
                     </p>
+                    {stage.description?.short && (
+                      <p className="text-xs text-slate-500 mt-1 line-clamp-2">{stage.description.short}</p>
+                    )}
                   </div>
                 </button>
                 <div className="flex items-center gap-2 shrink-0 ml-2">
@@ -441,8 +398,17 @@ const WorkflowSetup: React.FC = () => {
                   </span>
                   <button
                     onClick={() => {
+                      setEditingStage(stage);
+                      setShowStageForm(true);
+                    }}
+                    className="text-slate-400 hover:text-brand-primary hover:bg-brand-light p-1.5 rounded-md transition-colors"
+                    title="Edit stage"
+                  >
+                    <Pencil size={14} />
+                  </button>
+                  <button
+                    onClick={() => {
                       setTaskFormStageId(stage.id);
-                      setTaskForm({ name: "", roleType: "Client", order: stageTasks.length + 1, deadlineRule: DEADLINE_RULES[0], isApsTask: false, is_default: true });
                       setShowTaskForm(true);
                     }}
                     className="text-brand-primary hover:bg-brand-light p-1.5 rounded-md transition-colors"
@@ -525,7 +491,7 @@ const WorkflowSetup: React.FC = () => {
 
         {filteredStages.length === 0 && unassignedTasks.length === 0 && (
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 px-6 py-16 text-center">
-            <p className="text-slate-400 text-sm">No workflow data for {activeLeadType} lead type.</p>
+            <p className="text-slate-400 text-sm">No default tasks for {activeLeadType} lead type.</p>
           </div>
         )}
       </div>
@@ -583,199 +549,41 @@ const WorkflowSetup: React.FC = () => {
         </div>
       )}
 
-      {/* Add Task Modal */}
-      {showTaskForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-slate-200">
-              <h3 className="text-lg font-bold text-slate-900">
-                Add Task {taskFormStageId ? `to ${stages.find((s) => s.id === taskFormStageId)?.name}` : ""}
-              </h3>
-              <button onClick={() => setShowTaskForm(false)} className="text-slate-400 hover:text-slate-600">
-                <X size={20} />
-              </button>
-            </div>
-            <div className="px-4 sm:px-6 py-4 space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Task Name *</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Upload Signed APS"
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
-                  value={taskForm.name}
-                  onChange={(e) => setTaskForm((p) => ({ ...p, name: e.target.value }))}
-                />
-              </div>
+      {/* Shared Task Template Form Modal */}
+      <TaskTemplateFormModal
+        open={showTaskForm}
+        onClose={() => { setShowTaskForm(false); setTaskFormStageId(null); setEditingTask(null); }}
+        onSaved={handleTaskSaved}
+        stageTemplates={stages.map((s) => ({ id: s.id, name: s.name, lead_type: s.lead_type }))}
+        defaultLeadType={activeLeadType}
+        defaultStageTemplateId={taskFormStageId}
+        hideLeadType
+        editData={editingTask ? {
+          id: editingTask.id,
+          leadType: editingTask.lead_type,
+          roleType: editingTask.role_type,
+          name: editingTask.name,
+          order: editingTask.order_index,
+          deadlineRule: editingTask.deadline_rule,
+          isApsTask: editingTask.is_aps_task,
+          is_default: editingTask.is_default,
+          stageTemplateId: editingTask.stage_template_id,
+        } : null}
+      />
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Role Type</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Client, Agent, Lawyer"
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
-                    value={taskForm.roleType}
-                    onChange={(e) => setTaskForm((p) => ({ ...p, roleType: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Order</label>
-                  <input
-                    type="number"
-                    min={1}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
-                    value={taskForm.order}
-                    onChange={(e) => setTaskForm((p) => ({ ...p, order: parseInt(e.target.value) || 1 }))}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Deadline Rule</label>
-                <select
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
-                  value={taskForm.deadlineRule}
-                  onChange={(e) => setTaskForm((p) => ({ ...p, deadlineRule: e.target.value }))}
-                >
-                  {DEADLINE_RULES.map((rule) => (
-                    <option key={rule} value={rule}>{rule}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Stage (Milestone)</label>
-                <select
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
-                  value={taskFormStageId || ""}
-                  onChange={(e) => setTaskFormStageId(e.target.value || null)}
-                >
-                  <option value="">No Stage (Unassigned)</option>
-                  {filteredStages.map((s) => (
-                    <option key={s.id} value={s.id}>{s.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={taskForm.isApsTask}
-                    onChange={() => setTaskForm((p) => ({ ...p, isApsTask: !p.isApsTask }))}
-                    className="rounded border-slate-300"
-                  />
-                  APS Task
-                </label>
-                <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={taskForm.is_default}
-                    onChange={() => setTaskForm((p) => ({ ...p, is_default: !p.is_default }))}
-                    className="rounded border-slate-300"
-                  />
-                  Default
-                </label>
-              </div>
-
-              <div className="flex justify-end gap-3 pt-2">
-                <button
-                  onClick={() => setShowTaskForm(false)}
-                  className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleAddTask}
-                  className="bg-brand-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-brand-primary/90 transition-colors"
-                >
-                  Add Task
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Add Stage Modal */}
-      {showStageForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-slate-200">
-              <h3 className="text-lg font-bold text-slate-900">Add Stage ({activeLeadType})</h3>
-              <button onClick={() => setShowStageForm(false)} className="text-slate-400 hover:text-slate-600">
-                <X size={20} />
-              </button>
-            </div>
-            <div className="px-4 sm:px-6 py-4 space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Stage Name *</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Title Search"
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
-                  value={stageForm.name}
-                  onChange={(e) => setStageForm((p) => ({ ...p, name: e.target.value }))}
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Role</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Client, Agent"
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
-                    value={stageForm.role}
-                    onChange={(e) => setStageForm((p) => ({ ...p, role: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Order</label>
-                  <input
-                    type="number"
-                    min={1}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
-                    value={stageForm.order_index}
-                    onChange={(e) => setStageForm((p) => ({ ...p, order_index: parseInt(e.target.value) || 1 }))}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Email Template</label>
-                <select
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
-                  value={stageForm.emailTemplateId}
-                  onChange={(e) => setStageForm((p) => ({ ...p, emailTemplateId: e.target.value }))}
-                >
-                  <option value="">No Email Template</option>
-                  {emailTemplates.map((t) => (
-                    <option key={t.id} value={t.id}>{t.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="flex justify-end gap-3 pt-2">
-                <button
-                  onClick={() => setShowStageForm(false)}
-                  className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleAddStage}
-                  className="bg-brand-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-brand-primary/90 transition-colors"
-                >
-                  Add Stage
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Shared Stage Template Form Modal */}
+      <StageTemplateFormModal
+        open={showStageForm}
+        onClose={() => { setShowStageForm(false); setEditingStage(null); }}
+        onCreated={handleStageSaved}
+        emailTemplates={emailTemplates}
+        defaultLeadType={activeLeadType}
+        defaultOrderIndex={filteredStages.length + 1}
+        hideLeadType
+        editData={editingStage}
+      />
     </div>
   );
 };
 
-export default WorkflowSetup;
+export default DefaultTasks;

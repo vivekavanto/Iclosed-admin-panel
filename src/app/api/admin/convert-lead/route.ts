@@ -115,8 +115,78 @@ export async function POST(req: Request) {
     }
 
     const dealId = deal.id;
+    const leadType = lead.lead_type ?? "Purchase";
 
-    // ── 6. Create Supabase Auth user + send invite email ──────────────────────
+    // ── 6. Copy stage_templates → milestones ────────────────────────────────
+    const stageToMilestone: Record<string, string> = {};
+
+    try {
+      const { data: stageTemplates } = await supabaseAdmin
+        .from("stage_templates")
+        .select("*")
+        .eq("lead_type", leadType)
+        .order("order_index", { ascending: true });
+
+      if (stageTemplates && stageTemplates.length > 0) {
+        const milestoneRows = stageTemplates.map((st) => ({
+          deal_id: dealId,
+          title: st.name,
+          status: "Pending",
+          order_index: st.order_index,
+          email_template_id: st.email_template_id ?? null,
+          stage_template_id: st.id,
+          description: st.description ?? null,
+        }));
+
+        const { data: milestones, error: msError } = await supabaseAdmin
+          .from("milestones")
+          .insert(milestoneRows)
+          .select("id, stage_template_id");
+
+        if (!msError && milestones) {
+          for (const ms of milestones) {
+            if (ms.stage_template_id) {
+              stageToMilestone[ms.stage_template_id] = ms.id;
+            }
+          }
+        }
+
+        console.log(`[Convert] Created ${milestones?.length ?? 0} milestones for deal ${dealId}`);
+      }
+    } catch (err) {
+      console.error("[Convert] Failed to copy stage templates (non-blocking):", err);
+    }
+
+    // ── 7. Copy task_templates → tasks (only is_default = true) ─────────────
+    try {
+      const { data: taskTemplates } = await supabaseAdmin
+        .from("task_templates")
+        .select("*")
+        .eq("lead_type", leadType)
+        .eq("is_deleted", false)
+        .eq("is_default", true)
+        .order("order_index", { ascending: true });
+
+      if (taskTemplates && taskTemplates.length > 0) {
+        const taskRows = taskTemplates.map((tt) => ({
+          deal_id: dealId,
+          title: tt.name,
+          status: "Pending",
+          role_type: tt.role_type ?? "Client",
+          task_template_id: tt.id,
+          milestone_id: tt.stage_template_id
+            ? (stageToMilestone[tt.stage_template_id] ?? null)
+            : null,
+        }));
+
+        await supabaseAdmin.from("tasks").insert(taskRows);
+        console.log(`[Convert] Created ${taskRows.length} tasks for deal ${dealId}`);
+      }
+    } catch (err) {
+      console.error("[Convert] Failed to copy task templates (non-blocking):", err);
+    }
+
+    // ── 8. Create Supabase Auth user + send invite email ──────────────────────
     let authUserId: string | null = null;
     let inviteSent = false;
     let authError: string | null = null;

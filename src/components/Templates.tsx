@@ -9,10 +9,10 @@ import {
   CheckCircle2,
   XCircle,
   Plus,
-  X,
   Loader2,
   Trash2
 } from 'lucide-react';
+import StageTemplateFormModal from "@/components/shared/StageTemplateFormModal";
 
 interface StageTemplate {
   id: string;
@@ -52,19 +52,7 @@ const Templates: React.FC = () => {
   const [emailTemplates, setEmailTemplates] = useState<EmailTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
-
-  // Form state
-  const [formData, setFormData] = useState({
-    name: '',
-    description: { short: '', modal: '', task: '' },
-    lead_type: 'Purchase' as LeadType,
-    order_index: 1,
-    role: 'Client',
-    is_shared: false,
-    email_template_id: '',
-  });
 
   const showToast = (message: string, type: "success" | "error" = "success") => {
     setToast({ message, type });
@@ -109,35 +97,9 @@ const Templates: React.FC = () => {
     ),
   }));
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formData.name.trim()) return;
-
-    setSubmitting(true);
-    try {
-      const res = await fetch('/api/admin/milestone-templates', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...formData,
-          email_template_id: formData.email_template_id || null,
-        }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Failed to create');
-      }
-
-      showToast('Stage template created successfully');
-      setShowAddForm(false);
-      setFormData({ name: '', description: { short: '', modal: '', task: '' }, lead_type: 'Purchase', order_index: 1, role: 'Client', is_shared: false, email_template_id: '' });
-      fetchData();
-    } catch (err: any) {
-      showToast(err.message || 'Failed to create stage template', 'error');
-    } finally {
-      setSubmitting(false);
-    }
+  const handleStageCreated = () => {
+    showToast('Stage template created successfully');
+    fetchData();
   };
 
   const handleDelete = async (id: string, name: string) => {
@@ -169,7 +131,7 @@ const Templates: React.FC = () => {
         <div>
           <h1 className="text-2xl font-bold text-slate-900 flex items-center">
             <FileStack className="mr-3 text-brand-primary" size={28} />
-            Workflow Templates
+            Default tasks Templates
           </h1>
           <p className="text-sm text-slate-500 mt-1">
             Configure standardized milestones, email triggers, and client sharing for Nava Wilson files.
@@ -195,151 +157,13 @@ const Templates: React.FC = () => {
         </div>
       </div>
 
-      {/* Add Stage Template Modal */}
-      {showAddForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-slate-200">
-              <h3 className="text-lg font-bold text-slate-900">Add Stage Template</h3>
-              <button onClick={() => setShowAddForm(false)} className="text-slate-400 hover:text-slate-600">
-                <X size={20} />
-              </button>
-            </div>
-            <form onSubmit={handleSubmit} className="px-4 sm:px-6 py-4 space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Stage Name *</label>
-                <input
-                  type="text"
-                  value={formData.name}
-                  onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
-                  placeholder="e.g. Initial Call"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Short Description</label>
-                <input
-                  type="text"
-                  value={formData.description.short}
-                  onChange={(e) => setFormData(prev => ({ ...prev, description: { ...prev.description, short: e.target.value } }))}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
-                  placeholder="Brief one-line description..."
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Modal Description</label>
-                <textarea
-                  value={formData.description.modal}
-                  onChange={(e) => setFormData(prev => ({ ...prev, description: { ...prev.description, modal: e.target.value } }))}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary resize-none"
-                  placeholder="Description shown in the modal..."
-                  rows={2}
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Task Description</label>
-                <textarea
-                  value={formData.description.task}
-                  onChange={(e) => setFormData(prev => ({ ...prev, description: { ...prev.description, task: e.target.value } }))}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary resize-none"
-                  placeholder="Description for the task view..."
-                  rows={2}
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Lead Type *</label>
-                  <select
-                    value={formData.lead_type}
-                    onChange={(e) => setFormData(prev => ({ ...prev, lead_type: e.target.value as any }))}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
-                  >
-                    <option value="Purchase">Purchase</option>
-                    <option value="Sale">Sale</option>
-                    <option value="Refinance">Refinance</option>
-                    <option value="Status Certificate Review">Status Certificate Review</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Order</label>
-                  <input
-                    type="number"
-                    value={formData.order_index}
-                    onChange={(e) => setFormData(prev => ({ ...prev, order_index: parseInt(e.target.value) || 1 }))}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
-                    min={1}
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Role</label>
-                  <select
-                    value={formData.role}
-                    onChange={(e) => setFormData(prev => ({ ...prev, role: e.target.value as any }))}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
-                  >
-                    <option value="Client">Client</option>
-                    <option value="Lender">Lender</option>
-                    <option value="Realtor">Realtor</option>
-                    <option value="Mortgage Agent">Mortgage Agent</option>
-                    <option value="Opposing Counsel">Opposing Counsel</option>
-                  </select>
-                </div>
-                <div className="flex items-end pb-1">
-                  <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={formData.is_shared}
-                      onChange={(e) => setFormData(prev => ({ ...prev, is_shared: e.target.checked }))}
-                      className="rounded border-slate-300"
-                    />
-                    Shared with client
-                  </label>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Email Template</label>
-                <select
-                  value={formData.email_template_id}
-                  onChange={(e) => setFormData(prev => ({ ...prev, email_template_id: e.target.value }))}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
-                >
-                  <option value="">None</option>
-                  {emailTemplates.map(et => (
-                    <option key={et.id} value={et.id}>{et.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="flex justify-end gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowAddForm(false)}
-                  className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="flex items-center gap-2 bg-brand-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-brand-primary/90 transition-colors disabled:opacity-50"
-                >
-                  {submitting ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
-                  {submitting ? 'Creating...' : 'Create'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Shared Stage Template Form Modal */}
+      <StageTemplateFormModal
+        open={showAddForm}
+        onClose={() => setShowAddForm(false)}
+        onCreated={handleStageCreated}
+        emailTemplates={emailTemplates}
+      />
 
       {loading ? (
         <div className="flex items-center justify-center py-20">
