@@ -101,8 +101,7 @@ export async function POST(req: Request) {
         const htmlBody = `
       <div>
         ${processedBody}
-        <br>
-        <img src="https://iclosed-admin-panel.vercel.app/logo.png" alt="iClosed by Nava Wilson" style="width:150px;height:auto;" />
+        <img src="https://iclosed-admin-panel.vercel.app/logo.png" alt="iClosed by Nava Wilson" style="width:70px;height:auto;" />
       </div>
     `
 
