@@ -45,7 +45,9 @@ export default function LoginPage() {
         </div>
         <div className="relative z-10 px-16 max-w-lg">
           <div className="select-none mb-8">
-            <Image src="/logo.png" alt="iClosed" width={240} height={68} />
+            <div className="bg-white rounded-md px-2 py-1 inline-block">
+              <Image src="/logo.png" alt="iClosed" width={150} height={52} />
+            </div>
           </div>
           <p className="text-slate-400 text-lg leading-relaxed mb-8">
             Streamline your real estate closings with confidence. Manage deals,

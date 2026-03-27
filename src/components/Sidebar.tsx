@@ -85,7 +85,9 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {} }) => {
   return (
     <div className="w-64 bg-slate-900 text-slate-300 flex flex-col h-screen fixed left-0 top-0 border-r border-slate-800 shadow-xl z-20">
       <div className="p-6 flex items-center space-x-3 text-white border-b border-slate-800">
-        <Image src="/logo.png" alt="iClosed" width={140} height={40} className="select-none brightness-0 invert" />
+        <div className="bg-white rounded-md px-2 py-1">
+          <Image src="/logo.png" alt="iClosed" width={120} height={32} className="select-none" />
+        </div>
       </div>
       <nav className="flex-1 px-4 py-6 space-y-1 overflow-y-auto">
         {NAV_ITEMS.map((item) => {
