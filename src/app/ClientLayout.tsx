@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import Sidebar from "../components/Sidebar";
 import SearchDrawer from "../components/SearchDrawer";
 import { useNavigation } from "./providers";
@@ -16,6 +16,7 @@ export default function ClientLayout({
   const router = useRouter();
   const pathname = usePathname();
   const { user, loading } = useAuth();
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   // Show loading spinner while checking auth
   if (loading) {
@@ -38,7 +39,11 @@ export default function ClientLayout({
 
   return (
     <div className="bg-slate-50 min-h-screen font-sans text-slate-900 flex">
-      <Sidebar onSearchClick={openSearch} />
+      <Sidebar
+        onSearchClick={openSearch}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+      />
       <SearchDrawer
         isOpen={isSearchOpen}
         onClose={closeSearch}
@@ -47,7 +52,9 @@ export default function ClientLayout({
           closeSearch();
         }}
       />
-      <main className="ml-64 flex-1 p-8 h-screen overflow-y-auto">
+      <main
+        className={`${sidebarCollapsed ? "ml-[72px]" : "ml-64"} flex-1 p-8 h-screen overflow-y-auto transition-all duration-300`}
+      >
         <div className="max-w-7xl mx-auto h-full">{children}</div>
       </main>
     </div>

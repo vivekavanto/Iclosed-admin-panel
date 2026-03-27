@@ -15,6 +15,8 @@ import {
   Files,
   FileStack,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ClipboardCheck,
   ListTodo,
   KeyRound,
@@ -24,18 +26,19 @@ import { useAuth } from "@/lib/AuthProvider";
 
 interface SidebarProps {
   onSearchClick?: () => void;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
 const ROUTE_MAP: Record<string, string> = {
   dashboard: "/admin/dashboard",
-tasks: "/admin/tasks",
+  tasks: "/admin/tasks",
   deals: "/admin/deals",
   templates: "/admin/templates",
   "stage-templates": "/admin/templates",
   "task-templates": "/admin/templates/tasks",
   "email-templates": "/admin/templates/emails",
   leads: "/admin/leads",
-
   settings: "/admin/settings",
   "default-tasks": "/admin/settings/default-tasks",
 };
@@ -53,7 +56,7 @@ const iconMap: Record<string, React.ReactNode> = {
   FileText: <FileText size={20} />,
 };
 
-const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {} }) => {
+const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed = false, onToggleCollapse }) => {
   const pathname = usePathname();
   const { user, signOut } = useAuth();
 
@@ -83,13 +86,25 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {} }) => {
   };
 
   return (
-    <div className="w-64 bg-slate-900 text-slate-300 flex flex-col h-screen fixed left-0 top-0 border-r border-slate-800 shadow-xl z-20">
-      <div className="p-6 flex items-center space-x-3 text-white border-b border-slate-800">
-        <div className="bg-white rounded-md px-2 py-1">
-          <Image src="/logo.png" alt="iClosed" width={120} height={32} className="select-none" />
-        </div>
+    <div
+      className={`${collapsed ? "w-[72px]" : "w-64"} bg-slate-900 text-slate-300 flex flex-col h-screen fixed left-0 top-0 border-r border-slate-800 shadow-xl z-20 transition-all duration-300`}
+    >
+      {/* Logo & Toggle */}
+      <div className="flex items-center justify-between px-4 py-4 border-b border-slate-800">
+        {!collapsed && (
+          <Image src="/logo.png" alt="iClosed" width={90} height={24} className="select-none invert brightness-0 invert" style={{ filter: "brightness(0) invert(1)" }} />
+        )}
+        <button
+          onClick={() => onToggleCollapse?.()}
+          className={`p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors ${collapsed ? "mx-auto" : ""}`}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        >
+          {collapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
+        </button>
       </div>
-      <nav className="flex-1 px-4 py-6 space-y-1 overflow-y-auto">
+
+      {/* Navigation */}
+      <nav className="flex-1 px-2 py-4 space-y-1 overflow-y-auto">
         {NAV_ITEMS.map((item) => {
           const active =
             isActive(item.id) || (item.id === "templates" && isTemplateActive);
@@ -98,15 +113,14 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {} }) => {
 
           if (item.id === "search") {
             return (
-              <div key={item.id} className="space-y-1">
+              <div key={item.id}>
                 <button
                   onClick={onSearchClick}
-                  className="w-full flex items-center justify-between px-4 py-3 rounded-lg transition-all duration-200 hover:bg-slate-800 hover:text-white"
+                  title={collapsed ? item.label : undefined}
+                  className={`w-full flex items-center justify-center py-2.5 rounded-lg transition-all duration-200 hover:bg-slate-800 hover:text-white ${collapsed ? "" : "px-4 !justify-start gap-3"}`}
                 >
-                  <div className="flex items-center space-x-3">
-                    {iconMap[item.icon]}
-                    <span className="font-medium">{item.label}</span>
-                  </div>
+                  {iconMap[item.icon]}
+                  {!collapsed && <span className="font-medium text-sm">{item.label}</span>}
                 </button>
               </div>
             );
@@ -116,25 +130,35 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {} }) => {
 
           if (hasChildren) {
             return (
-              <div key={item.id} className="space-y-1">
+              <div key={item.id}>
                 <button
-                  onClick={() => toggleMenu(item.id)}
-                  className={`w-full flex items-center justify-between px-4 py-3 rounded-lg transition-all duration-200 ${
+                  onClick={() => {
+                    if (collapsed) {
+                      onToggleCollapse?.();
+                      if (!openMenus.has(item.id)) toggleMenu(item.id);
+                    } else {
+                      toggleMenu(item.id);
+                    }
+                  }}
+                  title={collapsed ? item.label : undefined}
+                  className={`w-full flex items-center justify-center py-2.5 rounded-lg transition-all duration-200 ${collapsed ? "" : "px-4 !justify-between"} ${
                     active
                       ? "bg-brand-primary text-white shadow-md shadow-brand-primary/20"
                       : "hover:bg-slate-800 hover:text-white"
                   }`}
                 >
-                  <div className="flex items-center space-x-3">
+                  <div className={`flex items-center ${collapsed ? "" : "gap-3"}`}>
                     {iconMap[item.icon]}
-                    <span className="font-medium">{item.label}</span>
+                    {!collapsed && <span className="font-medium text-sm">{item.label}</span>}
                   </div>
-                  <ChevronDown
-                    size={14}
-                    className={`transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`}
-                  />
+                  {!collapsed && (
+                    <ChevronDown
+                      size={14}
+                      className={`transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`}
+                    />
+                  )}
                 </button>
-                {isOpen && (
+                {isOpen && !collapsed && (
                   <div className="ml-9 space-y-1 py-1">
                     {item.children!.map((child) => {
                       const childRoute = ROUTE_MAP[child.id] || "/";
@@ -160,54 +184,83 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {} }) => {
           }
 
           return (
-            <div key={item.id} className="space-y-1">
+            <div key={item.id}>
               <Link
                 href={route}
-                className={`w-full flex items-center justify-between px-4 py-3 rounded-lg transition-all duration-200 ${
+                title={collapsed ? item.label : undefined}
+                className={`w-full flex items-center justify-center py-2.5 rounded-lg transition-all duration-200 ${collapsed ? "" : "px-4 !justify-start gap-3"} ${
                   active
                     ? "bg-brand-primary text-white shadow-md shadow-brand-primary/20"
                     : "hover:bg-slate-800 hover:text-white"
                 }`}
               >
-                <div className="flex items-center space-x-3">
-                  {iconMap[item.icon]}
-                  <span className="font-medium">{item.label}</span>
-                </div>
+                {iconMap[item.icon]}
+                {!collapsed && <span className="font-medium text-sm">{item.label}</span>}
               </Link>
             </div>
           );
         })}
       </nav>
-      <div className="p-4 border-t border-slate-800 space-y-2">
-        <div className="flex items-center space-x-3 px-4 py-3 rounded-lg bg-slate-800/50">
-          <div className="w-10 h-10 rounded-full border-2 border-slate-600 bg-slate-700 flex items-center justify-center text-white font-semibold text-sm">
-            {user?.email?.charAt(0).toUpperCase() ?? "A"}
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-white truncate">
-              {user?.email ?? "Admin"}
-            </p>
-            <p className="text-xs text-slate-500 truncate capitalize">
-              {(user?.user_metadata?.role as string) ?? "Admin"}
-            </p>
-          </div>
-        </div>
-        <div className="flex gap-2 px-2">
-          <Link
-            href="/admin/change-password"
-            className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-          >
-            <KeyRound size={14} />
-            Change Password
-          </Link>
-          <button
-            onClick={signOut}
-            className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs text-slate-400 hover:text-red-400 hover:bg-slate-800 transition-colors"
-          >
-            <LogOut size={14} />
-            Logout
-          </button>
-        </div>
+
+      {/* User Section */}
+      <div className="p-3 border-t border-slate-800 space-y-2">
+        {collapsed ? (
+          <>
+            <div className="flex justify-center">
+              <div className="w-9 h-9 rounded-full border-2 border-slate-600 bg-slate-700 flex items-center justify-center text-white font-semibold text-xs">
+                {user?.email?.charAt(0).toUpperCase() ?? "A"}
+              </div>
+            </div>
+            <div className="flex flex-col items-center gap-1">
+              <Link
+                href="/admin/change-password"
+                title="Change Password"
+                className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              >
+                <KeyRound size={16} />
+              </Link>
+              <button
+                onClick={signOut}
+                title="Logout"
+                className="p-2 rounded-lg text-slate-400 hover:text-red-400 hover:bg-slate-800 transition-colors"
+              >
+                <LogOut size={16} />
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="flex items-center space-x-3 px-3 py-2.5 rounded-lg bg-slate-800/50">
+              <div className="w-9 h-9 rounded-full border-2 border-slate-600 bg-slate-700 flex items-center justify-center text-white font-semibold text-sm shrink-0">
+                {user?.email?.charAt(0).toUpperCase() ?? "A"}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-white truncate">
+                  {user?.email ?? "Admin"}
+                </p>
+                <p className="text-xs text-slate-500 truncate capitalize">
+                  {(user?.user_metadata?.role as string) ?? "Admin"}
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-2 px-1">
+              <Link
+                href="/admin/change-password"
+                className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              >
+                <KeyRound size={14} />
+                Change Password
+              </Link>
+              <button
+                onClick={signOut}
+                className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs text-slate-400 hover:text-red-400 hover:bg-slate-800 transition-colors"
+              >
+                <LogOut size={14} />
+                Logout
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
