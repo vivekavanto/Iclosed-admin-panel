@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import Image from "next/image";
 import { Eye, EyeOff, Lock, Mail } from "lucide-react";
 
 export default function LoginPage() {
@@ -43,13 +44,8 @@ export default function LoginPage() {
           <div className="absolute bottom-20 right-20 w-96 h-96 bg-blue-500 rounded-full blur-[128px]" />
         </div>
         <div className="relative z-10 px-16 max-w-lg">
-          <div className="flex items-baseline select-none mb-8">
-            <span className="font-serif italic font-medium text-6xl tracking-tight text-red-500 mr-[2px]">
-              i
-            </span>
-            <span className="font-sans font-bold text-6xl tracking-tight text-white">
-              Closed
-            </span>
+          <div className="select-none mb-8">
+            <Image src="/logo.png" alt="iClosed" width={240} height={68} />
           </div>
           <p className="text-slate-400 text-lg leading-relaxed mb-8">
             Streamline your real estate closings with confidence. Manage deals,
@@ -73,14 +69,7 @@ export default function LoginPage() {
         <div className="w-full max-w-sm">
           {/* Mobile logo */}
           <div className="lg:hidden text-center mb-10">
-            <div className="flex items-baseline justify-center select-none mb-2">
-              <span className="font-serif italic font-medium text-4xl tracking-tight text-red-500 mr-[1px]">
-                i
-              </span>
-              <span className="font-sans font-bold text-4xl tracking-tight text-slate-900">
-                Closed
-              </span>
-            </div>
+            <Image src="/logo.png" alt="iClosed" width={160} height={46} className="mx-auto" />
           </div>
 
           <div className="mb-8">

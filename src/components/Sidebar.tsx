@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
@@ -84,14 +85,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {} }) => {
   return (
     <div className="w-64 bg-slate-900 text-slate-300 flex flex-col h-screen fixed left-0 top-0 border-r border-slate-800 shadow-xl z-20">
       <div className="p-6 flex items-center space-x-3 text-white border-b border-slate-800">
-        <div className="flex items-baseline select-none">
-          <span className="font-serif italic font-medium text-2xl tracking-tight text-brand-primary mr-[1px]">
-            i
-          </span>
-          <span className="font-sans font-bold text-2xl tracking-tight text-white">
-            Closed
-          </span>
-        </div>
+        <Image src="/logo.png" alt="iClosed" width={140} height={40} className="select-none brightness-0 invert" />
       </div>
       <nav className="flex-1 px-4 py-6 space-y-1 overflow-y-auto">
         {NAV_ITEMS.map((item) => {
