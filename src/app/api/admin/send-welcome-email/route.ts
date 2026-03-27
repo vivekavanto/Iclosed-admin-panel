@@ -86,9 +86,9 @@ function buildHtmlEmail(bodyText: string): string {
   // Build resource links block
   const linksHtml = RESOURCE_LINKS.map(
     (link) =>
-      `<li style="margin-bottom:8px;"><a href="${link.url}" style="color:#2563eb;text-decoration:underline;">${link.text}</a></li>`
+      `<li><a href="${link.url}">${link.text}</a></li>`
   ).join("\n");
-  const linksBlock = `<ul style="list-style:disc;padding-left:24px;margin:16px 0;">\n${linksHtml}\n</ul>`;
+  const linksBlock = `<ul>\n${linksHtml}\n</ul>`;
 
   // Replace {{RESOURCE_LINKS}} placeholder
   if (text.includes("{{RESOURCE_LINKS}}")) {
@@ -98,15 +98,13 @@ function buildHtmlEmail(bodyText: string): string {
   // Replace bullet lines (•, -, *) or plain-text lines that match resource links with markers
   for (const link of RESOURCE_LINKS) {
     const escapedText = link.text.replace(/[?]/g, "\\?");
-    // Match with bullet prefix
     const bulletRegex = new RegExp(`^[•\\-\\*]\\s*${escapedText}\\s*$`, "mi");
     text = text.replace(bulletRegex, `BULLET_LINK::${link.text}::${link.url}`);
-    // Match plain text line (no bullet prefix)
     const plainRegex = new RegExp(`^${escapedText}\\s*$`, "mi");
     text = text.replace(plainRegex, `BULLET_LINK::${link.text}::${link.url}`);
   }
 
-  // Convert to HTML with proper bullet list grouping
+  // Convert to HTML
   const lines = text.split("\n");
   const htmlParts: string[] = [];
   let inBulletBlock = false;
@@ -117,10 +115,10 @@ function buildHtmlEmail(bodyText: string): string {
     if (trimmed.startsWith("BULLET_LINK::")) {
       const [, linkText, url] = trimmed.split("::");
       if (!inBulletBlock) {
-        htmlParts.push('<ul style="list-style:disc;padding-left:24px;margin:16px 0;">');
+        htmlParts.push("<ul>");
         inBulletBlock = true;
       }
-      htmlParts.push(`<li style="margin-bottom:8px;"><a href="${url}" style="color:#2563eb;text-decoration:underline;">${linkText}</a></li>`);
+      htmlParts.push(`<li><a href="${url}">${linkText}</a></li>`);
       continue;
     }
 
@@ -130,30 +128,24 @@ function buildHtmlEmail(bodyText: string): string {
     }
 
     if (trimmed === "") {
-      // Avoid consecutive <br/> tags
+      // Skip consecutive blank lines
       const lastPart = htmlParts[htmlParts.length - 1];
-      if (lastPart !== "<br/>" && lastPart !== "</ul>") {
-        htmlParts.push("<br/>");
+      if (lastPart !== "<br>") {
+        htmlParts.push("<br>");
       }
     } else if (trimmed.startsWith("<ul") || trimmed.startsWith("<li") || trimmed.startsWith("</ul")) {
       htmlParts.push(trimmed);
-    } else if (trimmed.startsWith("Congratulations")) {
-      const parts = trimmed.split(" of ");
-      if (parts.length >= 2) {
-        htmlParts.push(`<p style="margin:0 0 4px 0;">${parts[0]} of <strong>${parts.slice(1).join(" of ")}</strong></p>`);
-      } else {
-        htmlParts.push(`<p style="margin:0 0 4px 0;">${trimmed}</p>`);
-      }
     } else {
-      htmlParts.push(`<p style="margin:0 0 4px 0;">${trimmed}</p>`);
+      htmlParts.push(`${trimmed}<br>`);
     }
   }
 
   if (inBulletBlock) htmlParts.push("</ul>");
 
   return `
-    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:32px;color:#1e293b;line-height:1.8;font-size:14px;">
+    <div>
       ${htmlParts.join("\n")}
+        <img src="https://iclosed-admin-panel.vercel.app/logo.png" alt="iClosed by Nava Wilson" style="width:70px;height:auto;" />
     </div>
   `;
 }

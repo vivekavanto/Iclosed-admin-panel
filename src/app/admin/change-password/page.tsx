@@ -111,10 +111,10 @@ export default function AccountSettingsPage() {
         Back to Dashboard
       </Link>
 
-      <h1 className="text-2xl font-bold text-slate-900 mb-6">Account Settings</h1>
+      <h1 className="text-2xl font-bold text-slate-900 mb-3">Change Password</h1>
 
       {/* Display Name Section */}
-      <div className="bg-white rounded-2xl shadow-lg border border-slate-200 p-8 mb-6">
+      {/* <div className="bg-white rounded-2xl shadow-lg border border-slate-200 p-8 mb-6">
         <h2 className="text-lg font-semibold text-slate-900 mb-1">Display Name</h2>
         <p className="text-sm text-slate-500 mb-5">
           This name will be shown in the dashboard greeting and sidebar.
@@ -162,14 +162,14 @@ export default function AccountSettingsPage() {
             {nameSaving ? "Saving..." : "Update Name"}
           </button>
         </form>
-      </div>
-
+      </div> */}
+ 
+        {/* <p className="text-sm text-slate-500 mb-5">
+          Enter your old password, then enter your new password twice to confirm.
+        </p> */}
       {/* Change Password Section */}
       <div className="bg-white rounded-2xl shadow-lg border border-slate-200 p-8">
-        <h2 className="text-lg font-semibold text-slate-900 mb-1">Change Password</h2>
-        <p className="text-sm text-slate-500 mb-5">
-          Enter your old password, then enter your new password twice to confirm.
-        </p>
+       
 
         <form onSubmit={handlePasswordChange} className="space-y-5">
           <div>

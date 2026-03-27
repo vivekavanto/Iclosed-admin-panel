@@ -796,12 +796,12 @@ const Leads: React.FC = () => {
               className="pl-12 pr-6 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-medium outline-none focus:border-brand-primary transition-all w-full md:w-64"
             />
           </div>
-          <button
+          {/* <button
             onClick={() => setIsAddModalOpen(true)}
             className="flex items-center gap-2 px-6 py-2.5 bg-brand-primary text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-brand-primaryHover transition-all shadow-lg active:scale-95 whitespace-nowrap"
           >
             <Plus size={16} /> Add Client
-          </button>
+          </button> */}
         </div>
       </div>
 

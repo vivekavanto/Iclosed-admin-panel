@@ -99,8 +99,9 @@ export async function POST(req: Request) {
             process.env.RESEND_FROM_EMAIL || "iClosed <onboarding@resend.dev>"
 
         const htmlBody = `
-      <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:32px;color:#1e293b;line-height:1.8;font-size:14px;">
-        ${processedBody.split("\n").map((line: string) => line.trim() === "" ? "<br/>" : `<p style="margin:0 0 4px 0;">${line}</p>`).join("\n")}
+      <div>
+        ${processedBody}
+        <img src="https://iclosed-admin-panel.vercel.app/logo.png" alt="iClosed by Nava Wilson" style="width:70px;height:auto;" />
       </div>
     `
 
