@@ -28,6 +28,8 @@ import {
   AlertTriangle,
   CalendarDays,
   Zap,
+  Users,
+  Link2,
 } from "lucide-react";
 
 interface LeadUser {
@@ -52,6 +54,11 @@ interface LeadUser {
   lead_type?: string;
   price?: string;
   created_at?: string;
+  parentLeadId?: string | null;
+  addressMatchFlag?: {
+    matched_lead_id?: string;
+    status?: "pending" | "approved" | "dismissed";
+  } | null;
 }
 
 const Leads: React.FC = () => {
@@ -89,6 +96,13 @@ const Leads: React.FC = () => {
   >([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
 
+  // Co-purchaser action state
+  const [coPurchaserActioning, setCoPurchaserActioning] = useState(false);
+  const [coPurchaserResult, setCoPurchaserResult] = useState<{
+    success: boolean;
+    message: string;
+  } | null>(null);
+
   const [expandedSections, setExpandedSections] = useState<string[]>([
     "personal",
     "current-address",
@@ -121,6 +135,8 @@ const Leads: React.FC = () => {
             lead_type: l.lead_type,
             price: l.price,
             created_at: l.created_at,
+            parentLeadId: l.parent_lead_id ?? null,
+            addressMatchFlag: l.address_match_flag ?? null,
           }));
           setLeads(mapped);
         } else {
@@ -143,8 +159,115 @@ const Leads: React.FC = () => {
   const openLead = (lead: LeadUser) => {
     setSelectedLead(lead);
     setConvertResult(null);
+    setCoPurchaserResult(null);
     setView("DETAIL");
   };
+
+  const getLeadName = (id: string) => {
+    const match = leads.find((l) => l.id === id);
+    return match ? `${match.firstName} ${match.lastName}` : null;
+  };
+
+  // ── Co-purchaser actions ──────────────────────────────────────────────────
+  async function handleApproveCoPurchaser() {
+    if (!selectedLead) return;
+    setCoPurchaserActioning(true);
+    setCoPurchaserResult(null);
+    try {
+      const res = await fetch("/api/admin/link-co-purchaser", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lead_id: selectedLead.id }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setCoPurchaserResult({
+          success: true,
+          message: "Co-purchaser approved and linked successfully.",
+        });
+        // Re-fetch leads to pick up parent_lead_id set by the portal
+        const refreshRes = await fetch("/api/admin/leads");
+        const refreshData = await refreshRes.json();
+        if (refreshData.success) {
+          const mapped: LeadUser[] = (refreshData.leads ?? []).map((l: any) => ({
+            id: l.id,
+            firstName: l.first_name ?? "",
+            lastName: l.last_name ?? "",
+            email: l.email ?? "",
+            phone: l.phone ?? "",
+            isCorporate: l.is_corporate ?? false,
+            corporateName: l.corporate_name,
+            incNumber: l.inc_number,
+            addressStreet: l.address_street,
+            addressCity: l.address_city,
+            addressPostalCode: l.address_postal_code,
+            status: l.status ?? "New",
+            lead_type: l.lead_type,
+            price: l.price,
+            created_at: l.created_at,
+            parentLeadId: l.parent_lead_id ?? null,
+            addressMatchFlag: l.address_match_flag ?? null,
+          }));
+          setLeads(mapped);
+          const updated = mapped.find((l) => l.id === selectedLead.id);
+          if (updated) setSelectedLead(updated);
+        }
+      } else {
+        setCoPurchaserResult({
+          success: false,
+          message: data.error ?? "Failed to approve co-purchaser.",
+        });
+      }
+    } catch {
+      setCoPurchaserResult({
+        success: false,
+        message: "Network error. Please try again.",
+      });
+    } finally {
+      setCoPurchaserActioning(false);
+    }
+  }
+
+  async function handleDismissCoPurchaser() {
+    if (!selectedLead) return;
+    setCoPurchaserActioning(true);
+    setCoPurchaserResult(null);
+    try {
+      const res = await fetch("/api/admin/link-co-purchaser", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lead_id: selectedLead.id }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setCoPurchaserResult({
+          success: true,
+          message: "Address match dismissed.",
+        });
+        const updatedFlag = { ...selectedLead.addressMatchFlag, status: "dismissed" as const };
+        setLeads((prev) =>
+          prev.map((l) =>
+            l.id === selectedLead.id ? { ...l, addressMatchFlag: updatedFlag } : l,
+          ),
+        );
+        setSelectedLead((prev) =>
+          prev ? { ...prev, addressMatchFlag: updatedFlag } : null,
+        );
+      } else {
+        setCoPurchaserResult({
+          success: false,
+          message: data.error ?? "Failed to dismiss match.",
+        });
+      }
+    } catch {
+      setCoPurchaserResult({
+        success: false,
+        message: "Network error. Please try again.",
+      });
+    } finally {
+      setCoPurchaserActioning(false);
+    }
+  }
 
   const toggleSection = (id: string) => {
     setExpandedSections((prev) =>
@@ -306,6 +429,46 @@ const Leads: React.FC = () => {
           <ArrowLeft size={18} /> Back to Leads Dashboard
         </button>
 
+        {/* Co-purchaser relationship banners */}
+        {selectedLead.parentLeadId && (
+          <div className="flex items-center gap-3 px-5 py-4 rounded-xl border border-blue-200 bg-blue-50 text-sm font-semibold text-blue-800">
+            <Link2 size={18} className="flex-shrink-0" />
+            <span>
+              This is a co-purchaser of{" "}
+              <button
+                onClick={() => {
+                  const parent = leads.find((l) => l.id === selectedLead.parentLeadId);
+                  if (parent) openLead(parent);
+                }}
+                className="underline font-bold hover:text-blue-600 transition-colors"
+              >
+                {getLeadName(selectedLead.parentLeadId) ?? "Primary Lead"}
+              </button>
+            </span>
+          </div>
+        )}
+        {leads.some((l) => l.parentLeadId === selectedLead.id) && (
+          <div className="flex items-center gap-3 px-5 py-4 rounded-xl border border-green-200 bg-green-50 text-sm font-semibold text-green-800">
+            <Users size={18} className="flex-shrink-0" />
+            <span>
+              Co-purchasers:{" "}
+              {leads
+                .filter((l) => l.parentLeadId === selectedLead.id)
+                .map((cp, i, arr) => (
+                  <span key={cp.id}>
+                    <button
+                      onClick={() => openLead(cp)}
+                      className="underline font-bold hover:text-green-600 transition-colors"
+                    >
+                      {cp.firstName} {cp.lastName}
+                    </button>
+                    {i < arr.length - 1 ? ", " : ""}
+                  </span>
+                ))}
+            </span>
+          </div>
+        )}
+
         {/* Top Identity Card */}
         <div className="bg-white rounded-2xl border border-slate-200 p-8 shadow-sm flex flex-col md:flex-row justify-between items-center gap-6">
           <div className="flex items-center gap-5">
@@ -359,6 +522,29 @@ const Leads: React.FC = () => {
             >
               <Send size={14} /> Send Email
             </button>
+            {selectedLead.addressMatchFlag?.status === "pending" && (
+              <>
+                <button
+                  onClick={handleApproveCoPurchaser}
+                  disabled={coPurchaserActioning}
+                  className="flex items-center gap-2 px-6 py-2.5 bg-amber-500 text-white rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-amber-600 transition-all shadow-lg active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {coPurchaserActioning ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <Check size={14} />
+                  )}{" "}
+                  Approve Co-Purchaser
+                </button>
+                <button
+                  onClick={handleDismissCoPurchaser}
+                  disabled={coPurchaserActioning}
+                  className="flex items-center gap-2 px-6 py-2.5 bg-slate-400 text-white rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-slate-500 transition-all shadow-lg active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <X size={14} /> Dismiss Match
+                </button>
+              </>
+            )}
             {/* <button className="flex items-center gap-2 px-6 py-2.5 bg-slate-900 text-white rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-slate-800 transition-all shadow-lg active:scale-95">
               <History size={14} /> View History
             </button> */}
@@ -398,6 +584,24 @@ const Leads: React.FC = () => {
               <AlertTriangle size={18} />
             )}
             {welcomeResult.message}
+          </div>
+        )}
+
+        {/* Co-purchaser Result Banner */}
+        {coPurchaserResult && (
+          <div
+            className={`flex items-center gap-3 px-5 py-4 rounded-xl border text-sm font-semibold ${
+              coPurchaserResult.success
+                ? "bg-green-50 border-green-200 text-green-800"
+                : "bg-red-50 border-red-200 text-red-700"
+            }`}
+          >
+            {coPurchaserResult.success ? (
+              <CheckCircle2 size={18} />
+            ) : (
+              <AlertTriangle size={18} />
+            )}
+            {coPurchaserResult.message}
           </div>
         )}
 
@@ -861,6 +1065,34 @@ const Leads: React.FC = () => {
                             {lead.lead_type}
                           </p>
                         )}
+                        {/* Co-purchaser badges */}
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {lead.parentLeadId && (
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-tight bg-blue-100 text-blue-700 border border-blue-200">
+                              Co-Purchaser
+                            </span>
+                          )}
+                          {lead.addressMatchFlag?.status === "pending" && (
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-tight bg-amber-100 text-amber-700 border border-amber-200">
+                              Potential Co-Purchaser
+                              {lead.addressMatchFlag.matched_lead_id && (
+                                <span className="font-medium normal-case ml-1">
+                                  — matches {getLeadName(lead.addressMatchFlag.matched_lead_id) ?? "another lead"}
+                                </span>
+                              )}
+                            </span>
+                          )}
+                          {lead.addressMatchFlag?.status === "approved" && (
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-tight bg-green-100 text-green-700 border border-green-200">
+                              Co-Purchaser Linked
+                            </span>
+                          )}
+                          {lead.addressMatchFlag?.status === "dismissed" && (
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-tight bg-slate-100 text-slate-500 border border-slate-200">
+                              Match Dismissed
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </td>
