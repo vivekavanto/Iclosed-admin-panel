@@ -11,17 +11,57 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "deal_id is required" }, { status: 400 });
   }
 
-  const { data, error } = await supabase
-    .from("tasks")
-    .select("*")
-    .eq("deal_id", dealId)
-    .order("created_at", { ascending: true });
+  // Shared tasks are a single source of truth on the primary purchaser's deal.
+  // Co-purchaser deals should still show shared tasks, but fetched from the primary deal.
+  let primaryDealId = dealId;
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  try {
+    const { data: deal } = await supabase
+      .from("deals")
+      .select("lead_id")
+      .eq("id", dealId)
+      .single();
+
+    if (deal?.lead_id) {
+      const { data: lead } = await supabase
+        .from("leads")
+        .select("id, parent_lead_id")
+        .eq("id", deal.lead_id)
+        .single();
+
+      const rootLeadId = lead?.parent_lead_id ?? lead?.id;
+      if (rootLeadId) {
+        const { data: rootDeal } = await supabase
+          .from("deals")
+          .select("id")
+          .eq("lead_id", rootLeadId)
+          .maybeSingle();
+        if (rootDeal?.id) primaryDealId = rootDeal.id;
+      }
+    }
+  } catch {
+    // Non-blocking: fallback to dealId
   }
 
-  return NextResponse.json(data);
+  const [{ data: sharedTasks, error: sharedErr }, { data: personalTasks, error: personalErr }] = await Promise.all([
+    supabase
+      .from("tasks")
+      .select("*")
+      .eq("deal_id", primaryDealId)
+      .eq("is_shared", true)
+      .order("created_at", { ascending: true }),
+    supabase
+      .from("tasks")
+      .select("*")
+      .eq("deal_id", dealId)
+      .or("is_shared.is.null,is_shared.eq.false")
+      .order("created_at", { ascending: true }),
+  ]);
+
+  if (sharedErr) return NextResponse.json({ error: sharedErr.message }, { status: 500 });
+  if (personalErr) return NextResponse.json({ error: personalErr.message }, { status: 500 });
+
+  return NextResponse.json([...(sharedTasks ?? []), ...(personalTasks ?? [])]);
 }
 
 export async function DELETE(req: Request) {
@@ -47,109 +87,101 @@ export async function DELETE(req: Request) {
 export async function PATCH(req: Request) {
   try {
     const body = await req.json();
-    const { id, ...updates } = body;
+    const { id, assignee, status, completed, document_url } = body;
 
     if (!id) {
       return NextResponse.json({ error: "id is required" }, { status: 400 });
     }
 
-    const { data, error } = await supabase
+    // Step 1: Load the task to decide shared vs personal update rules
+    const { data: existingTask, error: fetchError } = await supabase
       .from("tasks")
-      .update(updates)
+      .select("id, deal_id, is_shared, assignee, task_template_id")
       .eq("id", id)
-      .select()
       .single();
+
+    if (fetchError || !existingTask) {
+      return NextResponse.json({ success: false, error: fetchError?.message ?? "Task not found" }, { status: 404 });
+    }
+
+    // Step 2: Build a strict update payload (avoid accidental logic changes)
+    const updates: Record<string, any> = {};
+    if (status !== undefined) updates.status = status;
+    if (completed !== undefined) updates.completed = completed;
+    if (document_url !== undefined) updates.document_url = document_url;
+
+    // Nothing to update
+    if (Object.keys(updates).length === 0) {
+      return NextResponse.json({ success: true, data: existingTask });
+    }
+
+    // Step 3: Apply update rules
+    // - Shared tasks: update the primary deal's shared task row (single source of truth)
+    // - Personal tasks: update by task_id + assignee (user-specific)
+    let updateQuery = supabase.from("tasks").update(updates);
+
+    if (existingTask.is_shared) {
+      if (!existingTask.task_template_id) {
+        return NextResponse.json(
+          { success: false, error: "task_template_id is required for shared task updates" },
+          { status: 400 },
+        );
+      }
+
+      // Resolve primary deal for this lead family
+      let primaryDealId = existingTask.deal_id;
+      try {
+        const { data: deal } = await supabase
+          .from("deals")
+          .select("lead_id")
+          .eq("id", existingTask.deal_id)
+          .single();
+
+        if (deal?.lead_id) {
+          const { data: lead } = await supabase
+            .from("leads")
+            .select("id, parent_lead_id")
+            .eq("id", deal.lead_id)
+            .single();
+
+          const rootLeadId = lead?.parent_lead_id ?? lead?.id;
+          if (rootLeadId) {
+            const { data: rootDeal } = await supabase
+              .from("deals")
+              .select("id")
+              .eq("lead_id", rootLeadId)
+              .maybeSingle();
+            if (rootDeal?.id) primaryDealId = rootDeal.id;
+          }
+        }
+      } catch {
+        // Non-blocking: fallback to existingTask.deal_id
+      }
+
+      updateQuery = updateQuery
+        .eq("deal_id", primaryDealId)
+        .eq("task_template_id", existingTask.task_template_id)
+        .eq("is_shared", true);
+    } else {
+      const effectiveAssignee = assignee ?? existingTask.assignee;
+      if (!effectiveAssignee) {
+        return NextResponse.json(
+          { success: false, error: "assignee is required to update a personal task" },
+          { status: 400 },
+        );
+      }
+      updateQuery = updateQuery.eq("id", id).eq("assignee", effectiveAssignee);
+    }
+
+    const { data, error } = await updateQuery.select().single();
 
     if (error) {
       return NextResponse.json({ success: false, error: error.message }, { status: 400 });
     }
 
-    // ── Sync shared tasks to linked deals ────────────────────────────────────
-    // If this task is shared and its status/completed changed, sync to co-purchaser deals
-    if (data?.is_shared && data?.task_template_id && data?.deal_id &&
-        (updates.status !== undefined || updates.completed !== undefined)) {
-      try {
-        await syncSharedTask(data);
-      } catch (syncErr) {
-        console.error("[TaskSync] Non-blocking sync error:", syncErr);
-      }
-    }
-
     return NextResponse.json({ success: true, data });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
-  }
-}
-
-/**
- * Syncs a shared task's status to the same task in all linked co-purchaser deals.
- *
- * Linked deals are found via the lead relationship:
- *   deal → lead → root lead (coalesce parent_lead_id or self)
- *     → all leads in family → all their deals (excluding current)
- */
-async function syncSharedTask(task: Record<string, any>) {
-  const { deal_id, task_template_id, status, completed, completed_at } = task;
-
-  // Step 1: Get the lead_id for this deal
-  const { data: deal } = await supabase
-    .from("deals")
-    .select("lead_id")
-    .eq("id", deal_id)
-    .single();
-
-  if (!deal?.lead_id) return;
-
-  // Step 2: Get the root lead (primary)
-  const { data: lead } = await supabase
-    .from("leads")
-    .select("id, parent_lead_id")
-    .eq("id", deal.lead_id)
-    .single();
-
-  if (!lead) return;
-
-  const rootLeadId = lead.parent_lead_id ?? lead.id;
-
-  // Step 3: Find all leads in the family
-  const { data: familyLeads } = await supabase
-    .from("leads")
-    .select("id")
-    .or(`id.eq.${rootLeadId},parent_lead_id.eq.${rootLeadId}`);
-
-  if (!familyLeads || familyLeads.length <= 1) return;
-
-  const familyLeadIds = familyLeads.map((l) => l.id);
-
-  // Step 4: Find all deals for those leads, excluding the current deal
-  const { data: linkedDeals } = await supabase
-    .from("deals")
-    .select("id")
-    .in("lead_id", familyLeadIds)
-    .neq("id", deal_id);
-
-  if (!linkedDeals || linkedDeals.length === 0) return;
-
-  const linkedDealIds = linkedDeals.map((d) => d.id);
-
-  // Step 5: Update the matching shared task in all linked deals
-  const updatePayload: Record<string, any> = { status };
-  if (completed !== undefined) {
-    updatePayload.completed = completed;
-    updatePayload.completed_at = completed ? (completed_at ?? new Date().toISOString()) : null;
-  }
-
-  const { error: syncError } = await supabase
-    .from("tasks")
-    .update(updatePayload)
-    .eq("task_template_id", task_template_id)
-    .eq("is_shared", true)
-    .in("deal_id", linkedDealIds);
-
-  if (syncError) {
-    console.error("[TaskSync] Failed to sync shared task:", syncError.message);
-  } else {
-    console.log(`[TaskSync] Synced task (template: ${task_template_id}) to ${linkedDealIds.length} linked deal(s)`);
   }
 }
 

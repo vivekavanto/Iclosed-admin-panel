@@ -168,6 +168,9 @@ export async function POST(req: Request) {
         .order("order_index", { ascending: true });
 
       if (taskTemplates && taskTemplates.length > 0) {
+        // Co-purchasers should not get their own shared tasks; shared tasks live on the primary deal.
+        const isCoPurchaser = !!lead.parent_lead_id;
+
         const taskRows = taskTemplates.map((tt) => ({
           deal_id: dealId,
           title: tt.name,
@@ -180,8 +183,24 @@ export async function POST(req: Request) {
             : null,
         }));
 
-        await supabaseAdmin.from("tasks").insert(taskRows);
-        console.log(`[Convert] Created ${taskRows.length} tasks for deal ${dealId}`);
+        // Avoid duplicate shared tasks (deal_id + task_template_id)
+        const templateIds = taskRows.map((r) => r.task_template_id).filter(Boolean);
+        const { data: existingTasks } = await supabaseAdmin
+          .from("tasks")
+          .select("task_template_id")
+          .eq("deal_id", dealId)
+          .in("task_template_id", templateIds);
+
+        const existingTemplateIds = new Set((existingTasks ?? []).map((t) => t.task_template_id));
+        const dedupedRows = taskRows
+          .filter((r) => !r.task_template_id || !existingTemplateIds.has(r.task_template_id))
+          .filter((r) => !isCoPurchaser || !r.is_shared);
+
+        if (dedupedRows.length > 0) {
+          await supabaseAdmin.from("tasks").insert(dedupedRows);
+        }
+
+        console.log(`[Convert] Created ${dedupedRows.length} tasks for deal ${dealId} (${taskRows.length - dedupedRows.length} skipped as duplicates)`);
       }
     } catch (err) {
       console.error("[Convert] Failed to copy task templates (non-blocking):", err);
