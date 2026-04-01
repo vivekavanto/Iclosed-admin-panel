@@ -22,6 +22,7 @@ interface TaskTemplate {
   deadlineRule: string | null;
   isApsTask: boolean;
   is_default: boolean;
+  is_shared: boolean;
   stageTemplateId: string | null;
   stageName: string | null;
 }
@@ -61,6 +62,7 @@ const TaskTemplates: React.FC = () => {
             deadlineRule: t.deadline_rule,
             isApsTask: t.is_aps_task,
             is_default: t.is_default ?? false,
+            is_shared: t.is_shared ?? false,
             stageTemplateId: t.stage_template_id ?? null,
             stageName: t.stage_templates?.name ?? null,
           })),
@@ -107,6 +109,7 @@ const TaskTemplates: React.FC = () => {
       deadlineRule: result.deadline_rule,
       isApsTask: result.is_aps_task,
       is_default: result.is_default ?? false,
+      is_shared: result.is_shared ?? false,
       stageTemplateId: result.stage_template_id ?? null,
       stageName: result.stage_templates?.name ?? null,
     };
@@ -359,6 +362,7 @@ const TaskTemplates: React.FC = () => {
           deadlineRule: editingTask.deadlineRule,
           isApsTask: editingTask.isApsTask,
           is_default: editingTask.is_default,
+          is_shared: editingTask.is_shared ?? false,
           stageTemplateId: editingTask.stageTemplateId,
         } : null}
       />

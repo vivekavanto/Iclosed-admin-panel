@@ -21,7 +21,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const body = await req.json();
 
-  const { leadType, roleType, name, order, deadlineRule, isApsTask, is_default, stageTemplateId } = body;
+  const { leadType, roleType, name, order, deadlineRule, isApsTask, is_default, is_shared, stageTemplateId } = body;
 
   if (!leadType || !name || order === undefined) {
     return NextResponse.json({ error: 'Required fields missing' }, { status: 400 });
@@ -38,6 +38,7 @@ export async function POST(req: NextRequest) {
         deadline_rule: deadlineRule || null,
         is_aps_task: isApsTask ?? false,
         is_default: is_default ?? false,
+        is_shared: is_shared ?? false,
         stage_template_id: stageTemplateId || null,
       },
     ])
@@ -56,7 +57,7 @@ export async function PUT(req: NextRequest) {
   try {
     const body = await req.json();
 
-    const { id, leadType, roleType, name, order, deadlineRule, isApsTask, is_default, stageTemplateId } = body;
+    const { id, leadType, roleType, name, order, deadlineRule, isApsTask, is_default, is_shared, stageTemplateId } = body;
 
     if (!id) {
       return NextResponse.json({ error: 'ID required' }, { status: 400 });
@@ -72,6 +73,7 @@ export async function PUT(req: NextRequest) {
         deadline_rule: deadlineRule || null,
         is_aps_task: isApsTask,
         is_default: is_default ?? false,
+        is_shared: is_shared ?? false,
         stage_template_id: stageTemplateId || null,
       })
       .eq('id', id)

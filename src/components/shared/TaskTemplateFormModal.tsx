@@ -20,6 +20,7 @@ interface TaskFormData {
   deadlineRule: string;
   isApsTask: boolean;
   is_default: boolean;
+  is_shared: boolean;
   stageTemplateId: string;
 }
 
@@ -38,6 +39,7 @@ interface TaskTemplateFormModalProps {
     deadlineRule: string | null;
     isApsTask: boolean;
     is_default: boolean;
+    is_shared: boolean;
     stageTemplateId: string | null;
   } | null;
   /** Pre-fill lead type (from active tab in DefaultTasks) */
@@ -57,6 +59,7 @@ const EMPTY_FORM: TaskFormData = {
   deadlineRule: DEADLINE_RULES[0],
   isApsTask: false,
   is_default: false,
+  is_shared: false,
   stageTemplateId: "",
 };
 
@@ -81,6 +84,7 @@ export default function TaskTemplateFormModal({
         deadlineRule: editData.deadlineRule || DEADLINE_RULES[0],
         isApsTask: editData.isApsTask,
         is_default: editData.is_default,
+        is_shared: editData.is_shared ?? false,
         stageTemplateId: editData.stageTemplateId || "",
       };
     }
@@ -225,7 +229,7 @@ export default function TaskTemplateFormModal({
             </select>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="flex items-end pb-1">
               <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
                 <input
@@ -246,6 +250,17 @@ export default function TaskTemplateFormModal({
                   className="rounded border-slate-300"
                 />
                 Default
+              </label>
+            </div>
+            <div className="flex items-end pb-1">
+              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={form.is_shared}
+                  onChange={() => setForm((p) => ({ ...p, is_shared: !p.is_shared }))}
+                  className="rounded border-slate-300"
+                />
+                Shared (Co-Purchaser)
               </label>
             </div>
           </div>

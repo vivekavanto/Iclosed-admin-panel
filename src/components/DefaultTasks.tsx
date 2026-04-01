@@ -37,6 +37,7 @@ interface TaskTemplate {
   deadline_rule: string | null;
   is_aps_task: boolean;
   is_default: boolean;
+  is_shared: boolean;
   stage_template_id: string | null;
   stage_templates: { id: string; name: string } | null;
 }
@@ -209,6 +210,7 @@ const DefaultTasks: React.FC = () => {
       deadline_rule: result.deadline_rule,
       is_aps_task: result.is_aps_task,
       is_default: result.is_default ?? false,
+      is_shared: result.is_shared ?? false,
       stage_template_id: result.stage_template_id ?? null,
       stage_templates: result.stage_template_id
         ? { id: result.stage_template_id, name: stages.find((s) => s.id === result.stage_template_id)?.name || "" }
@@ -615,6 +617,7 @@ const DefaultTasks: React.FC = () => {
           deadlineRule: editingTask.deadline_rule,
           isApsTask: editingTask.is_aps_task,
           is_default: editingTask.is_default,
+          is_shared: editingTask.is_shared ?? false,
           stageTemplateId: editingTask.stage_template_id,
         } : null}
       />
