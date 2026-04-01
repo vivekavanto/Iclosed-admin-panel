@@ -36,7 +36,10 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           milestones: d.milestones ?? [],
           documents: d.documents ?? [],
           notes: d.notes ?? [],
-        }));
+          isCoPurchaser: d.is_co_purchaser ?? false,
+          hasCoPurchasers: d.has_co_purchasers ?? false,
+          leadName: d.lead_name ?? '',
+        } as Deal & { isCoPurchaser: boolean; hasCoPurchasers: boolean; leadName: string }));
         setDeals(mapped);
       })
       .catch(() => setDeals([]));
@@ -157,7 +160,20 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                 }} className={`${rowClass} hover:bg-brand-light/20 cursor-pointer transition-colors border-b border-slate-100 text-xs text-slate-700 whitespace-nowrap`}>
                   <td className="px-4 py-3">{index + 1}</td>
                   <td className="px-4 py-3 font-medium">{deal.fileNumber}</td>
-                  <td className="px-4 py-3">{deal.propertyAddress}</td>
+                  <td className="px-4 py-3">
+                    <div>
+                      {deal.propertyAddress}
+                      {(deal as any).isCoPurchaser && (
+                        <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-700 border border-blue-200">Co-Purchaser</span>
+                      )}
+                      {(deal as any).hasCoPurchasers && (
+                        <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-bold bg-green-100 text-green-700 border border-green-200">Has Co-Purchaser(s)</span>
+                      )}
+                    </div>
+                    {(deal as any).leadName && (
+                      <p className="text-[10px] text-slate-400 mt-0.5">{(deal as any).leadName}</p>
+                    )}
+                  </td>
                   <td className="px-4 py-3"><span className="bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded text-[10px] font-bold border border-blue-100">KN</span></td>
                   <td className="px-4 py-3"><span className="bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded text-[10px] font-bold border border-blue-100">SA</span></td>
                   <td className="px-4 py-3 truncate max-w-xs" title={deal.propertyAddress}>{deal.propertyAddress}</td>

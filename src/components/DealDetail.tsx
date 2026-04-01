@@ -726,6 +726,64 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         </div>
       </div>
 
+      {/* Linked Deals (Co-Purchaser) Section */}
+      {rawDeal?.linked_deals && rawDeal.linked_deals.length > 0 && (
+        <div className="bg-white rounded-xl shadow-sm border border-blue-200 p-5 mb-6">
+          <div className="flex items-center gap-2 mb-3">
+            <div className="w-7 h-7 rounded-full bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600">
+              <User size={14} />
+            </div>
+            <h3 className="text-sm font-bold text-slate-900">Linked Deals</h3>
+            {rawDeal.current_deal_role && (
+              <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                rawDeal.current_deal_role === "Co-Purchaser"
+                  ? "bg-blue-100 text-blue-700 border-blue-200"
+                  : "bg-green-100 text-green-700 border-green-200"
+              }`}>
+                This deal: {rawDeal.current_deal_role}
+              </span>
+            )}
+          </div>
+          <div className="space-y-2">
+            {rawDeal.linked_deals.map((ld: any) => (
+              <div
+                key={ld.id}
+                onClick={() => router.push(`/admin/deals/${ld.id}`)}
+                className="flex items-center justify-between px-4 py-3 rounded-lg border border-slate-100 hover:border-blue-200 hover:bg-blue-50/50 cursor-pointer transition-all group"
+              >
+                <div className="flex items-center gap-3">
+                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${
+                    ld.role === "Primary Purchaser"
+                      ? "bg-green-100 text-green-700 border-green-200"
+                      : "bg-blue-100 text-blue-700 border-blue-200"
+                  }`}>
+                    {ld.role}
+                  </span>
+                  <div>
+                    <p className="text-sm font-bold text-slate-800 group-hover:text-blue-700 transition-colors">
+                      {ld.lead_name || "Unknown"}
+                    </p>
+                    <p className="text-[11px] text-slate-400">
+                      {ld.file_number} · {ld.property_address}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                    ld.status === "Closed"
+                      ? "bg-green-100 text-green-700"
+                      : "bg-white text-green-600 border border-green-400"
+                  }`}>
+                    {ld.status}
+                  </span>
+                  <ExternalLink size={14} className="text-slate-300 group-hover:text-blue-500" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="space-y-8">
         {/* Tasks Section */}
         <div className="space-y-4">
