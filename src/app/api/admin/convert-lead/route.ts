@@ -174,6 +174,7 @@ export async function POST(req: Request) {
           status: "Pending",
           role_type: tt.role_type ?? "Client",
           task_template_id: tt.id,
+          is_shared: tt.is_shared ?? false,
           milestone_id: tt.stage_template_id
             ? (stageToMilestone[tt.stage_template_id] ?? null)
             : null,
@@ -184,6 +185,75 @@ export async function POST(req: Request) {
       }
     } catch (err) {
       console.error("[Convert] Failed to copy task templates (non-blocking):", err);
+    }
+
+    // ── 7b. Sync shared tasks from linked deals (co-purchaser flow) ──────────
+    try {
+      // Check if this lead has a parent (is a co-purchaser) or has co-purchasers
+      const parentLeadId = lead.parent_lead_id;
+      const currentLeadId = lead.id;
+
+      // Collect all linked lead IDs (parent + siblings)
+      let linkedLeadIds: string[] = [];
+
+      if (parentLeadId) {
+        // This lead is a co-purchaser — find the parent's deal and any sibling co-purchaser deals
+        linkedLeadIds.push(parentLeadId);
+        const { data: siblings } = await supabaseAdmin
+          .from("leads")
+          .select("id")
+          .eq("parent_lead_id", parentLeadId)
+          .neq("id", currentLeadId);
+        if (siblings) linkedLeadIds.push(...siblings.map((s) => s.id));
+      } else {
+        // This lead might be a primary — find co-purchaser deals
+        const { data: coPurchasers } = await supabaseAdmin
+          .from("leads")
+          .select("id")
+          .eq("parent_lead_id", currentLeadId);
+        if (coPurchasers) linkedLeadIds.push(...coPurchasers.map((c) => c.id));
+      }
+
+      if (linkedLeadIds.length > 0) {
+        // Find deals for the linked leads
+        const { data: linkedDeals } = await supabaseAdmin
+          .from("deals")
+          .select("id")
+          .in("lead_id", linkedLeadIds);
+
+        if (linkedDeals && linkedDeals.length > 0) {
+          const linkedDealIds = linkedDeals.map((d) => d.id);
+
+          // Find completed shared tasks in linked deals
+          const { data: completedSharedTasks } = await supabaseAdmin
+            .from("tasks")
+            .select("task_template_id, status, completed, completed_at")
+            .in("deal_id", linkedDealIds)
+            .eq("is_shared", true)
+            .eq("completed", true);
+
+          if (completedSharedTasks && completedSharedTasks.length > 0) {
+            // Update matching shared tasks in the newly created deal
+            for (const sharedTask of completedSharedTasks) {
+              if (sharedTask.task_template_id) {
+                await supabaseAdmin
+                  .from("tasks")
+                  .update({
+                    status: "Completed",
+                    completed: true,
+                    completed_at: sharedTask.completed_at ?? new Date().toISOString(),
+                  })
+                  .eq("deal_id", dealId)
+                  .eq("task_template_id", sharedTask.task_template_id)
+                  .eq("is_shared", true);
+              }
+            }
+            console.log(`[Convert] Synced ${completedSharedTasks.length} shared tasks from linked deals`);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("[Convert] Failed to sync shared tasks (non-blocking):", err);
     }
 
     // ── 8. Create Supabase Auth user + send invite email ──────────────────────
