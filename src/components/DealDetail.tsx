@@ -42,6 +42,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     completedAt: t.completed_at ?? t.completedAt,
     document: t.document_name ? { name: t.document_name, url: t.document_url ?? '#' } : undefined,
     milestoneId: t.milestone_id ?? undefined,
+    isShared: t.is_shared ?? false,
   });
 
   // Use state to allow modification simulation
@@ -270,16 +271,25 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
       if (allDone) {
         const milestone = milestones.find((m) => m.id === milestoneId);
+        // Check if ANY task in this milestone is shared — if so, send emails to linked deals too
+        const hasSharedTasks = milestoneTasks.some((t) => t.isShared);
         if (milestone?.emailTemplateId) {
           try {
             const res = await fetch("/api/admin/send-milestone-email", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ milestoneId, dealId: deal.id }),
+              body: JSON.stringify({
+                milestoneId,
+                dealId: deal.id,
+                sendToLinkedDeals: hasSharedTasks,
+              }),
             });
             const data = await res.json();
             if (data.success) {
-              showToast(data.alreadySent ? "Email was already sent for this milestone." : "Milestone email sent successfully!");
+              const linkedMsg = data.linked_emails_sent > 0
+                ? ` (also sent to ${data.linked_emails_sent} linked deal${data.linked_emails_sent > 1 ? "s" : ""})`
+                : "";
+              showToast(data.alreadySent ? "Email was already sent for this milestone." : `Milestone email sent successfully!${linkedMsg}`);
             } else {
               showToast(data.error || "Failed to send milestone email", "error");
             }

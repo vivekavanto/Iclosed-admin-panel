@@ -726,13 +726,91 @@ const Leads: React.FC = () => {
             id="client-leads"
             icon={BriefcaseIcon}
           />
-          {expandedSections.includes("client-leads") && (
-            <div className="p-0 animate-in slide-in-from-top-2 duration-300 overflow-x-auto border-t border-slate-50">
-              <div className="p-12 text-center text-slate-400 font-medium italic text-sm bg-slate-50/20">
-                No linked transaction files for this lead yet.
+          {expandedSections.includes("client-leads") && (() => {
+            // Find associated leads: parent + siblings + children
+            const associatedLeads: { lead: LeadUser; role: string }[] = [];
+
+            if (selectedLead.parentLeadId) {
+              // This is a co-purchaser — show the primary
+              const parent = leads.find((l) => l.id === selectedLead.parentLeadId);
+              if (parent) {
+                associatedLeads.push({ lead: parent, role: "Primary Purchaser" });
+              }
+              // Also show siblings (other co-purchasers of the same primary)
+              leads
+                .filter((l) => l.parentLeadId === selectedLead.parentLeadId && l.id !== selectedLead.id)
+                .forEach((l) => associatedLeads.push({ lead: l, role: "Co-Purchaser" }));
+            } else {
+              // This is a primary — show all co-purchasers
+              leads
+                .filter((l) => l.parentLeadId === selectedLead.id)
+                .forEach((l) => associatedLeads.push({ lead: l, role: "Co-Purchaser" }));
+            }
+
+            return (
+              <div className="p-0 animate-in slide-in-from-top-2 duration-300 overflow-x-auto border-t border-slate-50">
+                {associatedLeads.length === 0 ? (
+                  <div className="p-12 text-center text-slate-400 font-medium italic text-sm bg-slate-50/20">
+                    No associated leads for this client.
+                  </div>
+                ) : (
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr className="bg-slate-50/50 border-b border-slate-200 text-[11px] font-black text-slate-400 uppercase tracking-widest">
+                        <th className="px-6 py-3">Name</th>
+                        <th className="px-6 py-3">Email</th>
+                        <th className="px-6 py-3">Phone</th>
+                        <th className="px-6 py-3">Role</th>
+                        <th className="px-6 py-3">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50">
+                      {associatedLeads.map(({ lead: al, role }) => (
+                        <tr
+                          key={al.id}
+                          onClick={() => openLead(al)}
+                          className="hover:bg-slate-50/50 transition-colors cursor-pointer group"
+                        >
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-3">
+                              <div className="w-8 h-8 rounded-lg bg-brand-light flex items-center justify-center text-brand-primary group-hover:bg-brand-primary group-hover:text-white transition-colors">
+                                <UserIcon size={16} />
+                              </div>
+                              <span className="font-bold text-slate-900 text-sm group-hover:text-brand-primary">
+                                {al.firstName} {al.lastName}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 text-sm text-slate-600">{al.email}</td>
+                          <td className="px-6 py-4 text-sm text-slate-600">{al.phone}</td>
+                          <td className="px-6 py-4">
+                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-tight border ${
+                              role === "Primary Purchaser"
+                                ? "bg-green-100 text-green-700 border-green-200"
+                                : "bg-blue-100 text-blue-700 border-blue-200"
+                            }`}>
+                              {role}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4">
+                            {al.status === "Converted" ? (
+                              <span className="flex items-center gap-1 text-green-700 font-bold text-xs bg-green-50 px-2 py-0.5 rounded-full border border-green-100 w-fit">
+                                <CheckCircle2 size={12} /> Converted
+                              </span>
+                            ) : (
+                              <span className="flex items-center gap-1 text-emerald-600 font-bold text-xs bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100 w-fit">
+                                Active Lead
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
               </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
 
         {/* ── Convert to Deal Modal ── */}

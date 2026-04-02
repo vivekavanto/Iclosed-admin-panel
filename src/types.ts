@@ -31,6 +31,7 @@ export interface Task {
   document?: { name: string; url: string };
   clientId?: string;
   milestoneId?: string;
+  isShared?: boolean;
 }
 
 export interface Milestone {
