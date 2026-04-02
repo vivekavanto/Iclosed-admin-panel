@@ -158,15 +158,19 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       const milestone = milestones.find((m) => m.id === id);
       if (milestone?.emailTemplateId) {
         // Send email + update status (the email API handles completed_at)
+        // Always send to linked deals so co-purchasers get the email too
         try {
           const res = await fetch("/api/admin/send-milestone-email", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ milestoneId: id, dealId: deal.id }),
+            body: JSON.stringify({ milestoneId: id, dealId: deal.id, sendToLinkedDeals: true }),
           });
           const data = await res.json();
           if (data.success) {
-            showToast(data.alreadySent ? "Email was already sent for this milestone." : "Milestone email sent successfully!");
+            const linkedMsg = data.linked_emails_sent > 0
+              ? ` (also sent to ${data.linked_emails_sent} linked deal${data.linked_emails_sent > 1 ? "s" : ""})`
+              : "";
+            showToast(data.alreadySent ? "Email was already sent for this milestone." : `Milestone email sent successfully!${linkedMsg}`);
           } else {
             showToast(data.error || "Failed to send milestone email", "error");
           }
