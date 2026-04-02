@@ -18,40 +18,65 @@ import supabaseAdmin from "@/lib/supabaseAdmin";
  *   lead_id: string,
  *   file_number?: string,   // e.g. "26P-0059"  (optional, auto-generated if missing)
  *   closing_date?: string,  // ISO string e.g. "2026-05-15"
+ *   convert_family?: boolean // when true, converts the whole co-purchaser family
  * }
  */
-export async function POST(req: Request) {
+
+type ConvertOneResult = {
+  success: boolean;
+  created: boolean;
+  lead_id: string;
+  deal_id?: string;
+  file_number?: string;
+  client_id?: string;
+  invite_sent?: boolean;
+  auth_error?: string | null;
+  error?: string;
+  statusCode?: number;
+};
+
+async function convertSingleLeadToDeal(
+  lead: any,
+  opts: {
+    file_number?: string;
+    closing_date?: string;
+    existingDealBehavior: "error" | "skip";
+  },
+): Promise<ConvertOneResult> {
+  const leadId: string = lead.id;
+
   try {
-    const body = await req.json();
-    const { lead_id, file_number, closing_date } = body;
-
-    if (!lead_id) {
-      return NextResponse.json({ success: false, error: "lead_id is required" }, { status: 400 });
-    }
-
-    // ── 1. Fetch the lead ─────────────────────────────────────────────────────
-    const { data: lead, error: leadError } = await supabaseAdmin
-      .from("leads")
-      .select("*")
-      .eq("id", lead_id)
-      .single();
-
-    if (leadError || !lead) {
-      return NextResponse.json({ success: false, error: "Lead not found" }, { status: 404 });
-    }
-
-    // Check that this lead hasn't already been converted
+    // Check if this lead has already been converted.
     const { data: existingDeal } = await supabaseAdmin
       .from("deals")
-      .select("id, file_number")
-      .eq("lead_id", lead_id)
+      .select("id, file_number, client_id")
+      .eq("lead_id", leadId)
       .maybeSingle();
 
     if (existingDeal) {
-      return NextResponse.json({
-        success: false,
-        error: `Lead already converted to deal ${existingDeal.file_number}`,
-      }, { status: 409 });
+      if (opts.existingDealBehavior === "error") {
+        return {
+          success: false,
+          created: false,
+          lead_id: leadId,
+          statusCode: 409,
+          error: `Lead already converted to deal ${existingDeal.file_number}`,
+        };
+      }
+
+      // Idempotency: still mark lead as converted (in case it wasn't updated).
+      await supabaseAdmin.from("leads").update({ status: "Converted" }).eq("id", leadId);
+
+      return {
+        success: true,
+        created: false,
+        lead_id: leadId,
+        deal_id: existingDeal.id,
+        file_number: existingDeal.file_number,
+        client_id: existingDeal.client_id,
+        invite_sent: false,
+        auth_error: null,
+      };
     }
 
     // ── 2. Create or find client record ───────────────────────────────────────
@@ -78,7 +103,13 @@ export async function POST(req: Request) {
         .single();
 
       if (clientError || !newClient) {
-        return NextResponse.json({ success: false, error: `Failed to create client: ${clientError?.message}` }, { status: 500 });
+        return {
+          success: false,
+          created: false,
+          lead_id: leadId,
+          statusCode: 500,
+          error: `Failed to create client: ${clientError?.message}`,
+        };
       }
 
       clientId = newClient.id;
@@ -87,8 +118,8 @@ export async function POST(req: Request) {
     // ── 3. Generate file number if not provided ───────────────────────────────
     const leadTypePrefix = lead.lead_type?.charAt(0)?.toUpperCase() ?? "X";
     const year = new Date().getFullYear().toString().slice(-2);
-    const shortId = lead_id.substring(0, 4).toUpperCase();
-    const generatedFileNumber = file_number ?? `${year}${leadTypePrefix}-${shortId}`;
+    const shortId = leadId.substring(0, 4).toUpperCase();
+    const generatedFileNumber = opts.file_number ?? `${year}${leadTypePrefix}-${shortId}`;
 
     // ── 4. Clean price (strip currency formatting) ────────────────────────────
     const rawPrice = lead.price ? String(lead.price).replace(/[^0-9.]/g, "") : null;
@@ -98,20 +129,26 @@ export async function POST(req: Request) {
     const { data: deal, error: dealError } = await supabaseAdmin
       .from("deals")
       .insert({
-        lead_id,
+        lead_id: leadId,
         client_id: clientId,
         file_number: generatedFileNumber,
         type: lead.lead_type ?? "Purchase",
         status: "Active",
         property_address: lead.address_street ?? "Address TBD",
-        closing_date: closing_date ?? null,
+        closing_date: opts.closing_date ?? null,
         price: cleanPrice ?? 0,
       })
       .select("id")
       .single();
 
     if (dealError || !deal) {
-      return NextResponse.json({ success: false, error: `Failed to create deal: ${dealError?.message}` }, { status: 500 });
+      return {
+        success: false,
+        created: false,
+        lead_id: leadId,
+        statusCode: 500,
+        error: `Failed to create deal: ${dealError?.message}`,
+      };
     }
 
     const dealId = deal.id;
@@ -178,9 +215,7 @@ export async function POST(req: Request) {
           role_type: tt.role_type ?? "Client",
           task_template_id: tt.id,
           is_shared: tt.is_shared ?? false,
-          milestone_id: tt.stage_template_id
-            ? (stageToMilestone[tt.stage_template_id] ?? null)
-            : null,
+          milestone_id: tt.stage_template_id ? (stageToMilestone[tt.stage_template_id] ?? null) : null,
         }));
 
         // Avoid duplicate shared tasks (deal_id + task_template_id)
@@ -200,7 +235,9 @@ export async function POST(req: Request) {
           await supabaseAdmin.from("tasks").insert(dedupedRows);
         }
 
-        console.log(`[Convert] Created ${dedupedRows.length} tasks for deal ${dealId} (${taskRows.length - dedupedRows.length} skipped as duplicates)`);
+        console.log(
+          `[Convert] Created ${dedupedRows.length} tasks for deal ${dealId} (${taskRows.length - dedupedRows.length} skipped as duplicates)`,
+        );
       }
     } catch (err) {
       console.error("[Convert] Failed to copy task templates (non-blocking):", err);
@@ -296,7 +333,7 @@ export async function POST(req: Request) {
             last_name: lead.last_name ?? "",
             display_name: `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim(),
           },
-        }
+        },
       );
 
       if (!inviteError && inviteData?.user) {
@@ -304,37 +341,33 @@ export async function POST(req: Request) {
         inviteSent = true;
 
         // Link the auth user to the client record
-        await supabaseAdmin
-          .from("clients")
-          .update({ auth_user_id: authUserId })
-          .eq("id", clientId);
+        await supabaseAdmin.from("clients").update({ auth_user_id: authUserId }).eq("id", clientId);
       } else if (inviteError && inviteError.code === "user_already_exists") {
         // User already exists in the system.
         console.log(`[Invite] User ${lead.email} already exists, attempting to link and send reset link instead.`);
-        
+
         // 1. Find the user ID
         const { data: usersData } = await supabaseAdmin.auth.admin.listUsers();
-        const existingUser = usersData.users.find(u => u.email?.toLowerCase() === lead.email.toLowerCase());
-        
+        const existingUser = usersData.users.find(
+          (u: any) => u.email?.toLowerCase() === lead.email.toLowerCase(),
+        );
+
         if (existingUser) {
           authUserId = existingUser.id;
-          
-          await supabaseAdmin
-            .from("clients")
-            .update({ auth_user_id: authUserId })
-            .eq("id", clientId);
+
+          await supabaseAdmin.from("clients").update({ auth_user_id: authUserId }).eq("id", clientId);
 
           // 2. Send password reset link which acts as a "set password" flow if they haven't set one
           const { error: resetError } = await supabaseAdmin.auth.resetPasswordForEmail(
-            lead.email, 
-            { redirectTo: `${customerPortalUrl}/api/auth/callback?next=/set-password` }
+            lead.email,
+            { redirectTo: `${customerPortalUrl}/api/auth/callback?next=/set-password` },
           );
 
           if (!resetError) {
-             inviteSent = true;
+            inviteSent = true;
           } else {
-             authError = `Already exists, but reset email failed: ${resetError.message}`;
-             console.error("[Invite] Reset failed:", resetError.message);
+            authError = `Already exists, but reset email failed: ${resetError.message}`;
+            console.error("[Invite] Reset failed:", resetError.message);
           }
         }
       } else if (inviteError) {
@@ -348,21 +381,129 @@ export async function POST(req: Request) {
     }
 
     // ── 7. Update lead status ──────────────────────────────────────────────────
-    await supabaseAdmin
-      .from("leads")
-      .update({ status: "Converted" })
-      .eq("id", lead_id);
+    await supabaseAdmin.from("leads").update({ status: "Converted" }).eq("id", leadId);
 
-    return NextResponse.json({
+    return {
       success: true,
+      created: true,
+      lead_id: leadId,
       deal_id: dealId,
       file_number: generatedFileNumber,
       client_id: clientId,
       invite_sent: inviteSent,
       auth_error: authError,
-      message: inviteSent
-        ? `Deal created and invite email sent to ${lead.email}`
-        : `Deal created, but invite could not be sent: ${authError || "Create login manually"}`,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      created: false,
+      lead_id: lead.id,
+      statusCode: 500,
+      error: err?.message ?? "Unknown conversion error",
+    };
+  }
+}
+
+export async function POST(req: Request) {
+  try {
+    const body = await req.json();
+    const { lead_id, file_number, closing_date, convert_family } = body as {
+      lead_id: string;
+      file_number?: string;
+      closing_date?: string;
+      convert_family?: boolean;
+    };
+
+    if (!lead_id) {
+      return NextResponse.json({ success: false, error: "lead_id is required" }, { status: 400 });
+    }
+
+    // ── 1. Fetch the lead ─────────────────────────────────────────────────────
+    const { data: selectedLead, error: leadError } = await supabaseAdmin
+      .from("leads")
+      .select("*")
+      .eq("id", lead_id)
+      .single();
+
+    if (leadError || !selectedLead) {
+      return NextResponse.json({ success: false, error: "Lead not found" }, { status: 404 });
+    }
+
+    // ── Single-lead conversion (legacy behavior) ────────────────────────────
+    if (!convert_family) {
+      const one = await convertSingleLeadToDeal(selectedLead, {
+        file_number,
+        closing_date,
+        existingDealBehavior: "error",
+      });
+
+      if (!one.success) {
+        return NextResponse.json(
+          { success: false, error: one.error ?? "Conversion failed" },
+          { status: one.statusCode ?? 500 },
+        );
+      }
+
+      return NextResponse.json({
+        success: true,
+        deal_id: one.deal_id,
+        file_number: one.file_number,
+        client_id: one.client_id,
+        invite_sent: one.invite_sent ?? false,
+        auth_error: one.auth_error ?? null,
+        message: one.invite_sent
+          ? `Deal created and invite email sent to ${selectedLead.email}`
+          : `Deal created, but invite could not be sent: ${one.auth_error || "Create login manually"}`,
+      });
+    }
+
+    // ── Family conversion ───────────────────────────────────────────────────
+    const rootLeadId: string = selectedLead.parent_lead_id ?? selectedLead.id;
+
+    const { data: familyLeads, error: familyLeadsError } = await supabaseAdmin
+      .from("leads")
+      .select("*")
+      .or(`id.eq.${rootLeadId},parent_lead_id.eq.${rootLeadId}`);
+
+    if (familyLeadsError || !familyLeads || familyLeads.length === 0) {
+      return NextResponse.json(
+        { success: false, error: familyLeadsError?.message ?? "Co-purchaser family not found" },
+        { status: 404 },
+      );
+    }
+
+    const results: ConvertOneResult[] = [];
+    let failedCount = 0;
+
+    // Important: apply the admin-provided `file_number` only to the root/primary lead.
+    for (const lead of familyLeads) {
+      const fileOverride = lead.id === rootLeadId ? file_number : undefined;
+      const res = await convertSingleLeadToDeal(lead, {
+        file_number: fileOverride,
+        closing_date,
+        existingDealBehavior: "skip",
+      });
+      results.push(res);
+      if (!res.success) failedCount++;
+    }
+
+    const created_count = results.filter((r) => r.created).length;
+    const skipped_count = results.length - created_count;
+    const invites_sent_count = results.filter((r) => r.invite_sent).length;
+
+    const rootResult = results.find((r) => r.lead_id === rootLeadId);
+
+    return NextResponse.json({
+      success: failedCount === 0,
+      had_errors: failedCount > 0,
+      failed_count: failedCount,
+      created_count,
+      skipped_count,
+      invites_sent_count,
+      results,
+      deal_id: rootResult?.deal_id ?? null,
+      file_number: rootResult?.file_number ?? null,
+      client_id: rootResult?.client_id ?? null,
     });
   } catch (err) {
     console.error("POST /api/admin/convert-lead error:", err);

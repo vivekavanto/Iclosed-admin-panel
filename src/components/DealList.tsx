@@ -51,6 +51,9 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   const totalFiles = deals.length;
 
   const filteredDeals = deals.filter(deal => {
+    // ✅ ADDED: hide co-purchasers
+    if ((deal as any).isCoPurchaser) return false;
+
     if (searchTerm) {
       const lowerTerm = searchTerm.toLowerCase();
       const matchesSearch =

@@ -42,8 +42,10 @@ interface LeadUser {
   corporateName?: string;
   incNumber?: string;
   addressStreet?: string;
+  addressUnit?: string;
   addressCity?: string;
   addressPostalCode?: string;
+  addressProvince?: string;
   propertyType?: string;
   ownershipHistory?: string;
   maritalStatus?: string;
@@ -54,6 +56,14 @@ interface LeadUser {
   lead_type?: string;
   price?: string;
   created_at?: string;
+  service?: string;
+  subService?: string;
+  apsSigned?: boolean;
+  referralSource?: string;
+  sellingAddressStreet?: string;
+  sellingAddressCity?: string;
+  sellingAddressPostalCode?: string;
+  sellingAddressProvince?: string;
   parentLeadId?: string | null;
   addressMatchFlag?: {
     matched_lead_id?: string;
@@ -109,6 +119,42 @@ const Leads: React.FC = () => {
     "property-personal",
   ]);
 
+  const mapLead = (l: any): LeadUser => ({
+    id: l.id,
+    firstName: l.first_name ?? "",
+    lastName: l.last_name ?? "",
+    email: l.email ?? "",
+    phone: l.phone ?? "",
+    isCorporate: l.is_corporate ?? false,
+    corporateName: l.corporate_name,
+    incNumber: l.inc_number,
+    addressStreet: l.address_street,
+    addressUnit: l.address_unit,
+    addressCity: l.address_city,
+    addressPostalCode: l.address_postal_code,
+    addressProvince: l.address_province,
+    propertyType: l.property_type,
+    ownershipHistory: l.ownership_history,
+    maritalStatus: l.marital_status,
+    citizenshipStatus: l.citizenship_status,
+    occupation: l.occupation,
+    employerPhone: l.employer_phone,
+    status: l.status ?? "New",
+    lead_type: l.lead_type,
+    price: l.price,
+    created_at: l.created_at,
+    service: l.service,
+    subService: l.sub_service,
+    apsSigned: l.aps_signed,
+    referralSource: l.referral_source,
+    sellingAddressStreet: l.selling_address_street,
+    sellingAddressCity: l.selling_address_city,
+    sellingAddressPostalCode: l.selling_address_postal_code,
+    sellingAddressProvince: l.selling_address_province,
+    parentLeadId: l.parent_lead_id ?? null,
+    addressMatchFlag: l.address_match_flag ?? null,
+  });
+
   // ── Fetch leads from local admin API ─────────────────────
   useEffect(() => {
     async function fetchLeads() {
@@ -119,25 +165,7 @@ const Leads: React.FC = () => {
         const res = await fetch(`/api/admin/leads`);
         const data = await res.json();
         if (data.success) {
-          const mapped: LeadUser[] = (data.leads ?? []).map((l: any) => ({
-            id: l.id,
-            firstName: l.first_name ?? "",
-            lastName: l.last_name ?? "",
-            email: l.email ?? "",
-            phone: l.phone ?? "",
-            isCorporate: l.is_corporate ?? false,
-            corporateName: l.corporate_name,
-            incNumber: l.inc_number,
-            addressStreet: l.address_street,
-            addressCity: l.address_city,
-            addressPostalCode: l.address_postal_code,
-            status: l.status ?? "New",
-            lead_type: l.lead_type,
-            price: l.price,
-            created_at: l.created_at,
-            parentLeadId: l.parent_lead_id ?? null,
-            addressMatchFlag: l.address_match_flag ?? null,
-          }));
+          const mapped: LeadUser[] = (data.leads ?? []).map(mapLead);
           setLeads(mapped);
         } else {
           setLeadsError(data.error ?? "Failed to load leads.");
@@ -189,25 +217,7 @@ const Leads: React.FC = () => {
         const refreshRes = await fetch("/api/admin/leads");
         const refreshData = await refreshRes.json();
         if (refreshData.success) {
-          const mapped: LeadUser[] = (refreshData.leads ?? []).map((l: any) => ({
-            id: l.id,
-            firstName: l.first_name ?? "",
-            lastName: l.last_name ?? "",
-            email: l.email ?? "",
-            phone: l.phone ?? "",
-            isCorporate: l.is_corporate ?? false,
-            corporateName: l.corporate_name,
-            incNumber: l.inc_number,
-            addressStreet: l.address_street,
-            addressCity: l.address_city,
-            addressPostalCode: l.address_postal_code,
-            status: l.status ?? "New",
-            lead_type: l.lead_type,
-            price: l.price,
-            created_at: l.created_at,
-            parentLeadId: l.parent_lead_id ?? null,
-            addressMatchFlag: l.address_match_flag ?? null,
-          }));
+          const mapped: LeadUser[] = (refreshData.leads ?? []).map(mapLead);
           setLeads(mapped);
           const updated = mapped.find((l) => l.id === selectedLead.id);
           if (updated) setSelectedLead(updated);
@@ -276,11 +286,21 @@ const Leads: React.FC = () => {
   };
 
   // ── Convert to Deal ────────────────────────────────────────────────────────
+  const getFamilyLeadIds = (lead: LeadUser) => {
+    const rootLeadId = lead.parentLeadId ?? lead.id;
+    return leads
+      .filter((l) => l.id === rootLeadId || l.parentLeadId === rootLeadId)
+      .map((l) => l.id);
+  };
+
   async function handleConvertToDeal() {
     if (!selectedLead) return;
     setConverting(true);
     setConvertResult(null);
     try {
+      const familyLeadIds = getFamilyLeadIds(selectedLead);
+      const convertFamily = familyLeadIds.length > 1;
+
       const res = await fetch(`/api/admin/convert-lead`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -288,23 +308,52 @@ const Leads: React.FC = () => {
           lead_id: selectedLead.id,
           file_number: convertFileNumber.trim() || undefined,
           closing_date: convertClosingDate || undefined,
+          convert_family: convertFamily || undefined,
         }),
       });
       const data = await res.json();
-      if (data.success) {
-        setConvertResult({
-          success: true,
-          message: `✅ Deal ${data.file_number} created! ${data.invite_sent ? `Invite email sent to ${selectedLead.email}.` : "Please manually create their login."}`,
-        });
-        // Update the lead status in local state
-        setLeads((prev) =>
-          prev.map((l) =>
-            l.id === selectedLead.id ? { ...l, status: "Converted" } : l,
-          ),
-        );
-        setSelectedLead((prev) =>
-          prev ? { ...prev, status: "Converted" } : null,
-        );
+      if (data.success || Array.isArray(data.results)) {
+        if (Array.isArray(data.results)) {
+          const results = data.results as any[];
+          const convertedIds = new Set(results.map((r) => r.lead_id));
+
+          // Mark all converted/skipped family leads as Converted in local state.
+          setLeads((prev) =>
+            prev.map((l) => (convertedIds.has(l.id) ? { ...l, status: "Converted" } : l)),
+          );
+          setSelectedLead((prev) => {
+            if (!prev) return null;
+            return convertedIds.has(prev.id) ? { ...prev, status: "Converted" } : prev;
+          });
+
+          const createdCount = results.filter((r) => r.created).length;
+          const skippedCount = results.length - createdCount;
+          const inviteCount = results.filter((r) => r.invite_sent).length;
+          const failedCount = results.filter((r) => !r.success).length;
+          const hadErrors = data.had_errors ?? failedCount > 0;
+
+          setConvertResult({
+            success: !hadErrors,
+            message: `✅ Converted ${createdCount} lead(s) (${skippedCount} already converted). Invites sent to ${inviteCount} email(s).${
+              failedCount > 0 ? ` ${failedCount} failed.` : ""
+            }`,
+          });
+        } else {
+          setConvertResult({
+            success: true,
+            message: `✅ Deal ${data.file_number} created! ${
+              data.invite_sent
+                ? `Invite email sent to ${selectedLead.email}.`
+                : "Please manually create their login."
+            }`,
+          });
+
+          // Update the lead status in local state
+          setLeads((prev) =>
+            prev.map((l) => (l.id === selectedLead.id ? { ...l, status: "Converted" } : l)),
+          );
+          setSelectedLead((prev) => (prev ? { ...prev, status: "Converted" } : null));
+        }
       } else {
         setConvertResult({
           success: false,
@@ -405,15 +454,20 @@ const Leads: React.FC = () => {
     </button>
   );
 
-  const filteredLeads = leads.filter((l) => {
-    const q = search.toLowerCase();
-    return (
-      l.firstName.toLowerCase().includes(q) ||
-      l.lastName.toLowerCase().includes(q) ||
-      l.email.toLowerCase().includes(q) ||
-      (l.addressCity ?? "").toLowerCase().includes(q)
-    );
-  });
+  const filteredLeads = leads
+    .filter((l) => !l.parentLeadId) // Only show primary/standalone leads; co-purchasers visible in detail view
+    .filter((l) => {
+      const q = search.toLowerCase();
+      return (
+        l.firstName.toLowerCase().includes(q) ||
+        l.lastName.toLowerCase().includes(q) ||
+        l.email.toLowerCase().includes(q) ||
+        (l.addressStreet ?? "").toLowerCase().includes(q) ||
+        (l.addressCity ?? "").toLowerCase().includes(q) ||
+        (l.lead_type ?? "").toLowerCase().includes(q) ||
+        (l.price ?? "").toLowerCase().includes(q)
+      );
+    });
 
   const isConverted = selectedLead?.status === "Converted";
 
@@ -820,6 +874,12 @@ const Leads: React.FC = () => {
               className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
               onClick={() => !converting && setConvertModalOpen(false)}
             />
+            {(() => {
+              const familyLeadIds = getFamilyLeadIds(selectedLead);
+              const familyMembers = leads.filter((l) => familyLeadIds.includes(l.id));
+              const hasFamily = familyMembers.length > 1;
+
+              return (
             <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md relative z-10 overflow-hidden animate-in zoom-in duration-200">
               {/* Header */}
               <div className="px-8 py-6 border-b border-slate-100 flex justify-between items-start">
@@ -828,7 +888,9 @@ const Leads: React.FC = () => {
                     Convert to Deal
                   </h3>
                   <p className="text-slate-500 text-sm font-medium mt-1">
-                    Creates deal, milestones, tasks & sends client invite email.
+                    {hasFamily
+                      ? `Will create ${familyMembers.length} deals & send ${familyMembers.length} invite emails.`
+                      : "Creates deal, milestones, tasks & sends client invite email."}
                   </p>
                 </div>
                 <button
@@ -841,15 +903,47 @@ const Leads: React.FC = () => {
 
               {/* Lead summary */}
               <div className="px-8 py-5 bg-slate-50 border-b border-slate-100">
-                <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
-                  Lead
-                </p>
-                <p className="font-bold text-slate-900">
-                  {selectedLead.firstName} {selectedLead.lastName}
-                </p>
-                <p className="text-sm text-slate-500">{selectedLead.email}</p>
+                {hasFamily ? (
+                  <>
+                    <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3">
+                      Purchaser & Co-Purchasers ({familyMembers.length})
+                    </p>
+                    <div className="space-y-2.5">
+                      {familyMembers.map((fm) => {
+                        const isPrimary = !fm.parentLeadId;
+                        return (
+                          <div key={fm.id} className="flex items-center justify-between">
+                            <div>
+                              <p className="font-bold text-slate-900 text-sm">
+                                {fm.firstName} {fm.lastName}
+                              </p>
+                              <p className="text-xs text-slate-500">{fm.email}</p>
+                            </div>
+                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-tight border ${
+                              isPrimary
+                                ? "bg-green-100 text-green-700 border-green-200"
+                                : "bg-blue-100 text-blue-700 border-blue-200"
+                            }`}>
+                              {isPrimary ? "Primary" : "Co-Purchaser"}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
+                      Lead
+                    </p>
+                    <p className="font-bold text-slate-900">
+                      {selectedLead.firstName} {selectedLead.lastName}
+                    </p>
+                    <p className="text-sm text-slate-500">{selectedLead.email}</p>
+                  </>
+                )}
                 {selectedLead.lead_type && (
-                  <p className="text-xs text-slate-400 mt-1">
+                  <p className="text-xs text-slate-400 mt-2">
                     Type: {selectedLead.lead_type}
                   </p>
                 )}
@@ -943,6 +1037,7 @@ const Leads: React.FC = () => {
                 </button>
               </div>
             </div>
+              ); })()}
           </div>
         )}
 
@@ -1108,109 +1203,72 @@ const Leads: React.FC = () => {
             </p>
           </div>
         ) : (
-          <table className="w-full min-w-[700px] text-left">
+          <table className="w-full min-w-[900px] text-left border-t border-slate-200">
             <thead>
-              <tr className="bg-slate-50/50 border-b border-slate-200 text-[11px] font-black text-slate-400 uppercase tracking-widest">
-                <th className="px-8 py-5">Client Name</th>
-                <th className="px-6 py-5">Contact Details</th>
-                <th className="px-6 py-5">Type</th>
-                <th className="px-6 py-5">Status</th>
-                <th className="px-6 py-5 text-right">Actions</th>
+              <tr className="bg-white text-slate-800 text-xs font-bold border-b border-slate-200">
+                <th className="px-4 py-3 w-12">No.</th>
+                <th className="px-4 py-3">Client Name</th>
+                <th className="px-4 py-3">Address</th>
+                <th className="px-4 py-3 w-24">Lead Type</th>
+                <th className="px-4 py-3 w-28">Price</th>
+                <th className="px-4 py-3 w-28">Status</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-50">
-              {filteredLeads.map((lead) => (
+            <tbody>
+              {filteredLeads.map((lead, index) => {
+                const isEven = index % 2 === 0;
+                const rowClass = isEven ? "bg-white" : "bg-slate-50/80";
+                return (
                 <tr
                   key={lead.id}
                   onClick={() => openLead(lead)}
-                  className="hover:bg-slate-50/50 transition-colors cursor-pointer group"
+                  className={`${rowClass} hover:bg-brand-light/20 cursor-pointer transition-colors border-b border-slate-100 text-xs text-slate-700 whitespace-nowrap`}
                 >
-                  <td className="px-8 py-6">
-                    <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 rounded-xl bg-brand-light flex items-center justify-center text-brand-primary transition-colors group-hover:bg-brand-primary group-hover:text-white">
-                        {lead.isCorporate ? (
-                          <Building2 size={20} />
-                        ) : (
-                          <UserIcon size={20} />
-                        )}
-                      </div>
-                      <div>
-                        <h4 className="font-bold text-slate-900 leading-none mb-1 group-hover:text-brand-primary">
-                          {lead.firstName} {lead.lastName}
-                        </h4>
-                        {lead.lead_type && (
-                          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
-                            {lead.lead_type}
-                          </p>
-                        )}
-                        {/* Co-purchaser badges */}
-                        <div className="flex flex-wrap gap-1 mt-1">
-                          {lead.parentLeadId && (
-                            <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-tight bg-blue-100 text-blue-700 border border-blue-200">
-                              Co-Purchaser
-                            </span>
-                          )}
-                          {lead.addressMatchFlag?.status === "pending" && (
-                            <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-tight bg-amber-100 text-amber-700 border border-amber-200">
-                              Potential Co-Purchaser
-                              {lead.addressMatchFlag.matched_lead_id && (
-                                <span className="font-medium normal-case ml-1">
-                                  — matches {getLeadName(lead.addressMatchFlag.matched_lead_id) ?? "another lead"}
-                                </span>
-                              )}
-                            </span>
-                          )}
-                          {lead.addressMatchFlag?.status === "approved" && (
-                            <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-tight bg-green-100 text-green-700 border border-green-200">
-                              Co-Purchaser Linked
-                            </span>
-                          )}
-                          {lead.addressMatchFlag?.status === "dismissed" && (
-                            <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-tight bg-slate-100 text-slate-500 border border-slate-200">
-                              Match Dismissed
-                            </span>
-                          )}
-                        </div>
-                      </div>
+                  <td className="px-4 py-3">{index + 1}</td>
+                  <td className="px-4 py-3">
+                    <div>
+                      <span className="font-medium">{lead.firstName} {lead.lastName}</span>
+                      {lead.parentLeadId && (
+                        <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-100 text-blue-700 border border-blue-200">Co-Purchaser</span>
+                      )}
+                      {lead.addressMatchFlag?.status === "pending" && (
+                        <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-100 text-amber-700 border border-amber-200">Pending</span>
+                      )}
+                      {lead.addressMatchFlag?.status === "approved" && (
+                        <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold bg-green-100 text-green-700 border border-green-200">Linked</span>
+                      )}
                     </div>
                   </td>
-                  <td className="px-6 py-6">
-                    <div className="space-y-1">
-                      <p className="text-sm font-medium text-slate-600 flex items-center gap-1.5">
-                        <Mail size={14} className="text-slate-300" />{" "}
-                        {lead.email}
-                      </p>
-                      <p className="text-xs text-slate-400 flex items-center gap-1.5">
-                        <Smartphone size={14} className="text-slate-300" />{" "}
-                        {lead.phone}
-                      </p>
-                    </div>
+                  <td className="px-4 py-3 truncate max-w-xs" title={[lead.addressStreet, lead.addressCity, lead.addressProvince, lead.addressPostalCode].filter(Boolean).join(", ")}>
+                    {lead.addressStreet || "—"}
                   </td>
-                  <td className="px-6 py-6">
-                    <span
-                      className={`px-2 py-1 rounded-md text-[10px] font-black uppercase tracking-tight ${lead.isCorporate ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"}`}
-                    >
-                      {lead.isCorporate ? "Corporate" : "Individual"}
-                    </span>
+                  <td className="px-4 py-3">
+                    {lead.lead_type ? (
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${
+                        lead.lead_type === "Purchase" ? "bg-blue-100 text-blue-700 border-blue-200"
+                          : lead.lead_type === "Sale" ? "bg-orange-100 text-orange-700 border-orange-200"
+                          : "bg-slate-900 text-white border-slate-900"
+                      }`}>{lead.lead_type}</span>
+                    ) : "—"}
                   </td>
-                  <td className="px-6 py-6">
+                  <td className="px-4 py-3 font-medium">{lead.price || "—"}</td>
+                  <td className="px-4 py-3">
                     {lead.status === "Converted" ? (
-                      <div className="flex items-center gap-1.5 text-green-700 font-bold text-xs bg-green-50 px-2.5 py-1 rounded-full border border-green-100 w-fit">
-                        <CheckCircle2 size={14} /> Converted
-                      </div>
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 text-green-700 border border-green-200 shadow-sm">
+                        <span className="mr-1">✓</span> Converted
+                      </span>
                     ) : (
-                      <div className="flex items-center gap-1.5 text-emerald-600 font-bold text-xs bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-100 w-fit">
-                        <CheckCircle2 size={14} /> Active Lead
-                      </div>
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-white text-green-600 border border-green-400">
+                        Active
+                      </span>
                     )}
                   </td>
-                  <td className="px-6 py-6 text-right">
-                    <button className="p-2 text-slate-300 hover:text-brand-primary transition-colors">
-                      <ArrowRight size={20} />
-                    </button>
-                  </td>
                 </tr>
-              ))}
+                );
+              })}
+              {filteredLeads.length === 0 && (
+                <tr><td colSpan={6} className="px-6 py-12 text-center text-slate-500"><p>No leads found.</p></td></tr>
+              )}
             </tbody>
           </table>
         )}
