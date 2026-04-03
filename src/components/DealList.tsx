@@ -45,14 +45,14 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
       .catch(() => setDeals([]));
   }, []);
 
-  const countS = deals.filter(d => d.type === DealType.SALE).length;
-  const countP = deals.filter(d => d.type === DealType.PURCHASE).length;
-  const countR = deals.filter(d => d.type === DealType.REFINANCE).length;
-  const totalFiles = deals.length;
+  // Exclude co-purchaser deals from all counts and display
+  const primaryDeals = deals.filter(d => !(d as any).isCoPurchaser);
+  const countS = primaryDeals.filter(d => d.type === DealType.SALE).length;
+  const countP = primaryDeals.filter(d => d.type === DealType.PURCHASE).length;
+  const countR = primaryDeals.filter(d => d.type === DealType.REFINANCE).length;
+  const totalFiles = primaryDeals.length;
 
-  const filteredDeals = deals.filter(deal => {
-    // ✅ ADDED: hide co-purchasers
-    if ((deal as any).isCoPurchaser) return false;
+  const filteredDeals = primaryDeals.filter(deal => {
 
     if (searchTerm) {
       const lowerTerm = searchTerm.toLowerCase();
@@ -104,10 +104,10 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
 
   return (
     <div className="bg-white rounded-lg shadow-sm border border-slate-200">
-      <div className="flex flex-col xl:flex-row items-start xl:items-center justify-between p-6 pb-2 gap-4">
-        <div className="flex items-center gap-4">
-          <h1 className="text-xl font-bold text-slate-900 border-b-2 border-slate-900 pb-0.5">All files</h1>
-          <div className="flex items-center gap-2 text-sm"><span className="font-bold text-slate-700">Total files: {totalFiles}</span><span className="bg-orange-100 text-orange-700 border border-orange-200 px-1.5 rounded text-xs font-bold" title="Sales">S {countS}</span><span className="bg-blue-100 text-blue-700 border border-blue-200 px-1.5 rounded text-xs font-bold" title="Purchases">P {countP}</span><span className="bg-brand-black text-white px-1.5 rounded text-xs font-bold" title="Refinances">R {countR}</span></div>
+      <div className="flex flex-col xl:flex-row items-start xl:items-center justify-between p-4 sm:p-6 pb-2 gap-4">
+        <div className="flex flex-wrap items-center gap-3 sm:gap-4">
+          <h1 className="text-lg sm:text-xl font-bold text-slate-900 border-b-2 border-slate-900 pb-0.5">All files</h1>
+          <div className="flex items-center gap-2 text-sm"><span className="font-bold text-slate-700">Total: {totalFiles}</span><span className="bg-orange-100 text-orange-700 border border-orange-200 px-1.5 rounded text-xs font-bold" title="Sales">S {countS}</span><span className="bg-blue-100 text-blue-700 border border-blue-200 px-1.5 rounded text-xs font-bold" title="Purchases">P {countP}</span><span className="bg-brand-black text-white px-1.5 rounded text-xs font-bold" title="Refinances">R {countR}</span></div>
         </div>
 
         <div className="flex flex-1 w-full xl:w-auto items-center gap-3 justify-end">
@@ -117,8 +117,8 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
         </div>
       </div>
 
-      <div className="px-6 pb-6 pt-2 space-y-4">
-        <div className="flex flex-wrap items-end gap-6 border-b border-slate-100 pb-4">
+      <div className="px-4 sm:px-6 pb-4 sm:pb-6 pt-2 space-y-4">
+        <div className="flex flex-wrap items-end gap-3 sm:gap-6 border-b border-slate-100 pb-4">
           <div className="flex border border-slate-300 rounded overflow-hidden"><button className="px-3 py-1.5 text-xs font-medium transition-colors bg-brand-light text-brand-primary cursor-default">Closing date</button></div>
           <div className="flex items-center gap-3">
             <div><label className="block text-xs text-slate-500 mb-1">From</label><input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="border border-slate-300 rounded px-2 py-1 text-xs text-slate-700 focus:border-brand-primary outline-none" /></div>

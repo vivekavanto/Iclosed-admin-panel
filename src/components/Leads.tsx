@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import {
   History,
   Mail,
@@ -474,7 +475,7 @@ const Leads: React.FC = () => {
   // ── DETAIL VIEW ───────────────────────────────────────────────────────────
   if (view === "DETAIL" && selectedLead) {
     return (
-      <div className="max-w-6xl mx-auto space-y-6 animate-in slide-in-from-right duration-300 py-4 pb-20">
+      <div key={selectedLead.id} className="max-w-6xl mx-auto space-y-4 sm:space-y-6 animate-in slide-in-from-right duration-300 py-2 sm:py-4 pb-20">
         {/* Back button */}
         <button
           onClick={() => setView("LIST")}
@@ -868,64 +869,47 @@ const Leads: React.FC = () => {
         </div>
 
         {/* ── Convert to Deal Modal ── */}
-        {convertModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-6 animate-in fade-in duration-200">
-            <div
-              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
-              onClick={() => !converting && setConvertModalOpen(false)}
-            />
+        {convertModalOpen && createPortal(
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => !converting && setConvertModalOpen(false)}>
             {(() => {
               const familyLeadIds = getFamilyLeadIds(selectedLead);
               const familyMembers = leads.filter((l) => familyLeadIds.includes(l.id));
               const hasFamily = familyMembers.length > 1;
 
               return (
-            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md relative z-10 overflow-hidden animate-in zoom-in duration-200">
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
               {/* Header */}
-              <div className="px-8 py-6 border-b border-slate-100 flex justify-between items-start">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
                 <div>
-                  <h3 className="text-xl font-black text-slate-900">
-                    Convert to Deal
-                  </h3>
-                  <p className="text-slate-500 text-sm font-medium mt-1">
+                  <h3 className="text-lg font-bold text-slate-900">Convert to Deal</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
                     {hasFamily
                       ? `Will create ${familyMembers.length} deals & send ${familyMembers.length} invite emails.`
-                      : "Creates deal, milestones, tasks & sends client invite email."}
+                      : "Creates deal, milestones, tasks & sends invite email."}
                   </p>
                 </div>
-                <button
-                  onClick={() => !converting && setConvertModalOpen(false)}
-                  className="text-slate-300 hover:text-slate-600 transition-colors mt-1"
-                >
-                  <X size={22} />
-                </button>
+                <button onClick={() => !converting && setConvertModalOpen(false)} className="text-slate-400 hover:text-slate-600 text-xl font-bold">&times;</button>
               </div>
 
               {/* Lead summary */}
-              <div className="px-8 py-5 bg-slate-50 border-b border-slate-100">
+              <div className="px-6 py-4 bg-slate-50 border-b border-slate-200">
                 {hasFamily ? (
                   <>
-                    <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">
                       Purchaser & Co-Purchasers ({familyMembers.length})
                     </p>
-                    <div className="space-y-2.5">
-                      {familyMembers.map((fm) => {
+                    <div className="space-y-2">
+                      {[...familyMembers].sort((a, b) => (a.parentLeadId ? 1 : 0) - (b.parentLeadId ? 1 : 0)).map((fm) => {
                         const isPrimary = !fm.parentLeadId;
                         return (
                           <div key={fm.id} className="flex items-center justify-between">
                             <div>
-                              <p className="font-bold text-slate-900 text-sm">
-                                {fm.firstName} {fm.lastName}
-                              </p>
+                              <p className="text-sm font-bold text-slate-800">{fm.firstName} {fm.lastName}</p>
                               <p className="text-xs text-slate-500">{fm.email}</p>
                             </div>
-                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-tight border ${
-                              isPrimary
-                                ? "bg-green-100 text-green-700 border-green-200"
-                                : "bg-blue-100 text-blue-700 border-blue-200"
-                            }`}>
-                              {isPrimary ? "Primary" : "Co-Purchaser"}
-                            </span>
+                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase border ${
+                              isPrimary ? "bg-green-100 text-green-700 border-green-200" : "bg-blue-100 text-blue-700 border-blue-200"
+                            }`}>{isPrimary ? "Primary" : "Co-Purchaser"}</span>
                           </div>
                         );
                       })}
@@ -933,30 +917,20 @@ const Leads: React.FC = () => {
                   </>
                 ) : (
                   <>
-                    <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-2">
-                      Lead
-                    </p>
-                    <p className="font-bold text-slate-900">
-                      {selectedLead.firstName} {selectedLead.lastName}
-                    </p>
-                    <p className="text-sm text-slate-500">{selectedLead.email}</p>
+                    <p className="text-sm font-bold text-slate-800">{selectedLead.firstName} {selectedLead.lastName}</p>
+                    <p className="text-xs text-slate-500">{selectedLead.email}</p>
                   </>
                 )}
                 {selectedLead.lead_type && (
-                  <p className="text-xs text-slate-400 mt-2">
-                    Type: {selectedLead.lead_type}
-                  </p>
+                  <p className="text-xs text-slate-400 mt-1.5">Type: {selectedLead.lead_type}</p>
                 )}
               </div>
 
               {/* Form */}
-              <div className="px-8 py-6 space-y-5">
-                <div className="space-y-2">
-                  <label className="text-xs font-black text-slate-500 uppercase tracking-widest">
-                    File Number{" "}
-                    <span className="text-slate-300 font-normal normal-case">
-                      (optional — auto-generated if blank)
-                    </span>
+              <div className="px-6 py-4 space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">
+                    File Number <span className="text-slate-400 font-normal">(optional)</span>
                   </label>
                   <input
                     type="text"
@@ -964,184 +938,121 @@ const Leads: React.FC = () => {
                     onChange={(e) => setConvertFileNumber(e.target.value)}
                     placeholder="e.g. 26P-0059"
                     disabled={converting}
-                    className={inputClasses}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
                   />
                 </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-black text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
-                    <CalendarDays size={12} /> Closing Date{" "}
-                    <span className="text-slate-300 font-normal normal-case">
-                      (optional)
-                    </span>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">
+                    Closing Date <span className="text-slate-400 font-normal">(optional)</span>
                   </label>
                   <input
                     type="date"
                     value={convertClosingDate}
                     onChange={(e) => setConvertClosingDate(e.target.value)}
                     disabled={converting}
-                    className={inputClasses}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
                   />
                 </div>
 
-                {/* Result message */}
                 {convertResult && (
-                  <div
-                    className={`flex items-start gap-2.5 px-4 py-3 rounded-xl border text-sm font-semibold ${
-                      convertResult.success
-                        ? "bg-green-50 border-green-200 text-green-800"
-                        : "bg-red-50 border-red-200 text-red-700"
-                    }`}
-                  >
-                    {convertResult.success ? (
-                      <CheckCircle2
-                        size={16}
-                        className="flex-shrink-0 mt-0.5"
-                      />
-                    ) : (
-                      <AlertTriangle
-                        size={16}
-                        className="flex-shrink-0 mt-0.5"
-                      />
-                    )}
+                  <div className={`flex items-start gap-2 px-3 py-2.5 rounded-lg border text-sm font-medium ${
+                    convertResult.success ? "bg-green-50 border-green-200 text-green-800" : "bg-red-50 border-red-200 text-red-700"
+                  }`}>
+                    {convertResult.success ? <CheckCircle2 size={16} className="flex-shrink-0 mt-0.5" /> : <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" />}
                     <span>{convertResult.message}</span>
                   </div>
                 )}
               </div>
 
               {/* Footer */}
-              <div className="px-8 pb-8 flex flex-col gap-3">
+              <div className="flex justify-end gap-3 px-6 py-4 border-t border-slate-200">
+                <button
+                  onClick={() => setConvertModalOpen(false)}
+                  disabled={converting}
+                  className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors"
+                >
+                  {convertResult?.success ? "Close" : "Cancel"}
+                </button>
                 {!convertResult?.success && (
                   <button
                     onClick={handleConvertToDeal}
                     disabled={converting}
-                    className="w-full py-4 bg-brand-primary text-white rounded-2xl font-black text-sm uppercase tracking-widest shadow-xl shadow-brand-primary/20 hover:bg-brand-primaryHover transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    className="flex items-center gap-2 bg-brand-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-brand-primary/90 transition-colors disabled:opacity-50"
                   >
-                    {converting ? (
-                      <>
-                        <Loader2 size={16} className="animate-spin" />{" "}
-                        Converting...
-                      </>
-                    ) : (
-                      <>
-                        <Zap size={16} /> Confirm — Convert to Deal
-                      </>
-                    )}
+                    {converting ? <><Loader2 size={14} className="animate-spin" /> Converting...</> : <><Zap size={14} /> Convert</>}
                   </button>
                 )}
-                <button
-                  onClick={() => setConvertModalOpen(false)}
-                  disabled={converting}
-                  className="w-full py-3 border border-slate-200 text-slate-600 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all"
-                >
-                  {convertResult?.success ? "Close" : "Cancel"}
-                </button>
               </div>
             </div>
               ); })()}
           </div>
-        )}
+        , document.body)}
 
         {/* ── Send Email Template Picker Modal ── */}
-        {emailModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-6 animate-in fade-in duration-200">
-            <div
-              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
-              onClick={() => !sendingWelcome && setEmailModalOpen(false)}
-            />
-            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md relative z-10 overflow-hidden animate-in zoom-in duration-200">
+        {emailModalOpen && createPortal(
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => !sendingWelcome && setEmailModalOpen(false)}>
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[80vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
               {/* Header */}
-              <div className="px-8 py-6 border-b border-slate-100 flex justify-between items-start">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
                 <div>
-                  <h3 className="text-xl font-black text-slate-900">
-                    Send Email
-                  </h3>
-                  <p className="text-slate-500 text-sm font-medium mt-1">
-                    Pick a template to send to{" "}
-                    <span className="font-bold text-slate-700">
-                      {selectedLead?.email}
-                    </span>
+                  <h3 className="text-lg font-bold text-slate-900">Send Email</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Send to <span className="font-semibold text-slate-700">{selectedLead?.email}</span>
                   </p>
                 </div>
-                <button
-                  onClick={() => !sendingWelcome && setEmailModalOpen(false)}
-                  className="text-slate-300 hover:text-slate-600 transition-colors mt-1"
-                >
-                  <X size={22} />
-                </button>
+                <button onClick={() => !sendingWelcome && setEmailModalOpen(false)} className="text-slate-400 hover:text-slate-600 text-xl font-bold">&times;</button>
               </div>
 
               {/* Template list */}
-              <div className="px-8 py-6 space-y-3 max-h-80 overflow-y-auto">
+              <div className="px-6 py-4 space-y-2 overflow-y-auto flex-1">
                 {emailTemplates.length === 0 ? (
-                  <p className="text-sm text-slate-400 text-center py-6">
-                    No active templates with content found. Create one in Email
-                    Templates first.
-                  </p>
+                  <p className="text-sm text-slate-400 text-center py-8">No active templates found.</p>
                 ) : (
                   emailTemplates.map((t) => (
                     <button
                       key={t.id}
                       type="button"
                       onClick={() => setSelectedTemplateId(t.id)}
-                      className={`w-full text-left px-5 py-4 rounded-xl border transition-all ${
+                      className={`w-full text-left px-4 py-3 rounded-lg border transition-all ${
                         selectedTemplateId === t.id
-                          ? "border-emerald-500 bg-emerald-50 ring-2 ring-emerald-500/20"
+                          ? "border-brand-primary bg-brand-light ring-1 ring-brand-primary/20"
                           : "border-slate-200 hover:border-slate-300 hover:bg-slate-50"
                       }`}
                     >
-                      <div className="flex items-center gap-3">
-                        <Mail
-                          size={18}
-                          className={
-                            selectedTemplateId === t.id
-                              ? "text-emerald-600"
-                              : "text-slate-400"
-                          }
-                        />
-                        <span className="font-bold text-slate-800 text-sm">
-                          {t.name}
-                        </span>
+                      <div className="flex items-center gap-2">
+                        <Mail size={14} className={selectedTemplateId === t.id ? "text-brand-primary" : "text-slate-400"} />
+                        <span className="font-medium text-slate-800 text-sm">{t.name}</span>
                       </div>
-                      <p className="text-xs text-slate-400 mt-1.5 ml-[30px] line-clamp-2">
-                        {t.body?.substring(0, 100)}
-                        {(t.body?.length ?? 0) > 100 ? "..." : ""}
-                      </p>
+                      {t.body && (
+                        <p className="text-xs text-slate-400 mt-1 ml-[22px] line-clamp-2">
+                          {t.body.substring(0, 100)}{(t.body.length ?? 0) > 100 ? "..." : ""}
+                        </p>
+                      )}
                     </button>
                   ))
                 )}
               </div>
 
               {/* Footer */}
-              <div className="px-8 pb-8 flex flex-col gap-3">
-                <button
-                  onClick={() =>
-                    selectedLead &&
-                    sendWelcomeEmail(selectedLead.id, selectedTemplateId || undefined)
-                  }
-                  disabled={sendingWelcome || !selectedTemplateId}
-                  className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-black text-sm uppercase tracking-widest shadow-xl shadow-emerald-600/20 hover:bg-emerald-700 transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                >
-                  {sendingWelcome ? (
-                    <>
-                      <Loader2 size={16} className="animate-spin" /> Sending...
-                    </>
-                  ) : (
-                    <>
-                      <Send size={16} /> Send Email
-                    </>
-                  )}
-                </button>
+              <div className="flex justify-end gap-3 px-6 py-4 border-t border-slate-200">
                 <button
                   onClick={() => setEmailModalOpen(false)}
                   disabled={sendingWelcome}
-                  className="w-full py-3 border border-slate-200 text-slate-600 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all"
+                  className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors"
                 >
                   Cancel
+                </button>
+                <button
+                  onClick={() => selectedLead && sendWelcomeEmail(selectedLead.id, selectedTemplateId || undefined)}
+                  disabled={sendingWelcome || !selectedTemplateId}
+                  className="flex items-center gap-2 bg-brand-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-brand-primary/90 transition-colors disabled:opacity-50"
+                >
+                  {sendingWelcome ? <><Loader2 size={14} className="animate-spin" /> Sending...</> : <><Send size={14} /> Send Email</>}
                 </button>
               </div>
             </div>
           </div>
-        )}
+        , document.body)}
       </div>
     );
   }

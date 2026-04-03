@@ -209,11 +209,12 @@ const Templates: React.FC = () => {
                             <th className="px-6 py-3">Role</th>
                             <th className="px-6 py-3">Email Template</th>
                             <th className="px-6 py-3 text-center">Shared</th>
+                            <th className="px-6 py-3 w-16"></th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                           {section.items.map((item) => (
-                            <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
+                            <tr key={item.id} className="hover:bg-slate-50/80 transition-colors group">
                               <td className="px-6 py-4 text-center font-mono text-xs text-slate-400">{item.order_index}</td>
                               <td className="px-6 py-4 font-bold text-slate-800">{item.name}</td>
                               <td className="px-6 py-4">
@@ -231,6 +232,15 @@ const Templates: React.FC = () => {
                               </td>
                               <td className="px-6 py-4 text-center">
                                 {item.is_shared ? <CheckCircle2 className="mx-auto text-green-500" size={16} /> : <XCircle className="mx-auto text-slate-200" size={16} />}
+                              </td>
+                              <td className="px-6 py-4 text-center">
+                                <button
+                                  onClick={() => handleDelete(item.id, item.name)}
+                                  className="text-slate-300 hover:text-red-500 transition-colors p-1"
+                                  title="Delete stage template"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
                               </td>
                             </tr>
                           ))}

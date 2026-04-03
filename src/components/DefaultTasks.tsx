@@ -226,6 +226,21 @@ const DefaultTasks: React.FC = () => {
   };
 
   // Delete task
+  const handleDeleteStage = async (stageId: string) => {
+    if (!confirm("Delete this milestone and all its tasks?")) return;
+    try {
+      const res = await fetch(`/api/admin/milestone-templates?id=${stageId}`, { method: "DELETE" });
+      if (res.ok) {
+        setStages((prev) => prev.filter((s) => s.id !== stageId));
+        setTasks((prev) => prev.filter((t) => t.stage_template_id !== stageId));
+      } else {
+        alert("Failed to delete milestone.");
+      }
+    } catch {
+      alert("Error deleting milestone.");
+    }
+  };
+
   const handleDeleteTask = async (taskId: string) => {
     if (!confirm("Delete this task template?")) return;
     try {
@@ -326,7 +341,7 @@ const DefaultTasks: React.FC = () => {
             onClick={() => setShowStageForm(true)}
             className="bg-brand-primary text-white px-4 py-2 rounded-xl flex items-center gap-2 font-bold text-sm shadow-lg shadow-brand-primary/20 hover:bg-brand-primaryHover transition-all active:scale-95 whitespace-nowrap"
           >
-            <Plus size={16} />
+          <Plus size={16} />
             <span className="hidden sm:inline">Add Stage Templates</span>
             <span className="sm:hidden">Stage</span>
           </button>
@@ -450,6 +465,13 @@ const DefaultTasks: React.FC = () => {
                       title="Edit stage"
                     >
                       <Pencil size={14} />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteStage(stage.id)}
+                      className="text-slate-300 hover:text-red-500 p-1.5 rounded-md transition-colors"
+                      title="Delete milestone"
+                    >
+                      <Trash2 size={14} />
                     </button>
                     <button
                       onClick={() => {

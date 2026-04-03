@@ -53,7 +53,7 @@ export default function ClientLayout({
         }}
       />
       <main
-        className={`${sidebarCollapsed ? "ml-[72px]" : "ml-64"} flex-1 p-8 h-screen overflow-y-auto transition-all duration-300`}
+        className={`ml-0 ${sidebarCollapsed ? "md:ml-[72px]" : "md:ml-64"} flex-1 p-4 sm:p-6 md:p-8 pt-16 md:pt-8 h-screen overflow-y-auto transition-all duration-300`}
       >
         <div className="max-w-7xl mx-auto h-full">{children}</div>
       </main>
