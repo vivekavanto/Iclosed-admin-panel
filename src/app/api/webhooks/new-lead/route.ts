@@ -128,6 +128,13 @@ Warm regards,
 iClosed by Nava Wilson`;
     }
 
+    // Decode HTML entities that may wrap placeholders
+    templateBody = templateBody
+      .replace(/&#123;/g, "{")
+      .replace(/&#125;/g, "}")
+      .replace(/&nbsp;/g, " ")
+      .replace(/\u00A0/g, " ");
+
     // Interpolate variables
     const fullName = `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim();
     const address = [
