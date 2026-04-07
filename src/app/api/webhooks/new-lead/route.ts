@@ -166,6 +166,15 @@ iClosed by Nava Wilson`;
       emailBody = emailBody.split(key).join(value);
     }
 
+    // Catch remaining placeholders with flexible whitespace
+    emailBody = emailBody.replace(/\{\{\s*user\.get_full_name\s*\}\}/gi, fullName);
+    emailBody = emailBody.replace(/\{\{\s*user\.first_name\s*\}\}/gi, lead.first_name ?? "");
+    emailBody = emailBody.replace(/\{\{\s*user\.last_name\s*\}\}/gi, lead.last_name ?? "");
+    emailBody = emailBody.replace(/\{\{\s*user\.full_name\s*\}\}/gi, fullName);
+    emailBody = emailBody.replace(/\{\{\s*user\.email\s*\}\}/gi, lead.email ?? "");
+    emailBody = emailBody.replace(/\{\{\s*lead_type\s*\}\}/gi, leadType);
+    emailBody = emailBody.replace(/\{\{\s*lead_address\s*\}\}/gi, address);
+
     // Build resource links HTML
     const linksHtml = RESOURCE_LINKS.map(
       (link) =>

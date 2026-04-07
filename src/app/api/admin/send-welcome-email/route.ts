@@ -77,6 +77,19 @@ function interpolateVariables(text: string, lead: any): string {
   for (const [key, value] of Object.entries(variableMap)) {
     result = result.split(key).join(value);
   }
+
+  // Catch any remaining {{ ... }} placeholders with flexible whitespace matching
+  result = result.replace(/\{\{\s*user\.get_full_name\s*\}\}/gi, `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim());
+  result = result.replace(/\{\{\s*user\.first_name\s*\}\}/gi, lead.first_name ?? "");
+  result = result.replace(/\{\{\s*user\.last_name\s*\}\}/gi, lead.last_name ?? "");
+  result = result.replace(/\{\{\s*user\.full_name\s*\}\}/gi, `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim());
+  result = result.replace(/\{\{\s*user\.email\s*\}\}/gi, lead.email ?? "");
+  result = result.replace(/\{\{\s*lead_type\s*\}\}/gi, (lead.lead_type ?? "purchase").toLowerCase());
+  result = result.replace(/\{\{\s*lead_address\s*\}\}/gi, [lead.address_street, lead.address_city, lead.address_province, lead.address_postal_code].filter(Boolean).join(", "));
+  result = result.replace(/\{\{\s*lead\.address_line1\s*\}\}/gi, lead.address_street ?? "");
+  result = result.replace(/\{\{\s*lead\.address_city\s*\}\}/gi, lead.address_city ?? "");
+  result = result.replace(/\{\{\s*lead\.file_number\s*\}\}/gi, lead.file_number ?? "");
+
   return result;
 }
 
@@ -227,10 +240,17 @@ export async function POST(req: NextRequest) {
     }
 
     // 3. Use template body or fallback to default
-    const rawBody =
+    let rawBody =
       template?.body && template.body.trim() !== ""
         ? template.body
         : DEFAULT_WELCOME_BODY;
+
+    // Decode HTML entities that may wrap placeholders (e.g. &#123;&#123; → {{)
+    rawBody = rawBody
+      .replace(/&#123;/g, "{")
+      .replace(/&#125;/g, "}")
+      .replace(/&nbsp;/g, " ")
+      .replace(/\u00A0/g, " ");
 
     // 4. Interpolate variables
     const emailBody = interpolateVariables(rawBody, lead);

@@ -90,9 +90,20 @@ async function sendEmailForDeal(
         }
 
         let processedBody = template.body
+            .replace(/&#123;/g, "{")
+            .replace(/&#125;/g, "}")
+            .replace(/&nbsp;/g, " ")
+            .replace(/\u00A0/g, " ")
         for (const [key, value] of Object.entries(placeholders)) {
             processedBody = processedBody.replaceAll(key, value)
         }
+
+        // Catch remaining placeholders with flexible whitespace
+        processedBody = processedBody.replace(/\{\{\s*user\.get_full_name\s*\}\}/gi, fullName);
+        processedBody = processedBody.replace(/\{\{\s*user\.first_name\s*\}\}/gi, client.first_name ?? "");
+        processedBody = processedBody.replace(/\{\{\s*user\.last_name\s*\}\}/gi, client.last_name ?? "");
+        processedBody = processedBody.replace(/\{\{\s*user\.full_name\s*\}\}/gi, fullName);
+        processedBody = processedBody.replace(/\{\{\s*user\.email\s*\}\}/gi, client.email ?? "");
 
         const htmlBody = `
       <div>
