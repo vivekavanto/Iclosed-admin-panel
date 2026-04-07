@@ -118,8 +118,63 @@ async function convertSingleLeadToDeal(
     // ── 3. Generate file number if not provided ───────────────────────────────
     const leadTypePrefix = lead.lead_type?.charAt(0)?.toUpperCase() ?? "X";
     const year = new Date().getFullYear().toString().slice(-2);
-    const shortId = leadId.substring(0, 4).toUpperCase();
-    const generatedFileNumber = opts.file_number ?? `${year}${leadTypePrefix}-${shortId}`;
+    const prefix = `${year}${leadTypePrefix}-`;
+
+    let generatedFileNumber = opts.file_number;
+    if (!generatedFileNumber) {
+      // Get ALL file numbers with this prefix to find the true max numerically
+      const { data: allDeals } = await supabaseAdmin
+        .from("deals")
+        .select("file_number")
+        .like("file_number", `${prefix}%`);
+
+      let maxNum = 0;
+      if (allDeals) {
+        for (const d of allDeals) {
+          const numPart = parseInt(d.file_number.replace(prefix, ""), 10);
+          if (!isNaN(numPart) && numPart > maxNum) maxNum = numPart;
+        }
+      }
+
+      // Try incrementing from max, retry if collision (race condition safety)
+      for (let attempt = 1; attempt <= 10; attempt++) {
+        const candidate = `${prefix}${String(maxNum + attempt).padStart(4, "0")}`;
+        const { data: exists } = await supabaseAdmin
+          .from("deals")
+          .select("id")
+          .eq("file_number", candidate)
+          .maybeSingle();
+
+        if (!exists) {
+          generatedFileNumber = candidate;
+          break;
+        }
+      }
+
+      if (!generatedFileNumber) {
+        // Fallback: use timestamp-based suffix to guarantee uniqueness
+        generatedFileNumber = `${prefix}${String(maxNum + 100).padStart(4, "0")}`;
+      }
+    }
+
+    // If admin provided a custom file number, verify it's unique
+    if (opts.file_number) {
+      const { data: exists } = await supabaseAdmin
+        .from("deals")
+        .select("id")
+        .eq("file_number", opts.file_number)
+        .maybeSingle();
+
+      if (exists) {
+        return {
+          success: false,
+          created: false,
+          lead_id: leadId,
+          error: `File number "${opts.file_number}" already exists`,
+          statusCode: 409,
+        };
+      }
+    }
 
     // ── 4. Clean price (strip currency formatting) ────────────────────────────
     const rawPrice = lead.price ? String(lead.price).replace(/[^0-9.]/g, "") : null;
@@ -429,8 +484,77 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: "Lead not found" }, { status: 404 });
     }
 
-    // ── Single-lead conversion (legacy behavior) ────────────────────────────
-    if (!convert_family) {
+    // ── Auto-link address-matched leads before conversion ────────────────────
+    // If any leads have address_match_flag pointing to this lead but no parent_lead_id,
+    // link them now so they're included in family conversion.
+    try {
+      const { data: pendingMatches } = await supabaseAdmin
+        .from("leads")
+        .select("id, email, address_match_flag")
+        .is("parent_lead_id", null)
+        .not("address_match_flag", "is", null);
+
+      if (pendingMatches) {
+        for (const pm of pendingMatches) {
+          const matchedId = pm.address_match_flag?.matched_lead_id;
+          if (!matchedId) continue;
+
+          // Get matched lead's email and parent_lead_id
+          const { data: matchedLead } = await supabaseAdmin
+            .from("leads")
+            .select("email, parent_lead_id")
+            .eq("id", matchedId)
+            .single();
+
+          if (!matchedLead) continue;
+
+          // Only auto-link if emails are different (different person, same address)
+          if (matchedLead.email?.toLowerCase() === pm.email?.toLowerCase()) {
+            // Same email — just clear the flag
+            await supabaseAdmin
+              .from("leads")
+              .update({ address_match_flag: null })
+              .eq("id", pm.id);
+            continue;
+          }
+
+          const rootId = matchedLead.parent_lead_id ?? matchedId;
+
+          await supabaseAdmin
+            .from("leads")
+            .update({ parent_lead_id: rootId, address_match_flag: null })
+            .eq("id", pm.id);
+        }
+
+        // Re-fetch the selected lead in case it was updated
+        const { data: refreshedLead } = await supabaseAdmin
+          .from("leads")
+          .select("*")
+          .eq("id", lead_id)
+          .single();
+        if (refreshedLead) Object.assign(selectedLead, refreshedLead);
+      }
+    } catch {
+      // Non-blocking
+    }
+
+    // ── Check if this lead has family (auto-detect convert_family) ──────────
+    const autoDetectFamily = !convert_family;
+    let effectiveConvertFamily = convert_family ?? false;
+
+    if (autoDetectFamily) {
+      const rootId = selectedLead.parent_lead_id ?? selectedLead.id;
+      const { data: familyCheck } = await supabaseAdmin
+        .from("leads")
+        .select("id")
+        .or(`id.eq.${rootId},parent_lead_id.eq.${rootId}`);
+      if (familyCheck && familyCheck.length > 1) {
+        effectiveConvertFamily = true;
+      }
+    }
+
+    // ── Single-lead conversion (no family) ──────────────────────────────────
+    if (!effectiveConvertFamily) {
       const one = await convertSingleLeadToDeal(selectedLead, {
         file_number,
         closing_date,

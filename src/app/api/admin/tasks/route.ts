@@ -164,13 +164,11 @@ export async function PATCH(req: Request) {
         .eq("is_shared", true);
     } else {
       const effectiveAssignee = assignee ?? existingTask.assignee;
-      if (!effectiveAssignee) {
-        return NextResponse.json(
-          { success: false, error: "assignee is required to update a personal task" },
-          { status: 400 },
-        );
+      if (effectiveAssignee) {
+        updateQuery = updateQuery.eq("id", id).eq("assignee", effectiveAssignee);
+      } else {
+        updateQuery = updateQuery.eq("id", id);
       }
-      updateQuery = updateQuery.eq("id", id).eq("assignee", effectiveAssignee);
     }
 
     const { data, error } = await updateQuery.select().single();

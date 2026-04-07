@@ -122,9 +122,141 @@ async function sendEmailForDeal(
     }
 }
 
+/**
+ * Handles direct email send from the customer portal.
+ * The portal sends: { milestone_id, deal_id, lead_id, client_id, email_template_id, milestone_title }
+ * We fetch the template, client, and send the email directly.
+ */
+async function handlePortalRequest(body: Record<string, any>) {
+    const { deal_id, client_id, milestone_title, milestone_id } = body
+    let { email_template_id } = body
+
+    if (!client_id) {
+        return NextResponse.json({ success: false, error: "client_id is required" }, { status: 400 })
+    }
+
+    // If no email_template_id provided, try to get it from the milestone
+    if (!email_template_id && milestone_id) {
+        const { data: ms } = await supabaseAdmin
+            .from("milestones")
+            .select("email_template_id")
+            .eq("id", milestone_id)
+            .single()
+        if (ms?.email_template_id) email_template_id = ms.email_template_id
+    }
+
+    // If still no template, try to find one by matching the milestone title
+    if (!email_template_id && milestone_title) {
+        const { data: templates } = await supabaseAdmin
+            .from("email_templates")
+            .select("id, name")
+            .eq("is_active", true)
+        if (templates) {
+            const match = templates.find((t: any) =>
+                t.name.toLowerCase().includes(milestone_title.toLowerCase()) ||
+                milestone_title.toLowerCase().includes(t.name.toLowerCase())
+            )
+            if (match) email_template_id = match.id
+        }
+    }
+
+    if (!email_template_id) {
+        console.log(`[MilestoneEmail Portal] No email template found for milestone "${milestone_title}" — skipping`)
+        return NextResponse.json({ success: true, message: "No email template linked to this milestone" })
+    }
+
+    // Get email template
+    const { data: template } = await supabaseAdmin
+        .from("email_templates")
+        .select("*")
+        .eq("id", email_template_id)
+        .single()
+
+    if (!template?.body) {
+        return NextResponse.json({ success: false, error: "Email template has no content" }, { status: 400 })
+    }
+
+    if (!process.env.RESEND_API_KEY) {
+        return NextResponse.json({ success: false, error: "Email service not configured" }, { status: 500 })
+    }
+
+    const resend = new Resend(process.env.RESEND_API_KEY)
+    const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <onboarding@resend.dev>"
+
+    // Find all deals in the family (purchaser + co-purchasers)
+    let allDealIds: string[] = deal_id ? [deal_id] : []
+    if (deal_id) {
+        allDealIds = await getFamilyDealIds(deal_id)
+    }
+
+    // Send email to each deal's client
+    const results: { email?: string; success: boolean; error?: string }[] = []
+
+    for (const did of allDealIds) {
+        const result = await sendEmailForDeal(did, { title: milestone_title }, template, resend, fromEmail)
+        results.push(result)
+
+        // Mark milestone email_sent on each linked deal's matching milestone
+        if (milestone_id) {
+            try {
+                // Get stage_template_id from the original milestone
+                const { data: origMilestone } = await supabaseAdmin
+                    .from("milestones")
+                    .select("stage_template_id")
+                    .eq("id", milestone_id)
+                    .single()
+
+                if (origMilestone?.stage_template_id) {
+                    await supabaseAdmin
+                        .from("milestones")
+                        .update({ email_sent: true })
+                        .eq("deal_id", did)
+                        .eq("stage_template_id", origMilestone.stage_template_id)
+                }
+            } catch {
+                // Non-blocking
+            }
+        }
+    }
+
+    // Also mark email_sent on the original milestone
+    if (milestone_id) {
+        await supabaseAdmin
+            .from("milestones")
+            .update({ email_sent: true })
+            .eq("id", milestone_id)
+    }
+
+    const successCount = results.filter((r) => r.success).length
+    const failedCount = results.filter((r) => !r.success).length
+
+    console.log(`[MilestoneEmail Portal] Sent to ${successCount} client(s), milestone: "${milestone_title}"`)
+
+    return NextResponse.json({
+        success: true,
+        emails_sent: successCount,
+        emails_failed: failedCount,
+        email_sent_to: results.filter((r) => r.success).map((r) => r.email),
+    })
+}
+
 export async function POST(req: Request) {
     try {
-        const { milestoneId, dealId, sendToLinkedDeals } = await req.json()
+        const body = await req.json()
+
+        // Detect customer portal format (snake_case fields with client_id)
+        if (body.client_id) {
+            return handlePortalRequest(body)
+        }
+
+        // Admin panel format (camelCase fields)
+        const milestoneId = body.milestoneId ?? body.milestone_id
+        const dealId = body.dealId ?? body.deal_id
+        const sendToLinkedDeals = body.sendToLinkedDeals ?? false
+
+        if (!milestoneId) {
+            return NextResponse.json({ success: false, error: "milestoneId is required" }, { status: 400 })
+        }
 
         // 1. Get milestone
         const { data: milestone } = await supabaseAdmin

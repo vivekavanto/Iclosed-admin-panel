@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Deal, DealType, DealStatus } from '../types';
-import { Search } from 'lucide-react';
+import { Search, Trash2 } from 'lucide-react';
 
 interface DealListProps {
   onSelectDeal?: (dealId: string) => void;
@@ -69,8 +69,8 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
       const closing = deal.closingDate ? new Date(deal.closingDate) : null;
       if (!closing) return false;
       closing.setHours(0, 0, 0, 0);
-      if (dateFrom) { const from = new Date(dateFrom); from.setHours(0,0,0,0); if (closing < from) return false; }
-      if (dateTo) { const to = new Date(dateTo); to.setHours(23,59,59,999); if (closing > to) return false; }
+      if (dateFrom) { const from = new Date(dateFrom); from.setHours(0, 0, 0, 0); if (closing < from) return false; }
+      if (dateTo) { const to = new Date(dateTo); to.setHours(23, 59, 59, 999); if (closing > to) return false; }
     }
     return true;
   });
@@ -100,6 +100,26 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
     if (!dateString) return '';
     const date = new Date(dateString);
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  };
+
+
+  const handleDelete = async (dealId: string) => {
+    const confirmDelete = window.confirm("Are you sure you want to delete this deal?");
+    if (!confirmDelete) return;
+
+    try {
+      const res = await fetch(`/api/admin/deals/${dealId}`, {
+        method: "DELETE",
+      });
+
+      if (!res.ok) throw new Error("Delete failed");
+
+      // remove from UI
+      setDeals((prev) => prev.filter((d) => d.id !== dealId));
+    } catch (err) {
+      console.error("Delete error:", err);
+      alert("Failed to delete deal");
+    }
   };
 
   return (
@@ -133,6 +153,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           <div><label className="block text-xs text-slate-500 mb-1">Lawyer</label><select className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"><option>Choose a lawyer</option></select></div>
           <div><label className="block text-xs text-slate-500 mb-1">Clerk</label><select className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"><option>Suganya Argeen</option></select></div>
           <div><label className="block text-xs text-slate-500 mb-1">File status</label><select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"><option value="">Choose a status</option><option value="Active">Active</option><option value="Closed">Closed</option></select></div>
+
         </div>
       </div>
 
@@ -150,6 +171,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
               <th className="px-4 py-3 w-32">Requisition date</th>
               <th className="px-4 py-3 w-40">Steps</th>
               <th className="px-4 py-3 w-32">File status</th>
+              <th className="px-4 py-3 w-16 text-center">Action</th>
             </tr>
           </thead>
           <tbody>
@@ -194,6 +216,18 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                     </div>
                   </td>
                   <td className="px-4 py-3">{deal.status === DealStatus.CLOSED ? (<span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 text-green-700 border border-green-200 shadow-sm"><span className="mr-1">✓</span> Closed</span>) : (<span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-white text-green-600 border border-green-400">Active</span>)}</td>
+                  <td className="px-4 py-3 text-center">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDelete(deal.id);
+                      }}
+                      className="text-slate-300 hover:text-red-500 transition-colors p-1"
+                      title="Delete deal"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </td>
                 </tr>
               );
             }) : (

@@ -53,8 +53,19 @@ async function syncMilestoneToLinkedDeals(
   milestone: Record<string, any>,
   updates: Record<string, any>,
 ) {
-  const { deal_id, stage_template_id } = milestone;
+  const { id: milestoneId, deal_id, stage_template_id } = milestone;
   if (!deal_id || !stage_template_id) return;
+
+  // Only sync milestones that have shared tasks under them.
+  // Personal milestones (e.g., Personal Information, Identification) should NOT sync.
+  const { data: sharedTasksUnder } = await supabase
+    .from("tasks")
+    .select("id")
+    .eq("milestone_id", milestoneId)
+    .eq("is_shared", true)
+    .limit(1);
+
+  if (!sharedTasksUnder || sharedTasksUnder.length === 0) return;
 
   const familyDealIds = await getFamilyDealIds(deal_id);
   const linkedDealIds = familyDealIds.filter((id) => id !== deal_id);

@@ -8,7 +8,6 @@ import {
   Key,
   User as UserIcon,
   Building2,
-  Check,
   ExternalLink,
   Send,
   ChevronDown,
@@ -31,6 +30,7 @@ import {
   Zap,
   Users,
   Link2,
+  Trash2,
 } from "lucide-react";
 
 interface LeadUser {
@@ -66,10 +66,6 @@ interface LeadUser {
   sellingAddressPostalCode?: string;
   sellingAddressProvince?: string;
   parentLeadId?: string | null;
-  addressMatchFlag?: {
-    matched_lead_id?: string;
-    status?: "pending" | "approved" | "dismissed";
-  } | null;
 }
 
 const Leads: React.FC = () => {
@@ -106,13 +102,6 @@ const Leads: React.FC = () => {
     { id: string; name: string; body: string }[]
   >([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
-
-  // Co-purchaser action state
-  const [coPurchaserActioning, setCoPurchaserActioning] = useState(false);
-  const [coPurchaserResult, setCoPurchaserResult] = useState<{
-    success: boolean;
-    message: string;
-  } | null>(null);
 
   const [expandedSections, setExpandedSections] = useState<string[]>([
     "personal",
@@ -153,7 +142,6 @@ const Leads: React.FC = () => {
     sellingAddressPostalCode: l.selling_address_postal_code,
     sellingAddressProvince: l.selling_address_province,
     parentLeadId: l.parent_lead_id ?? null,
-    addressMatchFlag: l.address_match_flag ?? null,
   });
 
   // ── Fetch leads from local admin API ─────────────────────
@@ -188,7 +176,6 @@ const Leads: React.FC = () => {
   const openLead = (lead: LeadUser) => {
     setSelectedLead(lead);
     setConvertResult(null);
-    setCoPurchaserResult(null);
     setView("DETAIL");
   };
 
@@ -197,88 +184,20 @@ const Leads: React.FC = () => {
     return match ? `${match.firstName} ${match.lastName}` : null;
   };
 
-  // ── Co-purchaser actions ──────────────────────────────────────────────────
-  async function handleApproveCoPurchaser() {
-    if (!selectedLead) return;
-    setCoPurchaserActioning(true);
-    setCoPurchaserResult(null);
+  const handleDeleteLead = async (leadId: string, name: string) => {
+    if (!confirm(`Delete lead "${name}"?`)) return;
     try {
-      const res = await fetch("/api/admin/link-co-purchaser", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lead_id: selectedLead.id }),
-      });
+      const res = await fetch(`/api/admin/leads?id=${leadId}`, { method: "DELETE" });
       const data = await res.json();
       if (data.success) {
-        setCoPurchaserResult({
-          success: true,
-          message: "Co-purchaser approved and linked successfully.",
-        });
-        // Re-fetch leads to pick up parent_lead_id set by the portal
-        const refreshRes = await fetch("/api/admin/leads");
-        const refreshData = await refreshRes.json();
-        if (refreshData.success) {
-          const mapped: LeadUser[] = (refreshData.leads ?? []).map(mapLead);
-          setLeads(mapped);
-          const updated = mapped.find((l) => l.id === selectedLead.id);
-          if (updated) setSelectedLead(updated);
-        }
+        setLeads((prev) => prev.filter((l) => l.id !== leadId));
       } else {
-        setCoPurchaserResult({
-          success: false,
-          message: data.error ?? "Failed to approve co-purchaser.",
-        });
+        alert("Failed to delete lead: " + (data.error ?? "Unknown error"));
       }
     } catch {
-      setCoPurchaserResult({
-        success: false,
-        message: "Network error. Please try again.",
-      });
-    } finally {
-      setCoPurchaserActioning(false);
+      alert("Error deleting lead.");
     }
-  }
-
-  async function handleDismissCoPurchaser() {
-    if (!selectedLead) return;
-    setCoPurchaserActioning(true);
-    setCoPurchaserResult(null);
-    try {
-      const res = await fetch("/api/admin/link-co-purchaser", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lead_id: selectedLead.id }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setCoPurchaserResult({
-          success: true,
-          message: "Address match dismissed.",
-        });
-        const updatedFlag = { ...selectedLead.addressMatchFlag, status: "dismissed" as const };
-        setLeads((prev) =>
-          prev.map((l) =>
-            l.id === selectedLead.id ? { ...l, addressMatchFlag: updatedFlag } : l,
-          ),
-        );
-        setSelectedLead((prev) =>
-          prev ? { ...prev, addressMatchFlag: updatedFlag } : null,
-        );
-      } else {
-        setCoPurchaserResult({
-          success: false,
-          message: data.error ?? "Failed to dismiss match.",
-        });
-      }
-    } catch {
-      setCoPurchaserResult({
-        success: false,
-        message: "Network error. Please try again.",
-      });
-    } finally {
-      setCoPurchaserActioning(false);
-    }
-  }
+  };
 
   const toggleSection = (id: string) => {
     setExpandedSections((prev) =>
@@ -577,29 +496,6 @@ const Leads: React.FC = () => {
             >
               <Send size={14} /> Send Email
             </button>
-            {selectedLead.addressMatchFlag?.status === "pending" && (
-              <>
-                <button
-                  onClick={handleApproveCoPurchaser}
-                  disabled={coPurchaserActioning}
-                  className="flex items-center gap-2 px-6 py-2.5 bg-amber-500 text-white rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-amber-600 transition-all shadow-lg active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  {coPurchaserActioning ? (
-                    <Loader2 size={14} className="animate-spin" />
-                  ) : (
-                    <Check size={14} />
-                  )}{" "}
-                  Approve Co-Purchaser
-                </button>
-                <button
-                  onClick={handleDismissCoPurchaser}
-                  disabled={coPurchaserActioning}
-                  className="flex items-center gap-2 px-6 py-2.5 bg-slate-400 text-white rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-slate-500 transition-all shadow-lg active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  <X size={14} /> Dismiss Match
-                </button>
-              </>
-            )}
             {/* <button className="flex items-center gap-2 px-6 py-2.5 bg-slate-900 text-white rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-slate-800 transition-all shadow-lg active:scale-95">
               <History size={14} /> View History
             </button> */}
@@ -642,23 +538,6 @@ const Leads: React.FC = () => {
           </div>
         )}
 
-        {/* Co-purchaser Result Banner */}
-        {coPurchaserResult && (
-          <div
-            className={`flex items-center gap-3 px-5 py-4 rounded-xl border text-sm font-semibold ${
-              coPurchaserResult.success
-                ? "bg-green-50 border-green-200 text-green-800"
-                : "bg-red-50 border-red-200 text-red-700"
-            }`}
-          >
-            {coPurchaserResult.success ? (
-              <CheckCircle2 size={18} />
-            ) : (
-              <AlertTriangle size={18} />
-            )}
-            {coPurchaserResult.message}
-          </div>
-        )}
 
         {/* Sections */}
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
@@ -1123,6 +1002,7 @@ const Leads: React.FC = () => {
                 <th className="px-4 py-3 w-24">Lead Type</th>
                 <th className="px-4 py-3 w-28">Price</th>
                 <th className="px-4 py-3 w-28">Status</th>
+                <th className="px-4 py-3 w-16 text-center">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -1141,12 +1021,6 @@ const Leads: React.FC = () => {
                       <span className="font-medium">{lead.firstName} {lead.lastName}</span>
                       {lead.parentLeadId && (
                         <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-100 text-blue-700 border border-blue-200">Co-Purchaser</span>
-                      )}
-                      {lead.addressMatchFlag?.status === "pending" && (
-                        <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-100 text-amber-700 border border-amber-200">Pending</span>
-                      )}
-                      {lead.addressMatchFlag?.status === "approved" && (
-                        <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold bg-green-100 text-green-700 border border-green-200">Linked</span>
                       )}
                     </div>
                   </td>
@@ -1174,11 +1048,20 @@ const Leads: React.FC = () => {
                       </span>
                     )}
                   </td>
+                  <td className="px-4 py-3 text-center">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleDeleteLead(lead.id, `${lead.firstName} ${lead.lastName}`); }}
+                      className="text-slate-300 hover:text-red-500 transition-colors p-1"
+                      title="Delete lead"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </td>
                 </tr>
                 );
               })}
               {filteredLeads.length === 0 && (
-                <tr><td colSpan={6} className="px-6 py-12 text-center text-slate-500"><p>No leads found.</p></td></tr>
+                <tr><td colSpan={7} className="px-6 py-12 text-center text-slate-500"><p>No leads found.</p></td></tr>
               )}
             </tbody>
           </table>

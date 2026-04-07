@@ -154,16 +154,34 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       }),
     );
 
+    // Update all tasks under this milestone to match the new status
+    const milestoneTasks = tasks.filter((t) => t.milestoneId === id);
+    const hasSharedTasks = milestoneTasks.some((t) => t.isShared);
     if (newStatus === "Completed") {
+      // Mark all pending/in-progress tasks under this milestone as completed
+      for (const task of milestoneTasks) {
+        if (task.status !== "Completed") {
+          await fetch("/api/admin/tasks", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              id: task.id,
+              status: "Completed",
+              completed: true,
+              completed_at: new Date().toISOString(),
+            }),
+          });
+        }
+      }
+
       const milestone = milestones.find((m) => m.id === id);
       if (milestone?.emailTemplateId) {
-        // Send email + update status (the email API handles completed_at)
-        // Always send to linked deals so co-purchasers get the email too
+        // Send email — only send to linked deals if milestone has shared tasks
         try {
           const res = await fetch("/api/admin/send-milestone-email", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ milestoneId: id, dealId: deal.id, sendToLinkedDeals: true }),
+            body: JSON.stringify({ milestoneId: id, dealId: deal.id, sendToLinkedDeals: hasSharedTasks }),
           });
           const data = await res.json();
           if (data.success) {
@@ -186,6 +204,22 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         });
       }
     } else {
+      // Reset tasks under this milestone to match the new status
+      for (const task of milestoneTasks) {
+        if (task.status === "Completed") {
+          await fetch("/api/admin/tasks", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              id: task.id,
+              status: newStatus === "In Progress" ? "In Progress" : "Pending",
+              completed: false,
+              completed_at: null,
+            }),
+          });
+        }
+      }
+
       // Moving away from Completed — clear completed_at and reset email_sent
       await fetch("/api/admin/milestones", {
         method: "PATCH",
@@ -206,11 +240,14 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     const res = await fetch("/api/admin/send-milestone-email", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ milestoneId, dealId: deal.id }),
+      body: JSON.stringify({ milestoneId, dealId: deal.id, sendToLinkedDeals: true }),
     });
     const data = await res.json();
     if (data.success) {
-      showToast(data.alreadySent ? "Email was already sent for this milestone." : "Milestone email sent successfully!");
+      const linkedMsg = data.linked_emails_sent > 0
+        ? ` (also sent to ${data.linked_emails_sent} linked deal${data.linked_emails_sent > 1 ? "s" : ""})`
+        : "";
+      showToast(data.alreadySent ? "Email was already sent for this milestone." : `Milestone email sent successfully!${linkedMsg}`);
       await refetchData();
     } else {
       showToast(data.error || "Failed to send milestone email", "error");

@@ -9,7 +9,7 @@ const supabase = createClient(
 export async function GET() {
   const { data, error } = await supabase
     .from("deals")
-    .select("*, tasks(id, status), leads!lead_id(id, parent_lead_id, first_name, last_name)")
+    .select("*, tasks(id, status), leads(id, parent_lead_id, first_name, last_name)")
     .order("created_at", { ascending: false });
 
   if (error) {
