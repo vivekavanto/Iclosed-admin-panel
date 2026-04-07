@@ -131,7 +131,10 @@ async function convertSingleLeadToDeal(
       let maxNum = 0;
       if (allDeals) {
         for (const d of allDeals) {
-          const numPart = parseInt(d.file_number.replace(prefix, ""), 10);
+          const suffix = d.file_number.replace(prefix, "");
+          // Only count purely numeric suffixes (skip old UUID-based ones like "A3F2")
+          if (!/^\d+$/.test(suffix)) continue;
+          const numPart = parseInt(suffix, 10);
           if (!isNaN(numPart) && numPart > maxNum) maxNum = numPart;
         }
       }
