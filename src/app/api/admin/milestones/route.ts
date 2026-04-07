@@ -69,15 +69,7 @@ async function syncMilestoneToLinkedDeals(
 
   const familyMilestoneIds = familyMilestones?.map(m => m.id) || [milestoneId];
 
-  // Only sync milestones that have shared tasks under them.
-  const { data: sharedTasksUnder } = await supabase
-    .from("tasks")
-    .select("id")
-    .in("milestone_id", familyMilestoneIds)
-    .eq("is_shared", true)
-    .limit(1);
 
-  if (!sharedTasksUnder || sharedTasksUnder.length === 0) return;
 
   const syncPayload: Record<string, any> = {};
   if (updates.status !== undefined) syncPayload.status = updates.status;

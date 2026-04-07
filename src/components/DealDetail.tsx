@@ -181,7 +181,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           const res = await fetch("/api/admin/send-milestone-email", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ milestoneId: id, dealId: deal.id, sendToLinkedDeals: hasSharedTasks }),
+            body: JSON.stringify({ milestoneId: id, dealId: deal.id, sendToLinkedDeals: true }),
           });
           const data = await res.json();
           if (data.success) {
@@ -322,7 +322,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
               body: JSON.stringify({
                 milestoneId,
                 dealId: deal.id,
-                sendToLinkedDeals: hasSharedTasks,
+                sendToLinkedDeals: true,
               }),
             });
             const data = await res.json();
