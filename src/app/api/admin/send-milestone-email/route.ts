@@ -103,6 +103,7 @@ async function sendEmailForDeal(
 
         const { data: sendResult, error: sendError } = await resend.emails.send({
             from: fromEmail,
+            replyTo: "support@iclosed.ca",
             to: [client.email],
             subject: template.name || "Milestone Completed",
             html: htmlBody,
@@ -181,7 +182,7 @@ async function handlePortalRequest(body: Record<string, any>) {
     }
 
     const resend = new Resend(process.env.RESEND_API_KEY)
-    const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <onboarding@resend.dev>"
+    const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <noreply@iclosed.ca>"
 
     // Find all deals in the family (purchaser + co-purchasers)
     let allDealIds: string[] = deal_id ? [deal_id] : []
@@ -315,7 +316,7 @@ export async function POST(req: Request) {
         }
 
         const resend = new Resend(process.env.RESEND_API_KEY)
-        const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <onboarding@resend.dev>"
+        const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <noreply@iclosed.ca>"
 
         // 6. Send email to primary deal's client
         const primaryResult = await sendEmailForDeal(dealId, milestone, template, resend, fromEmail)

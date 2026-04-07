@@ -240,10 +240,11 @@ iClosed by Nava Wilson`;
 
     // Send via Resend
     const fromEmail =
-      process.env.RESEND_FROM_EMAIL || "iClosed <onboarding@resend.dev>";
+      process.env.RESEND_FROM_EMAIL || "iClosed <noreply@iclosed.ca>";
 
     const { data: sendResult, error: sendError } = await resend.emails.send({
       from: fromEmail,
+      replyTo: "support@iclosed.ca",
       to: [lead.email],
       subject,
       html: htmlBody,
