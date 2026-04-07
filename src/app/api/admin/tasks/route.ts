@@ -61,6 +61,37 @@ export async function GET(req: Request) {
   if (sharedErr) return NextResponse.json({ error: sharedErr.message }, { status: 500 });
   if (personalErr) return NextResponse.json({ error: personalErr.message }, { status: 500 });
 
+  if (dealId !== primaryDealId && sharedTasks && sharedTasks.length > 0) {
+    try {
+      const { data: familyMilestones } = await supabase
+        .from("milestones")
+        .select("id, deal_id, stage_template_id")
+        .in("deal_id", [dealId, primaryDealId]);
+
+      if (familyMilestones) {
+        const primaryMsMap = new Map();
+        const localMsMap = new Map();
+
+        familyMilestones.forEach(m => {
+          if (m.deal_id === primaryDealId) primaryMsMap.set(m.id, m.stage_template_id);
+          if (m.deal_id === dealId) localMsMap.set(m.stage_template_id, m.id);
+        });
+
+        for (const task of sharedTasks) {
+          if (task.milestone_id) {
+            const templId = primaryMsMap.get(task.milestone_id);
+            if (templId) {
+              const localId = localMsMap.get(templId);
+              if (localId) {
+                task.milestone_id = localId;
+              }
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+
   return NextResponse.json([...(sharedTasks ?? []), ...(personalTasks ?? [])]);
 }
 
@@ -108,6 +139,8 @@ export async function PATCH(req: Request) {
     const updates: Record<string, any> = {};
     if (status !== undefined) updates.status = status;
     if (completed !== undefined) updates.completed = completed;
+    if (body.completed_at !== undefined) updates.completed_at = body.completed_at;
+    if (body.due_date !== undefined) updates.due_date = body.due_date;
     if (document_url !== undefined) updates.document_url = document_url;
 
     // Nothing to update

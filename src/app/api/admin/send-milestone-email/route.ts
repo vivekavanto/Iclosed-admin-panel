@@ -276,6 +276,15 @@ export async function POST(req: Request) {
             })
             .eq("id", milestoneId)
 
+        await supabaseAdmin
+            .from("tasks")
+            .update({
+                status: "Completed",
+                completed: true,
+                completed_at: new Date().toISOString(),
+            })
+            .eq("milestone_id", milestoneId)
+
         // 3. If no email template linked, just mark completed
         if (!milestone.email_template_id) {
             return NextResponse.json({ success: true, message: "Status updated, no email template linked" })
@@ -340,6 +349,15 @@ export async function POST(req: Request) {
                             .from("milestones")
                             .update({ status: "Completed", completed_at: new Date(), email_sent: true })
                             .eq("id", linkedMilestones.id)
+
+                        await supabaseAdmin
+                            .from("tasks")
+                            .update({
+                                status: "Completed",
+                                completed: true,
+                                completed_at: new Date().toISOString(),
+                            })
+                            .eq("milestone_id", linkedMilestones.id)
                     }
                 } catch {
                     // Non-blocking

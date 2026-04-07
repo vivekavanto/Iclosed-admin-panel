@@ -56,20 +56,28 @@ async function syncMilestoneToLinkedDeals(
   const { id: milestoneId, deal_id, stage_template_id } = milestone;
   if (!deal_id || !stage_template_id) return;
 
+  const familyDealIds = await getFamilyDealIds(deal_id);
+  const linkedDealIds = familyDealIds.filter((id) => id !== deal_id);
+  if (linkedDealIds.length === 0) return;
+
+  // Find the milestones in the family with the same stage_template_id
+  const { data: familyMilestones } = await supabase
+    .from("milestones")
+    .select("id")
+    .eq("stage_template_id", stage_template_id)
+    .in("deal_id", familyDealIds);
+
+  const familyMilestoneIds = familyMilestones?.map(m => m.id) || [milestoneId];
+
   // Only sync milestones that have shared tasks under them.
-  // Personal milestones (e.g., Personal Information, Identification) should NOT sync.
   const { data: sharedTasksUnder } = await supabase
     .from("tasks")
     .select("id")
-    .eq("milestone_id", milestoneId)
+    .in("milestone_id", familyMilestoneIds)
     .eq("is_shared", true)
     .limit(1);
 
   if (!sharedTasksUnder || sharedTasksUnder.length === 0) return;
-
-  const familyDealIds = await getFamilyDealIds(deal_id);
-  const linkedDealIds = familyDealIds.filter((id) => id !== deal_id);
-  if (linkedDealIds.length === 0) return;
 
   const syncPayload: Record<string, any> = {};
   if (updates.status !== undefined) syncPayload.status = updates.status;
@@ -77,18 +85,39 @@ async function syncMilestoneToLinkedDeals(
   if (updates.email_sent !== undefined) syncPayload.email_sent = updates.email_sent;
   if (updates.milestone_date !== undefined) syncPayload.milestone_date = updates.milestone_date;
 
-  if (Object.keys(syncPayload).length === 0) return;
+  if (Object.keys(syncPayload).length > 0) {
+    const { error } = await supabase
+      .from("milestones")
+      .update(syncPayload)
+      .eq("stage_template_id", stage_template_id)
+      .in("deal_id", linkedDealIds);
 
-  const { error } = await supabase
-    .from("milestones")
-    .update(syncPayload)
-    .eq("stage_template_id", stage_template_id)
-    .in("deal_id", linkedDealIds);
+    if (error) {
+      console.error("[MilestoneSync] Failed:", error.message);
+    } else {
+      console.log(`[MilestoneSync] Synced milestone (template: ${stage_template_id}) to ${linkedDealIds.length} linked deal(s)`);
+    }
+  }
 
-  if (error) {
-    console.error("[MilestoneSync] Failed:", error.message);
-  } else {
-    console.log(`[MilestoneSync] Synced milestone (template: ${stage_template_id}) to ${linkedDealIds.length} linked deal(s)`);
+  // Cascade the status to the tasks under the linked milestones
+  if (updates.status) {
+    const isCompleted = updates.status === "Completed";
+    const linkedMilestoneIds = familyMilestoneIds.filter(id => id !== milestoneId);
+    
+    if (linkedMilestoneIds.length > 0) {
+      const taskUpdatePayload: Record<string, any> = {
+        status: updates.status,
+        completed: isCompleted,
+        completed_at: isCompleted ? (updates.completed_at || new Date().toISOString()) : null,
+      };
+      
+      const { error: taskError } = await supabase
+        .from("tasks")
+        .update(taskUpdatePayload)
+        .in("milestone_id", linkedMilestoneIds);
+        
+      if (taskError) console.error("[MilestoneSync Tasks] Failed:", taskError.message);
+    }
   }
 }
 
