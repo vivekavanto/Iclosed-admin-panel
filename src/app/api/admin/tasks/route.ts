@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
+import { getFamilyDealIds } from "@/lib/familyDeals";
 
 const supabase = supabaseAdmin;
 
@@ -191,10 +192,36 @@ export async function PATCH(req: Request) {
         // Non-blocking: fallback to existingTask.deal_id
       }
 
+      // Update the primary deal's shared task (single source of truth)
       updateQuery = updateQuery
         .eq("deal_id", primaryDealId)
         .eq("task_template_id", existingTask.task_template_id)
         .eq("is_shared", true);
+
+      const { data, error } = await updateQuery.select().single();
+
+      if (error) {
+        return NextResponse.json({ success: false, error: error.message }, { status: 400 });
+      }
+
+      // Also sync to ALL other family deals' shared tasks
+      try {
+        const familyDealIds = await getFamilyDealIds(primaryDealId);
+        const otherDealIds = familyDealIds.filter((did) => did !== primaryDealId);
+
+        if (otherDealIds.length > 0) {
+          await supabase
+            .from("tasks")
+            .update(updates)
+            .eq("task_template_id", existingTask.task_template_id)
+            .eq("is_shared", true)
+            .in("deal_id", otherDealIds);
+        }
+      } catch {
+        // Non-blocking
+      }
+
+      return NextResponse.json({ success: true, data });
     } else {
       const effectiveAssignee = assignee ?? existingTask.assignee;
       if (effectiveAssignee) {

@@ -16,11 +16,18 @@
 @layer base {
   html {
     @apply scroll-smooth antialiased;
+    color-scheme: light;
   }
 
   body {
     @apply bg-slate-50 text-slate-900;
     font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", sans-serif;
+  }
+
+  /* Force light styling on all form controls regardless of system dark mode */
+  input, textarea, select {
+    @apply bg-white text-slate-900;
+    color-scheme: light;
   }
 }
 
