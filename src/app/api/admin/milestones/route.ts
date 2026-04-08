@@ -1,49 +1,8 @@
 import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
+import { getFamilyDealIds } from "@/lib/familyDeals";
 
 const supabase = supabaseAdmin;
-
-/**
- * Finds all deal IDs in the same co-purchaser family as the given deal.
- */
-async function getFamilyDealIds(dealId: string): Promise<string[]> {
-  try {
-    const { data: deal } = await supabase
-      .from("deals")
-      .select("lead_id")
-      .eq("id", dealId)
-      .single();
-
-    if (!deal?.lead_id) return [dealId];
-
-    const { data: lead } = await supabase
-      .from("leads")
-      .select("id, parent_lead_id")
-      .eq("id", deal.lead_id)
-      .single();
-
-    if (!lead) return [dealId];
-
-    const rootLeadId = lead.parent_lead_id ?? lead.id;
-
-    const { data: familyLeads } = await supabase
-      .from("leads")
-      .select("id")
-      .or(`id.eq.${rootLeadId},parent_lead_id.eq.${rootLeadId}`);
-
-    if (!familyLeads || familyLeads.length <= 1) return [dealId];
-
-    const { data: familyDeals } = await supabase
-      .from("deals")
-      .select("id")
-      .in("lead_id", familyLeads.map((l) => l.id));
-
-    if (!familyDeals) return [dealId];
-    return familyDeals.map((d) => d.id);
-  } catch {
-    return [dealId];
-  }
-}
 
 /**
  * Syncs a milestone status update to matching milestones in all linked deals.
@@ -103,11 +62,13 @@ async function syncMilestoneToLinkedDeals(
         completed_at: isCompleted ? (updates.completed_at || new Date().toISOString()) : null,
       };
       
+      // Only cascade to shared tasks on linked deals — personal tasks are independent per person
       const { error: taskError } = await supabase
         .from("tasks")
         .update(taskUpdatePayload)
-        .in("milestone_id", linkedMilestoneIds);
-        
+        .in("milestone_id", linkedMilestoneIds)
+        .eq("is_shared", true);
+
       if (taskError) console.error("[MilestoneSync Tasks] Failed:", taskError.message);
     }
   }

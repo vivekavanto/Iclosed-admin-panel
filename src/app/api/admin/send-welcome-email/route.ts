@@ -4,20 +4,6 @@ import { Resend } from "resend";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-const RESOURCE_LINKS = [
-  {
-    text: "Why Do you Need Title Insurance?",
-    url: "https://navawilson.law/title-insurance",
-  },
-  {
-    text: "Understanding Real Estate Transaction Costs",
-    url: "https://navawilson.law/transaction-costs",
-  },
-  {
-    text: "What Are Disbursements?",
-    url: "https://navawilson.law/disbursements",
-  },
-];
 
 const DEFAULT_WELCOME_BODY = `Hi {{ user.first_name }},
 
@@ -94,71 +80,10 @@ function interpolateVariables(text: string, lead: any): string {
 }
 
 function buildHtmlEmail(bodyText: string): string {
-  let text = bodyText;
-
-  // Build resource links block
-  const linksHtml = RESOURCE_LINKS.map(
-    (link) =>
-      `<li><a href="${link.url}">${link.text}</a></li>`
-  ).join("\n");
-  const linksBlock = `<ul>\n${linksHtml}\n</ul>`;
-
-  // Replace {{RESOURCE_LINKS}} placeholder
-  if (text.includes("{{RESOURCE_LINKS}}")) {
-    text = text.replace("{{RESOURCE_LINKS}}", linksBlock);
-  }
-
-  // Replace bullet lines (•, -, *) or plain-text lines that match resource links with markers
-  for (const link of RESOURCE_LINKS) {
-    const escapedText = link.text.replace(/[?]/g, "\\?");
-    const bulletRegex = new RegExp(`^[•\\-\\*]\\s*${escapedText}\\s*$`, "mi");
-    text = text.replace(bulletRegex, `BULLET_LINK::${link.text}::${link.url}`);
-    const plainRegex = new RegExp(`^${escapedText}\\s*$`, "mi");
-    text = text.replace(plainRegex, `BULLET_LINK::${link.text}::${link.url}`);
-  }
-
-  // Convert to HTML
-  const lines = text.split("\n");
-  const htmlParts: string[] = [];
-  let inBulletBlock = false;
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-
-    if (trimmed.startsWith("BULLET_LINK::")) {
-      const [, linkText, url] = trimmed.split("::");
-      if (!inBulletBlock) {
-        htmlParts.push("<ul>");
-        inBulletBlock = true;
-      }
-      htmlParts.push(`<li><a href="${url}">${linkText}</a></li>`);
-      continue;
-    }
-
-    if (inBulletBlock) {
-      htmlParts.push("</ul>");
-      inBulletBlock = false;
-    }
-
-    if (trimmed === "") {
-      // Skip consecutive blank lines
-      const lastPart = htmlParts[htmlParts.length - 1];
-      if (lastPart !== "<br>") {
-        htmlParts.push("<br>");
-      }
-    } else if (trimmed.startsWith("<ul") || trimmed.startsWith("<li") || trimmed.startsWith("</ul")) {
-      htmlParts.push(trimmed);
-    } else {
-      htmlParts.push(`${trimmed}<br>`);
-    }
-  }
-
-  if (inBulletBlock) htmlParts.push("</ul>");
-
   return `
     <div>
-      ${htmlParts.join("\n")}
-        <img src="https://iclosed-admin-panel.vercel.app/logo.png" alt="iClosed by Nava Wilson" style="width:70px;height:auto;" />
+      ${bodyText}
+      <img src="https://iclosed-admin-panel.vercel.app/logo.png" alt="iClosed by Nava Wilson" style="width:70px;height:auto;" />
     </div>
   `;
 }

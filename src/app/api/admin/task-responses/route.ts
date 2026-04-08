@@ -1,47 +1,6 @@
 import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
-
-/**
- * For a given deal, finds all deal IDs in the co-purchaser family.
- */
-async function getFamilyDealIds(dealId: string): Promise<string[]> {
-  try {
-    const { data: deal } = await supabaseAdmin
-      .from("deals")
-      .select("lead_id")
-      .eq("id", dealId)
-      .single();
-
-    if (!deal?.lead_id) return [dealId];
-
-    const { data: lead } = await supabaseAdmin
-      .from("leads")
-      .select("id, parent_lead_id")
-      .eq("id", deal.lead_id)
-      .single();
-
-    if (!lead) return [dealId];
-
-    const rootLeadId = lead.parent_lead_id ?? lead.id;
-
-    const { data: familyLeads } = await supabaseAdmin
-      .from("leads")
-      .select("id")
-      .or(`id.eq.${rootLeadId},parent_lead_id.eq.${rootLeadId}`);
-
-    if (!familyLeads || familyLeads.length <= 1) return [dealId];
-
-    const { data: familyDeals } = await supabaseAdmin
-      .from("deals")
-      .select("id")
-      .in("lead_id", familyLeads.map((l) => l.id));
-
-    if (!familyDeals) return [dealId];
-    return familyDeals.map((d) => d.id);
-  } catch {
-    return [dealId];
-  }
-}
+import { getFamilyDealIds } from "@/lib/familyDeals";
 
 /**
  * For a shared task, finds all task IDs with the same task_template_id

@@ -193,58 +193,9 @@ iClosed by Nava Wilson`;
       emailBody = emailBody.replace("{{RESOURCE_LINKS}}", linksBlock);
     }
 
-    // Replace bullet lines (•, -, *) or plain-text lines that match resource links with markers
-    for (const link of RESOURCE_LINKS) {
-      const escapedText = link.text.replace(/[?]/g, "\\?");
-      const bulletRegex = new RegExp(`^[•\\-\\*]\\s*${escapedText}\\s*$`, "mi");
-      emailBody = emailBody.replace(bulletRegex, `BULLET_LINK::${link.text}::${link.url}`);
-      const plainRegex = new RegExp(`^${escapedText}\\s*$`, "mi");
-      emailBody = emailBody.replace(plainRegex, `BULLET_LINK::${link.text}::${link.url}`);
-    }
-
-    // Convert to HTML
-    const lines = emailBody.split("\n");
-    const htmlParts: string[] = [];
-    let inBulletBlock = false;
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-
-      if (trimmed.startsWith("BULLET_LINK::")) {
-        const [, text, url] = trimmed.split("::");
-        if (!inBulletBlock) {
-          htmlParts.push("<ul>");
-          inBulletBlock = true;
-        }
-        htmlParts.push(`<li><a href="${url}">${text}</a></li>`);
-        continue;
-      }
-
-      if (inBulletBlock) {
-        htmlParts.push("</ul>");
-        inBulletBlock = false;
-      }
-
-      if (trimmed === "") {
-        // Skip consecutive blank lines
-        const lastPart = htmlParts[htmlParts.length - 1];
-        if (lastPart !== "<br>") {
-          htmlParts.push("<br>");
-        }
-      } else if (trimmed.startsWith("<ul") || trimmed.startsWith("<li") || trimmed.startsWith("</ul")) {
-        htmlParts.push(trimmed);
-      } else {
-        htmlParts.push(`${trimmed}<br>`);
-      }
-    }
-
-    if (inBulletBlock) htmlParts.push("</ul>");
-    const htmlLines = htmlParts.join("\n");
-
     const htmlBody = `
       <div>
-        ${htmlLines}
-
+        ${emailBody}
         <img src="https://iclosed-admin-panel.vercel.app/logo.png" alt="iClosed by Nava Wilson" style="width:70px;height:auto;" />
       </div>
     `;

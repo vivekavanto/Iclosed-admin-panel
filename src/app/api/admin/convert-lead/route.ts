@@ -212,6 +212,9 @@ async function convertSingleLeadToDeal(
     const dealId = deal.id;
     const leadType = lead.lead_type ?? "Purchase";
 
+    // Mark lead as Converted immediately after deal creation to prevent duplicate conversions
+    await supabaseAdmin.from("leads").update({ status: "Converted" }).eq("id", leadId);
+
     // ── 6. Copy stage_templates → milestones ────────────────────────────────
     const stageToMilestone: Record<string, string> = {};
 
@@ -437,9 +440,6 @@ async function convertSingleLeadToDeal(
       authError = err.message || "Unknown auth error";
       console.error("[Invite Exception] Invite failed (non-blocking):", err);
     }
-
-    // ── 7. Update lead status ──────────────────────────────────────────────────
-    await supabaseAdmin.from("leads").update({ status: "Converted" }).eq("id", leadId);
 
     return {
       success: true,
