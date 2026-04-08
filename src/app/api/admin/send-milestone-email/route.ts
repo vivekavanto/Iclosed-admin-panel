@@ -335,11 +335,25 @@ export async function POST(req: Request) {
             }
         }
 
-        // 8. Mark email_sent on primary milestone
+        // 8. Mark email_sent on ALL family milestones with same stage_template_id
         await supabaseAdmin
             .from("milestones")
             .update({ email_sent: true })
             .eq("id", milestoneId)
+
+        // Also mark email_sent on all linked deal milestones by stage_template_id
+        if (milestone.stage_template_id && dealId) {
+            try {
+                const allFamilyDealIds = await getFamilyDealIds(dealId)
+                await supabaseAdmin
+                    .from("milestones")
+                    .update({ email_sent: true })
+                    .eq("stage_template_id", milestone.stage_template_id)
+                    .in("deal_id", allFamilyDealIds)
+            } catch {
+                // Non-blocking
+            }
+        }
 
         const totalSent = 1 + linkedResults.filter((r) => r.success).length
         const totalFailed = linkedResults.filter((r) => !r.success).length
