@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import supabaseAdmin from '@/lib/supabaseAdmin';
+import { convertSingleLead } from '@/lib/convertLead';
 
 // GET /api/admin/leads
 export async function GET() {
@@ -37,6 +38,30 @@ export async function GET() {
 
         lead.parent_lead_id = rootLeadId;
         lead.address_match_flag = null;
+
+        // Auto-convert: if the primary lead already has a deal, convert this co-purchaser too
+        try {
+          const { data: primaryDeal } = await supabaseAdmin
+            .from('deals')
+            .select('id, closing_date')
+            .eq('lead_id', rootLeadId)
+            .maybeSingle();
+
+          if (primaryDeal && lead.status !== 'Converted') {
+            // Primary already converted — auto-convert this co-purchaser
+            const result = await convertSingleLead(lead, {
+              closing_date: primaryDeal.closing_date ?? undefined,
+              existingDealBehavior: 'skip',
+            });
+
+            if (result.success && result.created) {
+              lead.status = 'Converted';
+              console.log(`[AutoConvert] Co-purchaser ${lead.email} auto-converted to deal ${result.file_number}`);
+            }
+          }
+        } catch (err) {
+          console.error(`[AutoConvert] Failed for co-purchaser ${lead.email}:`, err);
+        }
       } else {
         // Same email — just clear the flag, don't link
         await supabaseAdmin
