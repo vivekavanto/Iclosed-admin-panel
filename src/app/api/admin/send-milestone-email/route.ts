@@ -69,7 +69,7 @@ async function sendEmailForDeal(
 
         const { data: sendResult, error: sendError } = await resend.emails.send({
             from: fromEmail,
-            replyTo: "support@iclosed.ca",
+            replyTo: "iclosed@navawilson.law",
             to: [client.email],
             subject: template.name || "Milestone Completed",
             html: htmlBody,

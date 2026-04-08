@@ -1,4 +1,5 @@
 import supabaseAdmin from "./supabaseAdmin";
+import { completeApsTask } from "./completeApsTask";
 
 export type ConvertOneResult = {
   success: boolean;
@@ -326,6 +327,15 @@ export async function convertSingleLead(
       }
     } catch (err) {
       console.error("[Convert] Failed to sync shared tasks (non-blocking):", err);
+    }
+
+    // ── Auto-complete APS task if aps_uploaded is already true ─────────────
+    try {
+      if (lead.aps_uploaded === true) {
+        await completeApsTask(dealId);
+      }
+    } catch (err) {
+      console.error("[Convert] Failed to auto-complete APS task (non-blocking):", err);
     }
 
     // ── Create Supabase Auth user + send invite email ────────────────────────
