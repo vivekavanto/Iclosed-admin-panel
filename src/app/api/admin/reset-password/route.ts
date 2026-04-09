@@ -1,6 +1,31 @@
 import { NextResponse } from "next/server";
 import { sendAuthEmailViaResend } from "@/lib/sendAuthEmail";
 
+const ALLOWED_ORIGINS = [
+  "https://iclosed-customer-application-rosy.vercel.app",
+  "http://localhost:3000",
+  "http://localhost:3001",
+];
+
+function corsHeaders(req: Request) {
+  const origin = req.headers.get("origin") ?? "";
+  const allowedOrigin = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
+
+  return {
+    "Access-Control-Allow-Origin": allowedOrigin,
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  };
+}
+
+/**
+ * OPTIONS /api/admin/reset-password
+ * Handle CORS preflight request.
+ */
+export async function OPTIONS(req: Request) {
+  return new NextResponse(null, { status: 204, headers: corsHeaders(req) });
+}
+
 /**
  * POST /api/admin/reset-password
  *
@@ -12,6 +37,8 @@ import { sendAuthEmailViaResend } from "@/lib/sendAuthEmail";
  * Body: { email: string }
  */
 export async function POST(req: Request) {
+  const headers = corsHeaders(req);
+
   try {
     const body = await req.json();
     const { email } = body as { email: string };
@@ -19,7 +46,7 @@ export async function POST(req: Request) {
     if (!email) {
       return NextResponse.json(
         { success: false, error: "email is required" },
-        { status: 400 },
+        { status: 400, headers },
       );
     }
 
@@ -37,21 +64,21 @@ export async function POST(req: Request) {
     if (!result.success) {
       // Return generic message — don't leak whether the email exists
       console.error("[ResetPassword] Error:", result.error);
-      return NextResponse.json({
-        success: true,
-        message: "If an account exists with this email, a reset link has been sent.",
-      });
+      return NextResponse.json(
+        { success: true, message: "If an account exists with this email, a reset link has been sent." },
+        { headers },
+      );
     }
 
-    return NextResponse.json({
-      success: true,
-      message: "If an account exists with this email, a reset link has been sent.",
-    });
+    return NextResponse.json(
+      { success: true, message: "If an account exists with this email, a reset link has been sent." },
+      { headers },
+    );
   } catch (err: any) {
     console.error("POST /api/admin/reset-password error:", err);
-    return NextResponse.json({
-      success: true,
-      message: "If an account exists with this email, a reset link has been sent.",
-    });
+    return NextResponse.json(
+      { success: true, message: "If an account exists with this email, a reset link has been sent." },
+      { headers },
+    );
   }
 }
