@@ -63,7 +63,7 @@ export async function convertSingleLead(
 
     const { data: existingClient } = await supabaseAdmin
       .from("clients")
-      .select("id")
+      .select("id, auth_user_id")
       .eq("email", lead.email)
       .maybeSingle();
 
@@ -354,14 +354,11 @@ export async function convertSingleLead(
         display_name: `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim(),
       };
 
-      // Check if user already exists in Supabase Auth before deciding invite vs recovery.
-      // This matches the original inviteUserByEmail() behavior which returned "user_already_exists".
-      const { data: usersData } = await supabaseAdmin.auth.admin.listUsers();
-      const existingUser = usersData.users.find(
-        (u: any) => u.email?.toLowerCase() === lead.email.toLowerCase(),
-      );
+      // Check if this client already has a Supabase Auth account from a previous conversion.
+      // existingClient.auth_user_id is set during conversion — if present, user is already onboarded.
+      const alreadyOnboarded = !!(existingClient?.auth_user_id);
 
-      if (!existingUser) {
+      if (!alreadyOnboarded) {
         // New user — send invite email via Resend
         const inviteResult = await sendAuthEmailViaResend({
           type: "invite",
@@ -378,9 +375,8 @@ export async function convertSingleLead(
           authError = inviteResult.error;
         }
       } else {
-        // User already exists — link the auth user, send recovery email instead
-        authUserId = existingUser.id;
-        await supabaseAdmin.from("clients").update({ auth_user_id: authUserId }).eq("id", clientId);
+        // User already onboarded — link existing auth user, send recovery email instead
+        authUserId = existingClient.auth_user_id;
 
         const resetResult = await sendAuthEmailViaResend({
           type: "recovery",
