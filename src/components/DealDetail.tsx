@@ -939,7 +939,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                             const docType = (d.doc_type ?? "").toLowerCase();
                             if (titleLower.includes("identification") && docType === "identification") return true;
                             if ((titleLower.includes("agreement") || titleLower.includes("purchase") || titleLower.includes("sale")) && docType === "document") return true;
-                            if (docType === "other" && !titleLower.includes("identification") && !titleLower.includes("agreement") && !titleLower.includes("purchase") && !titleLower.includes("sale")) return true;
+                            if (titleLower.includes("insurance") && docType === "insurance") return true;
                             return false;
                           });
                           return matched.length > 0 ? (

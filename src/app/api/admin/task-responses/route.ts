@@ -106,7 +106,7 @@ export async function GET(req: Request) {
       const allTaskIds = await getSharedTaskIds(taskId);
       const { data: taskRows } = await supabaseAdmin
         .from("tasks")
-        .select("id, is_shared, task_template_id")
+        .select("id, deal_id, is_shared, task_template_id")
         .in("id", allTaskIds);
 
       const taskMap = new Map((taskRows ?? []).map((task) => [task.id, task]));
@@ -119,6 +119,39 @@ export async function GET(req: Request) {
 
       if (error) {
         return NextResponse.json({ error: error.message }, { status: 500 });
+      }
+
+      // Resolve missing file URLs from lead_corporate_docs
+      const hasNullUrls = (data ?? []).some((item) => item.field_type === "file" && !item.file_url && item.file_name);
+      if (hasNullUrls && sourceTask?.deal_id) {
+        const { data: dealRow } = await supabaseAdmin
+          .from("deals")
+          .select("lead_id")
+          .eq("id", sourceTask.deal_id)
+          .single();
+
+        if (dealRow?.lead_id) {
+          // Get lead_corporate_docs from all family leads (for shared tasks)
+          const leadIds = new Set<string>();
+          for (const task of taskRows ?? []) {
+            const { data: d } = await supabaseAdmin.from("deals").select("lead_id").eq("id", task.deal_id).single();
+            if (d?.lead_id) leadIds.add(d.lead_id);
+          }
+
+          const { data: docs } = await supabaseAdmin
+            .from("lead_corporate_docs")
+            .select("file_name, file_url")
+            .in("lead_id", [...leadIds]);
+
+          if (docs?.length) {
+            const docMap = new Map(docs.map((doc) => [doc.file_name, doc.file_url]));
+            for (const item of data ?? []) {
+              if (!item.file_url && item.file_name) {
+                item.file_url = docMap.get(item.file_name) ?? null;
+              }
+            }
+          }
+        }
       }
 
       if (!sourceTask?.is_shared || !sourceTask.task_template_id) {
