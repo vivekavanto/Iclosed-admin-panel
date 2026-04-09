@@ -82,7 +82,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
   // Documents modal state
   const [showDocuments, setShowDocuments] = useState(false);
-  const [dealDocuments, setDealDocuments] = useState<{ task_id: string; file_name: string; file_url: string; task_title: string }[]>([]);
+  const [dealDocuments, setDealDocuments] = useState<{ id: string; file_name: string; file_url: string; doc_type: string }[]>([]);
   const [loadingDocs, setLoadingDocs] = useState(false);
 
   // Drag and Drop State
@@ -115,9 +115,11 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   };
 
   const fetchDealDocuments = async () => {
+    const leadId = rawDeal?.lead_id;
+    if (!leadId) { setDealDocuments([]); return; }
     setLoadingDocs(true);
     try {
-      const res = await fetch(`/api/admin/task-responses?deal_id=${deal.id}`);
+      const res = await fetch(`/api/admin/lead-docs?lead_id=${leadId}`);
       const data = await res.json();
       if (Array.isArray(data)) setDealDocuments(data);
     } catch {
@@ -669,11 +671,13 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
 
   useEffect(() => {
-    fetch(`/api/admin/task-responses?deal_id=${deal.id}`)
+    const leadId = rawDeal?.lead_id;
+    if (!leadId) return;
+    fetch(`/api/admin/lead-docs?lead_id=${leadId}`)
       .then(res => res.json())
       .then(data => { if (Array.isArray(data)) setTaskFileDocs(data); })
       .catch(() => { });
-  }, [deal.id]);
+  }, [deal.id, rawDeal?.lead_id]);
 
   return (
     <div className="flex flex-col h-full bg-slate-50">
@@ -930,7 +934,14 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                         {task.isTemplate ? (
                           <span className="text-slate-300 text-xs">-</span>
                         ) : (() => {
-                          const matched = taskFileDocs.filter(d => d.task_id === task.id);
+                          const titleLower = task.title.toLowerCase();
+                          const matched = taskFileDocs.filter((d: any) => {
+                            const docType = (d.doc_type ?? "").toLowerCase();
+                            if (titleLower.includes("identification") && docType === "identification") return true;
+                            if ((titleLower.includes("agreement") || titleLower.includes("purchase") || titleLower.includes("sale")) && docType === "document") return true;
+                            if (docType === "other" && !titleLower.includes("identification") && !titleLower.includes("agreement") && !titleLower.includes("purchase") && !titleLower.includes("sale")) return true;
+                            return false;
+                          });
                           return matched.length > 0 ? (
                             <button
                               type="button"
@@ -1576,17 +1587,20 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                 <div className="space-y-5">
                   {Object.entries(
                     dealDocuments.reduce((acc: Record<string, any[]>, doc) => {
-                      const key = doc.task_title || "Unknown Task";
-                      if (!acc[key]) acc[key] = [];
-                      acc[key].push(doc);
+                      const docType = doc.doc_type || "Other";
+                      const label = docType === "identification" ? "Identification Documents"
+                        : docType === "document" ? "Agreement / Purchase Documents"
+                        : "Other Documents";
+                      if (!acc[label]) acc[label] = [];
+                      acc[label].push(doc);
                       return acc;
                     }, {})
-                  ).map(([taskTitle, docs]) => (
-                    <div key={taskTitle}>
-                      <h4 className="text-sm font-bold text-slate-700 mb-2">{taskTitle}</h4>
+                  ).map(([groupLabel, docs]) => (
+                    <div key={groupLabel}>
+                      <h4 className="text-sm font-bold text-slate-700 mb-2">{groupLabel}</h4>
                       <ul className="space-y-2">
                         {docs.map((doc: any, idx: number) => (
-                          <li key={`${doc.task_id}-${idx}`} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
+                          <li key={`${doc.id}-${idx}`} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
                             <div className="flex items-center gap-3 min-w-0">
                               <FileText size={16} className="text-slate-400 shrink-0" />
                               <p className="text-sm font-medium text-slate-800 truncate">{doc.file_name}</p>
