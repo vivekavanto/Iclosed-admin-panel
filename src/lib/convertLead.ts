@@ -363,31 +363,27 @@ export async function convertSingleLead(
       });
 
       if (inviteResult.success && inviteResult.userId) {
+        // New user — invite email sent successfully
         authUserId = inviteResult.userId;
         inviteSent = true;
         await supabaseAdmin.from("clients").update({ auth_user_id: authUserId }).eq("id", clientId);
-      } else if (inviteResult.error?.includes("already been registered")) {
-        // User already exists — link the existing auth user, then send recovery email
-        const { data: usersData } = await supabaseAdmin.auth.admin.listUsers();
-        const existingUser = usersData.users.find(
-          (u: any) => u.email?.toLowerCase() === lead.email.toLowerCase(),
-        );
-
-        if (existingUser) {
-          authUserId = existingUser.id;
+      } else if (inviteResult.userAlreadyExists) {
+        // User already exists — link the auth user, then send recovery email instead
+        authUserId = inviteResult.userId ?? null;
+        if (authUserId) {
           await supabaseAdmin.from("clients").update({ auth_user_id: authUserId }).eq("id", clientId);
+        }
 
-          const resetResult = await sendAuthEmailViaResend({
-            type: "recovery",
-            email: lead.email,
-            redirectTo,
-          });
+        const resetResult = await sendAuthEmailViaResend({
+          type: "recovery",
+          email: lead.email,
+          redirectTo,
+        });
 
-          if (resetResult.success) {
-            inviteSent = true;
-          } else {
-            authError = `Already exists, but reset email failed: ${resetResult.error}`;
-          }
+        if (resetResult.success) {
+          inviteSent = true;
+        } else {
+          authError = `Already exists, but reset email failed: ${resetResult.error}`;
         }
       } else if (inviteResult.error) {
         authError = inviteResult.error;
