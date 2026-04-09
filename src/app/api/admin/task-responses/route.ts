@@ -17,7 +17,7 @@ type TaskResponseRow = {
   file_url: string | null;
   field_type: string | null;
   field_label: string | null;
-  field_name: string | null;
+  field_id: string | null;
   value: string | null;
 };
 
@@ -26,13 +26,13 @@ function normalizeDocValue(value: string | null | undefined) {
 }
 
 function getDocumentIdentity(
-  response: Pick<TaskResponseRow, "id" | "task_id" | "file_name" | "file_url" | "field_label" | "field_name" | "value">,
+  response: Pick<TaskResponseRow, "id" | "task_id" | "file_name" | "file_url" | "field_label" | "field_id" | "value">,
 ) {
   const urlKey = normalizeDocValue(response.file_url);
   if (urlKey) return `url:${urlKey}`;
 
   const fileNameKey = normalizeDocValue(response.file_name);
-  const fieldLabelKey = normalizeDocValue(response.field_label ?? response.field_name);
+  const fieldLabelKey = normalizeDocValue(response.field_label ?? response.field_id);
   const valueKey = normalizeDocValue(response.value);
   const fallbackKey = [fileNameKey, fieldLabelKey, valueKey].filter(Boolean).join("|");
 
@@ -114,7 +114,7 @@ export async function GET(req: Request) {
 
       const { data, error } = await supabaseAdmin
         .from("task_responses")
-        .select("id, task_id, file_name, file_url, field_type, field_label, field_name, value")
+        .select("id, task_id, file_name, file_url, field_type, field_label, field_id, value")
         .in("task_id", allTaskIds);
 
       if (error) {
@@ -239,7 +239,7 @@ export async function GET(req: Request) {
 
   const { data, error } = await supabaseAdmin
     .from("task_responses")
-    .select("id, task_id, file_name, file_url, field_type, field_label, field_name, value")
+    .select("id, task_id, file_name, file_url, field_type, field_label, field_id, value")
     .in("task_id", allTaskIds)
     .eq("field_type", "file");
 

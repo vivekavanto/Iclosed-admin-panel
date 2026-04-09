@@ -1733,7 +1733,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                     {viewTaskResponses.map((resp: any, i: number) => (
                       <div key={i} className="bg-slate-50 rounded-lg px-4 py-3">
                         <p className="text-[11px] uppercase tracking-wider text-slate-400 font-bold">
-                          {resp.field_label || resp.field_name || `Field ${i + 1}`}
+                          {resp.field_label || resp.field_id || `Field ${i + 1}`}
                         </p>
                         {resp.field_type === "file" ? (
                           <div className="flex items-center gap-2 mt-1">
