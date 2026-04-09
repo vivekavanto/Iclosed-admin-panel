@@ -354,25 +354,33 @@ export async function convertSingleLead(
         display_name: `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim(),
       };
 
-      // Try invite (generates link + sends via Resend, no Supabase email)
-      const inviteResult = await sendAuthEmailViaResend({
-        type: "invite",
-        email: lead.email,
-        redirectTo,
-        userData,
-      });
+      // Check if user already exists in Supabase Auth before deciding invite vs recovery.
+      // This matches the original inviteUserByEmail() behavior which returned "user_already_exists".
+      const { data: usersData } = await supabaseAdmin.auth.admin.listUsers();
+      const existingUser = usersData.users.find(
+        (u: any) => u.email?.toLowerCase() === lead.email.toLowerCase(),
+      );
 
-      if (inviteResult.success && inviteResult.userId) {
-        // New user — invite email sent successfully
-        authUserId = inviteResult.userId;
-        inviteSent = true;
-        await supabaseAdmin.from("clients").update({ auth_user_id: authUserId }).eq("id", clientId);
-      } else if (inviteResult.userAlreadyExists) {
-        // User already exists — link the auth user, then send recovery email instead
-        authUserId = inviteResult.userId ?? null;
-        if (authUserId) {
+      if (!existingUser) {
+        // New user — send invite email via Resend
+        const inviteResult = await sendAuthEmailViaResend({
+          type: "invite",
+          email: lead.email,
+          redirectTo,
+          userData,
+        });
+
+        if (inviteResult.success && inviteResult.userId) {
+          authUserId = inviteResult.userId;
+          inviteSent = true;
           await supabaseAdmin.from("clients").update({ auth_user_id: authUserId }).eq("id", clientId);
+        } else if (inviteResult.error) {
+          authError = inviteResult.error;
         }
+      } else {
+        // User already exists — link the auth user, send recovery email instead
+        authUserId = existingUser.id;
+        await supabaseAdmin.from("clients").update({ auth_user_id: authUserId }).eq("id", clientId);
 
         const resetResult = await sendAuthEmailViaResend({
           type: "recovery",
@@ -385,8 +393,6 @@ export async function convertSingleLead(
         } else {
           authError = `Already exists, but reset email failed: ${resetResult.error}`;
         }
-      } else if (inviteResult.error) {
-        authError = inviteResult.error;
       }
     } catch (err: any) {
       authError = err.message || "Unknown auth error";

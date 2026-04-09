@@ -26,7 +26,6 @@ export async function sendAuthEmailViaResend(opts: {
   success: boolean;
   userId?: string;
   error?: string;
-  userAlreadyExists?: boolean;
 }> {
   const { type, email, redirectTo, userData } = opts;
 
@@ -50,17 +49,6 @@ export async function sendAuthEmailViaResend(opts: {
 
   if (!actionLink) {
     return { success: false, error: "Failed to generate auth action link" };
-  }
-
-  // generateLink({ type: "invite" }) succeeds even if the user already exists.
-  // Detect this so the caller can send a recovery email instead.
-  if (type === "invite" && user?.email_confirmed_at) {
-    return {
-      success: false,
-      userId: user.id,
-      userAlreadyExists: true,
-      error: "User has already been registered",
-    };
   }
 
   // 2. Derive user info for placeholders
