@@ -412,7 +412,7 @@ const Leads: React.FC = () => {
           <div className="flex items-center gap-3 px-5 py-4 rounded-xl border border-blue-200 bg-blue-50 text-sm font-semibold text-blue-800">
             <Link2 size={18} className="flex-shrink-0" />
             <span>
-              This is a co-purchaser of{" "}
+              This is a {selectedLead.lead_type === "Sale" ? "co-seller" : "co-purchaser"} of{" "}
               <button
                 onClick={() => {
                   const parent = leads.find((l) => l.id === selectedLead.parentLeadId);
@@ -429,7 +429,7 @@ const Leads: React.FC = () => {
           <div className="flex items-center gap-3 px-5 py-4 rounded-xl border border-green-200 bg-green-50 text-sm font-semibold text-green-800">
             <Users size={18} className="flex-shrink-0" />
             <span>
-              Co-purchasers:{" "}
+              {selectedLead.lead_type === "Sale" ? "Co-sellers" : "Co-purchasers"}:{" "}
               {leads
                 .filter((l) => l.parentLeadId === selectedLead.id)
                 .map((cp, i, arr) => (
@@ -668,21 +668,25 @@ const Leads: React.FC = () => {
             // Find associated leads: parent + siblings + children
             const associatedLeads: { lead: LeadUser; role: string }[] = [];
 
+            const isSaleLead = selectedLead.lead_type === "Sale";
+            const primaryLabel = isSaleLead ? "Primary Seller" : "Primary Purchaser";
+            const coLabel = isSaleLead ? "Co-Seller" : "Co-Purchaser";
+
             if (selectedLead.parentLeadId) {
-              // This is a co-purchaser — show the primary
+              // This is a co-purchaser/co-seller — show the primary
               const parent = leads.find((l) => l.id === selectedLead.parentLeadId);
               if (parent) {
-                associatedLeads.push({ lead: parent, role: "Primary Purchaser" });
+                associatedLeads.push({ lead: parent, role: primaryLabel });
               }
-              // Also show siblings (other co-purchasers of the same primary)
+              // Also show siblings
               leads
                 .filter((l) => l.parentLeadId === selectedLead.parentLeadId && l.id !== selectedLead.id)
-                .forEach((l) => associatedLeads.push({ lead: l, role: "Co-Purchaser" }));
+                .forEach((l) => associatedLeads.push({ lead: l, role: coLabel }));
             } else {
-              // This is a primary — show all co-purchasers
+              // This is a primary — show all co-purchasers/co-sellers
               leads
                 .filter((l) => l.parentLeadId === selectedLead.id)
-                .forEach((l) => associatedLeads.push({ lead: l, role: "Co-Purchaser" }));
+                .forEach((l) => associatedLeads.push({ lead: l, role: coLabel }));
             }
 
             return (
@@ -779,7 +783,7 @@ const Leads: React.FC = () => {
                 {hasFamily ? (
                   <>
                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">
-                      Purchaser & Co-Purchasers ({familyMembers.length})
+                      {selectedLead?.lead_type === "Sale" ? "Seller & Co-Sellers" : "Purchaser & Co-Purchasers"} ({familyMembers.length})
                     </p>
                     <div className="space-y-2">
                       {[...familyMembers].sort((a, b) => (a.parentLeadId ? 1 : 0) - (b.parentLeadId ? 1 : 0)).map((fm) => {
@@ -792,7 +796,7 @@ const Leads: React.FC = () => {
                             </div>
                             <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase border ${
                               isPrimary ? "bg-green-100 text-green-700 border-green-200" : "bg-blue-100 text-blue-700 border-blue-200"
-                            }`}>{isPrimary ? "Primary" : "Co-Purchaser"}</span>
+                            }`}>{isPrimary ? "Primary" : (selectedLead?.lead_type === "Sale" ? "Co-Seller" : "Co-Purchaser")}</span>
                           </div>
                         );
                       })}
@@ -1024,7 +1028,7 @@ const Leads: React.FC = () => {
                     <div>
                       <span className="font-medium">{lead.firstName} {lead.lastName}</span>
                       {lead.parentLeadId && (
-                        <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-100 text-blue-700 border border-blue-200">Co-Purchaser</span>
+                        <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-100 text-blue-700 border border-blue-200">{lead.lead_type === "Sale" ? "Co-Seller" : "Co-Purchaser"}</span>
                       )}
                     </div>
                   </td>

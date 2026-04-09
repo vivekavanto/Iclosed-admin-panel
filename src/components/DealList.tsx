@@ -189,10 +189,10 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                     <div>
                       {deal.propertyAddress}
                       {(deal as any).isCoPurchaser && (
-                        <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-700 border border-blue-200">Co-Purchaser</span>
+                        <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-700 border border-blue-200">{deal.type === "Sale" ? "Co-Seller" : "Co-Purchaser"}</span>
                       )}
                       {(deal as any).hasCoPurchasers && (
-                        <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-bold bg-green-100 text-green-700 border border-green-200">Has Co-Purchaser(s)</span>
+                        <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-bold bg-green-100 text-green-700 border border-green-200">{deal.type === "Sale" ? "Has Co-Seller(s)" : "Has Co-Purchaser(s)"}</span>
                       )}
                     </div>
                     {(deal as any).leadName && (

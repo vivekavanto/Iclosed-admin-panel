@@ -61,6 +61,10 @@ export async function GET(
                 familyLeads.map((l) => [l.id, l])
               );
 
+              const isSale = data.type === "Sale";
+              const primaryLabel = isSale ? "Primary Seller" : "Primary Purchaser";
+              const coLabel = isSale ? "Co-Seller" : "Co-Purchaser";
+
               linked_deals = otherDeals.map((d) => {
                 const dLead = leadMap.get(d.lead_id);
                 const isPrimary = dLead ? !dLead.parent_lead_id : false;
@@ -72,16 +76,17 @@ export async function GET(
                   lead_name: dLead
                     ? `${dLead.first_name ?? ""} ${dLead.last_name ?? ""}`.trim()
                     : null,
-                  role: isPrimary ? "Primary Purchaser" : "Co-Purchaser",
+                  role: isPrimary ? primaryLabel : coLabel,
                 };
               });
             }
           }
 
           // Also determine the current deal's role
+          const isSaleType = data.type === "Sale";
           const currentRole = lead.parent_lead_id
-            ? "Co-Purchaser"
-            : "Primary Purchaser";
+            ? (isSaleType ? "Co-Seller" : "Co-Purchaser")
+            : (isSaleType ? "Primary Seller" : "Primary Purchaser");
           data.current_deal_role = currentRole;
         }
       }
