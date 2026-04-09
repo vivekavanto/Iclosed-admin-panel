@@ -1028,7 +1028,9 @@ const Leads: React.FC = () => {
                     <div>
                       <span className="font-medium">{lead.firstName} {lead.lastName}</span>
                       {lead.parentLeadId && (
-                        <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-100 text-blue-700 border border-blue-200">{lead.lead_type === "Sale" ? "Co-Seller" : "Co-Purchaser"}</span>
+                        <span className="ml-2 inline-flex items-center text-blue-600" title={lead.lead_type === "Sale" ? "Co-Seller" : "Co-Purchaser"}>
+                          <Users size={14} />
+                        </span>
                       )}
                     </div>
                   </td>
