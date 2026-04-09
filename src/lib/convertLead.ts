@@ -1,5 +1,6 @@
 import supabaseAdmin from "./supabaseAdmin";
 import { completeApsTask } from "./completeApsTask";
+import { sendAuthEmailViaResend } from "./sendAuthEmail";
 
 export type ConvertOneResult = {
   success: boolean;
@@ -338,31 +339,35 @@ export async function convertSingleLead(
       console.error("[Convert] Failed to auto-complete APS task (non-blocking):", err);
     }
 
-    // ── Create Supabase Auth user + send invite email ────────────────────────
+    // ── Create Supabase Auth user + send invite/reset email via Resend ────
     let authUserId: string | null = null;
     let inviteSent = false;
     let authError: string | null = null;
 
     try {
       const customerPortalUrl = (process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ?? "https://iclosed-customer-application-rosy.vercel.app").replace(/\/+$/, "");
+      const redirectTo = `${customerPortalUrl}/api/auth/callback?next=/set-password`;
 
-      const { data: inviteData, error: inviteError } = await supabaseAdmin.auth.admin.inviteUserByEmail(
-        lead.email,
-        {
-          redirectTo: `${customerPortalUrl}/api/auth/callback?next=/set-password`,
-          data: {
-            first_name: lead.first_name ?? "",
-            last_name: lead.last_name ?? "",
-            display_name: `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim(),
-          },
-        },
-      );
+      const userData = {
+        first_name: lead.first_name ?? "",
+        last_name: lead.last_name ?? "",
+        display_name: `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim(),
+      };
 
-      if (!inviteError && inviteData?.user) {
-        authUserId = inviteData.user.id;
+      // Try invite (generates link + sends via Resend, no Supabase email)
+      const inviteResult = await sendAuthEmailViaResend({
+        type: "invite",
+        email: lead.email,
+        redirectTo,
+        userData,
+      });
+
+      if (inviteResult.success && inviteResult.userId) {
+        authUserId = inviteResult.userId;
         inviteSent = true;
         await supabaseAdmin.from("clients").update({ auth_user_id: authUserId }).eq("id", clientId);
-      } else if (inviteError && inviteError.code === "user_already_exists") {
+      } else if (inviteResult.error?.includes("already been registered")) {
+        // User already exists — link the existing auth user, then send recovery email
         const { data: usersData } = await supabaseAdmin.auth.admin.listUsers();
         const existingUser = usersData.users.find(
           (u: any) => u.email?.toLowerCase() === lead.email.toLowerCase(),
@@ -372,19 +377,20 @@ export async function convertSingleLead(
           authUserId = existingUser.id;
           await supabaseAdmin.from("clients").update({ auth_user_id: authUserId }).eq("id", clientId);
 
-          const { error: resetError } = await supabaseAdmin.auth.resetPasswordForEmail(
-            lead.email,
-            { redirectTo: `${customerPortalUrl}/api/auth/callback?next=/set-password` },
-          );
+          const resetResult = await sendAuthEmailViaResend({
+            type: "recovery",
+            email: lead.email,
+            redirectTo,
+          });
 
-          if (!resetError) {
+          if (resetResult.success) {
             inviteSent = true;
           } else {
-            authError = `Already exists, but reset email failed: ${resetError.message}`;
+            authError = `Already exists, but reset email failed: ${resetResult.error}`;
           }
         }
-      } else if (inviteError) {
-        authError = inviteError.message;
+      } else if (inviteResult.error) {
+        authError = inviteResult.error;
       }
     } catch (err: any) {
       authError = err.message || "Unknown auth error";

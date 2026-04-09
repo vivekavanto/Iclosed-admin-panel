@@ -35,6 +35,7 @@ const EMAIL_VARIABLES = [
   { key: "{{ lead.file_number }}", description: "File number" },
   { key: "{{ stage_name }}", description: "Stage template name" },
   { key: "{{ stage_status }}", description: "Current stage status" },
+  { key: "{{ confirmation_url }}", description: "Auth action link (invite / reset password)" },
 ];
 
 const EmailTemplates: React.FC = () => {
