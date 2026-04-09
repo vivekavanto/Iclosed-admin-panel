@@ -122,10 +122,13 @@ export async function POST(req: Request) {
         file_number: one.file_number,
         client_id: one.client_id,
         invite_sent: one.invite_sent ?? false,
+        already_has_login: one.already_has_login ?? false,
         auth_error: one.auth_error ?? null,
         message: one.invite_sent
           ? `Deal created and invite email sent to ${selectedLead.email}`
-          : `Deal created, but invite could not be sent: ${one.auth_error || "Create login manually"}`,
+          : one.already_has_login
+            ? `Deal created. User already has login access — no invite email sent.`
+            : `Deal created, but invite could not be sent: ${one.auth_error || "Create login manually"}`,
       });
     }
 
@@ -161,6 +164,7 @@ export async function POST(req: Request) {
     const created_count = results.filter((r) => r.created).length;
     const skipped_count = results.length - created_count;
     const invites_sent_count = results.filter((r) => r.invite_sent).length;
+    const already_has_login_count = results.filter((r) => r.already_has_login).length;
     const rootResult = results.find((r) => r.lead_id === rootLeadId);
 
     return NextResponse.json({
@@ -170,6 +174,7 @@ export async function POST(req: Request) {
       created_count,
       skipped_count,
       invites_sent_count,
+      already_has_login_count,
       results,
       deal_id: rootResult?.deal_id ?? null,
       file_number: rootResult?.file_number ?? null,

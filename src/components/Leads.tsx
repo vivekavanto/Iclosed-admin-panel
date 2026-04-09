@@ -252,11 +252,13 @@ const Leads: React.FC = () => {
           const failedCount = results.filter((r) => !r.success).length;
           const hadErrors = data.had_errors ?? failedCount > 0;
 
+          const alreadyHasLoginCount = results.filter((r: any) => r.already_has_login).length;
+
           setConvertResult({
             success: !hadErrors,
             message: `✅ Converted ${createdCount} lead(s) (${skippedCount} already converted). Invites sent to ${inviteCount} email(s).${
-              failedCount > 0 ? ` ${failedCount} failed.` : ""
-            }`,
+              alreadyHasLoginCount > 0 ? ` ${alreadyHasLoginCount} already had login access.` : ""
+            }${failedCount > 0 ? ` ${failedCount} failed.` : ""}`,
           });
         } else {
           setConvertResult({
@@ -264,7 +266,9 @@ const Leads: React.FC = () => {
             message: `✅ Deal ${data.file_number} created! ${
               data.invite_sent
                 ? `Invite email sent to ${selectedLead.email}.`
-                : "Please manually create their login."
+                : data.already_has_login
+                  ? `User already has login access — no invite email sent.`
+                  : "Please manually create their login."
             }`,
           });
 

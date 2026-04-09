@@ -10,6 +10,7 @@ export type ConvertOneResult = {
   file_number?: string;
   client_id?: string;
   invite_sent?: boolean;
+  already_has_login?: boolean;
   auth_error?: string | null;
   error?: string;
   statusCode?: number;
@@ -339,27 +340,31 @@ export async function convertSingleLead(
       console.error("[Convert] Failed to auto-complete APS task (non-blocking):", err);
     }
 
-    // ── Create Supabase Auth user + send invite/reset email via Resend ────
+    // ── Create Supabase Auth user + send invite email via Resend ─────────
     let authUserId: string | null = null;
     let inviteSent = false;
+    let alreadyHasLogin = false;
     let authError: string | null = null;
 
     try {
-      const customerPortalUrl = (process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ?? "https://iclosed-customer-application-rosy.vercel.app").replace(/\/+$/, "");
-      const redirectTo = `${customerPortalUrl}/api/auth/callback?next=/set-password`;
-
-      const userData = {
-        first_name: lead.first_name ?? "",
-        last_name: lead.last_name ?? "",
-        display_name: `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim(),
-      };
-
-      // Check if this client already has a Supabase Auth account from a previous conversion.
-      // existingClient.auth_user_id is set during conversion — if present, user is already onboarded.
+      // If client already has a Supabase Auth account, skip invite — no recovery email either.
       const alreadyOnboarded = !!(existingClient?.auth_user_id);
 
-      if (!alreadyOnboarded) {
+      if (alreadyOnboarded) {
+        // User already has portal login — just link, no email
+        authUserId = existingClient.auth_user_id;
+        alreadyHasLogin = true;
+      } else {
         // New user — send invite email via Resend
+        const customerPortalUrl = (process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ?? "https://iclosed-customer-application-rosy.vercel.app").replace(/\/+$/, "");
+        const redirectTo = `${customerPortalUrl}/api/auth/callback?next=/set-password`;
+
+        const userData = {
+          first_name: lead.first_name ?? "",
+          last_name: lead.last_name ?? "",
+          display_name: `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim(),
+        };
+
         const inviteResult = await sendAuthEmailViaResend({
           type: "invite",
           email: lead.email,
@@ -374,21 +379,6 @@ export async function convertSingleLead(
         } else if (inviteResult.error) {
           authError = inviteResult.error;
         }
-      } else {
-        // User already onboarded — link existing auth user, send recovery email instead
-        authUserId = existingClient.auth_user_id;
-
-        const resetResult = await sendAuthEmailViaResend({
-          type: "recovery",
-          email: lead.email,
-          redirectTo,
-        });
-
-        if (resetResult.success) {
-          inviteSent = true;
-        } else {
-          authError = `Already exists, but reset email failed: ${resetResult.error}`;
-        }
       }
     } catch (err: any) {
       authError = err.message || "Unknown auth error";
@@ -402,6 +392,7 @@ export async function convertSingleLead(
       file_number: generatedFileNumber,
       client_id: clientId,
       invite_sent: inviteSent,
+      already_has_login: alreadyHasLogin,
       auth_error: authError,
     };
   } catch (err: any) {
