@@ -618,6 +618,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     const userTitles = new Set(tasks.map(t => t.title.toLowerCase()));
     const templateRows: DisplayTask[] = taskTemplates
       .filter((t: any) => t.is_default)
+      .filter((t: any) => !dealType || t.lead_type?.toLowerCase() === dealType)
       .filter((t: any) => !userTitles.has(t.name.toLowerCase()))
       .map((t: any): DisplayTask => ({
         id: `tpl-${t.id}`,
