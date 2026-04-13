@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabaseClient';
+import supabaseAdmin from '@/lib/supabaseAdmin';
+
+const supabase = supabaseAdmin;
 
 // GET /api/admin/email-templates
 export async function GET() {

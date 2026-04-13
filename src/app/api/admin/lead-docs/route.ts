@@ -1,12 +1,54 @@
 import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
+import { getFamilyDealIds } from "@/lib/familyDeals";
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const leadId = searchParams.get("lead_id");
+  const dealId = searchParams.get("deal_id");
+
+  // If deal_id is provided, fetch docs from ALL family leads (for co-purchaser support)
+  if (dealId) {
+    try {
+      const familyDealIds = await getFamilyDealIds(dealId);
+
+      const { data: familyDeals } = await supabaseAdmin
+        .from("deals")
+        .select("lead_id")
+        .in("id", familyDealIds);
+
+      const familyLeadIds = [...new Set((familyDeals ?? []).map((d) => d.lead_id).filter(Boolean))];
+
+      if (familyLeadIds.length === 0) {
+        return NextResponse.json([]);
+      }
+
+      const { data, error } = await supabaseAdmin
+        .from("lead_corporate_docs")
+        .select("*")
+        .in("lead_id", familyLeadIds);
+
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 });
+      }
+
+      // Deduplicate by file_name (same doc uploaded by different family members)
+      const seen = new Set<string>();
+      const deduped = (data ?? []).filter((doc) => {
+        const key = doc.file_name ?? doc.id;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
+      return NextResponse.json(deduped);
+    } catch {
+      return NextResponse.json([]);
+    }
+  }
 
   if (!leadId) {
-    return NextResponse.json({ error: "lead_id is required" }, { status: 400 });
+    return NextResponse.json({ error: "lead_id or deal_id is required" }, { status: 400 });
   }
 
   const { data, error } = await supabaseAdmin

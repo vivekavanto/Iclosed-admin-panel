@@ -1,6 +1,8 @@
 import supabaseAdmin from "./supabaseAdmin";
 import { completeApsTask } from "./completeApsTask";
 import { sendAuthEmailViaResend } from "./sendAuthEmail";
+import { getFamilyDealIds } from "./familyDeals";
+import { recalcMilestonesForFamily } from "./recalcMilestones";
 
 export type ConvertOneResult = {
   success: boolean;
@@ -323,6 +325,22 @@ export async function convertSingleLead(
                   .eq("task_template_id", sharedTask.task_template_id)
                   .eq("is_shared", true);
               }
+            }
+
+            // Recalculate milestones after syncing completed shared tasks
+            try {
+              const familyDealIds = await getFamilyDealIds(dealId);
+              // Resolve the actual primary deal (root lead's deal)
+              const rootLeadId = lead.parent_lead_id ?? lead.id;
+              const { data: rootDeal } = await supabaseAdmin
+                .from("deals")
+                .select("id")
+                .eq("lead_id", rootLeadId)
+                .maybeSingle();
+              const primaryId = rootDeal?.id ?? dealId;
+              await recalcMilestonesForFamily(familyDealIds, primaryId);
+            } catch {
+              // Non-blocking
             }
           }
         }

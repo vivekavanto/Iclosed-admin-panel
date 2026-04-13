@@ -82,7 +82,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
   // Documents modal state
   const [showDocuments, setShowDocuments] = useState(false);
-  const [dealDocuments, setDealDocuments] = useState<{ id: string; file_name: string; file_url: string; doc_type: string }[]>([]);
+  const [dealDocuments, setDealDocuments] = useState<{ task_id: string; file_name: string; file_url: string; task_title: string }[]>([]);
   const [loadingDocs, setLoadingDocs] = useState(false);
 
   // Drag and Drop State
@@ -115,11 +115,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   };
 
   const fetchDealDocuments = async () => {
-    const leadId = rawDeal?.lead_id;
-    if (!leadId) { setDealDocuments([]); return; }
     setLoadingDocs(true);
     try {
-      const res = await fetch(`/api/admin/lead-docs?lead_id=${leadId}`);
+      const res = await fetch(`/api/admin/task-responses?deal_id=${deal.id}`);
       const data = await res.json();
       if (Array.isArray(data)) setDealDocuments(data);
     } catch {
@@ -672,13 +670,11 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
 
   useEffect(() => {
-    const leadId = rawDeal?.lead_id;
-    if (!leadId) return;
-    fetch(`/api/admin/lead-docs?lead_id=${leadId}`)
+    fetch(`/api/admin/task-responses?deal_id=${deal.id}`)
       .then(res => res.json())
       .then(data => { if (Array.isArray(data)) setTaskFileDocs(data); })
       .catch(() => { });
-  }, [deal.id, rawDeal?.lead_id]);
+  }, [deal.id]);
 
   return (
     <div className="flex flex-col h-full bg-slate-50">
@@ -935,14 +931,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                         {task.isTemplate ? (
                           <span className="text-slate-300 text-xs">-</span>
                         ) : (() => {
-                          const titleLower = task.title.toLowerCase();
-                          const matched = taskFileDocs.filter((d: any) => {
-                            const docType = (d.doc_type ?? "").toLowerCase();
-                            if (titleLower.includes("identification") && docType === "identification") return true;
-                            if ((titleLower.includes("agreement") || titleLower.includes("purchase") || titleLower.includes("sale")) && docType === "document") return true;
-                            if (titleLower.includes("insurance") && docType === "insurance") return true;
-                            return false;
-                          });
+                          const matched = taskFileDocs.filter((d: any) => d.task_id === task.id);
                           return matched.length > 0 ? (
                             <button
                               type="button"
@@ -1588,17 +1577,14 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                 <div className="space-y-5">
                   {Object.entries(
                     dealDocuments.reduce((acc: Record<string, any[]>, doc) => {
-                      const docType = doc.doc_type || "Other";
-                      const label = docType === "identification" ? "Identification Documents"
-                        : docType === "document" ? "Agreement / Purchase Documents"
-                        : "Other Documents";
-                      if (!acc[label]) acc[label] = [];
-                      acc[label].push(doc);
+                      const key = doc.task_title || "Other";
+                      if (!acc[key]) acc[key] = [];
+                      acc[key].push(doc);
                       return acc;
                     }, {})
-                  ).map(([groupLabel, docs]) => (
-                    <div key={groupLabel}>
-                      <h4 className="text-sm font-bold text-slate-700 mb-2">{groupLabel}</h4>
+                  ).map(([taskTitle, docs]) => (
+                    <div key={taskTitle}>
+                      <h4 className="text-sm font-bold text-slate-700 mb-2">{taskTitle}</h4>
                       <ul className="space-y-2">
                         {docs.map((doc: any, idx: number) => (
                           <li key={`${doc.id}-${idx}`} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
