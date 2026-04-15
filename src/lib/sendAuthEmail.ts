@@ -62,12 +62,12 @@ export async function sendAuthEmailViaResend(opts: {
   let bodyHtml: string;
 
   const templateName = TEMPLATE_NAMES[type];
-  let template: { name: string; body: string } | null = null;
+  let template: { name: string; subject: string | null; body: string } | null = null;
 
   try {
     const { data } = await supabaseAdmin
       .from("email_templates")
-      .select("name, body")
+      .select("name, subject, body")
       .eq("name", templateName)
       .eq("is_active", true)
       .maybeSingle();
@@ -125,7 +125,7 @@ export async function sendAuthEmailViaResend(opts: {
     processedBody = processedBody.replace(/\{\{\s*\.UserMetadata\.last_name\s*\}\}/g, lastName);
     processedBody = processedBody.replace(/\{\{\s*\.UserMetadata\.email\s*\}\}/g, email);
 
-    subject = template.name;
+    subject = template.subject || template.name;
     bodyHtml = `
       <div>
         ${processedBody}

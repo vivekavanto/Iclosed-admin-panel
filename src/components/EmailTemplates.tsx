@@ -19,6 +19,7 @@ import {
 interface EmailTemplate {
   id: string;
   name: string;
+  subject: string | null;
   body: string;
   is_active: boolean;
   created_at: string;
@@ -50,6 +51,7 @@ const EmailTemplates: React.FC = () => {
   const [form, setForm] = useState({
     id: "",
     name: "",
+    subject: "",
     body: "",
     is_active: true,
   });
@@ -65,13 +67,14 @@ const EmailTemplates: React.FC = () => {
   };
 
   const resetForm = () => {
-    setForm({ id: "", name: "", body: "", is_active: true });
+    setForm({ id: "", name: "", subject: "", body: "", is_active: true });
   };
 
   const handleEdit = (template: EmailTemplate) => {
     setForm({
       id: template.id,
       name: template.name ?? "",
+      subject: template.subject ?? "",
       body: template.body ?? "",
       is_active: template.is_active ?? true,
     });
@@ -192,13 +195,14 @@ const EmailTemplates: React.FC = () => {
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 items-start">
         {/* Main List */}
         <div className="xl:col-span-8 bg-white rounded-2xl shadow-sm border border-slate-200 overflow-x-auto">
-          <table className="w-full min-w-[600px] text-left text-sm">
+          <table className="w-full min-w-[700px] text-left text-sm">
             <thead className="bg-slate-50/30 border-b border-slate-100">
               <tr className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">
-                <th className="px-8 py-6">Name</th>
-                <th className="px-6 py-6 text-center w-32">Is Active</th>
-                <th className="px-8 py-6 w-48">Created At</th>
-                <th className="px-6 py-6 text-center w-32">Actions</th>
+                <th className="px-6 py-5">Name</th>
+                <th className="px-4 py-5">Subject</th>
+                <th className="px-4 py-5 text-center w-24">Active</th>
+                <th className="px-4 py-5 w-40">Created</th>
+                <th className="px-4 py-5 text-center w-24">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
@@ -207,36 +211,42 @@ const EmailTemplates: React.FC = () => {
                   key={template.id}
                   className="hover:bg-slate-50/50 transition-colors group"
                 >
-                  <td className="px-8 py-6">
-                    <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 bg-brand-light flex items-center justify-center rounded-lg">
-                        <Mail className="text-brand-primary" size={18} />
+                  <td className="px-6 py-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 bg-brand-light flex items-center justify-center rounded-lg shrink-0">
+                        <Mail className="text-brand-primary" size={16} />
                       </div>
-                      <span className="font-bold text-slate-800 text-[15px] leading-snug max-w-md">
+                      <span className="font-bold text-slate-800 text-sm leading-snug">
                         {template.name}
                       </span>
                     </div>
                   </td>
-                  <td className="px-6 py-6 text-center">
+                  <td className="px-4 py-4">
+                    <span className="text-xs text-slate-500 truncate block max-w-[200px]">
+                      {template.subject || <span className="italic text-slate-300">Uses template name</span>}
+                    </span>
+                  </td>
+                  <td className="px-4 py-4 text-center">
                     <div className="flex justify-center">
-                      <div className="text-green-500 bg-green-50 p-1.5 rounded-full ring-1 ring-green-100">
-                        <CheckCircle2 size={20} />
+                      <div className="text-green-500 bg-green-50 p-1 rounded-full ring-1 ring-green-100">
+                        <CheckCircle2 size={16} />
                       </div>
                     </div>
                   </td>
-                  <td className="px-8 py-6">
-                    <div className="flex items-center gap-2 text-slate-400 font-medium">
-                      <Clock size={16} className="shrink-0" />
-                      <span className="text-sm">{template.created_at}</span>
-                    </div>
+                  <td className="px-4 py-4">
+                    <span className="text-xs text-slate-400 font-medium">
+                      {template.created_at
+                        ? new Date(template.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                        : "—"}
+                    </span>
                   </td>
-                  <td className="px-6 py-6 text-center">
+                  <td className="px-4 py-4 text-center">
                     <div className="flex justify-center">
                       <button
                         onClick={() => handleEdit(template)}
-                        className="text-brand-primary hover:text-brand-primaryHover transition-colors"
+                        className="text-brand-primary hover:text-brand-primaryHover transition-colors p-1"
                       >
-                        <Edit size={20} />
+                        <Edit size={18} />
                       </button>
                     </div>
                   </td>
@@ -245,7 +255,7 @@ const EmailTemplates: React.FC = () => {
               {filteredTemplates.length === 0 && (
                 <tr>
                   <td
-                    colSpan={3}
+                    colSpan={5}
                     className="px-12 py-20 text-center text-slate-400"
                   >
                     <Mail size={48} className="text-slate-100 mb-4 mx-auto" />
@@ -358,11 +368,12 @@ const EmailTemplates: React.FC = () => {
             <div className="p-8 border-b border-slate-100 flex justify-between items-start">
               <div>
                 <h3 className="text-2xl font-black text-slate-900 leading-none">
-                  New Email Template
+                  {form.id ? "Edit Email Template" : "New Email Template"}
                 </h3>
                 <p className="text-slate-500 font-medium mt-2">
-                  Create a reusable email template for automated client
-                  communications.
+                  {form.id
+                    ? "Update this email template."
+                    : "Create a reusable email template for automated client communications."}
                 </p>
               </div>
               <button
@@ -393,6 +404,25 @@ const EmailTemplates: React.FC = () => {
                     setForm((prev) => ({ ...prev, name: e.target.value }))
                   }
                 />
+              </div>
+
+              {/* Subject */}
+              <div className="space-y-2">
+                <label className="block text-[11px] font-black text-slate-500 uppercase tracking-widest">
+                  Email Subject
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Your Transaction Update — iClosed"
+                  className={inputClasses}
+                  value={form.subject}
+                  onChange={(e) =>
+                    setForm((prev) => ({ ...prev, subject: e.target.value }))
+                  }
+                />
+                <p className="text-[10px] text-slate-400 font-medium">
+                  If left empty, the template name will be used as the subject.
+                </p>
               </div>
 
               {/* Body */}

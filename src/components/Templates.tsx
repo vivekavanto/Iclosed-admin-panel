@@ -10,13 +10,15 @@ import {
   XCircle,
   Plus,
   Loader2,
-  Trash2
+  Trash2,
+  Pencil
 } from 'lucide-react';
 import StageTemplateFormModal from "@/components/shared/StageTemplateFormModal";
 
 interface StageTemplate {
   id: string;
   name: string;
+  description: { short?: string; modal?: string; task?: string } | null;
   lead_type: LeadType;
   order_index: number;
   role: string;
@@ -52,6 +54,7 @@ const Templates: React.FC = () => {
   const [emailTemplates, setEmailTemplates] = useState<EmailTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
+  const [editingStage, setEditingStage] = useState<StageTemplate | null>(null);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
   const showToast = (message: string, type: "success" | "error" = "success") => {
@@ -157,13 +160,37 @@ const Templates: React.FC = () => {
         </div>
       </div>
 
-      {/* Shared Stage Template Form Modal */}
+      {/* Add Stage Template Modal */}
       <StageTemplateFormModal
         open={showAddForm}
         onClose={() => setShowAddForm(false)}
         onCreated={handleStageCreated}
         emailTemplates={emailTemplates}
       />
+
+      {/* Edit Stage Template Modal */}
+      {editingStage && (
+        <StageTemplateFormModal
+          open={true}
+          onClose={() => setEditingStage(null)}
+          onCreated={() => {
+            showToast("Stage template updated successfully");
+            setEditingStage(null);
+            fetchData();
+          }}
+          emailTemplates={emailTemplates}
+          editData={{
+            id: editingStage.id,
+            name: editingStage.name,
+            description: editingStage.description,
+            lead_type: editingStage.lead_type,
+            order_index: editingStage.order_index,
+            role: editingStage.role,
+            is_shared: editingStage.is_shared,
+            email_template_id: editingStage.email_template_id,
+          }}
+        />
+      )}
 
       {loading ? (
         <div className="flex items-center justify-center py-20">
@@ -234,13 +261,22 @@ const Templates: React.FC = () => {
                                 {item.is_shared ? <CheckCircle2 className="mx-auto text-green-500" size={16} /> : <XCircle className="mx-auto text-slate-200" size={16} />}
                               </td>
                               <td className="px-6 py-4 text-center">
-                                <button
-                                  onClick={() => handleDelete(item.id, item.name)}
-                                  className="text-slate-300 hover:text-red-500 transition-colors p-1"
-                                  title="Delete stage template"
-                                >
-                                  <Trash2 size={14} />
-                                </button>
+                                <div className="flex items-center justify-center gap-1">
+                                  <button
+                                    onClick={() => setEditingStage(item)}
+                                    className="text-slate-400 hover:text-brand-primary transition-colors p-1"
+                                    title="Edit stage template"
+                                  >
+                                    <Pencil size={14} />
+                                  </button>
+                                  <button
+                                    onClick={() => handleDelete(item.id, item.name)}
+                                    className="text-slate-300 hover:text-red-500 transition-colors p-1"
+                                    title="Delete stage template"
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
                               </td>
                             </tr>
                           ))}

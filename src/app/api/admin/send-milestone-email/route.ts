@@ -71,7 +71,7 @@ async function sendEmailForDeal(
             from: fromEmail,
             replyTo: "iclosed@navawilson.law",
             to: [client.email],
-            subject: template.name || "Milestone Completed",
+            subject: template.subject || template.name || "Milestone Completed",
             html: htmlBody,
         })
 

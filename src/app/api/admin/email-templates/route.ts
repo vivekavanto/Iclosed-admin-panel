@@ -20,7 +20,7 @@ export async function GET() {
 // POST /api/admin/email-templates
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { name, body: emailBody, is_active } = body;
+  const { name, body: emailBody, is_active, subject } = body;
 
   if (!name || !emailBody) {
     return NextResponse.json(
@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
 
   const { data, error } = await supabase
     .from('email_templates')
-    .insert([{ name, body: emailBody, is_active: is_active ?? true }])
+    .insert([{ name, body: emailBody, is_active: is_active ?? true, subject: subject || null }])
     .select()
     .single();
 
@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
 export async function PUT(req: NextRequest) {
   try {
     const body = await req.json();
-    const { id, name, body: emailBody, is_active } = body;
+    const { id, name, body: emailBody, is_active, subject } = body;
 
     if (!id) {
       return NextResponse.json({ error: "ID required" }, { status: 400 });
@@ -57,6 +57,7 @@ export async function PUT(req: NextRequest) {
     if (name !== undefined) updateData.name = name;
     if (emailBody !== undefined) updateData.body = emailBody;
     if (is_active !== undefined) updateData.is_active = is_active;
+    if (subject !== undefined) updateData.subject = subject || null;
 
     const { data, error } = await supabase
       .from("email_templates")

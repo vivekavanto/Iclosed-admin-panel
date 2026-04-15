@@ -19,11 +19,12 @@ export async function recalcMilestonesForFamily(
   // Pre-fetch all family milestones to do the mapping
   const { data: familyMilestones } = await supabaseAdmin
     .from("milestones")
-    .select("id, deal_id, stage_template_id")
+    .select("id, deal_id, stage_template_id, status, email_template_id, email_sent")
     .in("deal_id", familyDealIds);
 
   const primaryMsMap = new Map<string, string>(); // milestone_id -> stage_template_id
   const dealMsMap = new Map<string, Map<string, string>>(); // deal_id -> Map(stage_template_id -> milestone_id)
+  const msMetaMap = new Map<string, { deal_id: string; status: string; email_template_id: string | null; email_sent: boolean }>(); // milestone_id -> metadata
 
   if (familyMilestones) {
     familyMilestones.forEach((m) => {
@@ -32,6 +33,13 @@ export async function recalcMilestonesForFamily(
 
       if (!dealMsMap.has(m.deal_id)) dealMsMap.set(m.deal_id, new Map());
       dealMsMap.get(m.deal_id)!.set(m.stage_template_id, m.id);
+
+      msMetaMap.set(m.id, {
+        deal_id: m.deal_id,
+        status: m.status,
+        email_template_id: m.email_template_id,
+        email_sent: m.email_sent ?? false,
+      });
     });
   }
 
@@ -110,6 +118,37 @@ export async function recalcMilestonesForFamily(
           .from("milestones")
           .update(msUpdates)
           .eq("id", msId);
+
+        // Auto-send email when milestone transitions to Completed
+        if (allDone) {
+          const meta = msMetaMap.get(msId);
+          if (
+            meta &&
+            meta.status !== "Completed" && // was NOT already completed
+            meta.email_template_id &&       // has an email template linked
+            !meta.email_sent                // email not already sent
+          ) {
+            try {
+              const baseUrl = process.env.VERCEL_URL
+                ? `https://${process.env.VERCEL_URL}`
+                : "http://localhost:3000";
+              await fetch(
+                `${baseUrl}/api/admin/send-milestone-email`,
+                {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    milestoneId: msId,
+                    dealId: famDealId,
+                    sendToLinkedDeals: true,
+                  }),
+                },
+              );
+            } catch {
+              // Non-blocking — email send failure should not break recalc
+            }
+          }
+        }
       }
     } catch {
       // Non-blocking per deal
