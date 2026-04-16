@@ -91,6 +91,58 @@ export async function completeApsTask(dealId: string): Promise<{
       .update(completionPayload)
       .eq("id", apsTask.id);
 
+    // ── 4b. Bridge APS documents from lead_corporate_docs → task_responses ──
+    // Intake uploads go to lead_corporate_docs (no task_id). The Doc column
+    // and View Documents fetch from task_responses (needs task_id). Bridge
+    // them so Intake-uploaded APS docs appear in the deal detail views.
+    try {
+      const familyDealIdsForDocs = await getFamilyDealIds(primaryDealId);
+
+      // Collect all family lead IDs
+      const { data: familyDeals } = await supabaseAdmin
+        .from("deals")
+        .select("lead_id")
+        .in("id", familyDealIdsForDocs);
+
+      const familyLeadIds = [...new Set((familyDeals ?? []).map((d) => d.lead_id).filter(Boolean))];
+
+      if (familyLeadIds.length > 0) {
+        // Find APS documents in lead_corporate_docs (doc_type: "document", "aps", or custom_type: "APS Document")
+        const { data: apsDocs } = await supabaseAdmin
+          .from("lead_corporate_docs")
+          .select("file_name, file_url")
+          .in("lead_id", familyLeadIds)
+          .or('doc_type.eq.document,doc_type.eq.aps,custom_type.ilike.%APS%');
+
+        if (apsDocs && apsDocs.length > 0) {
+          // Check which files already exist as task_responses to avoid duplicates
+          const { data: existingResponses } = await supabaseAdmin
+            .from("task_responses")
+            .select("file_name")
+            .eq("task_id", apsTask.id)
+            .eq("field_type", "file");
+
+          const existingFileNames = new Set((existingResponses ?? []).map((r) => r.file_name));
+
+          const newResponses = apsDocs
+            .filter((doc) => doc.file_name && !existingFileNames.has(doc.file_name))
+            .map((doc) => ({
+              task_id: apsTask.id,
+              field_type: "file",
+              field_label: "Upload Agreement of Purchase and Sale",
+              file_name: doc.file_name,
+              file_url: doc.file_url,
+            }));
+
+          if (newResponses.length > 0) {
+            await supabaseAdmin.from("task_responses").insert(newResponses);
+          }
+        }
+      }
+    } catch {
+      // Non-blocking — document bridging failure should not break task completion
+    }
+
     // ── 5. Sync to all co-purchaser deals ────────────────────────────────────
     const familyDealIds = await getFamilyDealIds(primaryDealId);
     const otherDealIds = familyDealIds.filter((id) => id !== primaryDealId);

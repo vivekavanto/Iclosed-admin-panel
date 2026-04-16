@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
+import { supabase } from "@/lib/supabaseClient";
 import {
   History,
   Mail,
@@ -166,6 +167,28 @@ const Leads: React.FC = () => {
       }
     }
     fetchLeads();
+  }, []);
+
+  // ── Supabase Realtime: auto-append new leads ─────────────
+  useEffect(() => {
+    const channel = supabase
+      .channel("leads-realtime")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "leads" },
+        (payload) => {
+          const newLead = mapLead(payload.new);
+          setLeads((prev) => {
+            if (prev.some((l) => l.id === newLead.id)) return prev;
+            return [newLead, ...prev];
+          });
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   const handleAddClient = (e: React.FormEvent) => {
@@ -1031,6 +1054,9 @@ const Leads: React.FC = () => {
                         <span className="ml-2 inline-flex items-center text-blue-600" title={lead.lead_type === "Sale" ? "Co-Seller" : "Co-Purchaser"}>
                           <Users size={14} />
                         </span>
+                      )}
+                      {lead.status !== "Converted" && lead.created_at && (Date.now() - new Date(lead.created_at).getTime()) < 24 * 60 * 60 * 1000 && (
+                        <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold bg-green-100 text-green-700 border border-green-200">New</span>
                       )}
                     </div>
                   </td>

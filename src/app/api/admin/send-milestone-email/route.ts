@@ -17,7 +17,7 @@ async function sendEmailForDeal(
     try {
         const { data: deal } = await supabaseAdmin
             .from("deals")
-            .select("client_id")
+            .select("client_id, lead_id, file_number, property_address, type, closing_date")
             .eq("id", dealId)
             .single()
 
@@ -31,9 +31,26 @@ async function sendEmailForDeal(
 
         if (!client?.email) return { success: false, error: "Client email not found" }
 
+        // Fetch lead data for lead placeholders
+        let lead: any = null;
+        if (deal.lead_id) {
+            const { data: leadData } = await supabaseAdmin
+                .from("leads")
+                .select("*")
+                .eq("id", deal.lead_id)
+                .single()
+            lead = leadData;
+        }
+
+        // Build formatted address
+        const leadAddress = lead
+            ? [lead.address_street, lead.address_city, lead.address_province, lead.address_postal_code].filter(Boolean).join(", ")
+            : deal.property_address ?? "";
+
         // Replace placeholders in email body
         const fullName = `${client.first_name ?? ""} ${client.last_name ?? ""}`.trim()
         const placeholders: Record<string, string> = {
+            // User placeholders
             "{{ user.first_name }}": client.first_name ?? "",
             "{{ user.last_name }}": client.last_name ?? "",
             "{{ user.full_name }}": fullName,
@@ -42,6 +59,24 @@ async function sendEmailForDeal(
             "{{user.last_name}}": client.last_name ?? "",
             "{{user.full_name}}": fullName,
             "{{user.email}}": client.email,
+            // Lead / deal placeholders
+            "{{ lead_address }}": leadAddress,
+            "{{lead_address}}": leadAddress,
+            "{{ lead.address_line1 }}": lead?.address_street ?? deal.property_address ?? "",
+            "{{lead.address_line1}}": lead?.address_street ?? deal.property_address ?? "",
+            "{{ lead.address_city }}": lead?.address_city ?? "",
+            "{{lead.address_city}}": lead?.address_city ?? "",
+            "{{ lead.address_province }}": lead?.address_province ?? "",
+            "{{lead.address_province}}": lead?.address_province ?? "",
+            "{{ lead.file_number }}": deal.file_number ?? "",
+            "{{lead.file_number}}": deal.file_number ?? "",
+            "{{ lead_type }}": (deal.type ?? "").toLowerCase(),
+            "{{lead_type}}": (deal.type ?? "").toLowerCase(),
+            // Milestone placeholders
+            "{{ stage_name }}": milestone?.title ?? "",
+            "{{stage_name}}": milestone?.title ?? "",
+            "{{ stage_status }}": milestone?.status ?? "Completed",
+            "{{stage_status}}": milestone?.status ?? "Completed",
         }
 
         let processedBody = template.body
@@ -59,6 +94,14 @@ async function sendEmailForDeal(
         processedBody = processedBody.replace(/\{\{\s*user\.last_name\s*\}\}/gi, client.last_name ?? "");
         processedBody = processedBody.replace(/\{\{\s*user\.full_name\s*\}\}/gi, fullName);
         processedBody = processedBody.replace(/\{\{\s*user\.email\s*\}\}/gi, client.email ?? "");
+        processedBody = processedBody.replace(/\{\{\s*lead_address\s*\}\}/gi, leadAddress);
+        processedBody = processedBody.replace(/\{\{\s*lead\.address_line1\s*\}\}/gi, lead?.address_street ?? deal.property_address ?? "");
+        processedBody = processedBody.replace(/\{\{\s*lead\.address_city\s*\}\}/gi, lead?.address_city ?? "");
+        processedBody = processedBody.replace(/\{\{\s*lead\.address_province\s*\}\}/gi, lead?.address_province ?? "");
+        processedBody = processedBody.replace(/\{\{\s*lead\.file_number\s*\}\}/gi, deal.file_number ?? "");
+        processedBody = processedBody.replace(/\{\{\s*lead_type\s*\}\}/gi, (deal.type ?? "").toLowerCase());
+        processedBody = processedBody.replace(/\{\{\s*stage_name\s*\}\}/gi, milestone?.title ?? "");
+        processedBody = processedBody.replace(/\{\{\s*stage_status\s*\}\}/gi, milestone?.status ?? "Completed");
 
         const htmlBody = `
       <div>
@@ -67,11 +110,23 @@ async function sendEmailForDeal(
       </div>
     `
 
+        // Apply placeholder replacement to subject as well
+        let processedSubject = (template.subject || template.name || "Milestone Completed")
+            .replace(/&#123;/g, "{")
+            .replace(/&#125;/g, "}");
+        for (const [key, value] of Object.entries(placeholders)) {
+            processedSubject = processedSubject.replaceAll(key, value);
+        }
+        processedSubject = processedSubject.replace(/\{\{\s*lead_address\s*\}\}/gi, leadAddress);
+        processedSubject = processedSubject.replace(/\{\{\s*lead\.file_number\s*\}\}/gi, deal.file_number ?? "");
+        processedSubject = processedSubject.replace(/\{\{\s*user\.first_name\s*\}\}/gi, client.first_name ?? "");
+        processedSubject = processedSubject.replace(/\{\{\s*user\.full_name\s*\}\}/gi, fullName);
+
         const { data: sendResult, error: sendError } = await resend.emails.send({
             from: fromEmail,
             replyTo: "iclosed@navawilson.law",
             to: [client.email],
-            subject: template.subject || template.name || "Milestone Completed",
+            subject: processedSubject,
             html: htmlBody,
         })
 
