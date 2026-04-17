@@ -18,7 +18,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { name, description, lead_type, order_index, role, is_shared, email_template_id } = body;
+  const { name, description, lead_type, order_index, role, is_shared, email_template_id, auto_complete } = body;
 
   if (!name || !lead_type) {
     return NextResponse.json({ error: "Name and lead type are required" }, { status: 400 });
@@ -34,6 +34,7 @@ export async function POST(req: NextRequest) {
       role: role ?? "Client",
       is_shared: is_shared ?? false,
       email_template_id: email_template_id || null,
+      auto_complete: auto_complete ?? false,
     }])
     .select("*, email_templates(id, name)")
     .single();
@@ -47,7 +48,7 @@ export async function POST(req: NextRequest) {
 
 export async function PUT(req: NextRequest) {
   const body = await req.json();
-  const { id, name, description, lead_type, order_index, role, is_shared, email_template_id } = body;
+  const { id, name, description, lead_type, order_index, role, is_shared, email_template_id, auto_complete } = body;
 
   if (!id) {
     return NextResponse.json({ error: "ID is required" }, { status: 400 });
@@ -63,6 +64,7 @@ export async function PUT(req: NextRequest) {
       role: role ?? "Client",
       is_shared: is_shared ?? false,
       email_template_id: email_template_id || null,
+      auto_complete: auto_complete ?? false,
     })
     .eq("id", id)
     .select("*, email_templates(id, name)")

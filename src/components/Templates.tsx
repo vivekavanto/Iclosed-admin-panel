@@ -23,6 +23,7 @@ interface StageTemplate {
   order_index: number;
   role: string;
   is_shared: boolean;
+  auto_complete: boolean;
   email_template_id: string | null;
   email_templates: { id: string; name: string } | null;
 }
@@ -188,6 +189,7 @@ const Templates: React.FC = () => {
             role: editingStage.role,
             is_shared: editingStage.is_shared,
             email_template_id: editingStage.email_template_id,
+            auto_complete: editingStage.auto_complete,
           }}
         />
       )}
@@ -236,6 +238,7 @@ const Templates: React.FC = () => {
                             <th className="px-6 py-3">Role</th>
                             <th className="px-6 py-3">Email Template</th>
                             <th className="px-6 py-3 text-center">Shared</th>
+                            <th className="px-6 py-3 text-center">Auto</th>
                             <th className="px-6 py-3 w-16"></th>
                           </tr>
                         </thead>
@@ -259,6 +262,9 @@ const Templates: React.FC = () => {
                               </td>
                               <td className="px-6 py-4 text-center">
                                 {item.is_shared ? <CheckCircle2 className="mx-auto text-green-500" size={16} /> : <XCircle className="mx-auto text-slate-200" size={16} />}
+                              </td>
+                              <td className="px-6 py-4 text-center">
+                                {item.auto_complete ? <CheckCircle2 className="mx-auto text-blue-500" size={16} /> : <XCircle className="mx-auto text-slate-200" size={16} />}
                               </td>
                               <td className="px-6 py-4 text-center">
                                 <div className="flex items-center justify-center gap-1">

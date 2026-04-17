@@ -202,10 +202,12 @@ export async function convertSingleLead(
         .order("order_index", { ascending: true });
 
       if (stageTemplates && stageTemplates.length > 0) {
+        const now = new Date().toISOString();
         const milestoneRows = stageTemplates.map((st) => ({
           deal_id: dealId,
           title: st.name,
-          status: "Pending",
+          status: st.auto_complete ? "Completed" : "Pending",
+          completed_at: st.auto_complete ? now : null,
           order_index: st.order_index,
           email_template_id: st.email_template_id ?? null,
           stage_template_id: st.id,
@@ -218,9 +220,96 @@ export async function convertSingleLead(
           .select("id, stage_template_id");
 
         if (!msError && milestones) {
+          const stageTemplateMap = new Map(stageTemplates.map((st) => [st.id, st]));
+
           for (const ms of milestones) {
             if (ms.stage_template_id) {
               stageToMilestone[ms.stage_template_id] = ms.id;
+
+              // Send email for auto-completed milestones that have an email template
+              const st = stageTemplateMap.get(ms.stage_template_id);
+              if (st?.auto_complete && st?.email_template_id) {
+                try {
+                  // Fetch the email template
+                  const { data: emailTemplate } = await supabaseAdmin
+                    .from("email_templates")
+                    .select("name, subject, body")
+                    .eq("id", st.email_template_id)
+                    .single();
+
+                  if (emailTemplate?.body) {
+                    // Fetch client info
+                    const { data: clientData } = await supabaseAdmin
+                      .from("clients")
+                      .select("email, first_name, last_name")
+                      .eq("id", clientId)
+                      .single();
+
+                    if (clientData?.email) {
+                      const { Resend } = await import("resend");
+                      const resend = new Resend(process.env.RESEND_API_KEY);
+                      const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <noreply@iclosed.ca>";
+
+                      const fullName = `${clientData.first_name ?? ""} ${clientData.last_name ?? ""}`.trim();
+                      const leadAddress = [lead.address_street, lead.address_city, lead.address_province, lead.address_postal_code].filter(Boolean).join(", ");
+
+                      // Replace placeholders in body
+                      let processedBody = emailTemplate.body
+                        .replace(/&#123;/g, "{").replace(/&#125;/g, "}").replace(/&nbsp;/g, " ").replace(/\u00A0/g, " ");
+
+                      const placeholders: Record<string, string> = {
+                        "{{ user.first_name }}": clientData.first_name ?? "",
+                        "{{ user.last_name }}": clientData.last_name ?? "",
+                        "{{ user.full_name }}": fullName,
+                        "{{ user.email }}": clientData.email,
+                        "{{ lead_address }}": leadAddress,
+                        "{{ lead.file_number }}": generatedFileNumber ?? "",
+                        "{{ lead_type }}": (leadType ?? "").toLowerCase(),
+                        "{{ stage_name }}": st.name ?? "",
+                        "{{user.first_name}}": clientData.first_name ?? "",
+                        "{{user.last_name}}": clientData.last_name ?? "",
+                        "{{user.full_name}}": fullName,
+                        "{{user.email}}": clientData.email,
+                        "{{lead_address}}": leadAddress,
+                        "{{lead.file_number}}": generatedFileNumber ?? "",
+                        "{{lead_type}}": (leadType ?? "").toLowerCase(),
+                        "{{stage_name}}": st.name ?? "",
+                      };
+                      for (const [key, value] of Object.entries(placeholders)) {
+                        processedBody = processedBody.replaceAll(key, value);
+                      }
+                      processedBody = processedBody.replace(/\{\{\s*user\.first_name\s*\}\}/gi, clientData.first_name ?? "");
+                      processedBody = processedBody.replace(/\{\{\s*user\.full_name\s*\}\}/gi, fullName);
+                      processedBody = processedBody.replace(/\{\{\s*lead_address\s*\}\}/gi, leadAddress);
+
+                      // Replace placeholders in subject
+                      let processedSubject = (emailTemplate.subject || emailTemplate.name || "Milestone Completed")
+                        .replace(/&#123;/g, "{").replace(/&#125;/g, "}");
+                      for (const [key, value] of Object.entries(placeholders)) {
+                        processedSubject = processedSubject.replaceAll(key, value);
+                      }
+
+                      const htmlBody = `<div>${processedBody}<img src="https://iclosed-admin-panel.vercel.app/logo.png" alt="iClosed by Nava Wilson" style="width:70px;height:auto;" /></div>`;
+
+                      await resend.emails.send({
+                        from: fromEmail,
+                        replyTo: "iclosed@navawilson.law",
+                        to: [clientData.email],
+                        subject: processedSubject,
+                        html: htmlBody,
+                      });
+
+                      // Mark email_sent on the milestone
+                      await supabaseAdmin
+                        .from("milestones")
+                        .update({ email_sent: true })
+                        .eq("id", ms.id);
+                    }
+                  }
+                } catch (emailErr) {
+                  console.error("[Convert] Auto-complete email failed (non-blocking):", emailErr);
+                }
+              }
             }
           }
         }

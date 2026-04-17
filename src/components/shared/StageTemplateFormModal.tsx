@@ -13,6 +13,7 @@ interface StageFormData {
   role: string;
   is_shared: boolean;
   email_template_id: string;
+  auto_complete: boolean;
 }
 
 interface EditStageData {
@@ -24,6 +25,7 @@ interface EditStageData {
   role: string;
   is_shared?: boolean;
   email_template_id: string | null;
+  auto_complete?: boolean;
 }
 
 interface StageTemplateFormModalProps {
@@ -46,6 +48,7 @@ const INITIAL_FORM: StageFormData = {
   role: "Client",
   is_shared: false,
   email_template_id: "",
+  auto_complete: false,
 };
 
 export default function StageTemplateFormModal({
@@ -78,6 +81,7 @@ export default function StageTemplateFormModal({
           role: editData.role,
           is_shared: editData.is_shared ?? false,
           email_template_id: editData.email_template_id ?? "",
+          auto_complete: editData.auto_complete ?? false,
         });
       } else {
         setForm({
@@ -201,9 +205,9 @@ export default function StageTemplateFormModal({
               <input
                 type="number"
                 value={form.order_index}
-                onChange={(e) => setForm((p) => ({ ...p, order_index: parseInt(e.target.value) || 1 }))}
+                onChange={(e) => setForm((p) => ({ ...p, order_index: parseInt(e.target.value) || 0 }))}
                 className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
-                min={1}
+                min={0}
               />
             </div>
           </div>
@@ -223,7 +227,7 @@ export default function StageTemplateFormModal({
                 <option value="Opposing Counsel">Opposing Counsel</option>
               </select>
             </div>
-            <div className="flex items-end pb-1">
+            <div className="flex flex-col gap-2 pb-1 justify-end">
               <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
                 <input
                   type="checkbox"
@@ -232,6 +236,15 @@ export default function StageTemplateFormModal({
                   className="rounded border-slate-300"
                 />
                 Shared with client
+              </label>
+              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={form.auto_complete}
+                  onChange={(e) => setForm((p) => ({ ...p, auto_complete: e.target.checked }))}
+                  className="rounded border-slate-300"
+                />
+                Auto-complete on creation
               </label>
             </div>
           </div>
