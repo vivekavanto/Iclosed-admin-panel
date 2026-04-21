@@ -135,17 +135,22 @@ export async function sendAuthEmailViaResend(opts: {
   } else {
     // ── Fallback: built-in default (no template in DB yet) ────────────────
     if (type === "invite") {
-      subject = "You're Invited to iClosed";
+      subject = "Activate your iClosed account";
       bodyHtml = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <p>${greeting}</p>
-          <p>You have been invited to join <strong>iClosed</strong>, your client portal for managing your real estate transaction.</p>
-          <p>Please click the button below to set up your password and access your account:</p>
-          <p style="text-align: center; margin: 30px 0;">
-            <a href="${actionLink}" style="background-color: #1a1a2e; color: #ffffff; padding: 12px 30px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Set Your Password</a>
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #111827; line-height: 1.6;">
+          <h2 style="margin: 0 0 16px 0; font-size: 20px; font-weight: 700;">${greeting}</h2>
+          <p style="margin: 0 0 24px 0; font-size: 15px;">
+            You've been invited to access your secure iClosed customer portal. Click the button below to accept your invitation and set your password.
           </p>
-          <p style="font-size: 13px; color: #666;">If the button above doesn't work, copy and paste this link into your browser:<br/>
-            <a href="${actionLink}" style="color: #1a1a2e; word-break: break-all;">${actionLink}</a>
+          <p style="margin: 24px 0;">
+            <a href="${actionLink}" style="background-color: #DC2626; color: #ffffff; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block; font-size: 15px;">Activate my account</a>
+          </p>
+          <div style="border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px 20px; margin: 24px 0; font-size: 14px;">
+            <strong>Link expires in 24 hours.</strong> If the button doesn't work, copy and paste this URL into your browser:<br/>
+            <a href="${actionLink}" style="color: #DC2626; word-break: break-all;">${actionLink}</a>
+          </div>
+          <p style="margin: 24px 0 0 0; font-size: 13px; color: #6b7280;">
+            If you didn't request this invitation, you can safely ignore this email. No account will be created without your action.
           </p>
           <br/>
           <img src="https://iclosed-admin-panel.vercel.app/logo.png" alt="iClosed by Nava Wilson" style="width:70px;height:auto;" />

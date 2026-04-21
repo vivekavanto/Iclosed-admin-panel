@@ -201,9 +201,7 @@ iClosed by Nava Wilson`;
     `;
 
     // Build subject
-    const subject = address
-      ? `Congratulations on your ${leadType} of ${address}`
-      : "Welcome to iClosed";
+    const subject = "Welcome to iClosed";
 
     // Send via Resend
     const fromEmail =

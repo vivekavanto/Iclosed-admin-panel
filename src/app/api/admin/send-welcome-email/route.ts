@@ -88,20 +88,7 @@ function buildHtmlEmail(bodyText: string): string {
   `;
 }
 
-function buildSubject(lead: any): string {
-  const leadType = (lead.lead_type ?? "purchase").toLowerCase();
-  const address = [
-    lead.address_street,
-    lead.address_city,
-    lead.address_province,
-    lead.address_postal_code,
-  ]
-    .filter(Boolean)
-    .join(", ");
-
-  if (address) {
-    return `Congratulations on your ${leadType} of ${address}`;
-  }
+function buildSubject(_lead: any): string {
   return "Welcome to iClosed";
 }
 
