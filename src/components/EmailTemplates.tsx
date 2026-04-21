@@ -397,7 +397,7 @@ const EmailTemplates: React.FC = () => {
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Initial Intake Completed Email"
+                  placeholder="e.g. Initial Intake Completed"
                   className={inputClasses}
                   value={form.name}
                   onChange={(e) =>
