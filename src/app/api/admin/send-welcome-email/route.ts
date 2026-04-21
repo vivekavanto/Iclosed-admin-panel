@@ -88,10 +88,6 @@ function buildHtmlEmail(bodyText: string): string {
   `;
 }
 
-function buildSubject(_lead: any): string {
-  return "Welcome to iClosed";
-}
-
 /**
  * POST /api/admin/send-welcome-email
  *
@@ -170,8 +166,14 @@ export async function POST(req: NextRequest) {
     // 5. Build styled HTML
     const htmlBody = buildHtmlEmail(emailBody);
 
-    // 6. Build subject line (dynamic like the reference email)
-    const subject = buildSubject(lead);
+    // 6. Build subject: DB subject > template name > default, with placeholder interpolation
+    const rawSubject =
+      template?.subject && template.subject.trim() !== ""
+        ? template.subject
+        : template?.name
+          ? template.name
+          : "Welcome to iClosed";
+    const subject = interpolateVariables(rawSubject, lead);
 
     // 7. Send via Resend
     const fromEmail =

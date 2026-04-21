@@ -98,6 +98,7 @@ export async function POST(req: NextRequest) {
 
     let templateBody = "";
     let templateName = "Default Welcome";
+    let templateSubject: string | null = null;
 
     if (templates && templates.length > 0) {
       const welcome = templates.find((t: any) =>
@@ -107,6 +108,7 @@ export async function POST(req: NextRequest) {
       if (chosen.body && chosen.body.trim() !== "") {
         templateBody = chosen.body;
         templateName = chosen.name;
+        templateSubject = chosen.subject;
       }
     }
 
@@ -200,8 +202,21 @@ iClosed by Nava Wilson`;
       </div>
     `;
 
-    // Build subject
-    const subject = "Welcome to iClosed";
+    // Build subject: DB subject > template name > default, with placeholder interpolation
+    let subject =
+      templateSubject && templateSubject.trim() !== ""
+        ? templateSubject
+        : templateName !== "Default Welcome"
+          ? templateName
+          : "Welcome to iClosed";
+    for (const [key, value] of Object.entries(variableMap)) {
+      subject = subject.split(key).join(value);
+    }
+    subject = subject.replace(/\{\{\s*user\.first_name\s*\}\}/gi, lead.first_name ?? "");
+    subject = subject.replace(/\{\{\s*user\.last_name\s*\}\}/gi, lead.last_name ?? "");
+    subject = subject.replace(/\{\{\s*user\.full_name\s*\}\}/gi, fullName);
+    subject = subject.replace(/\{\{\s*lead_type\s*\}\}/gi, leadType);
+    subject = subject.replace(/\{\{\s*lead_address\s*\}\}/gi, address);
 
     // Send via Resend
     const fromEmail =
