@@ -5,7 +5,6 @@ import { createPortal } from "react-dom";
 import { supabase } from "@/lib/supabaseClient";
 import {
   isNonCitizenFlagged,
-  NON_CITIZEN_FLAG_LABEL,
   NON_CITIZEN_FLAG_TOOLTIP,
 } from "@/lib/isNonCitizenFlagged";
 import {
@@ -1094,11 +1093,10 @@ const Leads: React.FC = () => {
                       )}
                       {isNonCitizenFlagged(lead) && (
                         <span
-                          className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-red-100 text-red-700 border border-red-200"
+                          className="ml-2 inline-flex items-center text-red-600"
                           title={NON_CITIZEN_FLAG_TOOLTIP}
                         >
-                          <AlertTriangle size={10} />
-                          {NON_CITIZEN_FLAG_LABEL}
+                          <AlertTriangle size={12} />
                         </span>
                       )}
                       {lead.status !== "Converted" && lead.created_at && (Date.now() - new Date(lead.created_at).getTime()) < 24 * 60 * 60 * 1000 && (

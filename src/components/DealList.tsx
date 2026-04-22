@@ -3,7 +3,6 @@ import { Deal, DealType, DealStatus } from '../types';
 import { Search, Trash2, Users, AlertTriangle } from 'lucide-react';
 import {
   isNonCitizenFlagged,
-  NON_CITIZEN_FLAG_LABEL,
   NON_CITIZEN_FLAG_TOOLTIP,
 } from '@/lib/isNonCitizenFlagged';
 
@@ -225,11 +224,10 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       )}
                       {isNonCitizenFlagged({ citizenship_status: (deal as any).leadCitizenshipStatus }) && (
                         <span
-                          className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-red-100 text-red-700 border border-red-200"
+                          className="ml-2 inline-flex items-center text-red-600"
                           title={NON_CITIZEN_FLAG_TOOLTIP}
                         >
-                          <AlertTriangle size={10} />
-                          {NON_CITIZEN_FLAG_LABEL}
+                          <AlertTriangle size={12} />
                         </span>
                       )}
                     </div>
