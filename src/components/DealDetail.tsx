@@ -119,7 +119,12 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     try {
       const res = await fetch(`/api/admin/task-responses?deal_id=${deal.id}`);
       const data = await res.json();
-      if (Array.isArray(data)) setDealDocuments(data);
+      if (Array.isArray(data)) {
+        const uploaded = data.filter(
+          (doc: any) => typeof doc.file_url === "string" && doc.file_url.trim() !== ""
+        );
+        setDealDocuments(uploaded);
+      }
     } catch {
       setDealDocuments([]);
     } finally {

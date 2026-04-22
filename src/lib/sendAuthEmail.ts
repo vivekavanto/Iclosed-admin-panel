@@ -140,17 +140,13 @@ export async function sendAuthEmailViaResend(opts: {
         <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #111827; line-height: 1.6;">
           <h2 style="margin: 0 0 16px 0; font-size: 20px; font-weight: 700;">${greeting}</h2>
           <p style="margin: 0 0 24px 0; font-size: 15px;">
-            You've been invited to access your secure iClosed customer portal. Click the button below to accept your invitation and set your password.
+            You've been invited to access your secure iClosed customer portal. Click the button below to accept your invitation and set your password. <strong>Link expires in 24 hours.</strong>
           </p>
           <p style="margin: 24px 0;">
             <a href="${actionLink}" style="background-color: #DC2626; color: #ffffff; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block; font-size: 15px;">Activate my account</a>
           </p>
-          <div style="border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px 20px; margin: 24px 0; font-size: 14px;">
-            <strong>Link expires in 24 hours.</strong> If the button doesn't work, copy and paste this URL into your browser:<br/>
-            <a href="${actionLink}" style="color: #DC2626; word-break: break-all;">${actionLink}</a>
-          </div>
-          <p style="margin: 24px 0 0 0; font-size: 13px; color: #6b7280;">
-            If you didn't request this invitation, you can safely ignore this email. No account will be created without your action.
+          <p style="margin: 32px 0 0 0; font-size: 12px; color: #6b7280;">
+            If you didn't request this invitation, you can safely ignore this email. No account will be created without your action. If the button doesn't work, copy and paste this URL into your browser: <a href="${actionLink}" style="color: #DC2626; word-break: break-all; font-size: 12px;">${actionLink}</a>
           </p>
           <br/>
           <img src="https://iclosed-admin-panel.vercel.app/logo.png" alt="iClosed by Nava Wilson" style="width:70px;height:auto;" />
