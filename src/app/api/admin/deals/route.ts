@@ -6,7 +6,7 @@ const supabase = supabaseAdmin;
 export async function GET() {
   const { data, error } = await supabase
     .from("deals")
-    .select("*, tasks(id, status), leads(id, parent_lead_id, first_name, last_name)")
+    .select("*, tasks(id, status), leads(id, parent_lead_id, first_name, last_name, citizenship_status)")
     .order("created_at", { ascending: false });
 
   if (error) {
@@ -41,6 +41,7 @@ export async function GET() {
       is_co_purchaser: isCoPurchaser,
       has_co_purchasers: hasCoPurchasers,
       lead_name: lead ? `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim() : null,
+      lead_citizenship_status: lead?.citizenship_status ?? null,
     };
   });
 

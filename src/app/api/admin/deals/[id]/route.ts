@@ -26,11 +26,12 @@ export async function GET(
       // Step 1: Get the lead to find parent_lead_id
       const { data: lead } = await supabase
         .from("leads")
-        .select("id, parent_lead_id, first_name, last_name")
+        .select("id, parent_lead_id, first_name, last_name, citizenship_status")
         .eq("id", data.lead_id)
         .single();
 
       if (lead) {
+        data.lead_citizenship_status = lead.citizenship_status ?? null;
         const rootLeadId = lead.parent_lead_id ?? lead.id;
 
         // Step 2: Find all leads in the family

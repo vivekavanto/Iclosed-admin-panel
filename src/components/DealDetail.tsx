@@ -19,8 +19,13 @@ import {
   Download,
   Copy,
   ExternalLink,
+  AlertTriangle,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
+import {
+  isNonCitizenFlagged,
+  NON_CITIZEN_FLAG_TOOLTIP,
+} from "@/lib/isNonCitizenFlagged";
 
 interface DealDetailProps {
   deal: Deal;
@@ -30,7 +35,7 @@ interface DealDetailProps {
 
 const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const router = useRouter();
-  const handleBack = onBack || (() => router.push("/deals"));
+  const handleBack = onBack || (() => router.push("/admin/deals"));
 
   const mapApiTask = (t: any): Task => ({
     id: t.id,
@@ -119,12 +124,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     try {
       const res = await fetch(`/api/admin/task-responses?deal_id=${deal.id}`);
       const data = await res.json();
-      if (Array.isArray(data)) {
-        const uploaded = data.filter(
-          (doc: any) => typeof doc.file_url === "string" && doc.file_url.trim() !== ""
-        );
-        setDealDocuments(uploaded);
-      }
+      if (Array.isArray(data)) setDealDocuments(data);
     } catch {
       setDealDocuments([]);
     } finally {
@@ -712,6 +712,19 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           </button>
         </div>
       </div>
+
+      {/* Citizenship flag banner */}
+      {isNonCitizenFlagged({ citizenship_status: rawDeal?.lead_citizenship_status }) && (
+        <div
+          className="flex items-start gap-3 px-5 py-4 rounded-xl border bg-red-50 border-red-200 text-red-800 mb-6"
+          title={NON_CITIZEN_FLAG_TOOLTIP}
+        >
+          <AlertTriangle size={18} className="mt-0.5 shrink-0" />
+          <div className="text-sm font-semibold leading-snug">
+            This client selected &ldquo;Non-Citizen or Unsure&rdquo; as their citizenship status.
+          </div>
+        </div>
+      )}
 
       {/* Property Details Card (Top - Full Width) */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mb-6">

@@ -48,7 +48,7 @@ export default function ClientLayout({
         isOpen={isSearchOpen}
         onClose={closeSearch}
         onNavigateToDeal={(id) => {
-          router.push(`/deals/${id}`);
+          router.push(`/admin/deals/${id}`);
           closeSearch();
         }}
       />

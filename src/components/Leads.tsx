@@ -4,6 +4,11 @@ import React, { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { supabase } from "@/lib/supabaseClient";
 import {
+  isNonCitizenFlagged,
+  NON_CITIZEN_FLAG_LABEL,
+  NON_CITIZEN_FLAG_TOOLTIP,
+} from "@/lib/isNonCitizenFlagged";
+import {
   History,
   Mail,
   Key,
@@ -77,6 +82,7 @@ const Leads: React.FC = () => {
     "residential" | "corporate"
   >("residential");
   const [search, setSearch] = useState("");
+  const [showOnlyFlagged, setShowOnlyFlagged] = useState(false);
 
   const [leads, setLeads] = useState<LeadUser[]>([]);
   const [leadsLoading, setLeadsLoading] = useState(true);
@@ -403,6 +409,7 @@ const Leads: React.FC = () => {
 
   const filteredLeads = leads
     .filter((l) => !l.parentLeadId) // Only show primary/standalone leads; co-purchasers visible in detail view
+    .filter((l) => !showOnlyFlagged || isNonCitizenFlagged(l))
     .filter((l) => {
       const q = search.toLowerCase();
       return (
@@ -467,6 +474,19 @@ const Leads: React.FC = () => {
                   </span>
                 ))}
             </span>
+          </div>
+        )}
+
+        {/* Citizenship flag banner */}
+        {isNonCitizenFlagged(selectedLead) && (
+          <div
+            className="flex items-start gap-3 px-5 py-4 rounded-xl border bg-red-50 border-red-200 text-red-800"
+            title={NON_CITIZEN_FLAG_TOOLTIP}
+          >
+            <AlertTriangle size={18} className="mt-0.5 shrink-0" />
+            <div className="text-sm font-semibold leading-snug">
+              This client selected &ldquo;Non-Citizen or Unsure&rdquo; as their citizenship status.
+            </div>
           </div>
         )}
 
@@ -994,6 +1014,23 @@ const Leads: React.FC = () => {
               className="pl-12 pr-6 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-medium outline-none focus:border-brand-primary transition-all w-full md:w-64"
             />
           </div>
+          <label
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-widest cursor-pointer border transition-all select-none ${
+              showOnlyFlagged
+                ? "bg-red-50 border-red-200 text-red-700"
+                : "bg-white border-slate-200 text-slate-600 hover:border-red-200 hover:text-red-700"
+            }`}
+            title="Show only clients flagged as Non-Citizen / Unsure"
+          >
+            <input
+              type="checkbox"
+              className="sr-only"
+              checked={showOnlyFlagged}
+              onChange={(e) => setShowOnlyFlagged(e.target.checked)}
+            />
+            <AlertTriangle size={14} />
+            Only Flagged
+          </label>
           {/* <button
             onClick={() => setIsAddModalOpen(true)}
             className="flex items-center gap-2 px-6 py-2.5 bg-brand-primary text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-brand-primaryHover transition-all shadow-lg active:scale-95 whitespace-nowrap"
@@ -1053,6 +1090,15 @@ const Leads: React.FC = () => {
                       {lead.parentLeadId && (
                         <span className="ml-2 inline-flex items-center text-blue-600" title={lead.lead_type === "Sale" ? "Co-Seller" : "Co-Purchaser"}>
                           <Users size={14} />
+                        </span>
+                      )}
+                      {isNonCitizenFlagged(lead) && (
+                        <span
+                          className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-red-100 text-red-700 border border-red-200"
+                          title={NON_CITIZEN_FLAG_TOOLTIP}
+                        >
+                          <AlertTriangle size={10} />
+                          {NON_CITIZEN_FLAG_LABEL}
                         </span>
                       )}
                       {lead.status !== "Converted" && lead.created_at && (Date.now() - new Date(lead.created_at).getTime()) < 24 * 60 * 60 * 1000 && (

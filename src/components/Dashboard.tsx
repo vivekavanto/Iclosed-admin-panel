@@ -56,7 +56,7 @@ const Dashboard: React.FC = () => {
 
   const renderDealRow = (deal: any, showDueDate = false) => (
     <Link
-      href={`/deals/${deal.id}`}
+      href={`/admin/deals/${deal.id}`}
       key={deal.id}
       className="bg-white border border-slate-200 rounded-lg p-4 flex items-center justify-between hover:shadow-md transition-shadow cursor-pointer mb-3 group block"
     >

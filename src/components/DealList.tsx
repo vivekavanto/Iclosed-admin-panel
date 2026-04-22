@@ -1,6 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Deal, DealType, DealStatus } from '../types';
-import { Search, Trash2, Users } from 'lucide-react';
+import { Search, Trash2, Users, AlertTriangle } from 'lucide-react';
+import {
+  isNonCitizenFlagged,
+  NON_CITIZEN_FLAG_LABEL,
+  NON_CITIZEN_FLAG_TOOLTIP,
+} from '@/lib/isNonCitizenFlagged';
 
 interface DealListProps {
   onSelectDeal?: (dealId: string) => void;
@@ -12,6 +17,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   const [filterStatus, setFilterStatus] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [showOnlyFlagged, setShowOnlyFlagged] = useState(false);
   const [deals, setDeals] = useState<Deal[]>([]);
 
   useEffect(() => {
@@ -39,7 +45,8 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           isCoPurchaser: d.is_co_purchaser ?? false,
           hasCoPurchasers: d.has_co_purchasers ?? false,
           leadName: d.lead_name ?? '',
-        } as Deal & { isCoPurchaser: boolean; hasCoPurchasers: boolean; leadName: string }));
+          leadCitizenshipStatus: d.lead_citizenship_status ?? null,
+        } as Deal & { isCoPurchaser: boolean; hasCoPurchasers: boolean; leadName: string; leadCitizenshipStatus: string | null }));
         setDeals(mapped);
       })
       .catch(() => setDeals([]));
@@ -65,6 +72,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
     }
     if (filterType && filterType !== 'All' && deal.type !== filterType) return false;
     if (filterStatus && filterStatus !== '' && deal.status !== filterStatus) return false;
+    if (showOnlyFlagged && !isNonCitizenFlagged({ citizenship_status: (deal as any).leadCitizenshipStatus })) return false;
     if (dateFrom || dateTo) {
       const closing = deal.closingDate ? new Date(deal.closingDate) : null;
       if (!closing) return false;
@@ -131,6 +139,23 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
         </div>
 
         <div className="flex flex-1 w-full xl:w-auto items-center gap-3 justify-end">
+          <label
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wide cursor-pointer border transition-colors select-none whitespace-nowrap ${
+              showOnlyFlagged
+                ? 'bg-red-50 border-red-200 text-red-700'
+                : 'bg-white border-slate-300 text-slate-600 hover:border-red-200 hover:text-red-700'
+            }`}
+            title="Show only clients flagged as Non-Citizen / Unsure"
+          >
+            <input
+              type="checkbox"
+              className="sr-only"
+              checked={showOnlyFlagged}
+              onChange={(e) => setShowOnlyFlagged(e.target.checked)}
+            />
+            <AlertTriangle size={12} />
+            Only Flagged
+          </label>
           <div className="relative flex-1 xl:flex-none xl:w-96">
             <input type="text" placeholder="Search" className="w-full pl-3 pr-4 py-1.5 border border-slate-300 rounded text-sm focus:outline-none focus:border-brand-primary" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
           </div>
@@ -196,6 +221,15 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       {(deal as any).hasCoPurchasers && (
                         <span className="ml-2 inline-flex items-center text-green-600" title={deal.type === "Sale" ? "Has Co-Seller(s)" : "Has Co-Purchaser(s)"}>
                           <Users size={14} />
+                        </span>
+                      )}
+                      {isNonCitizenFlagged({ citizenship_status: (deal as any).leadCitizenshipStatus }) && (
+                        <span
+                          className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-red-100 text-red-700 border border-red-200"
+                          title={NON_CITIZEN_FLAG_TOOLTIP}
+                        >
+                          <AlertTriangle size={10} />
+                          {NON_CITIZEN_FLAG_LABEL}
                         </span>
                       )}
                     </div>
