@@ -146,7 +146,7 @@ export async function sendAuthEmailViaResend(opts: {
             <a href="${actionLink}" style="background-color: #DC2626; color: #ffffff; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block; font-size: 15px;">Activate my account</a>
           </p>
           <p style="margin: 32px 0 0 0; font-size: 12px; color: #6b7280;">
-            If you didn't request this invitation, you can safely ignore this email. No account will be created without your action. If the button doesn't work, copy and paste this URL into your browser: <a href="${actionLink}" style="color: #DC2626; word-break: break-all; font-size: 12px;">${actionLink}</a>
+            If you didn't request this invitation, you can safely ignore this email. No account will be created without your action. If the button doesn't work, <a href="${actionLink}" style="color: #DC2626;">use this link</a> instead.
           </p>
           <br/>
           <img src="https://iclosed-admin-panel.vercel.app/logo.png" alt="iClosed by Nava Wilson" style="width:70px;height:auto;" />
@@ -162,9 +162,7 @@ export async function sendAuthEmailViaResend(opts: {
           <p style="text-align: center; margin: 30px 0;">
             <a href="${actionLink}" style="background-color: #1a1a2e; color: #ffffff; padding: 12px 30px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Reset Password</a>
           </p>
-          <p style="font-size: 13px; color: #666;">If the button above doesn't work, copy and paste this link into your browser:<br/>
-            <a href="${actionLink}" style="color: #1a1a2e; word-break: break-all;">${actionLink}</a>
-          </p>
+          <p style="font-size: 13px; color: #666;">If the button above doesn't work, <a href="${actionLink}" style="color: #1a1a2e;">use this link</a> instead.</p>
           <p style="font-size: 13px; color: #666;">If you did not request a password reset, you can safely ignore this email.</p>
           <br/>
           <img src="https://iclosed-admin-panel.vercel.app/logo.png" alt="iClosed by Nava Wilson" style="width:70px;height:auto;" />
