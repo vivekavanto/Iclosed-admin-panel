@@ -33,6 +33,45 @@ interface DealDetailProps {
   onBack?: () => void;
 }
 
+const IdentificationChip: React.FC<{ meta: any }> = ({ meta }) => {
+  if (!meta || meta.doc_type !== 'identification') return null;
+
+  if (meta.is_identification === false) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-700 border border-red-200 mt-1"
+        title={meta.detection_reason || 'Gemini could not classify this as an ID document'}
+      >
+        <AlertTriangle size={10} />
+        Not a recognized ID
+      </span>
+    );
+  }
+
+  if (!meta.document_type) return null;
+
+  const label = meta.side && meta.side !== 'unknown'
+    ? `${meta.document_type} (${meta.side})`
+    : meta.document_type;
+  const isLowConf = meta.confidence && meta.confidence !== 'high';
+  const expectedSide =
+    meta.custom_type === 'primary_back' || meta.custom_type === 'secondary_back' ? 'back'
+    : meta.custom_type === 'primary_front' || meta.custom_type === 'secondary_front' ? 'front'
+    : null;
+  const sideMismatch = expectedSide && meta.side && meta.side !== 'unknown' && meta.side !== expectedSide;
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold border mt-1 ${isLowConf ? 'bg-slate-100 text-slate-600 border-slate-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}
+      title={meta.detection_reason || undefined}
+    >
+      {label}
+      {isLowConf && <span className="font-normal text-slate-400">· low confidence</span>}
+      {sideMismatch && <AlertTriangle size={10} className="text-amber-500" />}
+    </span>
+  );
+};
+
 const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const router = useRouter();
   const handleBack = onBack || (() => router.push("/admin/deals"));
@@ -680,6 +719,24 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       .then(data => { if (Array.isArray(data)) setTaskFileDocs(data); })
       .catch(() => { });
   }, [deal.id]);
+
+  const [leadCorporateDocs, setLeadCorporateDocs] = useState<any[]>([]);
+  useEffect(() => {
+    fetch(`/api/admin/lead-docs?deal_id=${deal.id}`)
+      .then(res => res.json())
+      .then(data => { if (Array.isArray(data)) setLeadCorporateDocs(data); })
+      .catch(() => { });
+  }, [deal.id]);
+
+  const findIdMeta = (doc: { file_name?: string | null; file_url?: string | null; value?: string | null } | null | undefined) => {
+    if (!doc) return null;
+    const match =
+      (doc.file_name && leadCorporateDocs.find(r => r.file_name === doc.file_name)) ||
+      (doc.file_url && leadCorporateDocs.find(r => r.file_url === doc.file_url)) ||
+      (doc.value && leadCorporateDocs.find(r => r.file_name === doc.value)) ||
+      null;
+    return match && match.doc_type === 'identification' ? match : null;
+  };
 
   return (
     <div className="flex flex-col h-full bg-slate-50">
@@ -1606,9 +1663,12 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                       <ul className="space-y-2">
                         {docs.map((doc: any, idx: number) => (
                           <li key={`${doc.id}-${idx}`} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
-                            <div className="flex items-center gap-3 min-w-0">
-                              <FileText size={16} className="text-slate-400 shrink-0" />
-                              <p className="text-sm font-medium text-slate-800 truncate">{doc.file_name}</p>
+                            <div className="flex items-start gap-3 min-w-0">
+                              <FileText size={16} className="text-slate-400 shrink-0 mt-0.5" />
+                              <div className="min-w-0 flex flex-col">
+                                <p className="text-sm font-medium text-slate-800 truncate">{doc.file_name}</p>
+                                <IdentificationChip meta={findIdMeta(doc)} />
+                              </div>
                             </div>
                             {doc.file_url ? (
                               <a
@@ -1653,9 +1713,12 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
               <ul className="space-y-2">
                 {taskDocsPopup.docs.map((doc: any, i: number) => (
                   <li key={i} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <FileText size={16} className="text-slate-400 shrink-0" />
-                      <p className="text-sm font-medium text-slate-800 truncate">{doc.file_name}</p>
+                    <div className="flex items-start gap-3 min-w-0">
+                      <FileText size={16} className="text-slate-400 shrink-0 mt-0.5" />
+                      <div className="min-w-0 flex flex-col">
+                        <p className="text-sm font-medium text-slate-800 truncate">{doc.file_name}</p>
+                        <IdentificationChip meta={findIdMeta(doc)} />
+                      </div>
                     </div>
                     {doc.file_url ? (
                       <a
