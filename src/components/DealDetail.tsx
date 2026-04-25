@@ -39,7 +39,7 @@ const IdentificationChip: React.FC<{ meta: any }> = ({ meta }) => {
   if (meta.is_identification === false) {
     return (
       <span
-        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-700 border border-red-200 mt-1"
+        className="inline-flex self-start items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-700 border border-red-200 mt-1"
         title={meta.detection_reason || 'Gemini could not classify this as an ID document'}
       >
         <AlertTriangle size={10} />
@@ -62,7 +62,7 @@ const IdentificationChip: React.FC<{ meta: any }> = ({ meta }) => {
 
   return (
     <span
-      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold border mt-1 ${isLowConf ? 'bg-slate-100 text-slate-600 border-slate-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}
+      className={`inline-flex self-start items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold border mt-1 ${isLowConf ? 'bg-slate-100 text-slate-600 border-slate-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}
       title={meta.detection_reason || undefined}
     >
       {label}
