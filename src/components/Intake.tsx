@@ -106,6 +106,7 @@ const Intake: React.FC = () => {
           address_postal_code: data.address.postalCode,
           address_province: data.address.province,
           aps_signed: data.apsSigned === 'yes',
+          parent_lead_id: null,
         })
         .select()
         .single();

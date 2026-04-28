@@ -8,6 +8,7 @@ export type ConvertOneResult = {
   success: boolean;
   created: boolean;
   lead_id: string;
+  already_converted?: boolean;
   deal_id?: string;
   file_number?: string;
   client_id?: string;
@@ -53,6 +54,7 @@ export async function convertSingleLead(
         success: true,
         created: false,
         lead_id: leadId,
+        already_converted: true,
         deal_id: existingDeal.id,
         file_number: existingDeal.file_number,
         client_id: existingDeal.client_id,
@@ -495,6 +497,7 @@ export async function convertSingleLead(
       success: true,
       created: true,
       lead_id: leadId,
+      already_converted: false,
       deal_id: dealId,
       file_number: generatedFileNumber,
       client_id: clientId,

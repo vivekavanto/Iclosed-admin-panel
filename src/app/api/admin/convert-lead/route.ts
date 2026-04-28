@@ -29,7 +29,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: "lead_id is required" }, { status: 400 });
     }
 
-    // ── 1. Fetch the lead ─────────────────────────────────────────────────────
     const { data: selectedLead, error: leadError } = await supabaseAdmin
       .from("leads")
       .select("*")
@@ -40,54 +39,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: "Lead not found" }, { status: 404 });
     }
 
-    // ── Auto-link address-matched leads before conversion ────────────────────
-    try {
-      const { data: pendingMatches } = await supabaseAdmin
-        .from("leads")
-        .select("id, email, address_match_flag")
-        .is("parent_lead_id", null)
-        .not("address_match_flag", "is", null);
-
-      if (pendingMatches) {
-        for (const pm of pendingMatches) {
-          const matchedId = pm.address_match_flag?.matched_lead_id;
-          if (!matchedId) continue;
-
-          const { data: matchedLead } = await supabaseAdmin
-            .from("leads")
-            .select("email, parent_lead_id")
-            .eq("id", matchedId)
-            .single();
-
-          if (!matchedLead) continue;
-
-          if (matchedLead.email?.toLowerCase() === pm.email?.toLowerCase()) {
-            await supabaseAdmin
-              .from("leads")
-              .update({ address_match_flag: null })
-              .eq("id", pm.id);
-            continue;
-          }
-
-          const rootId = matchedLead.parent_lead_id ?? matchedId;
-          await supabaseAdmin
-            .from("leads")
-            .update({ parent_lead_id: rootId, address_match_flag: null })
-            .eq("id", pm.id);
-        }
-
-        const { data: refreshedLead } = await supabaseAdmin
-          .from("leads")
-          .select("*")
-          .eq("id", lead_id)
-          .single();
-        if (refreshedLead) Object.assign(selectedLead, refreshedLead);
-      }
-    } catch {
-      // Non-blocking
-    }
-
-    // ── Check if this lead has family (auto-detect convert_family) ──────────
     let effectiveConvertFamily = convert_family ?? false;
 
     if (!convert_family) {
@@ -101,7 +52,6 @@ export async function POST(req: Request) {
       }
     }
 
-    // ── Single-lead conversion (no family) ──────────────────────────────────
     if (!effectiveConvertFamily) {
       const one = await convertSingleLead(selectedLead, {
         file_number,
@@ -127,12 +77,11 @@ export async function POST(req: Request) {
         message: one.invite_sent
           ? `Deal created and invite email sent to ${selectedLead.email}`
           : one.already_has_login
-            ? `Deal created. User already has login access — no invite email sent.`
+            ? `Deal created. User already has login access - no invite email sent.`
             : `Deal created, but invite could not be sent: ${one.auth_error || "Create login manually"}`,
       });
     }
 
-    // ── Family conversion ───────────────────────────────────────────────────
     const rootLeadId: string = selectedLead.parent_lead_id ?? selectedLead.id;
 
     const { data: familyLeads, error: familyLeadsError } = await supabaseAdmin

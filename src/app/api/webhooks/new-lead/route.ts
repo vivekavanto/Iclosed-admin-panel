@@ -80,6 +80,23 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const { data: relatedDeal } = await supabaseAdmin
+      .from("deals")
+      .select("id")
+      .eq("lead_id", lead.id)
+      .maybeSingle();
+
+    const isConvertedLead = lead.status === "Converted" || !!relatedDeal;
+    if (!isConvertedLead) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Ignoring welcome email for active lead without a converted deal.",
+        },
+        { status: 409 }
+      );
+    }
+
     // Check if welcome email was already sent
     if (lead.welcome_email_sent) {
       return NextResponse.json({

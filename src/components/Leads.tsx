@@ -4,10 +4,6 @@ import React, { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { supabase } from "@/lib/supabaseClient";
 import {
-  isNonCitizenFlagged,
-  NON_CITIZEN_FLAG_TOOLTIP,
-} from "@/lib/isNonCitizenFlagged";
-import {
   History,
   Mail,
   Key,
@@ -81,7 +77,6 @@ const Leads: React.FC = () => {
     "residential" | "corporate"
   >("residential");
   const [search, setSearch] = useState("");
-  const [showOnlyFlagged, setShowOnlyFlagged] = useState(false);
 
   const [leads, setLeads] = useState<LeadUser[]>([]);
   const [leadsLoading, setLeadsLoading] = useState(true);
@@ -264,6 +259,7 @@ const Leads: React.FC = () => {
         if (Array.isArray(data.results)) {
           const results = data.results as any[];
           const convertedIds = new Set(results.map((r) => r.lead_id));
+          const selectedResult = results.find((r) => r.lead_id === selectedLead.id);
 
           // Mark all converted/skipped family leads as Converted in local state.
           setLeads((prev) =>
@@ -275,18 +271,34 @@ const Leads: React.FC = () => {
           });
 
           const createdCount = results.filter((r) => r.created).length;
-          const skippedCount = results.length - createdCount;
+          const alreadyConvertedCount = results.filter((r) => r.already_converted).length;
           const inviteCount = results.filter((r) => r.invite_sent).length;
           const failedCount = results.filter((r) => !r.success).length;
           const hadErrors = data.had_errors ?? failedCount > 0;
 
           const alreadyHasLoginCount = results.filter((r: any) => r.already_has_login).length;
+          let message: string;
+
+          if (selectedResult?.already_converted) {
+            message = "This lead is already converted.";
+          } else {
+            message = `Converted ${createdCount} lead(s).`;
+            if (alreadyConvertedCount > 0) {
+              message += ` ${alreadyConvertedCount} already converted.`;
+            }
+            message += ` Invites sent to ${inviteCount} email(s).`;
+          }
+
+          if (alreadyHasLoginCount > 0) {
+            message += ` ${alreadyHasLoginCount} already had login access.`;
+          }
+          if (failedCount > 0) {
+            message += ` ${failedCount} failed.`;
+          }
 
           setConvertResult({
             success: !hadErrors,
-            message: `✅ Converted ${createdCount} lead(s) (${skippedCount} already converted). Invites sent to ${inviteCount} email(s).${
-              alreadyHasLoginCount > 0 ? ` ${alreadyHasLoginCount} already had login access.` : ""
-            }${failedCount > 0 ? ` ${failedCount} failed.` : ""}`,
+            message,
           });
         } else {
           setConvertResult({
@@ -337,6 +349,14 @@ const Leads: React.FC = () => {
 
   // ── Send Email with selected template ─────────────────────────────────────
   async function sendWelcomeEmail(leadId: string, templateId?: string) {
+    if (!selectedLead || selectedLead.status !== "Converted") {
+      setWelcomeResult({
+        success: false,
+        message: "Email can only be sent after the lead has been converted to a deal.",
+      });
+      return;
+    }
+
     setSendingWelcome(true);
     setWelcomeResult(null);
     try {
@@ -408,7 +428,6 @@ const Leads: React.FC = () => {
 
   const filteredLeads = leads
     .filter((l) => !l.parentLeadId) // Only show primary/standalone leads; co-purchasers visible in detail view
-    .filter((l) => !showOnlyFlagged || isNonCitizenFlagged(l))
     .filter((l) => {
       const q = search.toLowerCase();
       return (
@@ -476,19 +495,6 @@ const Leads: React.FC = () => {
           </div>
         )}
 
-        {/* Citizenship flag banner */}
-        {isNonCitizenFlagged(selectedLead) && (
-          <div
-            className="flex items-start gap-3 px-5 py-4 rounded-xl border bg-red-50 border-red-200 text-red-800"
-            title={NON_CITIZEN_FLAG_TOOLTIP}
-          >
-            <AlertTriangle size={18} className="mt-0.5 shrink-0" />
-            <div className="text-sm font-semibold leading-snug">
-              This client selected &ldquo;Non-Citizen or Unsure&rdquo; as their citizenship status.
-            </div>
-          </div>
-        )}
-
         {/* Top Identity Card */}
         <div className="bg-white rounded-2xl border border-slate-200 p-8 shadow-sm flex flex-col md:flex-row justify-between items-center gap-6">
           <div className="flex items-center gap-5">
@@ -533,11 +539,18 @@ const Leads: React.FC = () => {
             )}
             <button
               onClick={() => {
+                if (!isConverted) {
+                  setWelcomeResult({
+                    success: false,
+                    message: "Email can only be sent after the lead has been converted to a deal.",
+                  });
+                  return;
+                }
                 fetchEmailTemplates();
                 setSelectedTemplateId("");
                 setEmailModalOpen(true);
               }}
-              disabled={sendingWelcome}
+              disabled={sendingWelcome || !isConverted}
               className="flex items-center gap-2 px-6 py-2.5 bg-emerald-600 text-white rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-emerald-700 transition-all shadow-lg active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
             >
               <Send size={14} /> Send Email
@@ -1013,23 +1026,6 @@ const Leads: React.FC = () => {
               className="pl-12 pr-6 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-medium outline-none focus:border-brand-primary transition-all w-full md:w-64"
             />
           </div>
-          <label
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold uppercase tracking-widest cursor-pointer border transition-all select-none ${
-              showOnlyFlagged
-                ? "bg-red-50 border-red-200 text-red-700"
-                : "bg-white border-slate-200 text-slate-600 hover:border-red-200 hover:text-red-700"
-            }`}
-            title="Show only clients flagged as Non-Citizen / Unsure"
-          >
-            <input
-              type="checkbox"
-              className="sr-only"
-              checked={showOnlyFlagged}
-              onChange={(e) => setShowOnlyFlagged(e.target.checked)}
-            />
-            <AlertTriangle size={14} />
-            Only Flagged
-          </label>
           {/* <button
             onClick={() => setIsAddModalOpen(true)}
             className="flex items-center gap-2 px-6 py-2.5 bg-brand-primary text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-brand-primaryHover transition-all shadow-lg active:scale-95 whitespace-nowrap"
@@ -1089,14 +1085,6 @@ const Leads: React.FC = () => {
                       {lead.parentLeadId && (
                         <span className="ml-2 inline-flex items-center text-blue-600" title={lead.lead_type === "Sale" ? "Co-Seller" : "Co-Purchaser"}>
                           <Users size={14} />
-                        </span>
-                      )}
-                      {isNonCitizenFlagged(lead) && (
-                        <span
-                          className="ml-2 inline-flex items-center text-red-600"
-                          title={NON_CITIZEN_FLAG_TOOLTIP}
-                        >
-                          <AlertTriangle size={12} />
                         </span>
                       )}
                       {lead.status !== "Converted" && lead.created_at && (Date.now() - new Date(lead.created_at).getTime()) < 24 * 60 * 60 * 1000 && (

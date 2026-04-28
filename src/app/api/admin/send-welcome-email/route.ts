@@ -119,6 +119,23 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const { data: relatedDeal } = await supabaseAdmin
+      .from("deals")
+      .select("id")
+      .eq("lead_id", lead_id)
+      .maybeSingle();
+
+    const isConvertedLead = lead.status === "Converted" || !!relatedDeal;
+    if (!isConvertedLead) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Portal and welcome emails can only be sent after the lead has been converted to a deal.",
+        },
+        { status: 409 }
+      );
+    }
+
     // 2. Fetch the email template
     let template: any = null;
 
