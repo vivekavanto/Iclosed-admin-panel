@@ -64,7 +64,6 @@ const EmailTemplates: React.FC = () => {
   const handleInsertVariable = (key: string) => {
     setForm((prev) => ({ ...prev, body: prev.body + key }));
   };
-
   const resetForm = () => {
     setForm({ id: "", name: "", subject: "", body: "", is_active: true });
   };
