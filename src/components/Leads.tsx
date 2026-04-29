@@ -89,7 +89,8 @@ const Leads: React.FC = () => {
   const [converting, setConverting] = useState(false);
   const [convertResult, setConvertResult] = useState<{
     success: boolean;
-    message: string;
+    title: string;
+    details: string[];
   } | null>(null);
 
   // Welcome email state
@@ -207,6 +208,13 @@ const Leads: React.FC = () => {
     return match ? `${match.firstName} ${match.lastName}` : null;
   };
 
+  const getLeadDisplayName = (id: string) => {
+    if (selectedLead?.id === id) {
+      return `${selectedLead.firstName} ${selectedLead.lastName}`.trim();
+    }
+    return getLeadName(id) ?? "Unknown Lead";
+  };
+
   const handleDeleteLead = async (leadId: string, name: string) => {
     if (!confirm(`Delete lead "${name}"?`)) return;
     try {
@@ -272,44 +280,69 @@ const Leads: React.FC = () => {
 
           const createdCount = results.filter((r) => r.created).length;
           const alreadyConvertedCount = results.filter((r) => r.already_converted).length;
-          const inviteCount = results.filter((r) => r.invite_sent).length;
-          const failedCount = results.filter((r) => !r.success).length;
+          const invitedLeads = results
+            .filter((r) => r.invite_sent)
+            .map((r) => getLeadDisplayName(r.lead_id));
+          const alreadyConvertedLeads = results
+            .filter((r) => r.already_converted && r.lead_id !== selectedLead.id)
+            .map((r) => getLeadDisplayName(r.lead_id));
+          const alreadyHasLoginLeads = results
+            .filter((r: any) => r.already_has_login)
+            .map((r) => getLeadDisplayName(r.lead_id));
+          const failedLeads = results
+            .filter((r) => !r.success)
+            .map((r) => getLeadDisplayName(r.lead_id));
+          const failedCount = failedLeads.length;
           const hadErrors = data.had_errors ?? failedCount > 0;
-
-          const alreadyHasLoginCount = results.filter((r: any) => r.already_has_login).length;
-          let message: string;
+          const details: string[] = [];
+          let title: string;
 
           if (selectedResult?.already_converted) {
-            message = "This lead is already converted.";
+            title = `${selectedLead.firstName} ${selectedLead.lastName} is already converted.`;
+            details.push("No new deal was created for the selected lead.");
           } else {
-            message = `Converted ${createdCount} lead(s).`;
-            if (alreadyConvertedCount > 0) {
-              message += ` ${alreadyConvertedCount} already converted.`;
-            }
-            message += ` Invites sent to ${inviteCount} email(s).`;
+            title =
+              createdCount === 1
+                ? `${selectedLead.firstName} ${selectedLead.lastName} was converted successfully.`
+                : `${createdCount} leads were converted successfully.`;
           }
 
-          if (alreadyHasLoginCount > 0) {
-            message += ` ${alreadyHasLoginCount} already had login access.`;
+          if (invitedLeads.length > 0) {
+            details.push(`Invite sent: ${invitedLeads.join(", ")}`);
           }
-          if (failedCount > 0) {
-            message += ` ${failedCount} failed.`;
+          if (alreadyHasLoginLeads.length > 0) {
+            details.push(`Already had portal access: ${alreadyHasLoginLeads.join(", ")}`);
+          }
+          if (alreadyConvertedLeads.length > 0) {
+            details.push(`Already converted: ${alreadyConvertedLeads.join(", ")}`);
+          } else if (!selectedResult?.already_converted && alreadyConvertedCount > 0) {
+            details.push(`${alreadyConvertedCount} linked lead(s) were already converted.`);
+          }
+          if (failedLeads.length > 0) {
+            details.push(`Failed: ${failedLeads.join(", ")}`);
           }
 
           setConvertResult({
             success: !hadErrors,
-            message,
+            title,
+            details,
           });
         } else {
+          const title = `${selectedLead.firstName} ${selectedLead.lastName} was converted successfully.`;
+          const details: string[] = [];
+
+          if (data.invite_sent) {
+            details.push(`Invite sent: ${selectedLead.firstName} ${selectedLead.lastName}`);
+          } else if (data.already_has_login) {
+            details.push(`Already had portal access: ${selectedLead.firstName} ${selectedLead.lastName}`);
+          } else {
+            details.push("No invite was sent. Create portal access manually if needed.");
+          }
+
           setConvertResult({
             success: true,
-            message: `✅ Deal ${data.file_number} created! ${
-              data.invite_sent
-                ? `Invite email sent to ${selectedLead.email}.`
-                : data.already_has_login
-                  ? `User already has login access — no invite email sent.`
-                  : "Please manually create their login."
-            }`,
+            title,
+            details,
           });
 
           // Update the lead status in local state
@@ -321,13 +354,15 @@ const Leads: React.FC = () => {
       } else {
         setConvertResult({
           success: false,
-          message: data.error ?? "Conversion failed.",
+          title: "Conversion failed.",
+          details: [data.error ?? "Please try again."],
         });
       }
     } catch (err) {
       setConvertResult({
         success: false,
-        message: "Network error. Please try again.",
+        title: "Network error.",
+        details: ["Please try again."],
       });
     } finally {
       setConverting(false);
@@ -575,7 +610,14 @@ const Leads: React.FC = () => {
             ) : (
               <AlertTriangle size={18} />
             )}
-            {convertResult.message}
+            <div className="space-y-1">
+              <p>{convertResult.title}</p>
+              {convertResult.details.map((detail, index) => (
+                <p key={index} className="text-xs font-medium">
+                  {detail}
+                </p>
+              ))}
+            </div>
           </div>
         )}
 
@@ -901,7 +943,14 @@ const Leads: React.FC = () => {
                     convertResult.success ? "bg-green-50 border-green-200 text-green-800" : "bg-red-50 border-red-200 text-red-700"
                   }`}>
                     {convertResult.success ? <CheckCircle2 size={16} className="flex-shrink-0 mt-0.5" /> : <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" />}
-                    <span>{convertResult.message}</span>
+                    <div className="space-y-1">
+                      <p>{convertResult.title}</p>
+                      {convertResult.details.map((detail, index) => (
+                        <p key={index} className="text-xs font-medium">
+                          {detail}
+                        </p>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
