@@ -67,7 +67,6 @@ const EmailTemplates: React.FC = () => {
   const resetForm = () => {
     setForm({ id: "", name: "", subject: "", body: "", is_active: true });
   };
-
   const handleEdit = (template: EmailTemplate) => {
     setForm({
       id: template.id,
