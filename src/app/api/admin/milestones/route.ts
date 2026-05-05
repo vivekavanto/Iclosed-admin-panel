@@ -84,7 +84,7 @@ export async function GET(req: Request) {
 
   const { data, error } = await supabase
     .from("milestones")
-    .select("*")
+    .select("*, stage_templates(lead_type)")
     .eq("deal_id", dealId)
     .order("created_at", { ascending: true });
 

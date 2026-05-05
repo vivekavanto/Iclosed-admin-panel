@@ -191,17 +191,41 @@ export async function convertSingleLead(
     const dealId = deal.id;
     const leadType = lead.lead_type ?? "Purchase";
 
+    // A lead can be a combined type like "Purchase & Sale" — split into parts so
+    // we seed milestones/tasks from every constituent lead type, preserving the
+    // order the parts appeared in (e.g. Purchase rows before Sale rows).
+    const leadTypeParts = leadType
+      .split(/\s*(?:&|\band\b|\+|\/)\s*/i)
+      .map((s: string) => s.trim())
+      .filter(Boolean);
+    const leadTypePartIndex = (lt: string | null | undefined): number => {
+      if (!lt) return Number.MAX_SAFE_INTEGER;
+      const idx = leadTypeParts.findIndex(
+        (p: string) => p.toLowerCase() === lt.toLowerCase(),
+      );
+      return idx === -1 ? Number.MAX_SAFE_INTEGER : idx;
+    };
+
     await supabaseAdmin.from("leads").update({ status: "Converted" }).eq("id", leadId);
 
     // ── Copy stage_templates → milestones ────────────────────────────────────
     const stageToMilestone: Record<string, string> = {};
 
     try {
-      const { data: stageTemplates } = await supabaseAdmin
+      const { data: stageTemplatesRaw } = await supabaseAdmin
         .from("stage_templates")
         .select("*")
-        .eq("lead_type", leadType)
+        .in("lead_type", leadTypeParts)
         .order("order_index", { ascending: true });
+
+      // Group by lead_type in the order specified by leadTypeParts so combined
+      // deals show Purchase milestones first, then Sale, etc.
+      const stageTemplates = (stageTemplatesRaw ?? []).slice().sort((a, b) => {
+        const ai = leadTypePartIndex(a.lead_type);
+        const bi = leadTypePartIndex(b.lead_type);
+        if (ai !== bi) return ai - bi;
+        return (a.order_index ?? 0) - (b.order_index ?? 0);
+      });
 
       if (stageTemplates && stageTemplates.length > 0) {
         const now = new Date().toISOString();
@@ -322,13 +346,22 @@ export async function convertSingleLead(
 
     // ── Copy task_templates → tasks ──────────────────────────────────────────
     try {
-      const { data: taskTemplates } = await supabaseAdmin
+      const { data: taskTemplatesRaw } = await supabaseAdmin
         .from("task_templates")
         .select("*")
-        .eq("lead_type", leadType)
+        .in("lead_type", leadTypeParts)
         .eq("is_deleted", false)
         .eq("is_default", true)
         .order("order_index", { ascending: true });
+
+      // Group by lead_type in the order specified by leadTypeParts so combined
+      // deals show Purchase tasks first, then Sale, etc.
+      const taskTemplates = (taskTemplatesRaw ?? []).slice().sort((a, b) => {
+        const ai = leadTypePartIndex(a.lead_type);
+        const bi = leadTypePartIndex(b.lead_type);
+        if (ai !== bi) return ai - bi;
+        return (a.order_index ?? 0) - (b.order_index ?? 0);
+      });
 
       if (taskTemplates && taskTemplates.length > 0) {
         const isCoPurchaser = !!lead.parent_lead_id;

@@ -60,21 +60,24 @@ export async function completeApsTask(dealId: string): Promise<{
 
     const apsTemplateIds = apsTemplates.map((t) => t.id);
 
-    // ── 3. Find the APS shared task on the primary deal ──────────────────────
-    const { data: apsTask } = await supabaseAdmin
+    // ── 3. Find the APS shared task(s) on the primary deal ───────────────────
+    // A combined deal (e.g. Purchase & Sale) can have one APS task per lead type,
+    // so collect all of them rather than expecting a single row.
+    const { data: apsTasks } = await supabaseAdmin
       .from("tasks")
       .select("id, task_template_id, status")
       .eq("deal_id", primaryDealId)
       .eq("is_shared", true)
-      .in("task_template_id", apsTemplateIds)
-      .maybeSingle();
+      .in("task_template_id", apsTemplateIds);
 
-    if (!apsTask) {
+    if (!apsTasks || apsTasks.length === 0) {
       return { success: false, error: "APS task not found on primary deal" };
     }
 
-    // Idempotent — already done
-    if (apsTask.status === "Completed") {
+    const pendingApsTasks = apsTasks.filter((t) => t.status !== "Completed");
+
+    // Idempotent — every APS task is already done
+    if (pendingApsTasks.length === 0) {
       return { success: true, already_completed: true };
     }
 
@@ -85,11 +88,11 @@ export async function completeApsTask(dealId: string): Promise<{
       completed_at: now,
     };
 
-    // ── 4. Complete the task on the primary deal ─────────────────────────────
+    // ── 4. Complete each pending APS task on the primary deal ────────────────
     await supabaseAdmin
       .from("tasks")
       .update(completionPayload)
-      .eq("id", apsTask.id);
+      .in("id", pendingApsTasks.map((t) => t.id));
 
     // ── 4b. Bridge APS documents from lead_corporate_docs → task_responses ──
     // Intake uploads go to lead_corporate_docs (no task_id). The Doc column
@@ -115,27 +118,30 @@ export async function completeApsTask(dealId: string): Promise<{
           .or('doc_type.eq.document,doc_type.eq.aps,custom_type.ilike.%APS%');
 
         if (apsDocs && apsDocs.length > 0) {
-          // Check which files already exist as task_responses to avoid duplicates
-          const { data: existingResponses } = await supabaseAdmin
-            .from("task_responses")
-            .select("file_name")
-            .eq("task_id", apsTask.id)
-            .eq("field_type", "file");
+          // Bridge each uploaded doc into every APS task on the primary deal
+          // (a combined deal can have multiple APS tasks — one per lead type).
+          for (const apsTaskRow of pendingApsTasks) {
+            const { data: existingResponses } = await supabaseAdmin
+              .from("task_responses")
+              .select("file_name")
+              .eq("task_id", apsTaskRow.id)
+              .eq("field_type", "file");
 
-          const existingFileNames = new Set((existingResponses ?? []).map((r) => r.file_name));
+            const existingFileNames = new Set((existingResponses ?? []).map((r) => r.file_name));
 
-          const newResponses = apsDocs
-            .filter((doc) => doc.file_name && !existingFileNames.has(doc.file_name))
-            .map((doc) => ({
-              task_id: apsTask.id,
-              field_type: "file",
-              field_label: "Upload Agreement of Purchase and Sale",
-              file_name: doc.file_name,
-              file_url: doc.file_url,
-            }));
+            const newResponses = apsDocs
+              .filter((doc) => doc.file_name && !existingFileNames.has(doc.file_name))
+              .map((doc) => ({
+                task_id: apsTaskRow.id,
+                field_type: "file",
+                field_label: "Upload Agreement of Purchase and Sale",
+                file_name: doc.file_name,
+                file_url: doc.file_url,
+              }));
 
-          if (newResponses.length > 0) {
-            await supabaseAdmin.from("task_responses").insert(newResponses);
+            if (newResponses.length > 0) {
+              await supabaseAdmin.from("task_responses").insert(newResponses);
+            }
           }
         }
       }
@@ -148,12 +154,17 @@ export async function completeApsTask(dealId: string): Promise<{
     const otherDealIds = familyDealIds.filter((id) => id !== primaryDealId);
 
     if (otherDealIds.length > 0) {
-      await supabaseAdmin
-        .from("tasks")
-        .update(completionPayload)
-        .eq("task_template_id", apsTask.task_template_id)
-        .eq("is_shared", true)
-        .in("deal_id", otherDealIds);
+      const apsTaskTemplateIds = pendingApsTasks
+        .map((t) => t.task_template_id)
+        .filter((id): id is string => !!id);
+      if (apsTaskTemplateIds.length > 0) {
+        await supabaseAdmin
+          .from("tasks")
+          .update(completionPayload)
+          .in("task_template_id", apsTaskTemplateIds)
+          .eq("is_shared", true)
+          .in("deal_id", otherDealIds);
+      }
     }
 
     // ── 6. Recalculate milestones for all family deals ───────────────────────

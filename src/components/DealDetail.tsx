@@ -87,6 +87,8 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     document: t.document_name ? { name: t.document_name, url: t.document_url ?? '#' } : undefined,
     milestoneId: t.milestone_id ?? undefined,
     isShared: t.is_shared ?? false,
+    taskTemplateId: t.task_template_id ?? null,
+    leadType: t.task_templates?.lead_type ?? null,
   });
 
   // Use state to allow modification simulation
@@ -95,9 +97,26 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     deal.milestones || [],
   );
 
-  // Extended display types with template flag
-  type DisplayTask = Task & { isTemplate?: boolean };
-  type DisplayMilestone = Milestone & { isTemplate?: boolean };
+  // For combined deals (e.g. "Purchase & Sale"), tasks and milestones display
+  // under independent tabs — one per constituent lead type.
+  const [activeTaskTab, setActiveTaskTab] = useState<string>(() => {
+    const parts = (deal.type ?? "")
+      .split(/\s*(?:&|\band\b|\+|\/)\s*/i)
+      .map(s => s.trim())
+      .filter(Boolean);
+    return parts[0] ?? "";
+  });
+  const [activeMilestoneTab, setActiveMilestoneTab] = useState<string>(() => {
+    const parts = (deal.type ?? "")
+      .split(/\s*(?:&|\band\b|\+|\/)\s*/i)
+      .map(s => s.trim())
+      .filter(Boolean);
+    return parts[0] ?? "";
+  });
+
+  // Extended display types with template flag and resolved lead-type (for combined deals)
+  type DisplayTask = Task & { isTemplate?: boolean; leadType?: string | null };
+  type DisplayMilestone = Milestone & { isTemplate?: boolean; leadType?: string | null };
 
   // View task detail modal
   const [viewingTask, setViewingTask] = useState<DisplayTask | null>(null);
@@ -153,6 +172,8 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           completedAt: m.completed_at ?? undefined,
           emailSent: m.email_sent ?? false,
           emailTemplateId: m.email_template_id ?? null,
+          stageTemplateId: m.stage_template_id ?? null,
+          leadType: m.stage_templates?.lead_type ?? null,
         })));
       }
     } catch { }
@@ -590,6 +611,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           status: data.data.status ?? "Pending",
           milestoneDate: data.data.milestone_date ?? undefined,
           emailTemplateId: data.data.email_template_id ?? null,
+          stageTemplateId: data.data.stage_template_id ?? null,
         };
         setMilestones((prev) => [...prev, newMilestone]);
         setShowStageForm(false);
@@ -627,6 +649,8 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
             completedAt: m.completed_at ?? undefined,
             emailSent: m.email_sent ?? false,
             emailTemplateId: m.email_template_id ?? null,
+            stageTemplateId: m.stage_template_id ?? null,
+            leadType: m.stage_templates?.lead_type ?? null,
           })));
         }
       })
@@ -654,39 +678,93 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   }, []);
 
   // Combine predefined templates + user-added data for display (deduped by title)
-  const dealType = deal.type?.toLowerCase();
+  // A deal can be a combined type like "Purchase & Sale" — parse into individual parts
+  // so templates from each constituent lead type are included and the rows can be tagged.
+  const dealTypeParts = (deal.type ?? "")
+    .split(/\s*(?:&|\band\b|\+|\/)\s*/i)
+    .map(s => s.trim())
+    .filter(Boolean);
+  const dealTypePartsLower = dealTypeParts.map(s => s.toLowerCase());
+  const isCombinedDealType = dealTypeParts.length > 1;
+
+  // template id → lead_type lookups (used to resolve a task/milestone's source lead type)
+  const taskTemplateLeadTypeMap = new Map<string, string>(
+    (taskTemplates as any[]).map(t => [t.id, t.lead_type])
+  );
+  const stageTemplateLeadTypeMap = new Map<string, string>(
+    (stageTemplates as any[]).map(t => [t.id, t.lead_type])
+  );
+
+  const matchesDealType = (templateLeadType: string | undefined): boolean => {
+    if (!dealTypePartsLower.length) return true;
+    const lt = templateLeadType?.toLowerCase();
+    return !!lt && dealTypePartsLower.includes(lt);
+  };
+
+  // Filter rows by an active tab (one of the lead-type parts). Items without a
+  // resolved leadType (e.g. manually-added tasks) appear in every tab so they
+  // are never hidden by the filter.
+  const matchesActiveTab = (
+    rowLeadType: string | null | undefined,
+    activeTab: string,
+  ): boolean => {
+    if (!rowLeadType) return true;
+    return rowLeadType.toLowerCase() === activeTab.toLowerCase();
+  };
 
   const displayTasks: DisplayTask[] = (() => {
     const userTitles = new Set(tasks.map(t => t.title.toLowerCase()));
-    const templateRows: DisplayTask[] = taskTemplates
-      .filter((t: any) => t.is_default)
-      .filter((t: any) => !dealType || t.lead_type?.toLowerCase() === dealType)
-      .filter((t: any) => !userTitles.has(t.name.toLowerCase()))
-      .map((t: any): DisplayTask => ({
+    const templateRows: DisplayTask[] = (taskTemplates as any[])
+      .filter(t => t.is_default)
+      .filter(t => matchesDealType(t.lead_type))
+      .filter(t => !userTitles.has(t.name.toLowerCase()))
+      .map((t): DisplayTask => ({
         id: `tpl-${t.id}`,
         title: t.name,
         completed: false,
         status: "Pending",
         isTemplate: true,
+        taskTemplateId: t.id,
+        leadType: t.lead_type ?? null,
       }));
-    const userRows: DisplayTask[] = tasks.map(t => ({ ...t, isTemplate: false }));
-    return [...templateRows, ...userRows];
+    const userRows: DisplayTask[] = tasks.map(t => ({
+      ...t,
+      isTemplate: false,
+      leadType:
+        t.leadType
+        ?? (t.taskTemplateId ? taskTemplateLeadTypeMap.get(t.taskTemplateId) ?? null : null),
+    }));
+    const all = [...templateRows, ...userRows];
+    return isCombinedDealType
+      ? all.filter(t => matchesActiveTab(t.leadType, activeTaskTab))
+      : all;
   })();
 
   const displayMilestones: DisplayMilestone[] = (() => {
     const userTitles = new Set(milestones.map(m => m.title.toLowerCase()));
-    const templateRows: DisplayMilestone[] = stageTemplates
-      .filter((t: any) => !dealType || t.lead_type?.toLowerCase() === dealType)
-      .filter((t: any) => !userTitles.has(t.name.toLowerCase()))
-      .map((t: any): DisplayMilestone => ({
+    const templateRows: DisplayMilestone[] = (stageTemplates as any[])
+      .filter(t => matchesDealType(t.lead_type))
+      .filter(t => !userTitles.has(t.name.toLowerCase()))
+      .map((t): DisplayMilestone => ({
         id: `tpl-${t.id}`,
         title: t.name,
         status: "Pending",
         isTemplate: true,
         emailTemplateId: t.email_template_id ?? null,
+        stageTemplateId: t.id,
+        leadType: t.lead_type ?? null,
       }));
-    const userRows: DisplayMilestone[] = milestones.map(m => ({ ...m, isTemplate: false }));
-    return [...templateRows, ...userRows];
+    const userRows: DisplayMilestone[] = milestones.map(m => ({
+      ...m,
+      isTemplate: false,
+      leadType:
+        m.leadType
+        ?? (m.stageTemplateId ? stageTemplateLeadTypeMap.get(m.stageTemplateId) ?? null : null),
+    }));
+    const all = [...templateRows, ...userRows];
+    return isCombinedDealType
+      ? all.filter(m => matchesActiveTab(m.leadType, activeMilestoneTab))
+      : all;
   })();
 
   useEffect(() => {
@@ -925,6 +1003,27 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
             </button>
           </div>
 
+          {isCombinedDealType && (
+            <div className="flex gap-1 border-b border-slate-200">
+              {dealTypeParts.map((part) => {
+                const isActive = part.toLowerCase() === activeTaskTab.toLowerCase();
+                return (
+                  <button
+                    key={part}
+                    onClick={() => setActiveTaskTab(part)}
+                    className={`px-4 py-2 text-xs font-bold uppercase tracking-wide border-b-2 -mb-px transition-colors ${
+                      isActive
+                        ? "border-brand-primary text-brand-primary"
+                        : "border-transparent text-slate-500 hover:text-slate-700"
+                    }`}
+                  >
+                    {part}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-left">
@@ -1107,6 +1206,27 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                 <Plus size={14} className="mr-1" /> Add Stage
               </button>
             </div>
+
+            {isCombinedDealType && (
+              <div className="flex gap-1 border-b border-slate-200 mb-4">
+                {dealTypeParts.map((part) => {
+                  const isActive = part.toLowerCase() === activeMilestoneTab.toLowerCase();
+                  return (
+                    <button
+                      key={part}
+                      onClick={() => setActiveMilestoneTab(part)}
+                      className={`px-4 py-2 text-xs font-bold uppercase tracking-wide border-b-2 -mb-px transition-colors ${
+                        isActive
+                          ? "border-brand-primary text-brand-primary"
+                          : "border-transparent text-slate-500 hover:text-slate-700"
+                      }`}
+                    >
+                      {part}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
 
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
               <div className="overflow-x-auto">
@@ -1308,7 +1428,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                 >
                   <option value="">Select Stage Template</option>
                   {stageTemplates
-                    .filter((t) => !deal.type || t.lead_type?.toLowerCase() === deal.type.toLowerCase())
+                    .filter((t) => matchesDealType(t.lead_type))
                     .map((t) => {
                     const label = `${t.lead_type}-${t.role}-${t.name}`;
                     return (

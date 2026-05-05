@@ -48,13 +48,13 @@ export async function GET(req: Request) {
   const [{ data: sharedTasks, error: sharedErr }, { data: personalTasks, error: personalErr }] = await Promise.all([
     supabase
       .from("tasks")
-      .select("*")
+      .select("*, task_templates(lead_type)")
       .eq("deal_id", primaryDealId)
       .eq("is_shared", true)
       .order("created_at", { ascending: true }),
     supabase
       .from("tasks")
-      .select("*")
+      .select("*, task_templates(lead_type)")
       .eq("deal_id", dealId)
       .or("is_shared.is.null,is_shared.eq.false")
       .order("created_at", { ascending: true }),
