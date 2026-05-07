@@ -462,17 +462,23 @@ const Leads: React.FC = () => {
     </button>
   );
 
-  // Determine whether a co-lead is a co-purchaser or co-seller. Source of truth
-  // is the co-lead's own lead_type (Purchase → co-purchaser, Sale → co-seller).
-  // For ambiguous values (e.g. "Purchase & Sale" mirrored from the parent), we
-  // can't tell the role from data, so fall back to the parent's type.
+  // Determine whether a co-lead is a co-purchaser or co-seller.
+  //   1. Trust the co-lead's own lead_type when it specifies a single side.
+  //   2. Otherwise (empty, or "Purchase & Sale" mirrored from the parent)
+  //      use the co-lead's selling_address_street as a tiebreaker — only
+  //      co-sellers carry a selling-side address.
+  //   3. Last resort: parent's lead_type (only useful when parent is single-
+  //      sided, e.g. a Sale-only primary). Default to co-purchaser.
   const getCoRole = (
-    coLead: Pick<LeadUser, "lead_type">,
+    coLead: Pick<LeadUser, "lead_type" | "sellingAddressStreet">,
     parent?: Pick<LeadUser, "lead_type"> | null,
   ): "co-purchaser" | "co-seller" => {
     const ownLt = (coLead.lead_type ?? "").toLowerCase().trim();
-    if (ownLt === "purchase") return "co-purchaser";
-    if (ownLt === "sale") return "co-seller";
+    const ownHasPurchase = ownLt.includes("purchase");
+    const ownHasSale = ownLt.includes("sale");
+    if (ownHasSale && !ownHasPurchase) return "co-seller";
+    if (ownHasPurchase && !ownHasSale) return "co-purchaser";
+    if (coLead.sellingAddressStreet) return "co-seller";
     const parentLt = (parent?.lead_type ?? "").toLowerCase().trim();
     if (parentLt === "sale") return "co-seller";
     return "co-purchaser";

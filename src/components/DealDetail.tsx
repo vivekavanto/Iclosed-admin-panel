@@ -97,14 +97,33 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     deal.milestones || [],
   );
 
+  // Narrow combined "Purchase & Sale" deals down to the single side that
+  // actually applies to a co-purchaser/co-seller. Their deal still inherits
+  // the parent's combined type, but they should only see one workflow.
+  const deriveDealTypeParts = (
+    dealType: string | null | undefined,
+    coRole?: string | null,
+  ): string[] => {
+    const raw = (dealType ?? "")
+      .split(/\s*(?:&|\band\b|\+|\/)\s*/i)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (coRole === "Co-Purchaser") {
+      const narrowed = raw.filter((p) => p.toLowerCase() === "purchase");
+      return narrowed.length > 0 ? narrowed : raw;
+    }
+    if (coRole === "Co-Seller") {
+      const narrowed = raw.filter((p) => p.toLowerCase() === "sale");
+      return narrowed.length > 0 ? narrowed : raw;
+    }
+    return raw;
+  };
+
   // For combined deals (e.g. "Purchase & Sale"), tasks, milestones, and the
   // displayed property address all share a single active-workflow tab so
   // switching one section moves them all together.
   const [activeWorkflowTab, setActiveWorkflowTab] = useState<string>(() => {
-    const parts = (deal.type ?? "")
-      .split(/\s*(?:&|\band\b|\+|\/)\s*/i)
-      .map(s => s.trim())
-      .filter(Boolean);
+    const parts = deriveDealTypeParts(deal.type, rawDeal?.current_deal_role);
     return parts[0] ?? "";
   });
   // Aliases keep existing usages working while we migrate to the unified state.
@@ -679,10 +698,8 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   // Combine predefined templates + user-added data for display (deduped by title)
   // A deal can be a combined type like "Purchase & Sale" — parse into individual parts
   // so templates from each constituent lead type are included and the rows can be tagged.
-  const dealTypeParts = (deal.type ?? "")
-    .split(/\s*(?:&|\band\b|\+|\/)\s*/i)
-    .map(s => s.trim())
-    .filter(Boolean);
+  // For co-leads of a combined parent, the parts are narrowed to just their side.
+  const dealTypeParts = deriveDealTypeParts(deal.type, rawDeal?.current_deal_role);
   const dealTypePartsLower = dealTypeParts.map(s => s.toLowerCase());
   const isCombinedDealType = dealTypeParts.length > 1;
 
@@ -909,10 +926,15 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
             <h1 className="text-2xl font-bold text-slate-900 mb-4 leading-tight">
               {(() => {
-                // For combined Purchase & Sale deals, show the address that
-                // matches the active workflow tab. Falls back to purchase
-                // address if the sale-side address isn't set yet.
-                if (isCombinedDealType && activeWorkflowTab.toLowerCase() === "sale") {
+                // Combined deals follow the active tab; single-side deals
+                // (including co-seller / co-purchaser deals narrowed from a
+                // combined parent) follow their only part. Sale side prefers
+                // selling_address_* but falls back to property_address when
+                // the selling-side address isn't set.
+                const effectiveSide = isCombinedDealType
+                  ? activeWorkflowTab.toLowerCase()
+                  : (dealTypeParts[0] ?? "").toLowerCase();
+                if (effectiveSide === "sale") {
                   const sale = (deal as any).sellingPropertyAddress as string | undefined;
                   return getDisplayAddress(sale || deal.propertyAddress || "");
                 }

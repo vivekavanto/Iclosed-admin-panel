@@ -45,17 +45,26 @@ export async function GET(
         // Step 2: Find all leads in the family
         const { data: familyLeads } = await supabase
           .from("leads")
-          .select("id, parent_lead_id, first_name, last_name, lead_type")
+          .select("id, parent_lead_id, first_name, last_name, lead_type, selling_address_street")
           .or(`id.eq.${rootLeadId},parent_lead_id.eq.${rootLeadId}`);
 
         // Determine a co-lead's role from its own lead_type when specific
-        // (Purchase/Sale). Falls back to the deal's type for ambiguous cases.
+        // (Purchase/Sale). When ambiguous (e.g. "Purchase & Sale" mirrored
+        // from the parent), fall back to selling_address_street presence —
+        // only co-sellers carry a selling-side address — then to the deal's
+        // own type.
         const dealTypeLower = (data.type ?? "").toLowerCase().trim();
         const dealIsSaleOnly = dealTypeLower === "sale";
-        const labelForCo = (leadType: string | null | undefined): string => {
+        const labelForCo = (
+          leadType: string | null | undefined,
+          sellingAddressStreet?: string | null,
+        ): string => {
           const lt = (leadType ?? "").toLowerCase().trim();
-          if (lt === "purchase") return "Co-Purchaser";
-          if (lt === "sale") return "Co-Seller";
+          const hasPurchase = lt.includes("purchase");
+          const hasSale = lt.includes("sale");
+          if (hasSale && !hasPurchase) return "Co-Seller";
+          if (hasPurchase && !hasSale) return "Co-Purchaser";
+          if (sellingAddressStreet) return "Co-Seller";
           return dealIsSaleOnly ? "Co-Seller" : "Co-Purchaser";
         };
         const labelForPrimary = (leadType: string | null | undefined): string => {
@@ -90,7 +99,7 @@ export async function GET(
                 const isPrimary = dLead ? !dLead.parent_lead_id : false;
                 const role = isPrimary
                   ? labelForPrimary(dLead?.lead_type)
-                  : labelForCo(dLead?.lead_type);
+                  : labelForCo(dLead?.lead_type, dLead?.selling_address_street);
                 return {
                   id: d.id,
                   file_number: d.file_number,
@@ -107,7 +116,7 @@ export async function GET(
 
           // Also determine the current deal's role
           data.current_deal_role = lead.parent_lead_id
-            ? labelForCo(lead.lead_type)
+            ? labelForCo(lead.lead_type, lead.selling_address_street)
             : labelForPrimary(lead.lead_type);
         }
       }

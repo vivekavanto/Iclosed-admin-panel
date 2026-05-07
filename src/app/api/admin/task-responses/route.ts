@@ -39,37 +39,6 @@ function getDocumentIdentity(
   return fallbackKey ? `meta:${fallbackKey}` : `response:${response.id ?? response.task_id}`;
 }
 
-async function resolvePrimaryDealId(dealId: string): Promise<string> {
-  try {
-    const { data: dealRow } = await supabaseAdmin
-      .from("deals")
-      .select("lead_id")
-      .eq("id", dealId)
-      .single();
-
-    if (!dealRow?.lead_id) return dealId;
-
-    const { data: leadRow } = await supabaseAdmin
-      .from("leads")
-      .select("id, parent_lead_id")
-      .eq("id", dealRow.lead_id)
-      .single();
-
-    const rootLeadId = leadRow?.parent_lead_id ?? leadRow?.id;
-    if (!rootLeadId) return dealId;
-
-    const { data: rootDeal } = await supabaseAdmin
-      .from("deals")
-      .select("id")
-      .eq("lead_id", rootLeadId)
-      .maybeSingle();
-
-    return rootDeal?.id ?? dealId;
-  } catch {
-    return dealId;
-  }
-}
-
 /**
  * For a shared task, finds all task IDs with the same task_template_id
  * across all deals in the co-purchaser family.
@@ -198,7 +167,6 @@ export async function GET(req: Request) {
   const personalTaskIds = dealTasks.filter((task) => !task.is_shared).map((task) => task.id);
   const sharedTasks = dealTasks.filter((task) => task.is_shared && task.task_template_id);
   const familyDealIds = sharedTasks.length > 0 ? await getFamilyDealIds(dealId) : [dealId];
-  const primaryDealId = sharedTasks.length > 0 ? await resolvePrimaryDealId(dealId) : dealId;
 
   let familySharedTasks: TaskRow[] = [];
   if (sharedTasks.length > 0) {
@@ -272,30 +240,16 @@ export async function GET(req: Request) {
     }
   }
 
-  const templateToPrimaryTaskId = new Map<string, string>();
+  // Map shared docs to the *local* deal's task (matched by task_template_id),
+  // not the primary's. The doc-count column on the deal detail page filters
+  // taskFileDocs by `d.task_id === task.id`, so for a co-purchaser/co-seller
+  // page the rewritten id must point at that deal's own mirrored task or the
+  // bridged APS doc never shows on their task row.
+  const templateToLocalTaskId = new Map<string, string>();
   if (sharedTasks.length > 0) {
-    const sharedTemplateIds = sharedTasks
-      .map((task) => task.task_template_id)
-      .filter((taskTemplateId): taskTemplateId is string => Boolean(taskTemplateId));
-
-    if (primaryDealId !== dealId) {
-      const { data: primaryTasks } = await supabaseAdmin
-        .from("tasks")
-        .select("id, task_template_id")
-        .eq("deal_id", primaryDealId)
-        .eq("is_shared", true)
-        .in("task_template_id", sharedTemplateIds);
-
-      for (const task of primaryTasks ?? []) {
-        if (task.task_template_id) {
-          templateToPrimaryTaskId.set(task.task_template_id, task.id);
-        }
-      }
-    } else {
-      for (const task of sharedTasks) {
-        if (task.task_template_id) {
-          templateToPrimaryTaskId.set(task.task_template_id, task.id);
-        }
+    for (const task of sharedTasks) {
+      if (task.task_template_id) {
+        templateToLocalTaskId.set(task.task_template_id, task.id);
       }
     }
   }
@@ -315,8 +269,8 @@ export async function GET(req: Request) {
     let effectiveTaskId = response.task_id;
     let title = taskTitleById.get(response.task_id) ?? "Unknown Task";
 
-    if (isSharedDocument && templateId && templateToPrimaryTaskId.has(templateId)) {
-      effectiveTaskId = templateToPrimaryTaskId.get(templateId)!;
+    if (isSharedDocument && templateId && templateToLocalTaskId.has(templateId)) {
+      effectiveTaskId = templateToLocalTaskId.get(templateId)!;
       title =
         taskTitleById.get(effectiveTaskId) ??
         sharedTasks.find((task) => task.task_template_id === templateId)?.title ??
