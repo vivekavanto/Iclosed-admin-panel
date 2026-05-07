@@ -108,6 +108,7 @@ const Leads: React.FC = () => {
   const [expandedSections, setExpandedSections] = useState<string[]>([
     "personal",
     "current-address",
+    "selling-address",
     "property-personal",
   ]);
 
@@ -461,8 +462,24 @@ const Leads: React.FC = () => {
     </button>
   );
 
+  // Determine whether a co-lead is a co-purchaser or co-seller. Source of truth
+  // is the co-lead's own lead_type (Purchase → co-purchaser, Sale → co-seller).
+  // For ambiguous values (e.g. "Purchase & Sale" mirrored from the parent), we
+  // can't tell the role from data, so fall back to the parent's type.
+  const getCoRole = (
+    coLead: Pick<LeadUser, "lead_type">,
+    parent?: Pick<LeadUser, "lead_type"> | null,
+  ): "co-purchaser" | "co-seller" => {
+    const ownLt = (coLead.lead_type ?? "").toLowerCase().trim();
+    if (ownLt === "purchase") return "co-purchaser";
+    if (ownLt === "sale") return "co-seller";
+    const parentLt = (parent?.lead_type ?? "").toLowerCase().trim();
+    if (parentLt === "sale") return "co-seller";
+    return "co-purchaser";
+  };
+
   const filteredLeads = leads
-    .filter((l) => !l.parentLeadId) // Only show primary/standalone leads; co-purchasers visible in detail view
+    .filter((l) => !l.parentLeadId) // Only show primary/standalone leads; co-purchasers/co-sellers visible in detail view
     .filter((l) => {
       const q = search.toLowerCase();
       return (
@@ -477,6 +494,10 @@ const Leads: React.FC = () => {
     });
 
   const isConverted = selectedLead?.status === "Converted";
+  const isPurchaseAndSale = (() => {
+    const lt = (selectedLead?.lead_type ?? "").toLowerCase();
+    return lt.includes("purchase") && lt.includes("sale");
+  })();
 
   // ── DETAIL VIEW ───────────────────────────────────────────────────────────
   if (view === "DETAIL" && selectedLead) {
@@ -490,45 +511,80 @@ const Leads: React.FC = () => {
           <ArrowLeft size={18} /> Back to Leads Dashboard
         </button>
 
-        {/* Co-purchaser relationship banners */}
-        {selectedLead.parentLeadId && (
-          <div className="flex items-center gap-3 px-5 py-4 rounded-xl border border-blue-200 bg-blue-50 text-sm font-semibold text-blue-800">
-            <Link2 size={18} className="flex-shrink-0" />
-            <span>
-              This is a {selectedLead.lead_type === "Sale" ? "co-seller" : "co-purchaser"} of{" "}
-              <button
-                onClick={() => {
-                  const parent = leads.find((l) => l.id === selectedLead.parentLeadId);
-                  if (parent) openLead(parent);
-                }}
-                className="underline font-bold hover:text-blue-600 transition-colors"
-              >
-                {getLeadName(selectedLead.parentLeadId) ?? "Primary Lead"}
-              </button>
-            </span>
-          </div>
-        )}
-        {leads.some((l) => l.parentLeadId === selectedLead.id) && (
-          <div className="flex items-center gap-3 px-5 py-4 rounded-xl border border-green-200 bg-green-50 text-sm font-semibold text-green-800">
-            <Users size={18} className="flex-shrink-0" />
-            <span>
-              {selectedLead.lead_type === "Sale" ? "Co-sellers" : "Co-purchasers"}:{" "}
-              {leads
-                .filter((l) => l.parentLeadId === selectedLead.id)
-                .map((cp, i, arr) => (
-                  <span key={cp.id}>
-                    <button
-                      onClick={() => openLead(cp)}
-                      className="underline font-bold hover:text-green-600 transition-colors"
-                    >
-                      {cp.firstName} {cp.lastName}
-                    </button>
-                    {i < arr.length - 1 ? ", " : ""}
-                  </span>
-                ))}
-            </span>
-          </div>
-        )}
+        {/* Co-purchaser/co-seller relationship banners */}
+        {selectedLead.parentLeadId && (() => {
+          const parent = leads.find((l) => l.id === selectedLead.parentLeadId) ?? null;
+          const role = getCoRole(selectedLead, parent);
+          const isSeller = role === "co-seller";
+          const containerCls = isSeller
+            ? "border-amber-200 bg-amber-50 text-amber-800"
+            : "border-blue-200 bg-blue-50 text-blue-800";
+          const linkHoverCls = isSeller ? "hover:text-amber-600" : "hover:text-blue-600";
+          const badgeCls = isSeller
+            ? "bg-amber-100 text-amber-700 border-amber-200"
+            : "bg-blue-100 text-blue-700 border-blue-200";
+          return (
+            <div className={`flex items-center gap-3 px-5 py-4 rounded-xl border text-sm font-semibold ${containerCls}`}>
+              <Link2 size={18} className="flex-shrink-0" />
+              <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-tight border ${badgeCls}`}>
+                {isSeller ? "Co-Seller" : "Co-Purchaser"}
+              </span>
+              <span>
+                of{" "}
+                <button
+                  onClick={() => {
+                    if (parent) openLead(parent);
+                  }}
+                  className={`underline font-bold transition-colors ${linkHoverCls}`}
+                >
+                  {getLeadName(selectedLead.parentLeadId) ?? "Primary Lead"}
+                </button>
+              </span>
+            </div>
+          );
+        })()}
+        {leads.some((l) => l.parentLeadId === selectedLead.id) && (() => {
+          const children = leads.filter((l) => l.parentLeadId === selectedLead.id);
+          const coPurchasers = children.filter(
+            (c) => getCoRole(c, selectedLead) === "co-purchaser",
+          );
+          const coSellers = children.filter(
+            (c) => getCoRole(c, selectedLead) === "co-seller",
+          );
+
+          const renderList = (
+            list: typeof children,
+            label: string,
+            colorClass: string,
+            hoverClass: string,
+          ) =>
+            list.length === 0 ? null : (
+              <div className={`flex items-center gap-3 px-5 py-4 rounded-xl border text-sm font-semibold ${colorClass}`}>
+                <Users size={18} className="flex-shrink-0" />
+                <span>
+                  {label}:{" "}
+                  {list.map((cp, i) => (
+                    <span key={cp.id}>
+                      <button
+                        onClick={() => openLead(cp)}
+                        className={`underline font-bold transition-colors ${hoverClass}`}
+                      >
+                        {cp.firstName} {cp.lastName}
+                      </button>
+                      {i < list.length - 1 ? ", " : ""}
+                    </span>
+                  ))}
+                </span>
+              </div>
+            );
+
+          return (
+            <>
+              {renderList(coPurchasers, "Co-purchasers", "border-green-200 bg-green-50 text-green-800", "hover:text-green-600")}
+              {renderList(coSellers, "Co-sellers", "border-amber-200 bg-amber-50 text-amber-800", "hover:text-amber-600")}
+            </>
+          );
+        })()}
 
         {/* Top Identity Card */}
         <div className="bg-white rounded-2xl border border-slate-200 p-8 shadow-sm flex flex-col md:flex-row justify-between items-center gap-6">
@@ -711,7 +767,7 @@ const Leads: React.FC = () => {
 
           {/* Address */}
           <SectionHeader
-            title="Current Address"
+            title="Purchase Property Address"
             id="current-address"
             icon={MapPin}
           />
@@ -755,6 +811,67 @@ const Leads: React.FC = () => {
             </div>
           )}
 
+          {/* Selling Property Address (only for combined Purchase & Sale leads) */}
+          {isPurchaseAndSale && (
+            <>
+              <SectionHeader
+                title="Selling Property Address"
+                id="selling-address"
+                icon={MapPin}
+              />
+              {expandedSections.includes("selling-address") && (
+                <div className="p-8 space-y-6 animate-in slide-in-from-top-2 duration-300 border-t border-slate-50">
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                      Street Address
+                    </label>
+                    <input
+                      type="text"
+                      className={inputClasses}
+                      defaultValue={selectedLead.sellingAddressStreet}
+                      placeholder="e.g. 10 Milner Business Court"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                        City
+                      </label>
+                      <input
+                        type="text"
+                        className={inputClasses}
+                        defaultValue={selectedLead.sellingAddressCity}
+                        placeholder="e.g. Toronto"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                        Province
+                      </label>
+                      <input
+                        type="text"
+                        className={inputClasses}
+                        defaultValue={selectedLead.sellingAddressProvince}
+                        placeholder="e.g. ON"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                        Postal Code
+                      </label>
+                      <input
+                        type="text"
+                        className={inputClasses}
+                        defaultValue={selectedLead.sellingAddressPostalCode}
+                        placeholder="e.g. M1B 3C6"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
           {/* Associated deals */}
           <SectionHeader
             title="Associated Client Leads"
@@ -765,25 +882,37 @@ const Leads: React.FC = () => {
             // Find associated leads: parent + siblings + children
             const associatedLeads: { lead: LeadUser; role: string }[] = [];
 
-            const isSaleLead = selectedLead.lead_type === "Sale";
-            const primaryLabel = isSaleLead ? "Primary Seller" : "Primary Purchaser";
-            const coLabel = isSaleLead ? "Co-Seller" : "Co-Purchaser";
+            const formatRole = (role: "co-purchaser" | "co-seller") =>
+              role === "co-seller" ? "Co-Seller" : "Co-Purchaser";
+
+            const primaryLabelFor = (lead: LeadUser): string => {
+              const lt = (lead.lead_type ?? "").toLowerCase().trim();
+              // For combined "Purchase & Sale" we show a generic label since the
+              // primary is both a purchaser and a seller.
+              if (lt.includes("purchase") && lt.includes("sale")) return "Primary Client";
+              if (lt === "sale") return "Primary Seller";
+              return "Primary Purchaser";
+            };
 
             if (selectedLead.parentLeadId) {
               // This is a co-purchaser/co-seller — show the primary
-              const parent = leads.find((l) => l.id === selectedLead.parentLeadId);
+              const parent = leads.find((l) => l.id === selectedLead.parentLeadId) ?? null;
               if (parent) {
-                associatedLeads.push({ lead: parent, role: primaryLabel });
+                associatedLeads.push({ lead: parent, role: primaryLabelFor(parent) });
               }
-              // Also show siblings
+              // Also show siblings, each labeled by their own role
               leads
                 .filter((l) => l.parentLeadId === selectedLead.parentLeadId && l.id !== selectedLead.id)
-                .forEach((l) => associatedLeads.push({ lead: l, role: coLabel }));
+                .forEach((l) =>
+                  associatedLeads.push({ lead: l, role: formatRole(getCoRole(l, parent)) }),
+                );
             } else {
-              // This is a primary — show all co-purchasers/co-sellers
+              // This is a primary — show all co-leads, each labeled by their own role
               leads
                 .filter((l) => l.parentLeadId === selectedLead.id)
-                .forEach((l) => associatedLeads.push({ lead: l, role: coLabel }));
+                .forEach((l) =>
+                  associatedLeads.push({ lead: l, role: formatRole(getCoRole(l, selectedLead)) }),
+                );
             }
 
             return (
@@ -824,8 +953,10 @@ const Leads: React.FC = () => {
                           <td className="px-6 py-4 text-sm text-slate-600">{al.phone}</td>
                           <td className="px-6 py-4">
                             <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-tight border ${
-                              role === "Primary Purchaser"
+                              role.startsWith("Primary")
                                 ? "bg-green-100 text-green-700 border-green-200"
+                                : role === "Co-Seller"
+                                ? "bg-amber-100 text-amber-700 border-amber-200"
                                 : "bg-blue-100 text-blue-700 border-blue-200"
                             }`}>
                               {role}
@@ -877,29 +1008,43 @@ const Leads: React.FC = () => {
 
               {/* Lead summary */}
               <div className="px-6 py-4 bg-slate-50 border-b border-slate-200">
-                {hasFamily ? (
+                {hasFamily ? (() => {
+                  const primaryFm = familyMembers.find((fm) => !fm.parentLeadId) ?? selectedLead;
+                  const lt = (selectedLead?.lead_type ?? "").toLowerCase().trim();
+                  const headerLabel =
+                    lt.includes("purchase") && lt.includes("sale")
+                      ? "Primary & Co-Clients"
+                      : lt === "sale"
+                      ? "Seller & Co-Sellers"
+                      : "Purchaser & Co-Purchasers";
+                  return (
                   <>
                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">
-                      {selectedLead?.lead_type === "Sale" ? "Seller & Co-Sellers" : "Purchaser & Co-Purchasers"} ({familyMembers.length})
+                      {headerLabel} ({familyMembers.length})
                     </p>
                     <div className="space-y-2">
                       {[...familyMembers].sort((a, b) => (a.parentLeadId ? 1 : 0) - (b.parentLeadId ? 1 : 0)).map((fm) => {
                         const isPrimary = !fm.parentLeadId;
+                        const role = isPrimary ? "Primary" : (getCoRole(fm, primaryFm) === "co-seller" ? "Co-Seller" : "Co-Purchaser");
+                        const badgeClass = isPrimary
+                          ? "bg-green-100 text-green-700 border-green-200"
+                          : role === "Co-Seller"
+                          ? "bg-amber-100 text-amber-700 border-amber-200"
+                          : "bg-blue-100 text-blue-700 border-blue-200";
                         return (
                           <div key={fm.id} className="flex items-center justify-between">
                             <div>
                               <p className="text-sm font-bold text-slate-800">{fm.firstName} {fm.lastName}</p>
                               <p className="text-xs text-slate-500">{fm.email}</p>
                             </div>
-                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase border ${
-                              isPrimary ? "bg-green-100 text-green-700 border-green-200" : "bg-blue-100 text-blue-700 border-blue-200"
-                            }`}>{isPrimary ? "Primary" : (selectedLead?.lead_type === "Sale" ? "Co-Seller" : "Co-Purchaser")}</span>
+                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase border ${badgeClass}`}>{role}</span>
                           </div>
                         );
                       })}
                     </div>
                   </>
-                ) : (
+                  );
+                })() : (
                   <>
                     <p className="text-sm font-bold text-slate-800">{selectedLead.firstName} {selectedLead.lastName}</p>
                     <p className="text-xs text-slate-500">{selectedLead.email}</p>
@@ -1121,6 +1266,10 @@ const Leads: React.FC = () => {
               {filteredLeads.map((lead, index) => {
                 const isEven = index % 2 === 0;
                 const rowClass = isEven ? "bg-white" : "bg-slate-50/80";
+                const lt = (lead.lead_type ?? "").toLowerCase();
+                const isCombined = lt.includes("purchase") && lt.includes("sale");
+                const purchaseAddrFull = [lead.addressStreet, lead.addressCity, lead.addressProvince, lead.addressPostalCode].filter(Boolean).join(", ");
+                const sellingAddrFull = [lead.sellingAddressStreet, lead.sellingAddressCity, lead.sellingAddressProvince, lead.sellingAddressPostalCode].filter(Boolean).join(", ");
                 return (
                 <tr
                   key={lead.id}
@@ -1131,18 +1280,27 @@ const Leads: React.FC = () => {
                   <td className="px-4 py-3">
                     <div>
                       <span className="font-medium">{lead.firstName} {lead.lastName}</span>
-                      {lead.parentLeadId && (
-                        <span className="ml-2 inline-flex items-center text-blue-600" title={lead.lead_type === "Sale" ? "Co-Seller" : "Co-Purchaser"}>
-                          <Users size={14} />
-                        </span>
-                      )}
                       {lead.status !== "Converted" && lead.created_at && (Date.now() - new Date(lead.created_at).getTime()) < 24 * 60 * 60 * 1000 && (
                         <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold bg-green-100 text-green-700 border border-green-200">New</span>
                       )}
                     </div>
                   </td>
-                  <td className="px-4 py-3 truncate max-w-xs" title={[lead.addressStreet, lead.addressCity, lead.addressProvince, lead.addressPostalCode].filter(Boolean).join(", ")}>
-                    {lead.addressStreet || "—"}
+                  <td className="px-4 py-3 max-w-xs" title={isCombined ? `Purchase: ${purchaseAddrFull || "—"}\nSale: ${sellingAddrFull || "—"}` : purchaseAddrFull}>
+                    {isCombined ? (
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-[9px] font-black text-blue-600 uppercase tracking-widest w-14 flex-shrink-0">Purchase</span>
+                          <span className="truncate text-slate-700">{lead.addressStreet || "—"}</span>
+                        </div>
+                        <div className="h-px bg-slate-100" />
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-[9px] font-black text-orange-600 uppercase tracking-widest w-14 flex-shrink-0">Sale</span>
+                          <span className="truncate text-slate-700">{lead.sellingAddressStreet || "—"}</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <span className="truncate block">{lead.addressStreet || "—"}</span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     {lead.lead_type ? (

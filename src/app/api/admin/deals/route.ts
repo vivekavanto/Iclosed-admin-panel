@@ -6,7 +6,7 @@ const supabase = supabaseAdmin;
 export async function GET() {
   const { data, error } = await supabase
     .from("deals")
-    .select("*, tasks(id, status), leads(id, parent_lead_id, first_name, last_name, citizenship_status)")
+    .select("*, tasks(id, status), leads(id, parent_lead_id, first_name, last_name, citizenship_status, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code)")
     .order("created_at", { ascending: false });
 
   if (error) {
@@ -34,6 +34,16 @@ export async function GET() {
     const hasCoPurchasers = lead ? primaryLeadIds.has(lead.id) : false;
 
     const { tasks: _tasks, leads: _leads, ...rest } = deal;
+    const sellingPropertyAddress = lead
+      ? [
+          lead.selling_address_street,
+          lead.selling_address_city,
+          lead.selling_address_province,
+          lead.selling_address_postal_code,
+        ]
+          .filter(Boolean)
+          .join(", ")
+      : "";
     return {
       ...rest,
       totalTasks,
@@ -42,6 +52,7 @@ export async function GET() {
       has_co_purchasers: hasCoPurchasers,
       lead_name: lead ? `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim() : null,
       lead_citizenship_status: lead?.citizenship_status ?? null,
+      selling_property_address: sellingPropertyAddress,
     };
   });
 

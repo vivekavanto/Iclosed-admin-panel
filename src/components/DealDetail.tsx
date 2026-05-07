@@ -97,22 +97,21 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     deal.milestones || [],
   );
 
-  // For combined deals (e.g. "Purchase & Sale"), tasks and milestones display
-  // under independent tabs — one per constituent lead type.
-  const [activeTaskTab, setActiveTaskTab] = useState<string>(() => {
+  // For combined deals (e.g. "Purchase & Sale"), tasks, milestones, and the
+  // displayed property address all share a single active-workflow tab so
+  // switching one section moves them all together.
+  const [activeWorkflowTab, setActiveWorkflowTab] = useState<string>(() => {
     const parts = (deal.type ?? "")
       .split(/\s*(?:&|\band\b|\+|\/)\s*/i)
       .map(s => s.trim())
       .filter(Boolean);
     return parts[0] ?? "";
   });
-  const [activeMilestoneTab, setActiveMilestoneTab] = useState<string>(() => {
-    const parts = (deal.type ?? "")
-      .split(/\s*(?:&|\band\b|\+|\/)\s*/i)
-      .map(s => s.trim())
-      .filter(Boolean);
-    return parts[0] ?? "";
-  });
+  // Aliases keep existing usages working while we migrate to the unified state.
+  const activeTaskTab = activeWorkflowTab;
+  const activeMilestoneTab = activeWorkflowTab;
+  const setActiveTaskTab = setActiveWorkflowTab;
+  const setActiveMilestoneTab = setActiveWorkflowTab;
 
   // Extended display types with template flag and resolved lead-type (for combined deals)
   type DisplayTask = Task & { isTemplate?: boolean; leadType?: string | null };
@@ -712,8 +711,33 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     return rowLeadType.toLowerCase() === activeTab.toLowerCase();
   };
 
+  const dedupeTasksByTemplate = (rows: Task[]) => {
+    const seen = new Set<string>();
+    return rows.filter((task) => {
+      if (!task.taskTemplateId) return true;
+      if (seen.has(task.taskTemplateId)) return false;
+      seen.add(task.taskTemplateId);
+      return true;
+    });
+  };
+
+  const dedupeMilestonesByTemplate = (rows: Milestone[]) => {
+    const seen = new Set<string>();
+    return rows.filter((milestone) => {
+      if (!milestone.stageTemplateId) return true;
+      if (seen.has(milestone.stageTemplateId)) return false;
+      seen.add(milestone.stageTemplateId);
+      return true;
+    });
+  };
+
+  // Strict per-tab filtering for combined deals: each row appears on the tab
+  // matching its source template's lead_type. No item is duplicated across
+  // tabs. (Manually-added rows with no lead_type still appear on every tab so
+  // they aren't hidden.)
   const displayTasks: DisplayTask[] = (() => {
-    const userTitles = new Set(tasks.map(t => t.title.toLowerCase()));
+    const dedupedTasks = dedupeTasksByTemplate(tasks);
+    const userTitles = new Set(dedupedTasks.map(t => t.title.toLowerCase()));
     const templateRows: DisplayTask[] = (taskTemplates as any[])
       .filter(t => t.is_default)
       .filter(t => matchesDealType(t.lead_type))
@@ -727,7 +751,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         taskTemplateId: t.id,
         leadType: t.lead_type ?? null,
       }));
-    const userRows: DisplayTask[] = tasks.map(t => ({
+    const userRows: DisplayTask[] = dedupedTasks.map(t => ({
       ...t,
       isTemplate: false,
       leadType:
@@ -735,13 +759,18 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         ?? (t.taskTemplateId ? taskTemplateLeadTypeMap.get(t.taskTemplateId) ?? null : null),
     }));
     const all = [...templateRows, ...userRows];
-    return isCombinedDealType
-      ? all.filter(t => matchesActiveTab(t.leadType, activeTaskTab))
-      : all;
+    if (isCombinedDealType) {
+      return all.filter(t => matchesActiveTab(t.leadType, activeTaskTab));
+    }
+    // Single-type deals: shared tasks come from the primary deal (which may be
+    // a combined Purchase & Sale deal), so apply the same filter — only show
+    // tasks whose leadType matches the deal's type, or have no leadType.
+    return all.filter(t => !t.leadType || matchesDealType(t.leadType));
   })();
 
   const displayMilestones: DisplayMilestone[] = (() => {
-    const userTitles = new Set(milestones.map(m => m.title.toLowerCase()));
+    const dedupedMilestones = dedupeMilestonesByTemplate(milestones);
+    const userTitles = new Set(dedupedMilestones.map(m => m.title.toLowerCase()));
     const templateRows: DisplayMilestone[] = (stageTemplates as any[])
       .filter(t => matchesDealType(t.lead_type))
       .filter(t => !userTitles.has(t.name.toLowerCase()))
@@ -754,7 +783,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         stageTemplateId: t.id,
         leadType: t.lead_type ?? null,
       }));
-    const userRows: DisplayMilestone[] = milestones.map(m => ({
+    const userRows: DisplayMilestone[] = dedupedMilestones.map(m => ({
       ...m,
       isTemplate: false,
       leadType:
@@ -762,9 +791,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         ?? (m.stageTemplateId ? stageTemplateLeadTypeMap.get(m.stageTemplateId) ?? null : null),
     }));
     const all = [...templateRows, ...userRows];
-    return isCombinedDealType
-      ? all.filter(m => matchesActiveTab(m.leadType, activeMilestoneTab))
-      : all;
+    if (isCombinedDealType) {
+      return all.filter(m => matchesActiveTab(m.leadType, activeMilestoneTab));
+    }
+    return all.filter(m => !m.leadType || matchesDealType(m.leadType));
   })();
 
   useEffect(() => {
@@ -878,7 +908,16 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
             </div>
 
             <h1 className="text-2xl font-bold text-slate-900 mb-4 leading-tight">
-              {getDisplayAddress(deal.propertyAddress)}
+              {(() => {
+                // For combined Purchase & Sale deals, show the address that
+                // matches the active workflow tab. Falls back to purchase
+                // address if the sale-side address isn't set yet.
+                if (isCombinedDealType && activeWorkflowTab.toLowerCase() === "sale") {
+                  const sale = (deal as any).sellingPropertyAddress as string | undefined;
+                  return getDisplayAddress(sale || deal.propertyAddress || "");
+                }
+                return getDisplayAddress(deal.propertyAddress);
+              })()}
             </h1>
 
             <div className="flex flex-wrap gap-x-8 gap-y-4">

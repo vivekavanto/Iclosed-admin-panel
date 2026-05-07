@@ -9,15 +9,27 @@ import { recalcMilestonesForFamily } from "./recalcMilestones";
  * Identification: uses `task_templates.is_aps_task = true` to find the
  * correct template, then matches tasks by `task_template_id`.
  *
- * This is idempotent — calling it when the task is already completed is a
- * no-op that returns `{ success: true, already_completed: true }`.
+ * For combined Purchase & Sale deals, only completes the APS task(s) whose
+ * template `lead_type` matches the side(s) that were actually uploaded.
+ * If no side is supplied, the function inspects `lead_corporate_docs` to
+ * auto-detect which side(s) had an upload (via `doc_type` of `aps_purchase`
+ * or `aps_sale`).
+ *
+ * This is idempotent — calling it when the relevant tasks are already
+ * completed is a no-op.
  *
  * @param dealId – any deal in the family (primary or co-purchaser)
+ * @param opts.forLeadTypes – optional explicit list of lead_types to
+ *   complete (e.g. ["Purchase"], ["Sale"], ["Purchase","Sale"]).
  */
-export async function completeApsTask(dealId: string): Promise<{
+export async function completeApsTask(
+  dealId: string,
+  opts: { forLeadTypes?: string[] } = {},
+): Promise<{
   success: boolean;
   already_completed?: boolean;
   error?: string;
+  completed_lead_types?: string[];
 }> {
   try {
     // ── 1. Resolve the primary deal ──────────────────────────────────────────
@@ -47,10 +59,10 @@ export async function completeApsTask(dealId: string): Promise<{
       }
     }
 
-    // ── 2. Find the APS task template ────────────────────────────────────────
+    // ── 2. Find the APS task templates (with their lead_type) ────────────────
     const { data: apsTemplates } = await supabaseAdmin
       .from("task_templates")
-      .select("id")
+      .select("id, lead_type")
       .eq("is_aps_task", true)
       .eq("is_deleted", false);
 
@@ -58,7 +70,46 @@ export async function completeApsTask(dealId: string): Promise<{
       return { success: false, error: "No APS task template found" };
     }
 
+    const apsTemplateLeadTypeMap = new Map<string, string>(
+      (apsTemplates as any[]).map((t) => [t.id, (t.lead_type ?? "").toLowerCase().trim()]),
+    );
     const apsTemplateIds = apsTemplates.map((t) => t.id);
+
+    // ── 2b. Determine which lead_type(s) to mark complete ────────────────────
+    // Priority: explicit opts → auto-detect from lead_corporate_docs → all.
+    let allowLeadTypes: Set<string> | null = null;
+    if (opts.forLeadTypes && opts.forLeadTypes.length > 0) {
+      allowLeadTypes = new Set(
+        opts.forLeadTypes.map((s) => s.toLowerCase().trim()).filter(Boolean),
+      );
+    } else {
+      // Auto-detect from uploaded docs across the entire family
+      const familyDealIdsForDetect = await getFamilyDealIds(primaryDealId);
+      const { data: familyDealsForDetect } = await supabaseAdmin
+        .from("deals")
+        .select("lead_id")
+        .in("id", familyDealIdsForDetect);
+      const familyLeadIdsForDetect = [
+        ...new Set((familyDealsForDetect ?? []).map((d) => d.lead_id).filter(Boolean)),
+      ];
+      if (familyLeadIdsForDetect.length > 0) {
+        const { data: docs } = await supabaseAdmin
+          .from("lead_corporate_docs")
+          .select("doc_type")
+          .in("lead_id", familyLeadIdsForDetect);
+        const detected = new Set<string>();
+        for (const d of docs ?? []) {
+          const t = (d.doc_type ?? "").toLowerCase().trim();
+          if (t === "aps_purchase") detected.add("purchase");
+          else if (t === "aps_sale") detected.add("sale");
+        }
+        if (detected.size > 0) {
+          allowLeadTypes = detected;
+        }
+        // If only generic "aps"/"document" rows exist (no side specified),
+        // leave allowLeadTypes null → behave as before (complete all sides).
+      }
+    }
 
     // ── 3. Find the APS shared task(s) on the primary deal ───────────────────
     // A combined deal (e.g. Purchase & Sale) can have one APS task per lead type,
@@ -74,12 +125,21 @@ export async function completeApsTask(dealId: string): Promise<{
       return { success: false, error: "APS task not found on primary deal" };
     }
 
-    const pendingApsTasks = apsTasks.filter((t) => t.status !== "Completed");
+    // Filter APS tasks by allowed lead_types (if any constraint)
+    const matchesAllow = (task: { task_template_id: string | null }) => {
+      if (!allowLeadTypes) return true;
+      const lt = task.task_template_id
+        ? apsTemplateLeadTypeMap.get(task.task_template_id) ?? ""
+        : "";
+      return allowLeadTypes.has(lt);
+    };
 
-    // Idempotent — every APS task is already done
-    if (pendingApsTasks.length === 0) {
-      return { success: true, already_completed: true };
-    }
+    const pendingApsTasks = apsTasks
+      .filter((t) => matchesAllow(t))
+      .filter((t) => t.status !== "Completed");
+
+    const allowedApsTasks = apsTasks.filter((t) => matchesAllow(t));
+    const alreadyComplete = pendingApsTasks.length === 0;
 
     const now = new Date().toISOString();
     const completionPayload = {
@@ -89,19 +149,29 @@ export async function completeApsTask(dealId: string): Promise<{
     };
 
     // ── 4. Complete each pending APS task on the primary deal ────────────────
-    await supabaseAdmin
-      .from("tasks")
-      .update(completionPayload)
-      .in("id", pendingApsTasks.map((t) => t.id));
+    if (pendingApsTasks.length > 0) {
+      await supabaseAdmin
+        .from("tasks")
+        .update(completionPayload)
+        .in("id", pendingApsTasks.map((t) => t.id));
+    }
 
     // ── 4b. Bridge APS documents from lead_corporate_docs → task_responses ──
     // Intake uploads go to lead_corporate_docs (no task_id). The Doc column
     // and View Documents fetch from task_responses (needs task_id). Bridge
     // them so Intake-uploaded APS docs appear in the deal detail views.
+    //
+    // Matching:  doc.doc_type   APS task lead_type that gets the doc
+    //            -------------  ---------------------------------------
+    //            aps_purchase   Purchase
+    //            aps_sale       Sale
+    //            aps            both Purchase and Sale (legacy / generic)
+    //            document w/    both (legacy fallback when custom_type
+    //              custom_type   indicates APS)
+    //              ~ APS
     try {
       const familyDealIdsForDocs = await getFamilyDealIds(primaryDealId);
 
-      // Collect all family lead IDs
       const { data: familyDeals } = await supabaseAdmin
         .from("deals")
         .select("lead_id")
@@ -110,27 +180,57 @@ export async function completeApsTask(dealId: string): Promise<{
       const familyLeadIds = [...new Set((familyDeals ?? []).map((d) => d.lead_id).filter(Boolean))];
 
       if (familyLeadIds.length > 0) {
-        // Find APS documents in lead_corporate_docs (doc_type: "document", "aps", or custom_type: "APS Document")
+        // Pull every potentially-APS upload across the family. We include
+        // aps_purchase / aps_sale / aps explicitly, plus the legacy
+        // (doc_type='document' AND custom_type ilike '%APS%') case.
         const { data: apsDocs } = await supabaseAdmin
           .from("lead_corporate_docs")
-          .select("file_name, file_url")
+          .select("file_name, file_url, doc_type, custom_type")
           .in("lead_id", familyLeadIds)
-          .or('doc_type.eq.document,doc_type.eq.aps,custom_type.ilike.%APS%');
+          .or(
+            "doc_type.eq.aps_purchase,doc_type.eq.aps_sale,doc_type.eq.aps,doc_type.eq.document,custom_type.ilike.%APS%",
+          );
+
+        // Decide which lead_types each doc applies to.
+        const docTargetsLeadType = (doc: { doc_type: string | null; custom_type: string | null }): Set<string> => {
+          const dt = (doc.doc_type ?? "").toLowerCase();
+          if (dt === "aps_purchase") return new Set(["purchase"]);
+          if (dt === "aps_sale") return new Set(["sale"]);
+          // Generic aps or document/custom_type APS — applies to all sides
+          if (dt === "aps") return new Set(["purchase", "sale"]);
+          // doc_type=document with custom_type ~ APS — legacy fallback
+          if (dt === "document" && /aps/i.test(doc.custom_type ?? "")) {
+            return new Set(["purchase", "sale"]);
+          }
+          return new Set();
+        };
 
         if (apsDocs && apsDocs.length > 0) {
-          // Bridge each uploaded doc into every APS task on the primary deal
-          // (a combined deal can have multiple APS tasks — one per lead type).
-          for (const apsTaskRow of pendingApsTasks) {
+          // Bridge into ALL APS tasks (not just pending), so re-uploads after
+          // completion still attach to the right task.
+          for (const apsTaskRow of apsTasks ?? []) {
+            const taskLeadType = apsTemplateLeadTypeMap.get(apsTaskRow.task_template_id ?? "") ?? "";
+            if (!taskLeadType) continue;
+
+            const matchingDocs = apsDocs.filter((doc) =>
+              docTargetsLeadType(doc).has(taskLeadType),
+            );
+            if (matchingDocs.length === 0) continue;
+
             const { data: existingResponses } = await supabaseAdmin
               .from("task_responses")
-              .select("file_name")
+              .select("file_name, file_url")
               .eq("task_id", apsTaskRow.id)
               .eq("field_type", "file");
 
-            const existingFileNames = new Set((existingResponses ?? []).map((r) => r.file_name));
+            const existingKeys = new Set(
+              (existingResponses ?? []).map(
+                (r) => `${r.file_name ?? ""}|${r.file_url ?? ""}`,
+              ),
+            );
 
-            const newResponses = apsDocs
-              .filter((doc) => doc.file_name && !existingFileNames.has(doc.file_name))
+            const newResponses = matchingDocs
+              .filter((doc) => doc.file_name && !existingKeys.has(`${doc.file_name}|${doc.file_url ?? ""}`))
               .map((doc) => ({
                 task_id: apsTaskRow.id,
                 field_type: "file",
@@ -145,8 +245,9 @@ export async function completeApsTask(dealId: string): Promise<{
           }
         }
       }
-    } catch {
+    } catch (err) {
       // Non-blocking — document bridging failure should not break task completion
+      console.error("[completeApsTask] bridge failed (non-blocking):", err);
     }
 
     // ── 5. Sync to all co-purchaser deals ────────────────────────────────────
@@ -170,7 +271,18 @@ export async function completeApsTask(dealId: string): Promise<{
     // ── 6. Recalculate milestones for all family deals ───────────────────────
     await recalcMilestonesForFamily(familyDealIds, primaryDealId);
 
-    return { success: true };
+    const completedLeadTypes = [
+      ...new Set(
+        pendingApsTasks
+          .map((t) => apsTemplateLeadTypeMap.get(t.task_template_id ?? "") ?? "")
+          .filter(Boolean),
+      ),
+    ];
+    return {
+      success: true,
+      already_completed: alreadyComplete,
+      completed_lead_types: completedLeadTypes,
+    };
   } catch (err: any) {
     console.error("[completeApsTask] Error:", err);
     return { success: false, error: err.message ?? "Unknown error" };

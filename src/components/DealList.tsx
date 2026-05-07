@@ -30,6 +30,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           type: d.type,
           status: d.status,
           propertyAddress: d.propertyAddress ?? d.property_address ?? '',
+          sellingPropertyAddress: d.sellingPropertyAddress ?? d.selling_property_address ?? '',
           closingDate: d.closingDate ?? d.closing_date ?? '',
           openingDate: d.openingDate ?? d.opening_date,
           requisitionDate: d.requisitionDate ?? d.requisition_date,
@@ -56,6 +57,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   const countS = primaryDeals.filter(d => d.type === DealType.SALE).length;
   const countP = primaryDeals.filter(d => d.type === DealType.PURCHASE).length;
   const countR = primaryDeals.filter(d => d.type === DealType.REFINANCE).length;
+  const countPS = primaryDeals.filter(d => d.type === DealType.PURCHASE_AND_SALE).length;
   const totalFiles = primaryDeals.length;
 
   const filteredDeals = primaryDeals.filter(deal => {
@@ -65,6 +67,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
       const matchesSearch =
         deal.fileNumber.toLowerCase().includes(lowerTerm) ||
         deal.propertyAddress.toLowerCase().includes(lowerTerm) ||
+        (deal.sellingPropertyAddress ?? '').toLowerCase().includes(lowerTerm) ||
         deal.type?.toLowerCase().includes(lowerTerm) ||
         deal.status?.toLowerCase().includes(lowerTerm);
       if (!matchesSearch) return false;
@@ -134,7 +137,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
       <div className="flex flex-col xl:flex-row items-start xl:items-center justify-between p-4 sm:p-6 pb-2 gap-4">
         <div className="flex flex-wrap items-center gap-3 sm:gap-4">
           <h1 className="text-lg sm:text-xl font-bold text-slate-900 border-b-2 border-slate-900 pb-0.5">All files</h1>
-          <div className="flex items-center gap-2 text-sm"><span className="font-bold text-slate-700">Total: {totalFiles}</span><span className="bg-orange-100 text-orange-700 border border-orange-200 px-1.5 rounded text-xs font-bold" title="Sales">S {countS}</span><span className="bg-blue-100 text-blue-700 border border-blue-200 px-1.5 rounded text-xs font-bold" title="Purchases">P {countP}</span><span className="bg-brand-black text-white px-1.5 rounded text-xs font-bold" title="Refinances">R {countR}</span></div>
+          <div className="flex items-center gap-2 text-sm"><span className="font-bold text-slate-700">Total: {totalFiles}</span><span className="bg-orange-100 text-orange-700 border border-orange-200 px-1.5 rounded text-xs font-bold" title="Sales">S {countS}</span><span className="bg-blue-100 text-blue-700 border border-blue-200 px-1.5 rounded text-xs font-bold" title="Purchases">P {countP}</span><span className="bg-purple-100 text-purple-700 border border-purple-200 px-1.5 rounded text-xs font-bold" title="Purchase & Sale">PS {countPS}</span><span className="bg-brand-black text-white px-1.5 rounded text-xs font-bold" title="Refinances">R {countR}</span></div>
         </div>
 
         <div className="flex flex-1 w-full xl:w-auto items-center gap-3 justify-end">
@@ -173,7 +176,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div><label className="block text-xs text-slate-500 mb-1">File type</label><select value={filterType} onChange={e => setFilterType(e.target.value)} className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"><option value="All">All</option><option value="Purchase">Purchase</option><option value="Sale">Sale</option><option value="Refinance">Refinance</option></select></div>
+          <div><label className="block text-xs text-slate-500 mb-1">File type</label><select value={filterType} onChange={e => setFilterType(e.target.value)} className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"><option value="All">All</option><option value="Purchase">Purchase</option><option value="Sale">Sale</option><option value="Purchase &amp; Sale">Purchase &amp; Sale</option><option value="Refinance">Refinance</option></select></div>
           <div><label className="block text-xs text-slate-500 mb-1">Lawyer</label><select className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"><option>Choose a lawyer</option></select></div>
           <div><label className="block text-xs text-slate-500 mb-1">Clerk</label><select className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"><option>Suganya Argeen</option></select></div>
           <div><label className="block text-xs text-slate-500 mb-1">File status</label><select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"><option value="">Choose a status</option><option value="Active">Active</option><option value="Closed">Closed</option></select></div>
@@ -202,6 +205,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
             {filteredDeals.length > 0 ? filteredDeals.map((deal, index) => {
               const isEven = index % 2 === 0;
               const rowClass = isEven ? 'bg-white' : 'bg-slate-50/80';
+              const isCombined = deal.type === DealType.PURCHASE_AND_SALE;
               return (
                 <tr key={deal.id} onClick={() => {
                   console.log("Clicked deal id:", deal.id);
@@ -212,16 +216,34 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                   <td className="px-4 py-3">
                     <div>
                       {deal.propertyAddress}
-                      {(deal as any).isCoPurchaser && (
-                        <span className="ml-2 inline-flex items-center text-blue-600" title={deal.type === "Sale" ? "Co-Seller" : "Co-Purchaser"}>
-                          <Users size={14} />
-                        </span>
-                      )}
-                      {(deal as any).hasCoPurchasers && (
-                        <span className="ml-2 inline-flex items-center text-green-600" title={deal.type === "Sale" ? "Has Co-Seller(s)" : "Has Co-Purchaser(s)"}>
-                          <Users size={14} />
-                        </span>
-                      )}
+                      {(deal as any).isCoPurchaser && (() => {
+                        const t = (deal.type ?? "").toLowerCase();
+                        const tooltip =
+                          t === "sale"
+                            ? "Co-Seller"
+                            : t === "purchase"
+                            ? "Co-Purchaser"
+                            : "Co-Client";
+                        return (
+                          <span className="ml-2 inline-flex items-center text-blue-600" title={tooltip}>
+                            <Users size={14} />
+                          </span>
+                        );
+                      })()}
+                      {(deal as any).hasCoPurchasers && (() => {
+                        const t = (deal.type ?? "").toLowerCase();
+                        const tooltip =
+                          t.includes("purchase") && t.includes("sale")
+                            ? "Has Co-Client(s)"
+                            : t === "sale"
+                            ? "Has Co-Seller(s)"
+                            : "Has Co-Purchaser(s)";
+                        return (
+                          <span className="ml-2 inline-flex items-center text-green-600" title={tooltip}>
+                            <Users size={14} />
+                          </span>
+                        );
+                      })()}
                       {isNonCitizenFlagged({ citizenship_status: (deal as any).leadCitizenshipStatus }) && (
                         <span
                           className="ml-2 inline-flex items-center text-red-600"
@@ -237,7 +259,23 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                   </td>
                   <td className="px-4 py-3"><span className="bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded text-[10px] font-bold border border-blue-100">KN</span></td>
                   <td className="px-4 py-3"><span className="bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded text-[10px] font-bold border border-blue-100">SA</span></td>
-                  <td className="px-4 py-3 truncate max-w-xs" title={deal.propertyAddress}>{deal.propertyAddress}</td>
+                  <td className="px-4 py-3 max-w-xs" title={isCombined ? `Purchase: ${deal.propertyAddress || "—"}\nSale: ${deal.sellingPropertyAddress || "—"}` : deal.propertyAddress}>
+                    {isCombined ? (
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-[9px] font-black text-blue-600 uppercase tracking-widest w-14 flex-shrink-0">Purchase</span>
+                          <span className="truncate text-slate-700">{deal.propertyAddress || "—"}</span>
+                        </div>
+                        <div className="h-px bg-slate-100" />
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-[9px] font-black text-orange-600 uppercase tracking-widest w-14 flex-shrink-0">Sale</span>
+                          <span className="truncate text-slate-700">{deal.sellingPropertyAddress || "—"}</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <span className="truncate block">{deal.propertyAddress}</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3">{formatDate(deal.closingDate)}</td>
                   <td className="px-4 py-3">{formatDate(deal.requisitionDate)}</td>
                   <td className="px-4 py-3">

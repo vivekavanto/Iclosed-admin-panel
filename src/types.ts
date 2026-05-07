@@ -1,7 +1,8 @@
 export enum DealType {
   PURCHASE = 'Purchase',
   SALE = 'Sale',
-  REFINANCE = 'Refinance'
+  REFINANCE = 'Refinance',
+  PURCHASE_AND_SALE = 'Purchase & Sale'
 }
 
 export enum DealStatus {
@@ -57,6 +58,7 @@ export interface Deal {
   type: DealType;
   status: DealStatus;
   propertyAddress: string;
+  sellingPropertyAddress?: string;
   closingDate: string;
   openingDate?: string;
   requisitionDate?: string;

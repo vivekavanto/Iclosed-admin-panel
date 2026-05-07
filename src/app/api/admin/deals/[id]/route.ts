@@ -23,22 +23,48 @@ export async function GET(
 
   try {
     if (data.lead_id) {
-      // Step 1: Get the lead to find parent_lead_id
+      // Step 1: Get the lead to find parent_lead_id and selling-side address
       const { data: lead } = await supabase
         .from("leads")
-        .select("id, parent_lead_id, first_name, last_name, citizenship_status")
+        .select("id, parent_lead_id, first_name, last_name, citizenship_status, lead_type, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code")
         .eq("id", data.lead_id)
         .single();
 
       if (lead) {
         data.lead_citizenship_status = lead.citizenship_status ?? null;
+        data.selling_property_address = [
+          lead.selling_address_street,
+          lead.selling_address_city,
+          lead.selling_address_province,
+          lead.selling_address_postal_code,
+        ]
+          .filter(Boolean)
+          .join(", ");
         const rootLeadId = lead.parent_lead_id ?? lead.id;
 
         // Step 2: Find all leads in the family
         const { data: familyLeads } = await supabase
           .from("leads")
-          .select("id, parent_lead_id, first_name, last_name")
+          .select("id, parent_lead_id, first_name, last_name, lead_type")
           .or(`id.eq.${rootLeadId},parent_lead_id.eq.${rootLeadId}`);
+
+        // Determine a co-lead's role from its own lead_type when specific
+        // (Purchase/Sale). Falls back to the deal's type for ambiguous cases.
+        const dealTypeLower = (data.type ?? "").toLowerCase().trim();
+        const dealIsSaleOnly = dealTypeLower === "sale";
+        const labelForCo = (leadType: string | null | undefined): string => {
+          const lt = (leadType ?? "").toLowerCase().trim();
+          if (lt === "purchase") return "Co-Purchaser";
+          if (lt === "sale") return "Co-Seller";
+          return dealIsSaleOnly ? "Co-Seller" : "Co-Purchaser";
+        };
+        const labelForPrimary = (leadType: string | null | undefined): string => {
+          const lt = (leadType ?? "").toLowerCase().trim();
+          if (lt.includes("purchase") && lt.includes("sale")) return "Primary Client";
+          if (lt === "sale") return "Primary Seller";
+          if (lt === "purchase") return "Primary Purchaser";
+          return dealIsSaleOnly ? "Primary Seller" : "Primary Purchaser";
+        };
 
         if (familyLeads && familyLeads.length > 1) {
           // Get all family lead IDs except the current deal's lead
@@ -59,13 +85,12 @@ export async function GET(
                 familyLeads.map((l) => [l.id, l])
               );
 
-              const isSale = data.type === "Sale";
-              const primaryLabel = isSale ? "Primary Seller" : "Primary Purchaser";
-              const coLabel = isSale ? "Co-Seller" : "Co-Purchaser";
-
               linked_deals = otherDeals.map((d) => {
-                const dLead = leadMap.get(d.lead_id);
+                const dLead = leadMap.get(d.lead_id) as any;
                 const isPrimary = dLead ? !dLead.parent_lead_id : false;
+                const role = isPrimary
+                  ? labelForPrimary(dLead?.lead_type)
+                  : labelForCo(dLead?.lead_type);
                 return {
                   id: d.id,
                   file_number: d.file_number,
@@ -74,18 +99,16 @@ export async function GET(
                   lead_name: dLead
                     ? `${dLead.first_name ?? ""} ${dLead.last_name ?? ""}`.trim()
                     : null,
-                  role: isPrimary ? primaryLabel : coLabel,
+                  role,
                 };
               });
             }
           }
 
           // Also determine the current deal's role
-          const isSaleType = data.type === "Sale";
-          const currentRole = lead.parent_lead_id
-            ? (isSaleType ? "Co-Seller" : "Co-Purchaser")
-            : (isSaleType ? "Primary Seller" : "Primary Purchaser");
-          data.current_deal_role = currentRole;
+          data.current_deal_role = lead.parent_lead_id
+            ? labelForCo(lead.lead_type)
+            : labelForPrimary(lead.lead_type);
         }
       }
     }

@@ -23,6 +23,7 @@ export default function Page({ params }: Props) {
           type: d.type,
           status: d.status,
           propertyAddress: d.propertyAddress ?? d.property_address ?? '',
+          sellingPropertyAddress: d.sellingPropertyAddress ?? d.selling_property_address ?? '',
           closingDate: d.closingDate ?? d.closing_date ?? '',
           openingDate: d.openingDate ?? d.opening_date,
           requisitionDate: d.requisitionDate ?? d.requisition_date,

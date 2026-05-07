@@ -13,7 +13,11 @@ import { completeApsTask } from "@/lib/completeApsTask";
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { lead_id } = body as { lead_id: string };
+    const { lead_id, lead_type, lead_types } = body as {
+      lead_id: string;
+      lead_type?: string;       // single side: "Purchase" | "Sale"
+      lead_types?: string[];    // multiple sides
+    };
 
     if (!lead_id) {
       return NextResponse.json(
@@ -21,6 +25,14 @@ export async function POST(req: Request) {
         { status: 400 },
       );
     }
+
+    // Normalize the requested lead_type(s). When omitted, completeApsTask
+    // auto-detects from lead_corporate_docs (aps_purchase / aps_sale).
+    const forLeadTypes = lead_types && lead_types.length > 0
+      ? lead_types
+      : lead_type
+      ? [lead_type]
+      : undefined;
 
     // 1. Set aps_uploaded = true on the lead
     const { error: updateError } = await supabaseAdmin
@@ -50,8 +62,9 @@ export async function POST(req: Request) {
       });
     }
 
-    // 3. Complete the APS task across the family
-    const result = await completeApsTask(deal.id);
+    // 3. Complete the APS task across the family (only for the requested
+    //    side(s); falls back to auto-detection from lead_corporate_docs).
+    const result = await completeApsTask(deal.id, { forLeadTypes });
 
     if (!result.success) {
       return NextResponse.json(
@@ -63,6 +76,7 @@ export async function POST(req: Request) {
     return NextResponse.json({
       success: true,
       already_completed: result.already_completed ?? false,
+      completed_lead_types: result.completed_lead_types ?? [],
       message: result.already_completed
         ? "APS task was already completed"
         : "APS task completed and milestones updated for all linked deals",

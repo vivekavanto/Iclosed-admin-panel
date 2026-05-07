@@ -30,12 +30,16 @@ export async function convertSingleLead(
   const leadId: string = lead.id;
 
   try {
-    // Check if this lead has already been converted.
-    const { data: existingDeal } = await supabaseAdmin
+    // Check if this lead has already been converted. We use a list query so
+    // multiple rows (an unintended state) don't silently make .maybeSingle()
+    // return null — which would let the function continue and create yet
+    // another deal.
+    const { data: existingDeals } = await supabaseAdmin
       .from("deals")
-      .select("id, file_number, client_id")
+      .select("id, file_number, client_id, created_at")
       .eq("lead_id", leadId)
-      .maybeSingle();
+      .order("created_at", { ascending: true });
+    const existingDeal = (existingDeals ?? [])[0];
 
     if (existingDeal) {
       if (opts.existingDealBehavior === "error") {
@@ -100,7 +104,11 @@ export async function convertSingleLead(
     }
 
     // ── Generate file number ─────────────────────────────────────────────────
-    const leadTypePrefix = lead.lead_type?.charAt(0)?.toUpperCase() ?? "X";
+    const ltLower = (lead.lead_type ?? "").toLowerCase();
+    const isCombinedPS = ltLower.includes("purchase") && ltLower.includes("sale");
+    const leadTypePrefix = isCombinedPS
+      ? "PS"
+      : (lead.lead_type?.charAt(0)?.toUpperCase() ?? "X");
     const year = new Date().getFullYear().toString().slice(-2);
     const prefix = `${year}${leadTypePrefix}-`;
 
@@ -220,16 +228,34 @@ export async function convertSingleLead(
 
       // Group by lead_type in the order specified by leadTypeParts so combined
       // deals show Purchase milestones first, then Sale, etc.
-      const stageTemplates = (stageTemplatesRaw ?? []).slice().sort((a, b) => {
+      const stageTemplatesSorted = (stageTemplatesRaw ?? []).slice().sort((a, b) => {
         const ai = leadTypePartIndex(a.lead_type);
         const bi = leadTypePartIndex(b.lead_type);
         if (ai !== bi) return ai - bi;
         return (a.order_index ?? 0) - (b.order_index ?? 0);
       });
 
+      // Dedupe by name *within each lead_type only*. Keeps each workflow
+      // distinct: a name like "Funds Received" can appear once for Purchase
+      // and once for Sale (separate rows, each tagged with their own
+      // lead_type), so the Sale tab still shows its workflow's items.
+      const stageTemplates = (() => {
+        const seenByLeadType = new Map<string, Set<string>>();
+        return stageTemplatesSorted.filter((st) => {
+          const lt = (st.lead_type ?? "").toLowerCase().trim();
+          const key = (st.name ?? "").toLowerCase().trim();
+          if (!key) return true;
+          if (!seenByLeadType.has(lt)) seenByLeadType.set(lt, new Set());
+          const seen = seenByLeadType.get(lt)!;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+      })();
+
       if (stageTemplates && stageTemplates.length > 0) {
         const now = new Date().toISOString();
-        const milestoneRows = stageTemplates.map((st) => ({
+        const allMilestoneRows = stageTemplates.map((st) => ({
           deal_id: dealId,
           title: st.name,
           status: st.auto_complete ? "Completed" : "Pending",
@@ -240,10 +266,41 @@ export async function convertSingleLead(
           description: st.description ?? null,
         }));
 
-        const { data: milestones, error: msError } = await supabaseAdmin
+        // Idempotent guard: skip rows whose stage_template_id is already on the
+        // deal. Match strictly by template id (not by title) so a Purchase &
+        // Sale deal can correctly hold a Purchase row AND a Sale row that
+        // happen to share a name like "Funds Received".
+        const { data: existingMs } = await supabaseAdmin
           .from("milestones")
-          .insert(milestoneRows)
-          .select("id, stage_template_id");
+          .select("id, stage_template_id")
+          .eq("deal_id", dealId);
+
+        const existingStageIds = new Set(
+          (existingMs ?? []).map((m) => m.stage_template_id).filter(Boolean),
+        );
+
+        // Pre-populate stageToMilestone for any already-existing milestones so
+        // task seeding below can still link to them.
+        for (const m of existingMs ?? []) {
+          if (m.stage_template_id) stageToMilestone[m.stage_template_id] = m.id;
+        }
+
+        const milestoneRows = allMilestoneRows.filter((r) => {
+          if (r.stage_template_id && existingStageIds.has(r.stage_template_id)) return false;
+          return true;
+        });
+
+        if (milestoneRows.length === 0) {
+          // Nothing new to insert — already-seeded deal. Continue to task step
+          // where the same idempotent check applies.
+        }
+
+        const { data: milestones, error: msError } = milestoneRows.length > 0
+          ? await supabaseAdmin
+              .from("milestones")
+              .insert(milestoneRows)
+              .select("id, stage_template_id")
+          : { data: [], error: null };
 
         if (!msError && milestones) {
           const stageTemplateMap = new Map(stageTemplates.map((st) => [st.id, st]));
@@ -356,12 +413,30 @@ export async function convertSingleLead(
 
       // Group by lead_type in the order specified by leadTypeParts so combined
       // deals show Purchase tasks first, then Sale, etc.
-      const taskTemplates = (taskTemplatesRaw ?? []).slice().sort((a, b) => {
+      const taskTemplatesSorted = (taskTemplatesRaw ?? []).slice().sort((a, b) => {
         const ai = leadTypePartIndex(a.lead_type);
         const bi = leadTypePartIndex(b.lead_type);
         if (ai !== bi) return ai - bi;
         return (a.order_index ?? 0) - (b.order_index ?? 0);
       });
+
+      // Dedupe by name within each lead_type only — a Purchase & Sale deal
+      // gets a Purchase-tagged copy AND a Sale-tagged copy of any name that
+      // exists in both template sets. Strict per-tab filtering in the UI
+      // keeps each tab clean.
+      const taskTemplates = (() => {
+        const seenByLeadType = new Map<string, Set<string>>();
+        return taskTemplatesSorted.filter((tt) => {
+          const lt = (tt.lead_type ?? "").toLowerCase().trim();
+          const key = (tt.name ?? "").toLowerCase().trim();
+          if (!key) return true;
+          if (!seenByLeadType.has(lt)) seenByLeadType.set(lt, new Set());
+          const seen = seenByLeadType.get(lt)!;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+      })();
 
       if (taskTemplates && taskTemplates.length > 0) {
         const isCoPurchaser = !!lead.parent_lead_id;
@@ -376,14 +451,20 @@ export async function convertSingleLead(
           milestone_id: tt.stage_template_id ? (stageToMilestone[tt.stage_template_id] ?? null) : null,
         }));
 
-        const templateIds = taskRows.map((r) => r.task_template_id).filter(Boolean);
+        // Idempotent guard: skip rows whose task_template_id is already on the
+        // deal. Match by template id only — a Purchase & Sale deal can hold
+        // a Purchase task AND a Sale task with the same name (e.g. "Provide
+        // Personal Information") because they're tagged with different
+        // lead_types and shown on separate tabs.
         const { data: existingTasks } = await supabaseAdmin
           .from("tasks")
           .select("task_template_id")
-          .eq("deal_id", dealId)
-          .in("task_template_id", templateIds);
+          .eq("deal_id", dealId);
 
-        const existingTemplateIds = new Set((existingTasks ?? []).map((t) => t.task_template_id));
+        const existingTemplateIds = new Set(
+          (existingTasks ?? []).map((t) => t.task_template_id).filter(Boolean),
+        );
+
         const dedupedRows = taskRows
           .filter((r) => !r.task_template_id || !existingTemplateIds.has(r.task_template_id))
           .filter((r) => !isCoPurchaser || !r.is_shared);
