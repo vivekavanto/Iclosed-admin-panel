@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { Deal, DealType, DealStatus } from '../types';
-import { Search, Trash2, Users, AlertTriangle } from 'lucide-react';
+import { Search, Trash2, Users, AlertTriangle, Upload } from 'lucide-react';
 import {
   isNonCitizenFlagged,
   NON_CITIZEN_FLAG_TOOLTIP,
@@ -140,9 +141,9 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           <div className="flex items-center gap-2 text-sm"><span className="font-bold text-slate-700">Total: {totalFiles}</span><span className="bg-orange-100 text-orange-700 border border-orange-200 px-1.5 rounded text-xs font-bold" title="Sales">S {countS}</span><span className="bg-blue-100 text-blue-700 border border-blue-200 px-1.5 rounded text-xs font-bold" title="Purchases">P {countP}</span><span className="bg-purple-100 text-purple-700 border border-purple-200 px-1.5 rounded text-xs font-bold" title="Purchase & Sale">PS {countPS}</span><span className="bg-brand-black text-white px-1.5 rounded text-xs font-bold" title="Refinances">R {countR}</span></div>
         </div>
 
-        <div className="flex flex-1 w-full xl:w-auto items-center gap-3 justify-end">
+        <div className="flex flex-1 w-full xl:w-auto items-center gap-2 justify-end">
           <label
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wide cursor-pointer border transition-colors select-none whitespace-nowrap ${
+            className={`h-9 flex items-center gap-1.5 px-3 rounded text-xs font-bold uppercase tracking-wide cursor-pointer border transition-colors select-none whitespace-nowrap ${
               showOnlyFlagged
                 ? 'bg-red-50 border-red-200 text-red-700'
                 : 'bg-white border-slate-300 text-slate-600 hover:border-red-200 hover:text-red-700'
@@ -158,29 +159,109 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
             <AlertTriangle size={12} />
             Only Flagged
           </label>
-          <div className="relative flex-1 xl:flex-none xl:w-96">
-            <input type="text" placeholder="Search" className="w-full pl-3 pr-4 py-1.5 border border-slate-300 rounded text-sm focus:outline-none focus:border-brand-primary" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+          <div className="relative flex-1 xl:flex-none xl:w-72">
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+            <input
+              type="text"
+              placeholder="Search"
+              className="w-full h-9 pl-8 pr-3 border border-slate-300 rounded text-sm focus:outline-none focus:border-brand-primary"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
           </div>
+          <Link
+            href="/admin/bulk-import"
+            className="h-9 flex items-center gap-1.5 px-3 rounded text-xs font-bold uppercase tracking-wide bg-brand-primary text-white hover:bg-brand-primaryHover transition-colors whitespace-nowrap shadow-sm"
+            title="Import deals from a CSV file"
+          >
+            <Upload size={12} />
+            Bulk Import
+          </Link>
         </div>
       </div>
 
       <div className="px-4 sm:px-6 pb-4 sm:pb-6 pt-2 space-y-4">
-        <div className="flex flex-wrap items-end gap-3 sm:gap-6 border-b border-slate-100 pb-4">
-          <div className="flex border border-slate-300 rounded overflow-hidden"><button className="px-3 py-1.5 text-xs font-medium transition-colors bg-brand-light text-brand-primary cursor-default">Closing date</button></div>
-          <div className="flex items-center gap-3">
-            <div><label className="block text-xs text-slate-500 mb-1">From</label><input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="border border-slate-300 rounded px-2 py-1 text-xs text-slate-700 focus:border-brand-primary outline-none" /></div>
-            <div><label className="block text-xs text-slate-500 mb-1">To</label><input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="border border-slate-300 rounded px-2 py-1 text-xs text-slate-700 focus:border-brand-primary outline-none" /></div>
-            {(dateFrom || dateTo) && <button onClick={() => { setDateFrom(''); setDateTo(''); }} className="text-xs text-slate-400 hover:text-red-500 pb-0.5 mt-4">✕ Clear</button>}
+        <div className="flex flex-wrap items-end gap-x-4 gap-y-3 border-b border-slate-100 pb-4">
+          <div>
+            <span className="block text-xs text-slate-500 mb-1">Filter by</span>
+            <div className="inline-flex h-8 border border-slate-300 rounded overflow-hidden">
+              <button className="px-3 text-xs font-medium bg-brand-light text-brand-primary cursor-default">
+                Closing date
+              </button>
+            </div>
           </div>
-          <div className="flex gap-4 pb-1"><button onClick={() => applyPreset('today')} className="text-xs font-medium text-brand-primary hover:underline">Today</button><button onClick={() => applyPreset('week')} className="text-xs font-medium text-brand-primary hover:underline">This week</button><button onClick={() => applyPreset('month')} className="text-xs font-medium text-brand-primary hover:underline">This month</button></div>
+          <div>
+            <label className="block text-xs text-slate-500 mb-1">From</label>
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={e => setDateFrom(e.target.value)}
+              className="h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-slate-500 mb-1">To</label>
+            <input
+              type="date"
+              value={dateTo}
+              onChange={e => setDateTo(e.target.value)}
+              className="h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none"
+            />
+          </div>
+          {(dateFrom || dateTo) && (
+            <button
+              onClick={() => { setDateFrom(''); setDateTo(''); }}
+              className="h-8 px-2 text-xs text-slate-400 hover:text-red-500 transition-colors"
+            >
+              ✕ Clear
+            </button>
+          )}
+          <div className="h-8 flex items-center gap-4 ml-auto">
+            <button onClick={() => applyPreset('today')} className="text-xs font-medium text-brand-primary hover:underline">Today</button>
+            <button onClick={() => applyPreset('week')} className="text-xs font-medium text-brand-primary hover:underline">This week</button>
+            <button onClick={() => applyPreset('month')} className="text-xs font-medium text-brand-primary hover:underline">This month</button>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div><label className="block text-xs text-slate-500 mb-1">File type</label><select value={filterType} onChange={e => setFilterType(e.target.value)} className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"><option value="All">All</option><option value="Purchase">Purchase</option><option value="Sale">Sale</option><option value="Purchase &amp; Sale">Purchase &amp; Sale</option><option value="Refinance">Refinance</option></select></div>
-          <div><label className="block text-xs text-slate-500 mb-1">Lawyer</label><select className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"><option>Choose a lawyer</option></select></div>
-          <div><label className="block text-xs text-slate-500 mb-1">Clerk</label><select className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"><option>Suganya Argeen</option></select></div>
-          <div><label className="block text-xs text-slate-500 mb-1">File status</label><select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"><option value="">Choose a status</option><option value="Active">Active</option><option value="Closed">Closed</option></select></div>
-
+          <div>
+            <label className="block text-xs text-slate-500 mb-1">File type</label>
+            <select
+              value={filterType}
+              onChange={e => setFilterType(e.target.value)}
+              className="w-full h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"
+            >
+              <option value="All">All</option>
+              <option value="Purchase">Purchase</option>
+              <option value="Sale">Sale</option>
+              <option value="Purchase &amp; Sale">Purchase &amp; Sale</option>
+              <option value="Refinance">Refinance</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs text-slate-500 mb-1">Lawyer</label>
+            <select className="w-full h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white">
+              <option>Choose a lawyer</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs text-slate-500 mb-1">Clerk</label>
+            <select className="w-full h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white">
+              <option>Suganya Argeen</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs text-slate-500 mb-1">File status</label>
+            <select
+              value={filterStatus}
+              onChange={e => setFilterStatus(e.target.value)}
+              className="w-full h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"
+            >
+              <option value="">Choose a status</option>
+              <option value="Active">Active</option>
+              <option value="Closed">Closed</option>
+            </select>
+          </div>
         </div>
       </div>
 
