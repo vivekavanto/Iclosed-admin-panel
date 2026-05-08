@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import Papa from "papaparse";
 import {
   Upload,
@@ -10,7 +10,6 @@ import {
   AlertCircle,
   X,
   Download,
-  Info,
   RotateCcw,
 } from "lucide-react";
 import {
@@ -31,6 +30,29 @@ interface ImportResult {
   fileNumber: string;
   outcome: "created" | "updated" | "skipped" | "error";
   reason?: string;
+  type?: string;
+  status?: string;
+  address?: string;
+  clerk?: string;
+  lawyer?: string;
+  closingDate?: string | null;
+}
+
+interface RecentImportRow {
+  id: string;
+  file_number: string;
+  type: string | null;
+  status: string | null;
+  property_address: string | null;
+  file_name: string | null;
+  clerk_name: string | null;
+  lawyer_name: string | null;
+  requisition_date: string | null;
+  outstanding_undertakings: number | null;
+  outstanding_requisitions: number | null;
+  closing_date: string | null;
+  opening_date: string | null;
+  created_at: string;
 }
 
 const SAMPLE_CSV_HEADER = REQUIRED_HEADERS.join(",") + "\n";
@@ -42,8 +64,10 @@ const BulkImport: React.FC = () => {
   const [missingHeaders, setMissingHeaders] = useState<string[]>([]);
   const [parseError, setParseError] = useState<string | null>(null);
   const [importResults, setImportResults] = useState<ImportResult[]>([]);
-  const [resultBannerDismissed, setResultBannerDismissed] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [recentRefreshKey, setRecentRefreshKey] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const reset = () => {
@@ -53,7 +77,9 @@ const BulkImport: React.FC = () => {
     setMissingHeaders([]);
     setParseError(null);
     setImportResults([]);
-    setResultBannerDismissed(false);
+    setIsImporting(false);
+    setImportError(null);
+    setRecentRefreshKey((k) => k + 1);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -97,12 +123,49 @@ const BulkImport: React.FC = () => {
     if (file) handleFile(file);
   };
 
-  const downloadSample = () => {
-    const blob = new Blob([SAMPLE_CSV_HEADER], { type: "text/csv;charset=utf-8" });
+  const downloadSample = async () => {
+    const escape = (v: unknown) => {
+      const s = v == null ? "" : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+
+    let body = SAMPLE_CSV_HEADER;
+    try {
+      const res = await fetch("/api/admin/bulk-import-deals");
+      const payload = await res.json().catch(() => ({}));
+      const deals: RecentImportRow[] = Array.isArray(payload?.deals)
+        ? payload.deals
+        : [];
+
+      const lines = deals.map((d) =>
+        [
+          d.file_number,
+          d.type,
+          d.file_name,
+          d.clerk_name,
+          d.lawyer_name,
+          d.property_address,
+          d.requisition_date,
+          d.outstanding_undertakings,
+          d.outstanding_requisitions,
+          d.closing_date,
+          d.opening_date,
+          d.status,
+        ]
+          .map(escape)
+          .join(","),
+      );
+
+      if (lines.length > 0) body = SAMPLE_CSV_HEADER + lines.join("\n") + "\n";
+    } catch {
+      // fall back to header-only
+    }
+
+    const blob = new Blob([body], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "bulk-deals-sample.csv";
+    a.download = "bulk-imported-deals.csv";
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -111,12 +174,25 @@ const BulkImport: React.FC = () => {
     (r) => r.rowStatus === "ready" || r.rowStatus === "warning",
   );
 
-  const runImport = () => {
-    // UI-only mock — backend wiring is a follow-up. Every importable row
-    // resolves to "created" and skips/errors carry their existing reason.
-    const results: ImportResult[] = parsedRows.map((r) => {
+  const runImport = async () => {
+    setIsImporting(true);
+    setImportError(null);
+
+    const localResults: ImportResult[] = [];
+    const sendable: ParsedRow[] = [];
+
+    const rowDetails = (r: ParsedRow) => ({
+      type: r.fileType,
+      status: r.status,
+      address: r.address,
+      clerk: r.clerk,
+      lawyer: r.lawyer,
+      closingDate: r.closingDate,
+    });
+
+    for (const r of parsedRows) {
       if (r.rowStatus === "error") {
-        return {
+        localResults.push({
           row: r.index,
           fileNumber: r.fileNumber || "(missing)",
           outcome: "error",
@@ -124,24 +200,73 @@ const BulkImport: React.FC = () => {
             .filter((p) => p.level === "error")
             .map((p) => p.message)
             .join("; "),
-        };
-      }
-      if (r.rowStatus === "skip") {
-        return {
+          ...rowDetails(r),
+        });
+      } else if (r.rowStatus === "skip") {
+        localResults.push({
           row: r.index,
           fileNumber: r.fileNumber,
           outcome: "skipped",
           reason: r.skipReason,
-        };
+          ...rowDetails(r),
+        });
+      } else {
+        sendable.push(r);
       }
-      return {
-        row: r.index,
-        fileNumber: r.fileNumber,
-        outcome: "created",
-      };
-    });
-    setImportResults(results);
-    setStage("result");
+    }
+
+    try {
+      const res = await fetch("/api/admin/bulk-import-deals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rows: sendable.map((r) => ({
+            index: r.index,
+            fileNumber: r.fileNumber,
+            fileType: r.fileType,
+            fileName: r.fileName,
+            clerk: r.clerk,
+            lawyer: r.lawyer,
+            address: r.address,
+            requisitionDate: r.requisitionDate,
+            outstandingUndertakings: r.outstandingUndertakings,
+            outstandingRequisitions: r.outstandingRequisitions,
+            closingDate: r.closingDate,
+            openingDate: r.openingDate,
+            status: r.status,
+          })),
+        }),
+      });
+
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok || payload?.success === false) {
+        const msg = payload?.error ?? `Import failed (HTTP ${res.status})`;
+        setImportError(msg);
+        setIsImporting(false);
+        return;
+      }
+
+      const serverResults: ImportResult[] = Array.isArray(payload?.results)
+        ? payload.results
+        : [];
+
+      const sendableByIndex = new Map(sendable.map((r) => [r.index, r]));
+      const enrichedServerResults = serverResults.map((sr) => {
+        const src = sendableByIndex.get(sr.row);
+        return src ? { ...sr, ...rowDetails(src) } : sr;
+      });
+
+      const combined = [...localResults, ...enrichedServerResults].sort(
+        (a, b) => a.row - b.row,
+      );
+      setImportResults(combined);
+      setStage("result");
+      setRecentRefreshKey((k) => k + 1);
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setIsImporting(false);
+    }
   };
 
   const summary = summarize(parsedRows);
@@ -152,20 +277,23 @@ const BulkImport: React.FC = () => {
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-slate-900">Bulk Import Deals</h1>
         <p className="text-sm text-slate-500 mt-1">
-          Upload a CSV with the closer file list. The Import button currently
-          simulates the result — backend persistence will be added in a follow-up.
+          Upload a CSV to create deals. Existing file numbers are skipped;
+          rows with errors are reported and not imported.
         </p>
       </div>
 
       {stage === "picker" && (
-        <PickerView
-          isDragging={isDragging}
-          setIsDragging={setIsDragging}
-          onDrop={onDrop}
-          onPick={onPick}
-          fileInputRef={fileInputRef}
-          downloadSample={downloadSample}
-        />
+        <div className="space-y-6">
+          <PickerView
+            isDragging={isDragging}
+            setIsDragging={setIsDragging}
+            onDrop={onDrop}
+            onPick={onPick}
+            fileInputRef={fileInputRef}
+            downloadSample={downloadSample}
+          />
+          <RecentImports refreshKey={recentRefreshKey} />
+        </div>
       )}
 
       {stage === "preview" && (
@@ -176,6 +304,8 @@ const BulkImport: React.FC = () => {
           parsedRows={parsedRows}
           summary={summary}
           importableCount={importableRows.length}
+          isImporting={isImporting}
+          importError={importError}
           onCancel={reset}
           onImport={runImport}
         />
@@ -184,8 +314,6 @@ const BulkImport: React.FC = () => {
       {stage === "result" && (
         <ResultView
           results={importResults}
-          dismissed={resultBannerDismissed}
-          onDismiss={() => setResultBannerDismissed(true)}
           onAnother={reset}
         />
       )}
@@ -250,7 +378,7 @@ const PickerView: React.FC<{
         className="flex items-center gap-2 px-4 py-2 text-xs font-bold text-brand-primary border border-brand-primary/30 rounded-lg hover:bg-brand-light transition-colors whitespace-nowrap"
       >
         <Download size={14} />
-        Download sample
+        Download imported data
       </button>
     </div>
   </div>
@@ -265,6 +393,8 @@ const PreviewView: React.FC<{
   parsedRows: ParsedRow[];
   summary: ReturnType<typeof summarize>;
   importableCount: number;
+  isImporting: boolean;
+  importError: string | null;
   onCancel: () => void;
   onImport: () => void;
 }> = ({
@@ -274,6 +404,8 @@ const PreviewView: React.FC<{
   parsedRows,
   summary,
   importableCount,
+  isImporting,
+  importError,
   onCancel,
   onImport,
 }) => {
@@ -342,19 +474,26 @@ const PreviewView: React.FC<{
             </div>
           </div>
 
+          {importError && (
+            <BannerError title="Import failed">{importError}</BannerError>
+          )}
+
           <div className="flex items-center justify-end gap-3 pt-2">
             <button
               onClick={onCancel}
-              className="px-4 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 transition-colors"
+              disabled={isImporting}
+              className="px-4 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Cancel
             </button>
             <button
               onClick={onImport}
-              disabled={importableCount === 0}
+              disabled={importableCount === 0 || isImporting}
               className="px-5 py-2 text-xs font-bold uppercase tracking-widest text-white bg-brand-primary rounded-lg hover:bg-brand-primaryHover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              Import {importableCount} {importableCount === 1 ? "row" : "rows"}
+              {isImporting
+                ? "Importing…"
+                : `Import ${importableCount} ${importableCount === 1 ? "row" : "rows"}`}
             </button>
           </div>
         </>
@@ -414,10 +553,8 @@ const PreviewRow: React.FC<{ row: ParsedRow }> = ({ row }) => {
 
 const ResultView: React.FC<{
   results: ImportResult[];
-  dismissed: boolean;
-  onDismiss: () => void;
   onAnother: () => void;
-}> = ({ results, dismissed, onDismiss, onAnother }) => {
+}> = ({ results, onAnother }) => {
   const created = results.filter((r) => r.outcome === "created").length;
   const updated = results.filter((r) => r.outcome === "updated").length;
   const skipped = results.filter((r) => r.outcome === "skipped").length;
@@ -425,23 +562,6 @@ const ResultView: React.FC<{
 
   return (
     <div className="space-y-4">
-      {!dismissed && (
-        <div className="flex items-start gap-3 px-4 py-3 rounded-xl border border-blue-200 bg-blue-50 text-blue-800 text-sm">
-          <Info size={16} className="mt-0.5 shrink-0" />
-          <div className="flex-1 leading-relaxed">
-            This screen is a UI-only preview. Real persistence to the database
-            will be added in a follow-up — nothing has been written yet.
-          </div>
-          <button
-            onClick={onDismiss}
-            className="text-blue-600 hover:text-blue-900 transition-colors"
-            aria-label="Dismiss"
-          >
-            <X size={16} />
-          </button>
-        </div>
-      )}
-
       <div className="flex items-center justify-between">
         <div className="flex flex-wrap items-center gap-2">
           <ResultChip label="Created" value={created} tone="green" />
@@ -463,9 +583,15 @@ const ResultView: React.FC<{
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold uppercase tracking-wider text-slate-500">
               <tr>
-                <th className="px-3 py-3 w-16 text-center">Row #</th>
-                <th className="px-3 py-3 w-32">File #</th>
-                <th className="px-3 py-3 w-28">Outcome</th>
+                <th className="px-3 py-3 w-12 text-center">#</th>
+                <th className="px-3 py-3 w-28">File #</th>
+                <th className="px-3 py-3 w-24">Outcome</th>
+                <th className="px-3 py-3 w-20">Type</th>
+                <th className="px-3 py-3 w-20">Status</th>
+                <th className="px-3 py-3">Address</th>
+                <th className="px-3 py-3 w-32">Clerk</th>
+                <th className="px-3 py-3 w-32">Lawyer</th>
+                <th className="px-3 py-3 w-24">Closing</th>
                 <th className="px-3 py-3">Reason</th>
               </tr>
             </thead>
@@ -481,10 +607,40 @@ const ResultView: React.FC<{
                   <td className="px-3 py-2.5">
                     <OutcomeChip outcome={r.outcome} />
                   </td>
+                  <td className="px-3 py-2.5 text-slate-700">
+                    {r.type || <span className="text-slate-300">—</span>}
+                  </td>
+                  <td className="px-3 py-2.5 text-slate-700">
+                    {r.status || <span className="text-slate-300">—</span>}
+                  </td>
+                  <td
+                    className="px-3 py-2.5 text-slate-700 truncate max-w-[280px]"
+                    title={r.address ?? ""}
+                  >
+                    {r.address || <span className="text-slate-300">—</span>}
+                  </td>
+                  <td
+                    className="px-3 py-2.5 text-slate-700 truncate max-w-[140px]"
+                    title={r.clerk ?? ""}
+                  >
+                    {r.clerk || <span className="text-slate-300">—</span>}
+                  </td>
+                  <td
+                    className="px-3 py-2.5 text-slate-700 truncate max-w-[140px]"
+                    title={r.lawyer ?? ""}
+                  >
+                    {r.lawyer || <span className="text-slate-300">—</span>}
+                  </td>
+                  <td className="px-3 py-2.5 text-slate-700 font-mono text-[11px]">
+                    {r.closingDate ?? <span className="text-slate-300">—</span>}
+                  </td>
                   <td className="px-3 py-2.5 text-slate-600">
-                    {r.outcome === "created"
-                      ? "Created (mock — no persistence)"
-                      : r.reason ?? "—"}
+                    {r.reason ??
+                      (r.outcome === "created"
+                        ? "Deal created"
+                        : r.outcome === "updated"
+                          ? "Existing deal updated"
+                          : "—")}
                   </td>
                 </tr>
               ))}
@@ -584,5 +740,155 @@ const BannerError: React.FC<{ title: string; children: React.ReactNode }> = ({ t
     </div>
   </div>
 );
+
+// ────────────────────────────────────────────────────────────────────────────
+
+const RecentImports: React.FC<{ refreshKey: number }> = ({ refreshKey }) => {
+  const [rows, setRows] = useState<RecentImportRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    fetch("/api/admin/bulk-import-deals")
+      .then(async (res) => {
+        const payload = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok || payload?.success === false) {
+          setError(payload?.error ?? `Failed to load (HTTP ${res.status})`);
+          setRows([]);
+        } else {
+          setRows(Array.isArray(payload?.deals) ? payload.deals : []);
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : "Network error");
+        setRows([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshKey]);
+
+  return (
+    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+      <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200 bg-slate-50">
+        <h2 className="text-sm font-bold text-slate-800">
+          Recently bulk-imported deals
+        </h2>
+        <span className="text-[11px] text-slate-500">
+          {loading ? "Loading…" : `${rows.length} ${rows.length === 1 ? "deal" : "deals"}`}
+        </span>
+      </div>
+
+      {error && (
+        <div className="px-5 py-3 text-xs text-red-700 bg-red-50 border-b border-red-100">
+          {error}
+        </div>
+      )}
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-xs">
+          <thead className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+            <tr>
+              <th className="px-3 py-3 w-28">File Number</th>
+              <th className="px-3 py-3 w-20">File Type</th>
+              <th className="px-3 py-3 w-32">File Name</th>
+              <th className="px-3 py-3 w-32">Clerk</th>
+              <th className="px-3 py-3 w-32">Lawyer</th>
+              <th className="px-3 py-3">Address</th>
+              <th className="px-3 py-3 w-24">Requisition</th>
+              <th className="px-3 py-3 w-20" title="Outstanding undertakings">Out. UT</th>
+              <th className="px-3 py-3 w-20" title="Outstanding requisitions">Out. RQ</th>
+              <th className="px-3 py-3 w-24">Closing</th>
+              <th className="px-3 py-3 w-24">Opening</th>
+              <th className="px-3 py-3 w-20">Status</th>
+              <th className="px-3 py-3 w-28">Imported</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {loading ? (
+              <tr>
+                <td colSpan={13} className="px-6 py-10 text-center text-slate-400">
+                  Loading…
+                </td>
+              </tr>
+            ) : rows.length === 0 ? (
+              <tr>
+                <td colSpan={13} className="px-6 py-10 text-center text-slate-400">
+                  No bulk imports yet. Upload a CSV above to get started.
+                </td>
+              </tr>
+            ) : (
+              rows.map((d) => (
+                <tr key={d.id} className="hover:bg-slate-50/40">
+                  <td className="px-3 py-2.5 font-mono text-[11px] text-slate-700">
+                    {d.file_number}
+                  </td>
+                  <td className="px-3 py-2.5 text-slate-700">
+                    {d.type ?? <span className="text-slate-300">—</span>}
+                  </td>
+                  <td
+                    className="px-3 py-2.5 text-slate-700 truncate max-w-[140px]"
+                    title={d.file_name ?? ""}
+                  >
+                    {d.file_name || <span className="text-slate-300">—</span>}
+                  </td>
+                  <td
+                    className="px-3 py-2.5 text-slate-700 truncate max-w-[140px]"
+                    title={d.clerk_name ?? ""}
+                  >
+                    {d.clerk_name || <span className="text-slate-300">—</span>}
+                  </td>
+                  <td
+                    className="px-3 py-2.5 text-slate-700 truncate max-w-[140px]"
+                    title={d.lawyer_name ?? ""}
+                  >
+                    {d.lawyer_name || <span className="text-slate-300">—</span>}
+                  </td>
+                  <td
+                    className="px-3 py-2.5 text-slate-700 truncate max-w-[280px]"
+                    title={d.property_address ?? ""}
+                  >
+                    {d.property_address || <span className="text-slate-300">—</span>}
+                  </td>
+                  <td className="px-3 py-2.5 text-slate-700 font-mono text-[11px]">
+                    {d.requisition_date ?? <span className="text-slate-300">—</span>}
+                  </td>
+                  <td className="px-3 py-2.5 text-slate-700 text-center font-mono text-[11px]">
+                    {d.outstanding_undertakings ?? 0}
+                  </td>
+                  <td className="px-3 py-2.5 text-slate-700 text-center font-mono text-[11px]">
+                    {d.outstanding_requisitions ?? 0}
+                  </td>
+                  <td className="px-3 py-2.5 text-slate-700 font-mono text-[11px]">
+                    {d.closing_date ?? <span className="text-slate-300">—</span>}
+                  </td>
+                  <td className="px-3 py-2.5 text-slate-700 font-mono text-[11px]">
+                    {d.opening_date ?? <span className="text-slate-300">—</span>}
+                  </td>
+                  <td className="px-3 py-2.5 text-slate-700">
+                    {d.status ?? <span className="text-slate-300">—</span>}
+                  </td>
+                  <td className="px-3 py-2.5 text-slate-500 text-[11px]">
+                    {new Date(d.created_at).toLocaleDateString()}
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
 
 export default BulkImport;

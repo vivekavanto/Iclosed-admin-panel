@@ -7,6 +7,7 @@ export async function GET() {
   const { data, error } = await supabase
     .from("deals")
     .select("*, tasks(id, status), leads(id, parent_lead_id, first_name, last_name, citizenship_status, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code)")
+    .or("source.is.null,source.neq.bulk_import")
     .order("created_at", { ascending: false });
 
   if (error) {

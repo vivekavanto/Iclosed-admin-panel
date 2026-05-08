@@ -142,7 +142,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
         </div>
 
         <div className="flex flex-1 w-full xl:w-auto items-center gap-2 justify-end">
-          <label
+          {/* <label
             className={`h-9 flex items-center gap-1.5 px-3 rounded text-xs font-bold uppercase tracking-wide cursor-pointer border transition-colors select-none whitespace-nowrap ${
               showOnlyFlagged
                 ? 'bg-red-50 border-red-200 text-red-700'
@@ -158,7 +158,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
             />
             <AlertTriangle size={12} />
             Only Flagged
-          </label>
+          </label> */}
           <div className="relative flex-1 xl:flex-none xl:w-72">
             <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
             <input
