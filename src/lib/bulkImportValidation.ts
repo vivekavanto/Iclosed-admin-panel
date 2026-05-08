@@ -49,6 +49,16 @@ export interface ParsedRow {
     closing: string;
     opening: string;
   };
+  rawCells: {
+    fileType: string;
+    fileName: string;
+    clerk: string;
+    lawyer: string;
+    address: string;
+    status: string;
+    outstandingUndertakings: string;
+    outstandingRequisitions: string;
+  };
   problems: { level: "error" | "warning"; field: string; message: string }[];
   rowStatus: RowStatus;
   skipReason?: string;
@@ -109,6 +119,8 @@ export function parseRow(raw: RawCsvRow, index: number): ParsedRow {
   const closingRaw = (raw["Closing date"] ?? "").trim();
   const openingRaw = (raw["Opening date"] ?? "").trim();
   const statusRaw = (raw.Status ?? "").trim();
+  const outstandingUndertakingsRaw = (raw["Outstanding undertakings"] ?? "").trim();
+  const outstandingRequisitionsRaw = (raw["Outstanding requisitions"] ?? "").trim();
 
   if (!fileNumber) {
     problems.push({ level: "error", field: "File Number", message: "File Number is required" });
@@ -178,8 +190,8 @@ export function parseRow(raw: RawCsvRow, index: number): ParsedRow {
     lawyer,
     address,
     requisitionDate,
-    outstandingUndertakings: parseIntSafe(raw["Outstanding undertakings"]),
-    outstandingRequisitions: parseIntSafe(raw["Outstanding requisitions"]),
+    outstandingUndertakings: parseIntSafe(outstandingUndertakingsRaw),
+    outstandingRequisitions: parseIntSafe(outstandingRequisitionsRaw),
     closingDate,
     openingDate,
     status,
@@ -187,6 +199,16 @@ export function parseRow(raw: RawCsvRow, index: number): ParsedRow {
       requisition: requisitionRaw,
       closing: closingRaw,
       opening: openingRaw,
+    },
+    rawCells: {
+      fileType: fileTypeRaw,
+      fileName,
+      clerk,
+      lawyer,
+      address,
+      status: statusRaw,
+      outstandingUndertakings: outstandingUndertakingsRaw,
+      outstandingRequisitions: outstandingRequisitionsRaw,
     },
     problems,
     rowStatus: hasError ? "error" : hasWarning ? "warning" : "ready",
@@ -218,4 +240,40 @@ export function summarize(rows: ParsedRow[]) {
     errors: rows.filter((r) => r.rowStatus === "error").length,
     skips: rows.filter((r) => r.rowStatus === "skip").length,
   };
+}
+
+const COMPLETENESS_FIELDS = new Set(["File Name", "Clerk", "Lawyer", "Address"]);
+
+/**
+ * For rows whose file_number already exists in the deals table, drop
+ * "is required" errors on the optional-on-update fields (Clerk, Lawyer,
+ * Address, File Name). Structural errors — bad File Number format, bad
+ * File Type — are preserved. Recomputes rowStatus from the filtered
+ * problems list.
+ */
+export function relaxRequiredForExisting(
+  rows: ParsedRow[],
+  existingFileNumbers: Set<string>,
+): ParsedRow[] {
+  return rows.map((row) => {
+    if (row.rowStatus === "skip") return row;
+    if (!row.fileNumber || !existingFileNumbers.has(row.fileNumber)) return row;
+
+    const filtered = row.problems.filter((p) => {
+      if (p.level !== "error") return true;
+      if (!COMPLETENESS_FIELDS.has(p.field)) return true;
+      return !/is required$/.test(p.message);
+    });
+
+    if (filtered.length === row.problems.length) return row;
+
+    const hasError = filtered.some((p) => p.level === "error");
+    const hasWarning = filtered.some((p) => p.level === "warning");
+
+    return {
+      ...row,
+      problems: filtered,
+      rowStatus: hasError ? "error" : hasWarning ? "warning" : "ready",
+    };
+  });
 }

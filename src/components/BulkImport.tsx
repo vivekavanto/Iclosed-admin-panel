@@ -5,12 +5,12 @@ import Papa from "papaparse";
 import {
   Upload,
   FileText,
-  CheckCircle2,
   AlertTriangle,
   AlertCircle,
   X,
   Download,
   RotateCcw,
+  ArrowRight,
 } from "lucide-react";
 import {
   REQUIRED_HEADERS,
@@ -21,7 +21,15 @@ import {
   flagDuplicates,
   summarize,
   checkHeaders,
+  relaxRequiredForExisting,
 } from "@/lib/bulkImportValidation";
+import {
+  DealSnapshot,
+  FieldDiff,
+  RowOutcome,
+  computeDiff,
+  rowOutcome,
+} from "@/lib/bulkImportDiff";
 
 type Stage = "picker" | "preview" | "result";
 
@@ -68,6 +76,11 @@ const BulkImport: React.FC = () => {
   const [isImporting, setIsImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [recentRefreshKey, setRecentRefreshKey] = useState(0);
+  const [existingMap, setExistingMap] = useState<Record<string, DealSnapshot>>({});
+  const [diffsByIndex, setDiffsByIndex] = useState<Record<number, FieldDiff[]>>({});
+  const [outcomesByIndex, setOutcomesByIndex] = useState<Record<number, RowOutcome>>({});
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [previewWarning, setPreviewWarning] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const reset = () => {
@@ -79,8 +92,66 @@ const BulkImport: React.FC = () => {
     setImportResults([]);
     setIsImporting(false);
     setImportError(null);
+    setExistingMap({});
+    setDiffsByIndex({});
+    setOutcomesByIndex({});
+    setIsPreviewLoading(false);
+    setPreviewWarning(null);
     setRecentRefreshKey((k) => k + 1);
     if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const finishParse = async (rows: ParsedRow[]) => {
+    const flagged = flagDuplicates(rows);
+
+    setIsPreviewLoading(true);
+    setPreviewWarning(null);
+
+    const fileNumbers = Array.from(
+      new Set(flagged.map((r) => r.fileNumber).filter(Boolean)),
+    );
+
+    let snapshots: Record<string, DealSnapshot> = {};
+    try {
+      const res = await fetch("/api/admin/bulk-import-deals/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileNumbers }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (res.ok && payload?.success) {
+        snapshots = (payload.existing ?? {}) as Record<string, DealSnapshot>;
+      } else {
+        setPreviewWarning(
+          payload?.error ?? `Could not load existing deals (HTTP ${res.status}). Showing all rows as new.`,
+        );
+      }
+    } catch (err) {
+      setPreviewWarning(
+        err instanceof Error
+          ? `Could not load existing deals: ${err.message}. Showing all rows as new.`
+          : "Could not load existing deals. Showing all rows as new.",
+      );
+    }
+
+    const existingFileNumbers = new Set(Object.keys(snapshots));
+    const relaxed = relaxRequiredForExisting(flagged, existingFileNumbers);
+
+    const diffs: Record<number, FieldDiff[]> = {};
+    const outcomes: Record<number, RowOutcome> = {};
+    for (const row of relaxed) {
+      const snap = snapshots[row.fileNumber];
+      const d = computeDiff(row, snap);
+      diffs[row.index] = d;
+      outcomes[row.index] = rowOutcome(row, snap, d);
+    }
+
+    setExistingMap(snapshots);
+    setParsedRows(relaxed);
+    setDiffsByIndex(diffs);
+    setOutcomesByIndex(outcomes);
+    setIsPreviewLoading(false);
+    setStage("preview");
   };
 
   const handleFile = (file: File) => {
@@ -97,12 +168,12 @@ const BulkImport: React.FC = () => {
         const missing = checkHeaders(headers);
         if (missing.length > 0) {
           setMissingHeaders(missing);
+          setParsedRows([]);
           setStage("preview");
           return;
         }
         const rows = (result.data ?? []).map((raw, i) => parseRow(raw, i + 2));
-        setParsedRows(flagDuplicates(rows));
-        setStage("preview");
+        void finishParse(rows);
       },
       error: (err) => {
         setParseError(err.message);
@@ -170,9 +241,10 @@ const BulkImport: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
-  const importableRows = parsedRows.filter(
-    (r) => r.rowStatus === "ready" || r.rowStatus === "warning",
-  );
+  const importableRows = parsedRows.filter((r) => {
+    const o = outcomesByIndex[r.index];
+    return o === "will-update" || o === "will-create";
+  });
 
   const runImport = async () => {
     setIsImporting(true);
@@ -191,6 +263,7 @@ const BulkImport: React.FC = () => {
     });
 
     for (const r of parsedRows) {
+      const outcome = outcomesByIndex[r.index];
       if (r.rowStatus === "error") {
         localResults.push({
           row: r.index,
@@ -210,6 +283,14 @@ const BulkImport: React.FC = () => {
           reason: r.skipReason,
           ...rowDetails(r),
         });
+      } else if (outcome === "no-change") {
+        localResults.push({
+          row: r.index,
+          fileNumber: r.fileNumber,
+          outcome: "skipped",
+          reason: "No changes",
+          ...rowDetails(r),
+        });
       } else {
         sendable.push(r);
       }
@@ -220,21 +301,38 @@ const BulkImport: React.FC = () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          rows: sendable.map((r) => ({
-            index: r.index,
-            fileNumber: r.fileNumber,
-            fileType: r.fileType,
-            fileName: r.fileName,
-            clerk: r.clerk,
-            lawyer: r.lawyer,
-            address: r.address,
-            requisitionDate: r.requisitionDate,
-            outstandingUndertakings: r.outstandingUndertakings,
-            outstandingRequisitions: r.outstandingRequisitions,
-            closingDate: r.closingDate,
-            openingDate: r.openingDate,
-            status: r.status,
-          })),
+          rows: sendable.map((r) => {
+            const isUpdate = outcomesByIndex[r.index] === "will-update";
+            // For update rows, blank cells must arrive as null so the server
+            // does not overwrite existing values. For create rows, send the
+            // parser defaults (server applies "Address TBD", 0, etc.).
+            const blankToNull = (raw: string, val: string) =>
+              isUpdate && raw === "" ? null : val;
+            const blankNumToNull = (raw: string, val: number) =>
+              isUpdate && raw === "" ? null : val;
+
+            return {
+              index: r.index,
+              fileNumber: r.fileNumber,
+              fileType: blankToNull(r.rawCells.fileType, r.fileType),
+              fileName: blankToNull(r.rawCells.fileName, r.fileName),
+              clerk: blankToNull(r.rawCells.clerk, r.clerk),
+              lawyer: blankToNull(r.rawCells.lawyer, r.lawyer),
+              address: blankToNull(r.rawCells.address, r.address),
+              requisitionDate: r.requisitionDate,
+              outstandingUndertakings: blankNumToNull(
+                r.rawCells.outstandingUndertakings,
+                r.outstandingUndertakings,
+              ),
+              outstandingRequisitions: blankNumToNull(
+                r.rawCells.outstandingRequisitions,
+                r.outstandingRequisitions,
+              ),
+              closingDate: r.closingDate,
+              openingDate: r.openingDate,
+              status: blankToNull(r.rawCells.status, r.status),
+            };
+          }),
         }),
       });
 
@@ -277,8 +375,8 @@ const BulkImport: React.FC = () => {
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-slate-900">Bulk Import Deals</h1>
         <p className="text-sm text-slate-500 mt-1">
-          Upload a CSV to create deals. Existing file numbers are skipped;
-          rows with errors are reported and not imported.
+          Upload a CSV. Existing file numbers are matched and updated; blank
+          cells leave existing values untouched. New file numbers are created.
         </p>
       </div>
 
@@ -303,6 +401,11 @@ const BulkImport: React.FC = () => {
           missingHeaders={missingHeaders}
           parsedRows={parsedRows}
           summary={summary}
+          outcomesByIndex={outcomesByIndex}
+          diffsByIndex={diffsByIndex}
+          existingMap={existingMap}
+          isPreviewLoading={isPreviewLoading}
+          previewWarning={previewWarning}
           importableCount={importableRows.length}
           isImporting={isImporting}
           importError={importError}
@@ -353,7 +456,9 @@ const PickerView: React.FC<{
         <p className="text-base font-bold text-slate-800">
           Drop your CSV here or click to browse
         </p>
-        <p className="text-xs text-slate-500 mt-1">CSV files only · max 5 MB</p>
+        <p className="text-xs text-slate-500 mt-1">
+          CSV files only · max 5 MB · save Excel sheets as CSV before uploading
+        </p>
       </div>
       <input
         ref={fileInputRef}
@@ -392,6 +497,11 @@ const PreviewView: React.FC<{
   missingHeaders: string[];
   parsedRows: ParsedRow[];
   summary: ReturnType<typeof summarize>;
+  outcomesByIndex: Record<number, RowOutcome>;
+  diffsByIndex: Record<number, FieldDiff[]>;
+  existingMap: Record<string, DealSnapshot>;
+  isPreviewLoading: boolean;
+  previewWarning: string | null;
   importableCount: number;
   isImporting: boolean;
   importError: string | null;
@@ -403,6 +513,11 @@ const PreviewView: React.FC<{
   missingHeaders,
   parsedRows,
   summary,
+  outcomesByIndex,
+  diffsByIndex,
+  existingMap,
+  isPreviewLoading,
+  previewWarning,
   importableCount,
   isImporting,
   importError,
@@ -410,6 +525,16 @@ const PreviewView: React.FC<{
   onImport,
 }) => {
   const hasFatalProblem = parseError !== null || missingHeaders.length > 0;
+
+  const willUpdateCount = parsedRows.filter(
+    (r) => outcomesByIndex[r.index] === "will-update",
+  ).length;
+  const willCreateCount = parsedRows.filter(
+    (r) => outcomesByIndex[r.index] === "will-create",
+  ).length;
+  const noChangeCount = parsedRows.filter(
+    (r) => outcomesByIndex[r.index] === "no-change",
+  ).length;
 
   return (
     <div className="space-y-4">
@@ -433,14 +558,26 @@ const PreviewView: React.FC<{
 
       {missingHeaders.length > 0 && (
         <BannerError title="Missing required column(s)">
-          {missingHeaders.join(", ")}. Add the missing column(s) to the CSV
-          header row and re-upload.
+          {missingHeaders.join(", ")}. Add the missing column(s) to the header
+          row and re-upload.
         </BannerError>
       )}
 
       {!hasFatalProblem && (
         <>
-          <SummaryChips summary={summary} />
+          {previewWarning && (
+            <div className="flex items-start gap-3 px-4 py-3 rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-xs">
+              <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+              <p>{previewWarning}</p>
+            </div>
+          )}
+
+          <SummaryChips
+            summary={summary}
+            willUpdate={willUpdateCount}
+            willCreate={willCreateCount}
+            noChange={noChangeCount}
+          />
 
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
             <div className="overflow-x-auto">
@@ -448,26 +585,34 @@ const PreviewView: React.FC<{
                 <thead className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold uppercase tracking-wider text-slate-500">
                   <tr>
                     <th className="px-3 py-3 w-12 text-center">#</th>
-                    <th className="px-3 py-3 w-24">Status</th>
+                    <th className="px-3 py-3 w-28">Outcome</th>
                     <th className="px-3 py-3 w-28">File #</th>
-                    <th className="px-3 py-3 w-20">Type</th>
-                    <th className="px-3 py-3 w-32">Clerk</th>
-                    <th className="px-3 py-3 w-32">Lawyer</th>
-                    <th className="px-3 py-3">Address</th>
-                    <th className="px-3 py-3 w-24">Closing</th>
-                    <th className="px-3 py-3 w-20">Deal status</th>
-                    <th className="px-3 py-3">Issues</th>
+                    <th className="px-3 py-3">Changes / Issues</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {parsedRows.length === 0 ? (
+                  {isPreviewLoading ? (
                     <tr>
-                      <td colSpan={10} className="px-6 py-12 text-center text-slate-400">
-                        No rows in the uploaded CSV.
+                      <td colSpan={4} className="px-6 py-12 text-center text-slate-400">
+                        Comparing against existing deals…
+                      </td>
+                    </tr>
+                  ) : parsedRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="px-6 py-12 text-center text-slate-400">
+                        No rows in the uploaded file.
                       </td>
                     </tr>
                   ) : (
-                    parsedRows.map((row) => <PreviewRow key={row.index} row={row} />)
+                    parsedRows.map((row) => (
+                      <PreviewRow
+                        key={row.index}
+                        row={row}
+                        outcome={outcomesByIndex[row.index] ?? "error"}
+                        diff={diffsByIndex[row.index] ?? []}
+                        snapshot={existingMap[row.fileNumber]}
+                      />
+                    ))
                   )}
                 </tbody>
               </table>
@@ -488,12 +633,12 @@ const PreviewView: React.FC<{
             </button>
             <button
               onClick={onImport}
-              disabled={importableCount === 0 || isImporting}
+              disabled={importableCount === 0 || isImporting || isPreviewLoading}
               className="px-5 py-2 text-xs font-bold uppercase tracking-widest text-white bg-brand-primary rounded-lg hover:bg-brand-primaryHover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {isImporting
                 ? "Importing…"
-                : `Import ${importableCount} ${importableCount === 1 ? "row" : "rows"}`}
+                : `Import ${importableCount} ${importableCount === 1 ? "change" : "changes"}`}
             </button>
           </div>
         </>
@@ -502,45 +647,69 @@ const PreviewView: React.FC<{
   );
 };
 
-const PreviewRow: React.FC<{ row: ParsedRow }> = ({ row }) => {
+const PreviewRow: React.FC<{
+  row: ParsedRow;
+  outcome: RowOutcome;
+  diff: FieldDiff[];
+  snapshot: DealSnapshot | undefined;
+}> = ({ row, outcome, diff, snapshot }) => {
   const issues = row.problems
     .map((p) => `${p.field}: ${p.message}`)
     .concat(row.skipReason ? [row.skipReason] : []);
 
+  const fmt = (v: unknown) => {
+    if (v === null || v === undefined || v === "") return "—";
+    return String(v);
+  };
+
   return (
-    <tr className="hover:bg-slate-50/40">
+    <tr className="hover:bg-slate-50/40 align-top">
       <td className="px-3 py-2.5 text-center text-slate-400 font-mono text-[11px]">
         {row.index}
       </td>
       <td className="px-3 py-2.5">
-        <StatusChip status={row.rowStatus} />
+        <PreviewOutcomeChip outcome={outcome} status={row.rowStatus} />
       </td>
       <td className="px-3 py-2.5 font-mono text-[11px] text-slate-700">
         {row.fileNumber || <span className="text-slate-300">—</span>}
       </td>
-      <td className="px-3 py-2.5 text-slate-700">
-        {row.fileType || <span className="text-slate-300">—</span>}
-      </td>
-      <td className="px-3 py-2.5 text-slate-700 truncate max-w-[140px]" title={row.clerk}>
-        {row.clerk || <span className="text-slate-300">—</span>}
-      </td>
-      <td className="px-3 py-2.5 text-slate-700 truncate max-w-[140px]" title={row.lawyer}>
-        {row.lawyer || <span className="text-slate-300">—</span>}
-      </td>
-      <td className="px-3 py-2.5 text-slate-700 truncate max-w-[280px]" title={row.address}>
-        {row.address || <span className="text-slate-300">—</span>}
-      </td>
-      <td className="px-3 py-2.5 text-slate-700 font-mono text-[11px]">
-        {row.closingDate ?? <span className="text-slate-300">—</span>}
-      </td>
-      <td className="px-3 py-2.5 text-slate-700">{row.status}</td>
-      <td className="px-3 py-2.5 text-slate-500 text-[11px]">
-        {issues.length === 0 ? (
-          <span className="text-slate-300">—</span>
+      <td className="px-3 py-2.5 text-[11px] text-slate-600">
+        {row.rowStatus === "error" || row.rowStatus === "skip" ? (
+          issues.length === 0 ? (
+            <span className="text-slate-300">—</span>
+          ) : (
+            <ul className="space-y-0.5">
+              {issues.map((issue, i) => (
+                <li key={i}>{issue}</li>
+              ))}
+            </ul>
+          )
+        ) : outcome === "no-change" ? (
+          <span className="text-slate-400">No changes</span>
+        ) : outcome === "will-create" ? (
+          <span className="text-blue-700">
+            New deal — will create with {row.fileType || "type unknown"}
+            {row.address ? `, ${row.address}` : ""}
+          </span>
+        ) : diff.length === 0 ? (
+          <span className="text-slate-400">—</span>
         ) : (
           <ul className="space-y-0.5">
+            {diff.map((d) => (
+              <li key={d.field} className="flex flex-wrap items-center gap-1">
+                <span className="font-bold text-slate-700">{d.label}:</span>
+                <span className="text-slate-500 line-through">{fmt(d.before)}</span>
+                <ArrowRight size={10} className="text-slate-400" />
+                <span className="text-emerald-700 font-medium">{fmt(d.after)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {snapshot && outcome !== "error" && outcome !== "no-change" && diff.length > 0 ? null : null}
+        {issues.length > 0 && row.rowStatus !== "error" && row.rowStatus !== "skip" && (
+          <ul className="mt-1 space-y-0.5 text-amber-700">
             {issues.map((issue, i) => (
-              <li key={i}>{issue}</li>
+              <li key={`w-${i}`}>{issue}</li>
             ))}
           </ul>
         )}
@@ -654,17 +823,23 @@ const ResultView: React.FC<{
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const SummaryChips: React.FC<{ summary: ReturnType<typeof summarize> }> = ({ summary }) => (
+const SummaryChips: React.FC<{
+  summary: ReturnType<typeof summarize>;
+  willUpdate: number;
+  willCreate: number;
+  noChange: number;
+}> = ({ summary, willUpdate, willCreate, noChange }) => (
   <div className="flex flex-wrap items-center gap-2">
     <Chip label="Rows" value={summary.total} tone="slate" />
-    <Chip label="Ready" value={summary.ready} tone="green" />
-    <Chip label="Warnings" value={summary.warnings} tone="amber" />
+    <Chip label="Will update" value={willUpdate} tone="blue" />
+    <Chip label="Will create" value={willCreate} tone="green" />
+    <Chip label="No change" value={noChange} tone="slate" />
     <Chip label="Errors" value={summary.errors} tone="red" />
     <Chip label="Duplicates in file" value={summary.skips} tone="slate" />
   </div>
 );
 
-const Chip: React.FC<{ label: string; value: number; tone: "slate" | "green" | "amber" | "red" }> = ({
+const Chip: React.FC<{ label: string; value: number; tone: "slate" | "green" | "amber" | "red" | "blue" }> = ({
   label,
   value,
   tone,
@@ -674,6 +849,7 @@ const Chip: React.FC<{ label: string; value: number; tone: "slate" | "green" | "
     green: "bg-green-100 text-green-700 border-green-200",
     amber: "bg-amber-100 text-amber-700 border-amber-200",
     red: "bg-red-100 text-red-700 border-red-200",
+    blue: "bg-blue-100 text-blue-700 border-blue-200",
   }[tone];
   return (
     <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold border ${toneCls}`}>
@@ -702,16 +878,25 @@ const ResultChip: React.FC<{ label: string; value: number; tone: "green" | "blue
   );
 };
 
-const StatusChip: React.FC<{ status: RowStatus }> = ({ status }) => {
+const PreviewOutcomeChip: React.FC<{ outcome: RowOutcome; status: RowStatus }> = ({
+  outcome,
+  status,
+}) => {
+  if (status === "skip") {
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border bg-slate-100 text-slate-600 border-slate-200">
+        Skip
+      </span>
+    );
+  }
   const cfg = {
-    ready: { label: "Ready", cls: "bg-green-100 text-green-700 border-green-200", icon: <CheckCircle2 size={11} /> },
-    warning: { label: "Warning", cls: "bg-amber-100 text-amber-700 border-amber-200", icon: <AlertTriangle size={11} /> },
-    error: { label: "Error", cls: "bg-red-100 text-red-700 border-red-200", icon: <AlertCircle size={11} /> },
-    skip: { label: "Skip", cls: "bg-slate-100 text-slate-600 border-slate-200", icon: <X size={11} /> },
-  }[status];
+    "will-update": { label: "Will update", cls: "bg-blue-100 text-blue-700 border-blue-200" },
+    "will-create": { label: "Will create", cls: "bg-green-100 text-green-700 border-green-200" },
+    "no-change": { label: "No change", cls: "bg-slate-100 text-slate-600 border-slate-200" },
+    error: { label: "Error", cls: "bg-red-100 text-red-700 border-red-200" },
+  }[outcome];
   return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border ${cfg.cls}`}>
-      {cfg.icon}
+    <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border ${cfg.cls}`}>
       {cfg.label}
     </span>
   );

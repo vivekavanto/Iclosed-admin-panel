@@ -21,20 +21,22 @@ export async function GET() {
   return NextResponse.json({ success: true, deals: data ?? [] });
 }
 
+// Blank cells in the source sheet arrive as null. Numeric fields use null
+// (not 0) to distinguish "user wrote 0" from "cell was blank".
 type IncomingRow = {
   index: number;
   fileNumber: string;
-  fileType: string;
-  fileName: string;
-  clerk: string;
-  lawyer: string;
-  address: string;
+  fileType: string | null;
+  fileName: string | null;
+  clerk: string | null;
+  lawyer: string | null;
+  address: string | null;
   requisitionDate: string | null;
-  outstandingUndertakings: number;
-  outstandingRequisitions: number;
+  outstandingUndertakings: number | null;
+  outstandingRequisitions: number | null;
   closingDate: string | null;
   openingDate: string | null;
-  status: string;
+  status: string | null;
 };
 
 type ImportOutcome = {
@@ -48,22 +50,22 @@ const FILE_NUMBER_REGEX = /^[0-9]{2}[A-Z]{1,3}-[0-9]{3,5}$/;
 const ALLOWED_TYPES = new Set(["Purchase", "Sale", "Refinance", "Purchase & Sale"]);
 const ALLOWED_STATUSES = new Set(["Active", "Closed"]);
 
-// Build the column payload from a CSV row. Optional/blank fields are omitted
-// on update so a missing CSV value never blanks out a column that already had
-// data — only fields the CSV actually carries are written.
-function buildPayload(
+function buildInsertPayload(
   row: IncomingRow,
   fileNumber: string,
-  mode: "insert" | "update",
 ): Record<string, unknown> {
-  const status = ALLOWED_STATUSES.has(row.status) ? row.status : "Active";
+  const status =
+    row.status && ALLOWED_STATUSES.has(row.status) ? row.status : "Active";
 
   const payload: Record<string, unknown> = {
+    file_number: fileNumber,
     type: row.fileType,
     status,
     property_address: row.address || "Address TBD",
     outstanding_undertakings: row.outstandingUndertakings ?? 0,
     outstanding_requisitions: row.outstandingRequisitions ?? 0,
+    price: 0,
+    source: "bulk_import",
   };
 
   if (row.closingDate) payload.closing_date = row.closingDate;
@@ -73,11 +75,29 @@ function buildPayload(
   if (row.clerk) payload.clerk_name = row.clerk;
   if (row.lawyer) payload.lawyer_name = row.lawyer;
 
-  if (mode === "insert") {
-    payload.file_number = fileNumber;
-    payload.price = 0;
-    payload.source = "bulk_import";
+  return payload;
+}
+
+// Update payload is purely differential: only fields the sheet explicitly
+// carried a value for are written. Blank cells leave existing DB values alone.
+function buildUpdatePayload(row: IncomingRow): Record<string, unknown> {
+  const payload: Record<string, unknown> = {};
+
+  if (row.fileType && ALLOWED_TYPES.has(row.fileType)) payload.type = row.fileType;
+  if (row.status && ALLOWED_STATUSES.has(row.status)) payload.status = row.status;
+  if (row.address) payload.property_address = row.address;
+  if (row.outstandingUndertakings !== null && row.outstandingUndertakings !== undefined) {
+    payload.outstanding_undertakings = row.outstandingUndertakings;
   }
+  if (row.outstandingRequisitions !== null && row.outstandingRequisitions !== undefined) {
+    payload.outstanding_requisitions = row.outstandingRequisitions;
+  }
+  if (row.closingDate) payload.closing_date = row.closingDate;
+  if (row.openingDate) payload.opening_date = row.openingDate;
+  if (row.requisitionDate) payload.requisition_date = row.requisitionDate;
+  if (row.fileName) payload.file_name = row.fileName;
+  if (row.clerk) payload.clerk_name = row.clerk;
+  if (row.lawyer) payload.lawyer_name = row.lawyer;
 
   return payload;
 }
@@ -127,16 +147,6 @@ export async function POST(req: Request) {
       continue;
     }
 
-    if (!ALLOWED_TYPES.has(row.fileType)) {
-      results.push({
-        row: row.index,
-        fileNumber,
-        outcome: "error",
-        reason: `Invalid File Type "${row.fileType}"`,
-      });
-      continue;
-    }
-
     if (seenInBatch.has(fileNumber)) {
       results.push({
         row: row.index,
@@ -150,9 +160,22 @@ export async function POST(req: Request) {
     const existingId = existingMap.get(fileNumber);
 
     if (existingId) {
+      const updatePayload = buildUpdatePayload(row);
+
+      if (Object.keys(updatePayload).length === 0) {
+        seenInBatch.add(fileNumber);
+        results.push({
+          row: row.index,
+          fileNumber,
+          outcome: "skipped",
+          reason: "No changes",
+        });
+        continue;
+      }
+
       const { error: updateErr } = await supabaseAdmin
         .from("deals")
-        .update(buildPayload(row, fileNumber, "update"))
+        .update(updatePayload)
         .eq("id", existingId);
 
       if (updateErr) {
@@ -170,19 +193,29 @@ export async function POST(req: Request) {
         row: row.index,
         fileNumber,
         outcome: "updated",
-        reason: "Existing deal updated from CSV",
+        reason: "Existing deal updated",
+      });
+      continue;
+    }
+
+    // Insert path keeps strict validation — file type is required for new deals.
+    if (!row.fileType || !ALLOWED_TYPES.has(row.fileType)) {
+      results.push({
+        row: row.index,
+        fileNumber,
+        outcome: "error",
+        reason: `Invalid File Type "${row.fileType ?? ""}"`,
       });
       continue;
     }
 
     const { error: insertErr } = await supabaseAdmin
       .from("deals")
-      .insert(buildPayload(row, fileNumber, "insert"));
+      .insert(buildInsertPayload(row, fileNumber));
 
     if (insertErr) {
       const isDup = /duplicate key|unique constraint/i.test(insertErr.message);
       if (isDup) {
-        // A concurrent insert beat us. Treat as update path on the next run.
         results.push({
           row: row.index,
           fileNumber,
