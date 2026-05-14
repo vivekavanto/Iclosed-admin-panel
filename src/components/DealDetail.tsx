@@ -26,6 +26,7 @@ import {
   isNonCitizenFlagged,
   NON_CITIZEN_FLAG_TOOLTIP,
 } from "@/lib/isNonCitizenFlagged";
+import { formatLocalDate, formatLocalDateTime } from "@/lib/formatDate";
 
 interface DealDetailProps {
   deal: Deal;
@@ -271,7 +272,13 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
             const linkedMsg = data.linked_emails_sent > 0
               ? ` (also sent to ${data.linked_emails_sent} linked deal${data.linked_emails_sent > 1 ? "s" : ""})`
               : "";
-            showToast(data.alreadySent ? "Email was already sent for this milestone." : `Milestone email sent successfully!${linkedMsg}`);
+            if (data.skipped) {
+              showToast(data.message || "Email skipped — template is inactive.", "error");
+            } else if (data.alreadySent) {
+              showToast("Email was already sent for this milestone.");
+            } else {
+              showToast(`Milestone email sent successfully!${linkedMsg}`);
+            }
           } else {
             showToast(data.error || "Failed to send milestone email", "error");
           }
@@ -330,7 +337,13 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       const linkedMsg = data.linked_emails_sent > 0
         ? ` (also sent to ${data.linked_emails_sent} linked deal${data.linked_emails_sent > 1 ? "s" : ""})`
         : "";
-      showToast(data.alreadySent ? "Email was already sent for this milestone." : `Milestone email sent successfully!${linkedMsg}`);
+      if (data.skipped) {
+        showToast(data.message || "Email skipped — template is inactive.", "error");
+      } else if (data.alreadySent) {
+        showToast("Email was already sent for this milestone.");
+      } else {
+        showToast(`Milestone email sent successfully!${linkedMsg}`);
+      }
       await refetchData();
     } else {
       showToast(data.error || "Failed to send milestone email", "error");
@@ -413,7 +426,13 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
               const linkedMsg = data.linked_emails_sent > 0
                 ? ` (also sent to ${data.linked_emails_sent} linked deal${data.linked_emails_sent > 1 ? "s" : ""})`
                 : "";
-              showToast(data.alreadySent ? "Email was already sent for this milestone." : `Milestone email sent successfully!${linkedMsg}`);
+              if (data.skipped) {
+                showToast(data.message || "Email skipped — template is inactive.", "error");
+              } else if (data.alreadySent) {
+                showToast("Email was already sent for this milestone.");
+              } else {
+                showToast(`Milestone email sent successfully!${linkedMsg}`);
+              }
             } else {
               showToast(data.error || "Failed to send milestone email", "error");
             }
@@ -952,7 +971,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                     Closing Date
                   </p>
                   <p className="font-bold text-sm text-slate-900 leading-none">
-                    {deal.closingDate || "TBD"}
+                    {deal.closingDate ? formatLocalDate(deal.closingDate) : "TBD"}
                   </p>
                 </div>
               </div>
@@ -1207,7 +1226,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                             />
                             {task.dueDate ? (
                               <span className="text-xs font-medium text-slate-700">
-                                {new Date(task.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                                {formatLocalDate(task.dueDate)}
                               </span>
                             ) : (
                               <span className="text-xs text-slate-300">—</span>
@@ -1220,7 +1239,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                           {task.isTemplate
                             ? "-"
                             : task.completedAt
-                              ? new Date(task.completedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                              ? formatLocalDate(task.completedAt)
                               : "-"}
                         </span>
                       </td>
@@ -1395,7 +1414,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                                     />
                                     {milestone.milestoneDate ? (
                                       <span className="text-xs font-medium text-slate-700">
-                                        {new Date(milestone.milestoneDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                                        {formatLocalDate(milestone.milestoneDate)}
                                       </span>
                                     ) : (
                                       <span className="text-xs text-slate-300">—</span>
@@ -1947,7 +1966,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                   <p className="text-[11px] uppercase tracking-wider text-slate-400 font-bold">Due Date</p>
                   <p className="text-sm text-slate-700 mt-0.5">
                     {viewingTask.dueDate
-                      ? new Date(viewingTask.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                      ? formatLocalDate(viewingTask.dueDate)
                       : "—"}
                   </p>
                 </div>
@@ -1955,7 +1974,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                   <p className="text-[11px] uppercase tracking-wider text-slate-400 font-bold">Completed At</p>
                   <p className="text-sm text-slate-700 mt-0.5">
                     {viewingTask.completedAt
-                      ? new Date(viewingTask.completedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })
+                      ? formatLocalDateTime(viewingTask.completedAt)
                       : "—"}
                   </p>
                 </div>

@@ -3,6 +3,7 @@ import { completeApsTask } from "./completeApsTask";
 import { sendAuthEmailViaResend } from "./sendAuthEmail";
 import { getFamilyDealIds } from "./familyDeals";
 import { recalcMilestonesForFamily } from "./recalcMilestones";
+import { sendWelcomeEmail } from "./sendWelcomeEmail";
 
 export type ConvertOneResult = {
   success: boolean;
@@ -316,11 +317,17 @@ export async function convertSingleLead(
                   // Fetch the email template
                   const { data: emailTemplate } = await supabaseAdmin
                     .from("email_templates")
-                    .select("name, subject, body")
+                    .select("name, subject, body, is_active")
                     .eq("id", st.email_template_id)
                     .single();
 
-                  if (emailTemplate?.body) {
+                  // Strict is_active check — skip the auto-complete email if
+                  // admin disabled this template. Milestone stays completed.
+                  if (emailTemplate && !emailTemplate.is_active) {
+                    console.log(
+                      `[Convert] Auto-complete email skipped — template "${emailTemplate.name}" is inactive. milestone=${ms.id}`,
+                    );
+                  } else if (emailTemplate?.body) {
                     // Fetch client info
                     const { data: clientData } = await supabaseAdmin
                       .from("clients")
@@ -344,16 +351,24 @@ export async function convertSingleLead(
                         "{{ user.first_name }}": clientData.first_name ?? "",
                         "{{ user.last_name }}": clientData.last_name ?? "",
                         "{{ user.full_name }}": fullName,
+                        "{{ user.get_full_name }}": fullName,
                         "{{ user.email }}": clientData.email,
                         "{{ lead_address }}": leadAddress,
+                        "{{ lead.address_line1 }}": lead.address_street ?? "",
+                        "{{ lead.address_city }}": lead.address_city ?? "",
+                        "{{ lead.address_province }}": lead.address_province ?? "",
                         "{{ lead.file_number }}": generatedFileNumber ?? "",
                         "{{ lead_type }}": (leadType ?? "").toLowerCase(),
                         "{{ stage_name }}": st.name ?? "",
                         "{{user.first_name}}": clientData.first_name ?? "",
                         "{{user.last_name}}": clientData.last_name ?? "",
                         "{{user.full_name}}": fullName,
+                        "{{user.get_full_name}}": fullName,
                         "{{user.email}}": clientData.email,
                         "{{lead_address}}": leadAddress,
+                        "{{lead.address_line1}}": lead.address_street ?? "",
+                        "{{lead.address_city}}": lead.address_city ?? "",
+                        "{{lead.address_province}}": lead.address_province ?? "",
                         "{{lead.file_number}}": generatedFileNumber ?? "",
                         "{{lead_type}}": (leadType ?? "").toLowerCase(),
                         "{{stage_name}}": st.name ?? "",
@@ -361,18 +376,30 @@ export async function convertSingleLead(
                       for (const [key, value] of Object.entries(placeholders)) {
                         processedBody = processedBody.replaceAll(key, value);
                       }
-                      processedBody = processedBody.replace(/\{\{\s*user\.first_name\s*\}\}/gi, clientData.first_name ?? "");
+                      // Whitespace-tolerant regex fallbacks — catches stray
+                      // template values like "{{  user.get_full_name  }}".
+                      processedBody = processedBody.replace(/\{\{\s*user\.get_full_name\s*\}\}/gi, fullName);
                       processedBody = processedBody.replace(/\{\{\s*user\.full_name\s*\}\}/gi, fullName);
+                      processedBody = processedBody.replace(/\{\{\s*user\.first_name\s*\}\}/gi, clientData.first_name ?? "");
+                      processedBody = processedBody.replace(/\{\{\s*user\.last_name\s*\}\}/gi, clientData.last_name ?? "");
+                      processedBody = processedBody.replace(/\{\{\s*user\.email\s*\}\}/gi, clientData.email ?? "");
                       processedBody = processedBody.replace(/\{\{\s*lead_address\s*\}\}/gi, leadAddress);
+                      processedBody = processedBody.replace(/\{\{\s*lead\.address_line1\s*\}\}/gi, lead.address_street ?? "");
+                      processedBody = processedBody.replace(/\{\{\s*lead\.address_city\s*\}\}/gi, lead.address_city ?? "");
+                      processedBody = processedBody.replace(/\{\{\s*lead\.address_province\s*\}\}/gi, lead.address_province ?? "");
+                      processedBody = processedBody.replace(/\{\{\s*lead\.file_number\s*\}\}/gi, generatedFileNumber ?? "");
+                      processedBody = processedBody.replace(/\{\{\s*lead_type\s*\}\}/gi, (leadType ?? "").toLowerCase());
+                      processedBody = processedBody.replace(/\{\{\s*stage_name\s*\}\}/gi, st.name ?? "");
 
-                      // Replace placeholders in subject
-                      let processedSubject = (emailTemplate.subject || emailTemplate.name || "Milestone Completed")
+                      // Replace placeholders in subject — derived from template only.
+                      let processedSubject = (emailTemplate.subject || emailTemplate.name)
                         .replace(/&#123;/g, "{").replace(/&#125;/g, "}");
                       for (const [key, value] of Object.entries(placeholders)) {
                         processedSubject = processedSubject.replaceAll(key, value);
                       }
 
-                      const htmlBody = `<div>${processedBody}<img src="https://iclosed-admin-panel.vercel.app/logo.png" alt="iClosed by Nava Wilson" style="width:70px;height:auto;" /></div>`;
+                      // No HTML wrapper / logo injection — the DB template owns its layout.
+                      const htmlBody = processedBody;
 
                       await resend.emails.send({
                         from: fromEmail,
@@ -605,6 +632,17 @@ export async function convertSingleLead(
       }
     } catch (err: any) {
       authError = err.message || "Unknown auth error";
+    }
+
+    // ── Send welcome email on conversion ─────────────────────────────────
+    // Fires for every converted client (new or returning). Idempotent —
+    // sendWelcomeEmail checks leads.welcome_email_sent, so this is a no-op
+    // if the email already went out at intake stage or first login. Failure
+    // is non-blocking; the conversion itself is already complete.
+    try {
+      await sendWelcomeEmail(leadId, { source: "conversion" });
+    } catch (welcomeErr) {
+      console.error("[Convert] Welcome email failed (non-blocking):", welcomeErr);
     }
 
     return {

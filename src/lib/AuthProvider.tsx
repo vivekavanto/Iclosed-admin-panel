@@ -19,6 +19,13 @@ const AuthContext = createContext<AuthContextType>({
 
 export const useAuth = () => useContext(AuthContext);
 
+// auth.users is shared with the customer portal, so a valid session is
+// not proof of admin access. Only users tagged with role="admin" in
+// app_metadata are allowed in.
+function isAdmin(user: User | null): boolean {
+  return user?.app_metadata?.role === "admin";
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -26,26 +33,47 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
   useEffect(() => {
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
-      setLoading(false);
+    let cancelled = false;
+
+    const verifyAndSet = async (sessionUser: User | null) => {
+      if (!sessionUser) {
+        if (!cancelled) setUser(null);
+        return;
+      }
+      if (!isAdmin(sessionUser)) {
+        // A non-admin (customer) somehow has a session here. Force
+        // sign-out so they're bounced back to /admin/login.
+        await supabase.auth.signOut();
+        if (!cancelled) setUser(null);
+        return;
+      }
+      if (!cancelled) setUser(sessionUser);
+    };
+
+    // Initial session
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      await verifyAndSet(session?.user ?? null);
+      if (!cancelled) setLoading(false);
     });
 
-    // Listen for auth changes
+    // Future auth changes (login/logout in another tab, token refresh, etc.)
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-      if (!session && pathname !== "/admin/login") {
-        router.push("/admin/login");
-      }
+      verifyAndSet(session?.user ?? null).then(() => {
+        if (!cancelled && !session && pathname !== "/admin/login") {
+          router.push("/admin/login");
+        }
+      });
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
   }, [router, pathname]);
 
-  // Redirect to login if not authenticated
+  // Redirect to login if not authenticated (or not authorized as admin)
   useEffect(() => {
     if (!loading && !user && pathname !== "/admin/login") {
       router.push("/admin/login");

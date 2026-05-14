@@ -1,21 +1,86 @@
 import { Resend } from "resend";
 import supabaseAdmin from "./supabaseAdmin";
 
-/** Map action type → exact template name in email_templates table */
-const TEMPLATE_NAMES: Record<"invite" | "recovery", string> = {
-  invite: "Invite User",
-  recovery: "Reset Password",
+/**
+ * For each action type, list the template names we'll accept (in priority
+ * order). The first active, non-empty match wins. Matching is case-insensitive
+ * and uses a contains-check, so any template name like "Activate Account" or
+ * "Invite User" works without requiring an exact rename in the DB.
+ */
+const TEMPLATE_NAME_CANDIDATES: Record<"invite" | "recovery", string[]> = {
+  invite: ["Invite User", "Activate", "Activate Account", "Welcome Invite"],
+  recovery: ["Reset Password", "Password Reset", "Forgot Password"],
 };
+
+type TemplateLookupResult =
+  | { kind: "active"; template: { name: string; subject: string | null; body: string } }
+  | { kind: "inactive"; name: string }
+  | { kind: "missing" };
+
+async function findTemplate(type: "invite" | "recovery"): Promise<TemplateLookupResult> {
+  const keywords = type === "invite" ? ["invite", "activate"] : ["reset", "recovery"];
+
+  // 1. Try exact-name matches (active only) in priority order.
+  for (const name of TEMPLATE_NAME_CANDIDATES[type]) {
+    const { data } = await supabaseAdmin
+      .from("email_templates")
+      .select("name, subject, body")
+      .ilike("name", name)
+      .eq("is_active", true)
+      .maybeSingle();
+    if (data?.body) return { kind: "active", template: data };
+  }
+
+  // 2. Fallback: scan active templates for any whose name contains the
+  // accepted keywords. Catches admin-renamed templates like "Activate your
+  // iClosed account".
+  const { data: activeAll } = await supabaseAdmin
+    .from("email_templates")
+    .select("name, subject, body")
+    .eq("is_active", true);
+
+  if (activeAll) {
+    for (const tmpl of activeAll) {
+      const n = (tmpl.name ?? "").toLowerCase();
+      if (keywords.some((k) => n.includes(k)) && tmpl.body) {
+        return { kind: "active", template: tmpl };
+      }
+    }
+  }
+
+  // 3. No active match. Check whether an INACTIVE matching template exists —
+  // that signals the admin intentionally disabled this email type, in which
+  // case we skip sending entirely instead of falling back to a default body.
+  const { data: anyMatching } = await supabaseAdmin
+    .from("email_templates")
+    .select("name, is_active")
+    .or(
+      [
+        ...TEMPLATE_NAME_CANDIDATES[type].map((n) => `name.ilike.${n}`),
+        ...keywords.map((k) => `name.ilike.%${k}%`),
+      ].join(","),
+    );
+
+  if (anyMatching && anyMatching.length > 0) {
+    const inactiveMatch = anyMatching.find((t) => !t.is_active);
+    if (inactiveMatch) return { kind: "inactive", name: inactiveMatch.name };
+  }
+
+  return { kind: "missing" };
+}
 
 /**
  * Generates a Supabase auth link (invite or recovery) without sending the
- * default Supabase email, then delivers the email through Resend instead.
+ * default Supabase email, then delivers the email through Resend.
  *
- * Email content is fetched from the `email_templates` table by exact name.
- * If no matching active template exists, falls back to a built-in default.
- *
- * Templates can use all standard placeholders plus `{{ confirmation_url }}`
- * which resolves to the Supabase action link (magic link with token).
+ * Email content is fetched from the `email_templates` table. Supports all
+ * variables advertised in the admin Email Templates UI:
+ *   {{ user.first_name }} {{ user.last_name }} {{ user.get_full_name }}
+ *   {{ user.full_name }} {{ user.email }}
+ *   {{ lead_address }} {{ lead.address_line1 }} {{ lead.address_city }}
+ *   {{ lead.address_province }} {{ lead.file_number }} {{ lead_type }}
+ *   {{ stage_name }} {{ stage_status }} {{ confirmation_url }}
+ * plus Supabase-style {{ .ConfirmationURL }} / {{ .UserMetadata.* }}.
  */
 export async function sendAuthEmailViaResend(opts: {
   type: "invite" | "recovery";
@@ -25,11 +90,13 @@ export async function sendAuthEmailViaResend(opts: {
 }): Promise<{
   success: boolean;
   userId?: string;
+  skipped?: boolean;
+  skipReason?: string;
   error?: string;
 }> {
   const { type, email, redirectTo, userData } = opts;
 
-  // 1. Generate the auth link (token) without sending an email
+  // 1. Generate the auth link (token) without sending Supabase's default email
   const { data: linkData, error: linkError } =
     await supabaseAdmin.auth.admin.generateLink({
       type,
@@ -55,41 +122,99 @@ export async function sendAuthEmailViaResend(opts: {
   const firstName = user?.user_metadata?.first_name || userData?.first_name || "";
   const lastName = user?.user_metadata?.last_name || userData?.last_name || "";
   const fullName = `${firstName} ${lastName}`.trim();
-  const greeting = firstName ? `Hi ${firstName},` : "Hi,";
 
-  // 3. Fetch email template from DB by exact name
+  // 3. Look up lead by email so we can fill in lead.* placeholders
+  let lead: any = null;
+  let dealFileNumber: string | null = null;
+  try {
+    const { data: leadData } = await supabaseAdmin
+      .from("leads")
+      .select("*")
+      .eq("email", email)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    lead = leadData ?? null;
+
+    if (lead?.id) {
+      const { data: deal } = await supabaseAdmin
+        .from("deals")
+        .select("file_number")
+        .eq("lead_id", lead.id)
+        .maybeSingle();
+      dealFileNumber = deal?.file_number ?? null;
+    }
+  } catch {
+    // Non-blocking — lead/deal lookup is optional context for placeholders
+  }
+
+  const leadAddress = lead
+    ? [
+        lead.address_street,
+        lead.address_city,
+        lead.address_province,
+        lead.address_postal_code,
+      ].filter(Boolean).join(", ")
+    : "";
+  const fileNumber = dealFileNumber ?? lead?.file_number ?? "";
+  const leadType = (lead?.lead_type ?? "").toLowerCase();
+
+  // 4. Resolve template
   let subject: string;
   let bodyHtml: string;
+  const lookup = await findTemplate(type);
 
-  const templateName = TEMPLATE_NAMES[type];
-  let template: { name: string; subject: string | null; body: string } | null = null;
-
-  try {
-    const { data } = await supabaseAdmin
-      .from("email_templates")
-      .select("name, subject, body")
-      .eq("name", templateName)
-      .eq("is_active", true)
-      .maybeSingle();
-
-    template = data ?? null;
-  } catch {
-    // Non-blocking — will fall through to default
+  // Admin explicitly disabled this auth email type → skip the send entirely
+  // (no fallback to default body). User still has a valid auth account; we
+  // just don't deliver the notification.
+  if (lookup.kind === "inactive") {
+    console.log(
+      `[Auth Email] Skipped ${type} — template "${lookup.name}" is inactive. email=${email}`,
+    );
+    return {
+      success: true,
+      userId: user?.id,
+      skipped: true,
+      skipReason: `Template "${lookup.name}" is inactive`,
+    };
   }
+
+  const template = lookup.kind === "active" ? lookup.template : null;
 
   if (template?.body) {
     // ── Render DB template with placeholders ──────────────────────────────
     const placeholders: Record<string, string> = {
-      // iClosed-style placeholders
+      // iClosed-style user placeholders
       "{{ user.first_name }}": firstName,
       "{{ user.last_name }}": lastName,
       "{{ user.full_name }}": fullName,
+      "{{ user.get_full_name }}": fullName,
       "{{ user.email }}": email,
-      "{{ confirmation_url }}": actionLink,
       "{{user.first_name}}": firstName,
       "{{user.last_name}}": lastName,
       "{{user.full_name}}": fullName,
+      "{{user.get_full_name}}": fullName,
       "{{user.email}}": email,
+      // Lead placeholders
+      "{{ lead_address }}": leadAddress,
+      "{{lead_address}}": leadAddress,
+      "{{ lead.address_line1 }}": lead?.address_street ?? "",
+      "{{lead.address_line1}}": lead?.address_street ?? "",
+      "{{ lead.address_city }}": lead?.address_city ?? "",
+      "{{lead.address_city}}": lead?.address_city ?? "",
+      "{{ lead.address_province }}": lead?.address_province ?? "",
+      "{{lead.address_province}}": lead?.address_province ?? "",
+      "{{ lead.file_number }}": fileNumber,
+      "{{lead.file_number}}": fileNumber,
+      "{{ lead_type }}": leadType,
+      "{{lead_type}}": leadType,
+      // Stage placeholders (kept as empty for auth-flow emails)
+      "{{ stage_name }}": "",
+      "{{stage_name}}": "",
+      "{{ stage_status }}": "",
+      "{{stage_status}}": "",
+      // Confirmation/auth link
+      "{{ confirmation_url }}": actionLink,
       "{{confirmation_url}}": actionLink,
       // Supabase-style placeholders
       "{{ .ConfirmationURL }}": actionLink,
@@ -106,72 +231,69 @@ export async function sendAuthEmailViaResend(opts: {
       .replace(/&#123;/g, "{")
       .replace(/&#125;/g, "}")
       .replace(/&nbsp;/g, " ")
-      .replace(/\u00A0/g, " ");
+      .replace(/ /g, " ");
 
     for (const [key, value] of Object.entries(placeholders)) {
       processedBody = processedBody.replaceAll(key, value);
     }
 
-    // Regex fallback for flexible whitespace (iClosed-style)
+    // Whitespace-tolerant fallbacks for the iClosed-style placeholders
     processedBody = processedBody.replace(/\{\{\s*user\.first_name\s*\}\}/gi, firstName);
     processedBody = processedBody.replace(/\{\{\s*user\.last_name\s*\}\}/gi, lastName);
     processedBody = processedBody.replace(/\{\{\s*user\.full_name\s*\}\}/gi, fullName);
     processedBody = processedBody.replace(/\{\{\s*user\.get_full_name\s*\}\}/gi, fullName);
     processedBody = processedBody.replace(/\{\{\s*user\.email\s*\}\}/gi, email);
+    processedBody = processedBody.replace(/\{\{\s*lead_address\s*\}\}/gi, leadAddress);
+    processedBody = processedBody.replace(/\{\{\s*lead\.address_line1\s*\}\}/gi, lead?.address_street ?? "");
+    processedBody = processedBody.replace(/\{\{\s*lead\.address_city\s*\}\}/gi, lead?.address_city ?? "");
+    processedBody = processedBody.replace(/\{\{\s*lead\.address_province\s*\}\}/gi, lead?.address_province ?? "");
+    processedBody = processedBody.replace(/\{\{\s*lead\.file_number\s*\}\}/gi, fileNumber);
+    processedBody = processedBody.replace(/\{\{\s*lead_type\s*\}\}/gi, leadType);
     processedBody = processedBody.replace(/\{\{\s*confirmation_url\s*\}\}/gi, actionLink);
-    // Regex fallback for flexible whitespace (Supabase-style)
+    // Supabase-style whitespace-tolerant fallbacks
     processedBody = processedBody.replace(/\{\{\s*\.ConfirmationURL\s*\}\}/g, actionLink);
     processedBody = processedBody.replace(/\{\{\s*\.UserMetadata\.first_name\s*\}\}/g, firstName);
     processedBody = processedBody.replace(/\{\{\s*\.UserMetadata\.last_name\s*\}\}/g, lastName);
     processedBody = processedBody.replace(/\{\{\s*\.UserMetadata\.email\s*\}\}/g, email);
+    // Strip any leftover stage placeholders that don't apply to auth emails
+    processedBody = processedBody.replace(/\{\{\s*stage_name\s*\}\}/gi, "");
+    processedBody = processedBody.replace(/\{\{\s*stage_status\s*\}\}/gi, "");
 
-    subject = template.subject || template.name;
-    bodyHtml = `
-      <div>
-        ${processedBody}
-        <img src="https://iclosed-admin-panel.vercel.app/logo.png" alt="iClosed by Nava Wilson" style="width:70px;height:auto;" />
-      </div>
-    `;
-  } else {
-    // ── Fallback: built-in default (no template in DB yet) ────────────────
-    if (type === "invite") {
-      subject = "Activate your iClosed account";
-      bodyHtml = `
-        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #111827; line-height: 1.6;">
-          <h2 style="margin: 0 0 16px 0; font-size: 20px; font-weight: 700;">${greeting}</h2>
-          <p style="margin: 0 0 24px 0; font-size: 15px;">
-            You've been invited to access your secure iClosed customer portal. Click the button below to accept your invitation and set your password. <strong>Link expires in 24 hours.</strong>
-          </p>
-          <p style="margin: 24px 0;">
-            <a href="${actionLink}" style="background-color: #DC2626; color: #ffffff; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block; font-size: 15px;">Activate my account</a>
-          </p>
-          <p style="margin: 32px 0 0 0; font-size: 12px; color: #6b7280;">
-            If you didn't request this invitation, you can safely ignore this email. No account will be created without your action. If the button doesn't work, <a href="${actionLink}" style="color: #DC2626;">use this link</a> instead.
-          </p>
-          <br/>
-          <img src="https://iclosed-admin-panel.vercel.app/logo.png" alt="iClosed by Nava Wilson" style="width:70px;height:auto;" />
-        </div>
-      `;
-    } else {
-      subject = "Reset Your Password — iClosed";
-      bodyHtml = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <p>${greeting}</p>
-          <p>We received a request to reset your password for your <strong>iClosed</strong> account.</p>
-          <p>Click the button below to set a new password:</p>
-          <p style="text-align: center; margin: 30px 0;">
-            <a href="${actionLink}" style="background-color: #1a1a2e; color: #ffffff; padding: 12px 30px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Reset Password</a>
-          </p>
-          <p style="font-size: 13px; color: #666;">If the button above doesn't work, <a href="${actionLink}" style="color: #1a1a2e;">use this link</a> instead.</p>
-          <p style="font-size: 13px; color: #666;">If you did not request a password reset, you can safely ignore this email.</p>
-          <br/>
-          <img src="https://iclosed-admin-panel.vercel.app/logo.png" alt="iClosed by Nava Wilson" style="width:70px;height:auto;" />
-        </div>
-      `;
+    let rawSubject = template.subject || template.name;
+    rawSubject = rawSubject
+      .replace(/&#123;/g, "{")
+      .replace(/&#125;/g, "}");
+    for (const [key, value] of Object.entries(placeholders)) {
+      rawSubject = rawSubject.replaceAll(key, value);
     }
+    rawSubject = rawSubject.replace(/\{\{\s*user\.first_name\s*\}\}/gi, firstName);
+    rawSubject = rawSubject.replace(/\{\{\s*user\.full_name\s*\}\}/gi, fullName);
+    rawSubject = rawSubject.replace(/\{\{\s*user\.get_full_name\s*\}\}/gi, fullName);
+    rawSubject = rawSubject.replace(/\{\{\s*lead_address\s*\}\}/gi, leadAddress);
+    rawSubject = rawSubject.replace(/\{\{\s*lead\.file_number\s*\}\}/gi, fileNumber);
+
+    subject = rawSubject;
+    // No HTML wrapper / logo injection — the DB template owns its layout.
+    bodyHtml = processedBody;
+  } else {
+    // No template configured for this auth email type — skip the send.
+    // Hardcoded fallback HTML has been removed; admins must create an
+    // "Invite User" / "Reset Password" template in the Email Templates UI
+    // (or run the seed migration). WARNING: skipping the invite email
+    // means new customers will not receive their activation link and
+    // cannot log in until admin re-sends.
+    console.log(
+      `[Auth Email] Skipped ${type} — no template configured. email=${email}`,
+    );
+    return {
+      success: true,
+      userId: user?.id,
+      skipped: true,
+      skipReason: `No ${type} template configured`,
+    };
   }
 
-  // 4. Send via Resend
+  // 5. Send via Resend
   if (!process.env.RESEND_API_KEY) {
     return { success: false, error: "Email service not configured (missing RESEND_API_KEY)" };
   }

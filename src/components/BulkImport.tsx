@@ -23,6 +23,7 @@ import {
   checkHeaders,
   relaxRequiredForExisting,
 } from "@/lib/bulkImportValidation";
+import { formatLocalDate } from "@/lib/formatDate";
 import {
   DealSnapshot,
   FieldDiff,
@@ -801,7 +802,7 @@ const ResultView: React.FC<{
                     {r.lawyer || <span className="text-slate-300">—</span>}
                   </td>
                   <td className="px-3 py-2.5 text-slate-700 font-mono text-[11px]">
-                    {r.closingDate ?? <span className="text-slate-300">—</span>}
+                    {formatLocalDate(r.closingDate) || <span className="text-slate-300">—</span>}
                   </td>
                   <td className="px-3 py-2.5 text-slate-600">
                     {r.reason ??
@@ -1046,7 +1047,7 @@ const RecentImports: React.FC<{ refreshKey: number }> = ({ refreshKey }) => {
                     {d.property_address || <span className="text-slate-300">—</span>}
                   </td>
                   <td className="px-3 py-2.5 text-slate-700 font-mono text-[11px]">
-                    {d.requisition_date ?? <span className="text-slate-300">—</span>}
+                    {formatLocalDate(d.requisition_date) || <span className="text-slate-300">—</span>}
                   </td>
                   <td className="px-3 py-2.5 text-slate-700 text-center font-mono text-[11px]">
                     {d.outstanding_undertakings ?? 0}
@@ -1055,16 +1056,16 @@ const RecentImports: React.FC<{ refreshKey: number }> = ({ refreshKey }) => {
                     {d.outstanding_requisitions ?? 0}
                   </td>
                   <td className="px-3 py-2.5 text-slate-700 font-mono text-[11px]">
-                    {d.closing_date ?? <span className="text-slate-300">—</span>}
+                    {formatLocalDate(d.closing_date) || <span className="text-slate-300">—</span>}
                   </td>
                   <td className="px-3 py-2.5 text-slate-700 font-mono text-[11px]">
-                    {d.opening_date ?? <span className="text-slate-300">—</span>}
+                    {formatLocalDate(d.opening_date) || <span className="text-slate-300">—</span>}
                   </td>
                   <td className="px-3 py-2.5 text-slate-700">
                     {d.status ?? <span className="text-slate-300">—</span>}
                   </td>
                   <td className="px-3 py-2.5 text-slate-500 text-[11px]">
-                    {new Date(d.created_at).toLocaleDateString()}
+                    {formatLocalDate(d.created_at)}
                   </td>
                 </tr>
               ))

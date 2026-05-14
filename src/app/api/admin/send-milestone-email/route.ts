@@ -54,10 +54,12 @@ async function sendEmailForDeal(
             "{{ user.first_name }}": client.first_name ?? "",
             "{{ user.last_name }}": client.last_name ?? "",
             "{{ user.full_name }}": fullName,
+            "{{ user.get_full_name }}": fullName,
             "{{ user.email }}": client.email,
             "{{user.first_name}}": client.first_name ?? "",
             "{{user.last_name}}": client.last_name ?? "",
             "{{user.full_name}}": fullName,
+            "{{user.get_full_name}}": fullName,
             "{{user.email}}": client.email,
             // Lead / deal placeholders
             "{{ lead_address }}": leadAddress,
@@ -103,15 +105,11 @@ async function sendEmailForDeal(
         processedBody = processedBody.replace(/\{\{\s*stage_name\s*\}\}/gi, milestone?.title ?? "");
         processedBody = processedBody.replace(/\{\{\s*stage_status\s*\}\}/gi, milestone?.status ?? "Completed");
 
-        const htmlBody = `
-      <div>
-        ${processedBody}
-        <img src="https://iclosed-admin-panel.vercel.app/logo.png" alt="iClosed by Nava Wilson" style="width:70px;height:auto;" />
-      </div>
-    `
+        // No HTML wrapper / logo injection — the DB template owns its layout.
+        const htmlBody = processedBody
 
-        // Apply placeholder replacement to subject as well
-        let processedSubject = (template.subject || template.name || "Milestone Completed")
+        // Apply placeholder replacement to subject — derived from template only.
+        let processedSubject = (template.subject || template.name)
             .replace(/&#123;/g, "{")
             .replace(/&#125;/g, "}");
         for (const [key, value] of Object.entries(placeholders)) {
@@ -196,6 +194,18 @@ async function handlePortalRequest(body: Record<string, any>) {
 
     if (!template?.body) {
         return NextResponse.json({ success: false, error: "Email template has no content" }, { status: 400 })
+    }
+
+    // Strict is_active check — if admin disabled this template, skip the send
+    if (!template.is_active) {
+        console.log(
+            `[MilestoneEmail Portal] Skipped — template "${template.name}" (id=${template.id}) is inactive. milestone="${milestone_title}"`,
+        )
+        return NextResponse.json({
+            success: true,
+            skipped: true,
+            message: `Template "${template.name}" is inactive — milestone email skipped`,
+        })
     }
 
     if (!process.env.RESEND_API_KEY) {
@@ -326,6 +336,20 @@ export async function POST(req: Request) {
 
         if (!template?.body) {
             return NextResponse.json({ success: false, error: "Email template has no content" }, { status: 400 })
+        }
+
+        // Strict is_active check — admin can disable a milestone email by
+        // marking its linked template inactive. Skip the send (milestone
+        // status was already updated above; we just don't send the email).
+        if (!template.is_active) {
+            console.log(
+                `[MilestoneEmail] Skipped — template "${template.name}" (id=${template.id}) is inactive. milestone=${milestoneId}`,
+            )
+            return NextResponse.json({
+                success: true,
+                skipped: true,
+                message: `Template "${template.name}" is inactive — milestone email skipped`,
+            })
         }
 
         // 5. Set up Resend

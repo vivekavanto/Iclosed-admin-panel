@@ -4,7 +4,6 @@ import {
   Search,
   Plus,
   Mail,
-  CheckCircle2,
   Clock,
   Code2,
   Info,
@@ -14,6 +13,7 @@ import {
   X,
   Edit,
 } from "lucide-react";
+import { formatLocalDate } from "@/lib/formatDate";
 
 interface EmailTemplate {
   id: string;
@@ -136,10 +136,8 @@ const EmailTemplates: React.FC = () => {
     }
   };
 
-  const filteredTemplates = templates.filter(
-    (t) =>
-      t.is_active && // 👈 Only show active
-      t.name.toLowerCase().includes(searchTerm.toLowerCase()),
+  const filteredTemplates = templates.filter((t) =>
+    t.name.toLowerCase().includes(searchTerm.toLowerCase()),
   );
 
   const inputClasses =
@@ -225,16 +223,20 @@ const EmailTemplates: React.FC = () => {
                   </td>
                   <td className="px-4 py-4 text-center">
                     <div className="flex justify-center">
-                      <div className="text-green-500 bg-green-50 p-1 rounded-full ring-1 ring-green-100">
-                        <CheckCircle2 size={16} />
-                      </div>
+                      {template.is_active ? (
+                        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-green-50 text-green-700 ring-1 ring-green-200">
+                          Active
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-slate-100 text-slate-500 ring-1 ring-slate-200">
+                          Inactive
+                        </span>
+                      )}
                     </div>
                   </td>
                   <td className="px-4 py-4">
                     <span className="text-xs text-slate-400 font-medium">
-                      {template.created_at
-                        ? new Date(template.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
-                        : "—"}
+                      {formatLocalDate(template.created_at) || "—"}
                     </span>
                   </td>
                   <td className="px-4 py-4 text-center">

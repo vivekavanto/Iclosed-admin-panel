@@ -91,7 +91,15 @@ export function parseFreeTextDate(value: string | undefined | null): string | nu
   if (!trimmed) return null;
   const ts = Date.parse(trimmed);
   if (Number.isNaN(ts)) return null;
-  return new Date(ts).toISOString().slice(0, 10);
+  const d = new Date(ts);
+  const year = d.getFullYear();
+  // Reject obviously-malformed input (e.g. "Feb 3, 202323" parses as a
+  // 6-digit year and would later render as garbage in the UI).
+  if (year < 1900 || year > 2200) return null;
+  const yyyy = String(year).padStart(4, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 function parseIntSafe(value: string | undefined | null): number {

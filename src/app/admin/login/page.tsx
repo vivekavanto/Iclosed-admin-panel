@@ -19,13 +19,24 @@ export default function LoginPage() {
     setError("");
     setLoading(true);
 
-    const { error: authError } = await supabase.auth.signInWithPassword({
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
 
     if (authError) {
       setError(authError.message);
+      setLoading(false);
+      return;
+    }
+
+    // Authorization gate — auth.users is shared with the customer portal,
+    // so a valid Supabase login alone is not enough. Only users tagged
+    // with role="admin" in app_metadata are allowed past this point.
+    const role = authData?.user?.app_metadata?.role;
+    if (role !== "admin") {
+      await supabase.auth.signOut();
+      setError("This account does not have admin access.");
       setLoading(false);
       return;
     }

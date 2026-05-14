@@ -149,6 +149,20 @@ const Intake: React.FC = () => {
         if (docError) throw new Error(docError.message);
       }
 
+      // Fire the welcome email at intake stage. Idempotent — the server-side
+      // lib uses leads.welcome_email_sent so re-triggers at conversion or
+      // first login won't send a duplicate. Failure is non-blocking; the
+      // user has already submitted intake successfully.
+      try {
+        await fetch('/api/admin/send-welcome-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lead_id: lead.id, source: 'intake' }),
+        });
+      } catch (emailErr) {
+        console.error('[Intake] Welcome email trigger failed (non-blocking):', emailErr);
+      }
+
       setCurrentStep('SUCCESS');
     } catch (err: any) {
       setSubmitError(err.message || 'Something went wrong. Please try again.');

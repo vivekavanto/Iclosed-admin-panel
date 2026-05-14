@@ -6,6 +6,7 @@ import {
   isNonCitizenFlagged,
   NON_CITIZEN_FLAG_TOOLTIP,
 } from '@/lib/isNonCitizenFlagged';
+import { formatLocalDate, parseLocalDate } from '@/lib/formatDate';
 
 interface DealListProps {
   onSelectDeal?: (dealId: string) => void;
@@ -77,11 +78,11 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
     if (filterStatus && filterStatus !== '' && deal.status !== filterStatus) return false;
     if (showOnlyFlagged && !isNonCitizenFlagged({ citizenship_status: (deal as any).leadCitizenshipStatus })) return false;
     if (dateFrom || dateTo) {
-      const closing = deal.closingDate ? new Date(deal.closingDate) : null;
+      const closing = parseLocalDate(deal.closingDate);
       if (!closing) return false;
       closing.setHours(0, 0, 0, 0);
-      if (dateFrom) { const from = new Date(dateFrom); from.setHours(0, 0, 0, 0); if (closing < from) return false; }
-      if (dateTo) { const to = new Date(dateTo); to.setHours(23, 59, 59, 999); if (closing > to) return false; }
+      if (dateFrom) { const from = parseLocalDate(dateFrom); if (!from) return false; from.setHours(0, 0, 0, 0); if (closing < from) return false; }
+      if (dateTo) { const to = parseLocalDate(dateTo); if (!to) return false; to.setHours(23, 59, 59, 999); if (closing > to) return false; }
     }
     return true;
   });
@@ -107,11 +108,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
     }
   };
 
-  const formatDate = (dateString?: string) => {
-    if (!dateString) return '';
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  };
+  const formatDate = (dateString?: string) => formatLocalDate(dateString);
 
 
   const handleDelete = async (dealId: string) => {
