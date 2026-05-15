@@ -157,7 +157,11 @@ const Intake: React.FC = () => {
         await fetch('/api/admin/send-welcome-email', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ lead_id: lead.id, source: 'intake' }),
+          body: JSON.stringify({
+            lead_id: lead.id,
+            source: 'intake',
+            template_name: 'Intake form completed',
+          }),
         });
       } catch (emailErr) {
         console.error('[Intake] Welcome email trigger failed (non-blocking):', emailErr);

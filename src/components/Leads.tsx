@@ -1085,6 +1085,8 @@ const Leads: React.FC = () => {
                     value={convertClosingDate}
                     onChange={(e) => setConvertClosingDate(e.target.value)}
                     disabled={converting}
+                    min="1900-01-01"
+                    max="2100-12-31"
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
                   />
                 </div>

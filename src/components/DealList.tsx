@@ -193,6 +193,8 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
               type="date"
               value={dateFrom}
               onChange={e => setDateFrom(e.target.value)}
+              min="1900-01-01"
+              max="2100-12-31"
               className="h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none"
             />
           </div>
@@ -202,6 +204,8 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
               type="date"
               value={dateTo}
               onChange={e => setDateTo(e.target.value)}
+              min="1900-01-01"
+              max="2100-12-31"
               className="h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none"
             />
           </div>

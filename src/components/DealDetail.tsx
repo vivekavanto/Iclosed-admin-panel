@@ -1213,6 +1213,8 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                             <input
                               type="date"
                               value={task.dueDate ?? ""}
+                              min="1900-01-01"
+                              max="2100-12-31"
                               onChange={async (e) => {
                                 const newDate = e.target.value || null;
                                 setTasks((prev) => prev.map((t) => t.id === task.id ? { ...t, dueDate: newDate ?? undefined } : t));
@@ -1401,6 +1403,8 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                                     <input
                                       type="date"
                                       value={milestone.milestoneDate ?? ""}
+                                      min="1900-01-01"
+                                      max="2100-12-31"
                                       onChange={async (e) => {
                                         const newDate = e.target.value || null;
                                         setMilestones((prev) => prev.map((m) => m.id === milestone.id ? { ...m, milestoneDate: newDate ?? undefined } : m));
@@ -1582,6 +1586,8 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                   name="milestoneDate"
                   value={stageForm.milestoneDate}
                   onChange={handleStageFormChange}
+                  min="1900-01-01"
+                  max="2100-12-31"
                   className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-primary outline-none"
                 />
               </div>
@@ -1781,6 +1787,8 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                       name="deadlineDate"
                       value={taskForm.deadlineDate}
                       onChange={handleTaskFormChange}
+                      min="1900-01-01"
+                      max="2100-12-31"
                       className="w-full border border-slate-200 rounded-lg pl-9 pr-3 py-2 text-sm focus:border-brand-primary outline-none"
                     />
                   </div>
