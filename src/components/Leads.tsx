@@ -383,8 +383,10 @@ const Leads: React.FC = () => {
     }
   }
 
-  // ── Send Email with selected template ─────────────────────────────────────
-  async function sendWelcomeEmail(leadId: string, templateId?: string) {
+  // ── Send Email with selected template to all related clients ─────────────
+  // Sends to the primary lead + every co-purchaser/co-seller (deduped by email)
+  // via the family endpoint. Reports per-recipient outcomes back to the admin.
+  async function sendEmailToFamily(templateId?: string) {
     if (!selectedLead || selectedLead.status !== "Converted") {
       setWelcomeResult({
         success: false,
@@ -396,25 +398,54 @@ const Leads: React.FC = () => {
     setSendingWelcome(true);
     setWelcomeResult(null);
     try {
-      const payload: any = { lead_id: leadId };
+      const payload: any = { lead_id: selectedLead.id };
       if (templateId) payload.template_id = templateId;
 
-      const res = await fetch(`/api/admin/send-welcome-email`, {
+      const res = await fetch(`/api/admin/send-lead-family-email`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
       const data = await res.json();
-      if (data.success) {
+
+      const results: any[] = Array.isArray(data?.results) ? data.results : [];
+
+      if (!res.ok && results.length === 0) {
+        setWelcomeResult({
+          success: false,
+          message: data?.error ?? "Failed to send email.",
+        });
+        return;
+      }
+
+      const total: number = data?.total ?? results.length;
+      const sent: number = data?.sent ?? 0;
+      const failed: number = data?.failed ?? 0;
+      const sentEmails = results
+        .filter((r) => r.success && !r.skipped)
+        .map((r) => r.email);
+      const failures = results
+        .filter((r) => !r.success)
+        .map((r) => `${r.email} (${r.error ?? "failed"})`);
+
+      if (failed === 0 && sent > 0) {
         setWelcomeResult({
           success: true,
-          message: `Email sent to ${selectedLead?.email ?? "client"} (template: ${data.template_used})`,
+          message: `Email sent to ${sent} client(s): ${sentEmails.join(", ")}`,
         });
         setEmailModalOpen(false);
+      } else if (sent > 0) {
+        setWelcomeResult({
+          success: false,
+          message: `Sent ${sent} of ${total}. Failed: ${failures.join(", ")}`,
+        });
       } else {
         setWelcomeResult({
           success: false,
-          message: data.error ?? "Failed to send email.",
+          message:
+            failures.length > 0
+              ? `All sends failed. First error: ${failures[0]}`
+              : data?.error ?? "Failed to send email.",
         });
       }
     } catch (err) {
@@ -503,6 +534,31 @@ const Leads: React.FC = () => {
   const isPurchaseAndSale = (() => {
     const lt = (selectedLead?.lead_type ?? "").toLowerCase();
     return lt.includes("purchase") && lt.includes("sale");
+  })();
+
+  // Family of related clients to receive the email when admin hits Send Email.
+  // Walks up to the primary if the admin is viewing a co-lead, then includes
+  // every co-purchaser/co-seller. Dedupes by lowercased email; drops empties.
+  const emailRecipients = (() => {
+    if (!selectedLead) return [] as Array<{ lead: LeadUser; role: string }>;
+    const primary = selectedLead.parentLeadId
+      ? leads.find((l) => l.id === selectedLead.parentLeadId) ?? selectedLead
+      : selectedLead;
+    const coLeads = leads.filter((l) => l.parentLeadId === primary.id);
+    const list: Array<{ lead: LeadUser; role: string }> = [
+      { lead: primary, role: "Primary" },
+      ...coLeads.map((l) => ({
+        lead: l,
+        role: getCoRole(l, primary) === "co-seller" ? "Co-Seller" : "Co-Purchaser",
+      })),
+    ];
+    const seen = new Set<string>();
+    return list.filter(({ lead }) => {
+      const key = (lead.email ?? "").trim().toLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   })();
 
   // ── DETAIL VIEW ───────────────────────────────────────────────────────────
@@ -1141,11 +1197,40 @@ const Leads: React.FC = () => {
                 <div>
                   <h3 className="text-lg font-bold text-slate-900">Send Email</h3>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Send to <span className="font-semibold text-slate-700">{selectedLead?.email}</span>
+                    {emailRecipients.length === 0
+                      ? "No related clients have an email address."
+                      : `Sending to ${emailRecipients.length} client${emailRecipients.length === 1 ? "" : "s"}`}
                   </p>
                 </div>
                 <button onClick={() => !sendingWelcome && setEmailModalOpen(false)} className="text-slate-400 hover:text-slate-600 text-xl font-bold">&times;</button>
               </div>
+
+              {/* Recipient list */}
+              {emailRecipients.length > 0 && (
+                <div className="px-6 py-3 bg-slate-50 border-b border-slate-200 max-h-32 overflow-y-auto">
+                  <ul className="space-y-1.5">
+                    {emailRecipients.map(({ lead: r, role }) => (
+                      <li key={r.id} className="flex items-center gap-2 text-xs">
+                        <span className="font-semibold text-slate-700 truncate">
+                          {r.firstName} {r.lastName}
+                        </span>
+                        <span className="text-slate-500 truncate">— {r.email}</span>
+                        <span
+                          className={`ml-auto px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-tight border whitespace-nowrap ${
+                            role === "Primary"
+                              ? "bg-green-100 text-green-700 border-green-200"
+                              : role === "Co-Seller"
+                              ? "bg-amber-100 text-amber-700 border-amber-200"
+                              : "bg-blue-100 text-blue-700 border-blue-200"
+                          }`}
+                        >
+                          {role}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               {/* Template list */}
               <div className="px-6 py-4 space-y-2 overflow-y-auto flex-1">
@@ -1187,11 +1272,15 @@ const Leads: React.FC = () => {
                   Cancel
                 </button>
                 <button
-                  onClick={() => selectedLead && sendWelcomeEmail(selectedLead.id, selectedTemplateId || undefined)}
-                  disabled={sendingWelcome || !selectedTemplateId}
+                  onClick={() => selectedLead && sendEmailToFamily(selectedTemplateId || undefined)}
+                  disabled={sendingWelcome || !selectedTemplateId || emailRecipients.length === 0}
                   className="flex items-center gap-2 bg-brand-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-brand-primary/90 transition-colors disabled:opacity-50"
                 >
-                  {sendingWelcome ? <><Loader2 size={14} className="animate-spin" /> Sending...</> : <><Send size={14} /> Send Email</>}
+                  {sendingWelcome ? (
+                    <><Loader2 size={14} className="animate-spin" /> Sending...</>
+                  ) : (
+                    <><Send size={14} /> {emailRecipients.length > 1 ? `Send to ${emailRecipients.length} clients` : "Send Email"}</>
+                  )}
                 </button>
               </div>
             </div>

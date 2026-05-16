@@ -28,6 +28,15 @@ export type WelcomeEmailOpts = {
    */
   templateId?: string;
   templateName?: string;
+
+  /**
+   * When true, skip the `welcome_email_sent` idempotency guard. Used by the
+   * manual admin Send-Email-to-Family flow which may need to re-send to family
+   * members who already had a welcome email triggered automatically at
+   * conversion. Auto-triggers (intake / conversion / first_login) must leave
+   * this false so they remain idempotent.
+   */
+  bypassIdempotency?: boolean;
 };
 
 function interpolate(text: string, lead: any, fileNumber: string | null = null): string {
@@ -124,7 +133,7 @@ export async function sendWelcomeEmail(
   }
 
   // 2. Idempotency guard
-  if (lead.welcome_email_sent) {
+  if (lead.welcome_email_sent && !opts.bypassIdempotency) {
     return { success: true, alreadySent: true, templateUsed: "(already sent)" };
   }
 
