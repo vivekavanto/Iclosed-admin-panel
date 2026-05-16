@@ -87,6 +87,15 @@ const Leads: React.FC = () => {
   const [convertFileNumber, setConvertFileNumber] = useState("");
   const [convertClosingDate, setConvertClosingDate] = useState("");
   const [converting, setConverting] = useState(false);
+  // Local YYYY-MM-DD for the closing-date min attribute. Recomputed on render
+  // so the picker won't drift past midnight in a long-open session.
+  const todayLocalStr = (() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  })();
   const [convertResult, setConvertResult] = useState<{
     success: boolean;
     title: string;
@@ -247,6 +256,19 @@ const Leads: React.FC = () => {
 
   async function handleConvertToDeal() {
     if (!selectedLead) return;
+
+    // Block past closing dates before we hit the server. The server enforces
+    // the same rule, but catching it here gives instant feedback and avoids
+    // a wasted round-trip.
+    if (convertClosingDate && convertClosingDate < todayLocalStr) {
+      setConvertResult({
+        success: false,
+        title: "Closing date can't be in the past.",
+        details: ["Pick today or a future date to create the deal."],
+      });
+      return;
+    }
+
     setConverting(true);
     setConvertResult(null);
     try {
@@ -1141,7 +1163,7 @@ const Leads: React.FC = () => {
                     value={convertClosingDate}
                     onChange={(e) => setConvertClosingDate(e.target.value)}
                     disabled={converting}
-                    min="1900-01-01"
+                    min={todayLocalStr}
                     max="2100-12-31"
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
                   />

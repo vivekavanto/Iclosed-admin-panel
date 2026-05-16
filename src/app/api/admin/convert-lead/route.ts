@@ -29,6 +29,27 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: "lead_id is required" }, { status: 400 });
     }
 
+    // Reject past closing dates. Admin's local date is computed in
+    // America/Toronto so a 9pm-Eastern convert isn't wrongly rejected for
+    // being "yesterday" in the server's UTC clock.
+    if (closing_date) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(closing_date)) {
+        return NextResponse.json(
+          { success: false, error: "closing_date must be YYYY-MM-DD" },
+          { status: 400 },
+        );
+      }
+      const todayLocal = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Toronto",
+      }).format(new Date());
+      if (closing_date < todayLocal) {
+        return NextResponse.json(
+          { success: false, error: "Closing date cannot be in the past." },
+          { status: 400 },
+        );
+      }
+    }
+
     const { data: selectedLead, error: leadError } = await supabaseAdmin
       .from("leads")
       .select("*")
