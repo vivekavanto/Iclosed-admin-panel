@@ -87,6 +87,14 @@ export async function sendAuthEmailViaResend(opts: {
   email: string;
   redirectTo: string;
   userData?: Record<string, string>;
+  /**
+   * Optional explicit template selection. If provided we use this template
+   * (subject to is_active checks). If omitted we fall back to the name-based
+   * findTemplate() lookup. Used by the manual admin family-send flow so the
+   * exact template the admin picked in the modal is honoured even when
+   * multiple invite/recovery templates exist.
+   */
+  templateId?: string;
 }): Promise<{
   success: boolean;
   userId?: string;
@@ -94,7 +102,7 @@ export async function sendAuthEmailViaResend(opts: {
   skipReason?: string;
   error?: string;
 }> {
-  const { type, email, redirectTo, userData } = opts;
+  const { type, email, redirectTo, userData, templateId } = opts;
 
   // 1. Generate the auth link (token) without sending Supabase's default email
   const { data: linkData, error: linkError } =
@@ -162,7 +170,31 @@ export async function sendAuthEmailViaResend(opts: {
   // 4. Resolve template
   let subject: string;
   let bodyHtml: string;
-  const lookup = await findTemplate(type);
+  let lookup: TemplateLookupResult;
+
+  if (templateId) {
+    // Honour the exact template the caller picked. Same is_active semantics as
+    // the name-based path: inactive → skip the send (admin's off-switch).
+    const { data } = await supabaseAdmin
+      .from("email_templates")
+      .select("name, subject, body, is_active")
+      .eq("id", templateId)
+      .maybeSingle();
+    if (!data) {
+      lookup = { kind: "missing" };
+    } else if (!data.is_active) {
+      lookup = { kind: "inactive", name: data.name };
+    } else if (!data.body) {
+      lookup = { kind: "missing" };
+    } else {
+      lookup = {
+        kind: "active",
+        template: { name: data.name, subject: data.subject, body: data.body },
+      };
+    }
+  } else {
+    lookup = await findTemplate(type);
+  }
 
   // Admin explicitly disabled this auth email type → skip the send entirely
   // (no fallback to default body). User still has a valid auth account; we
