@@ -245,12 +245,41 @@ export async function sendAuthEmailViaResend(opts: {
       "{{stage_name}}": "",
       "{{ stage_status }}": "",
       "{{stage_status}}": "",
-      // Confirmation/auth link
+      // Confirmation/auth link — supports the documented placeholder plus
+      // common variants admins may type instead.
       "{{ confirmation_url }}": actionLink,
       "{{confirmation_url}}": actionLink,
+      "{{ confirmationUrl }}": actionLink,
+      "{{confirmationUrl}}": actionLink,
+      "{{ confirmation_link }}": actionLink,
+      "{{confirmation_link}}": actionLink,
+      "{{ activation_url }}": actionLink,
+      "{{activation_url}}": actionLink,
+      "{{ activate_url }}": actionLink,
+      "{{activate_url}}": actionLink,
+      "{{ activation_link }}": actionLink,
+      "{{activation_link}}": actionLink,
+      "{{ activate_link }}": actionLink,
+      "{{activate_link}}": actionLink,
+      "{{ action_url }}": actionLink,
+      "{{action_url}}": actionLink,
+      "{{ action_link }}": actionLink,
+      "{{action_link}}": actionLink,
+      "{{ button_url }}": actionLink,
+      "{{button_url}}": actionLink,
+      "{{ invite_url }}": actionLink,
+      "{{invite_url}}": actionLink,
+      "{{ invite_link }}": actionLink,
+      "{{invite_link}}": actionLink,
+      "{{ reset_url }}": actionLink,
+      "{{reset_url}}": actionLink,
+      "{{ reset_link }}": actionLink,
+      "{{reset_link}}": actionLink,
       // Supabase-style placeholders
       "{{ .ConfirmationURL }}": actionLink,
       "{{.ConfirmationURL}}": actionLink,
+      "{{ ConfirmationURL }}": actionLink,
+      "{{ConfirmationURL}}": actionLink,
       "{{ .UserMetadata.first_name }}": firstName,
       "{{.UserMetadata.first_name}}": firstName,
       "{{ .UserMetadata.last_name }}": lastName,
@@ -287,6 +316,26 @@ export async function sendAuthEmailViaResend(opts: {
     processedBody = processedBody.replace(/\{\{\s*\.UserMetadata\.first_name\s*\}\}/g, firstName);
     processedBody = processedBody.replace(/\{\{\s*\.UserMetadata\.last_name\s*\}\}/g, lastName);
     processedBody = processedBody.replace(/\{\{\s*\.UserMetadata\.email\s*\}\}/g, email);
+
+    // Regex catch-all for any remaining auth-link placeholder the admin may
+    // have typed: {{ (confirmation|activation|activate|action|invite|reset)
+    // _? (url|link) }} — case-insensitive, whitespace-tolerant, optional
+    // leading dot for Supabase-style names. This is the safety net for
+    // templates that use a placeholder name not in the explicit map above.
+    processedBody = processedBody.replace(
+      /\{\{\s*\.?\s*(confirmation|activation|activate|action|invite|invitation|reset|recovery|password|verification|verify|button)[_\s\.]*(url|link)\s*\}\}/gi,
+      actionLink,
+    );
+
+    // Integrity check — if any {{ ... }} placeholder containing url|link
+    // survives we have a bug. Log it so the next failure is one grep away
+    // from the cause. The email still goes out; we just record what's wrong.
+    const leftover = processedBody.match(/\{\{[^}]*(url|link)[^}]*\}\}/i);
+    if (leftover) {
+      console.warn(
+        `[Auth Email] Unreplaced auth-link placeholder in body: "${leftover[0]}". email=${email} type=${type}`,
+      );
+    }
     // Strip any leftover stage placeholders that don't apply to auth emails
     processedBody = processedBody.replace(/\{\{\s*stage_name\s*\}\}/gi, "");
     processedBody = processedBody.replace(/\{\{\s*stage_status\s*\}\}/gi, "");

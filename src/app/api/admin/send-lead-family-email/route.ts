@@ -30,26 +30,53 @@ type RecipientResult = {
   link_type?: "invite" | "recovery";
 };
 
-// Classify an email_templates row by name. If the name signals an auth flow
-// (activate / invite / reset / recovery / password), we must route the send
-// through sendAuthEmailViaResend so the {{ confirmation_url }} placeholder is
-// replaced with a freshly generated Supabase action_link.
+// Matches any placeholder that looks like it should hold an auth action link:
+//   {{ confirmation_url }}, {{ .ConfirmationURL }}, {{ activation_link }},
+//   {{ activate_url }}, {{ action_link }}, etc. — with or without spaces,
+//   underscores, or leading dot.
+const AUTH_URL_PLACEHOLDER_RE =
+  /\{\{\s*\.?\s*(confirmation|activation|activate|action|invite|invitation|reset|recovery|password|verification|verify|button)[_\s\.]*(url|link)\s*\}\}/i;
+
+// Classify an email_templates row. We look at both the body and the name so a
+// template named "Welcome Email" still routes through the auth path if its
+// body contains a {{ confirmation_url }}-style placeholder. Without this the
+// placeholder would survive untouched and the rendered <a href> would point
+// at the literal text `{{ confirmation_url }}` — which is unclickable.
 function detectAuthType(
   templateName: string | null | undefined,
+  templateBody: string | null | undefined,
 ): "invite" | "recovery" | null {
-  const n = (templateName ?? "").toLowerCase();
-  if (!n) return null;
+  const name = (templateName ?? "").toLowerCase();
+  const body = templateBody ?? "";
+
+  // Name-based recovery detection (highest signal — admin explicitly named it
+  // "Reset Password").
   if (
-    n.includes("reset") ||
-    n.includes("recovery") ||
-    n.includes("forgot") ||
-    (n.includes("password") && !n.includes("set password"))
+    name.includes("reset") ||
+    name.includes("recovery") ||
+    name.includes("forgot") ||
+    (name.includes("password") && !name.includes("set password"))
   ) {
     return "recovery";
   }
-  if (n.includes("invite") || n.includes("activate") || n.includes("welcome invite")) {
+
+  // Name-based invite detection.
+  if (
+    name.includes("invite") ||
+    name.includes("activate") ||
+    name.includes("activation")
+  ) {
     return "invite";
   }
+
+  // Body-based fallback: if the template body contains an auth-link
+  // placeholder, route through the auth path so the link gets generated.
+  // Default to "invite" — sendAuthEmailViaResend's invite path falls back to
+  // recovery for existing users via the retry logic below.
+  if (AUTH_URL_PLACEHOLDER_RE.test(body)) {
+    return "invite";
+  }
+
   return null;
 }
 
@@ -136,18 +163,23 @@ export async function POST(req: NextRequest) {
 
     // 5. Classify the chosen template so we know whether to use the auth path
     //    (Activate Account / Reset Password) or the regular welcome path. We
-    //    only need the name to classify.
+    //    pull the body too so body-based detection can catch templates whose
+    //    name doesn't hint at an auth flow but whose body contains a
+    //    confirmation_url placeholder.
     let authType: "invite" | "recovery" | null = null;
     let templateName: string | null = null;
     if (template_id) {
       const { data: tmpl } = await supabaseAdmin
         .from("email_templates")
-        .select("name")
+        .select("name, body")
         .eq("id", template_id)
         .maybeSingle();
       templateName = tmpl?.name ?? null;
-      authType = detectAuthType(templateName);
+      authType = detectAuthType(templateName, tmpl?.body);
     }
+    console.log(
+      `[Family Email] template_id=${template_id ?? "(none)"} name="${templateName ?? "(none)"}" authType=${authType ?? "welcome"} recipients=${recipients.length}`,
+    );
 
     // Customer-portal redirect URL — same pattern used by the auto-invite in
     // convertLead.ts so admins and auto-flows land on the same set-password
@@ -184,11 +216,13 @@ export async function POST(req: NextRequest) {
 
         // Invite to an email that already has an auth user → Supabase rejects
         // with "User already registered" (or similar). Fall back to a recovery
-        // link so the existing user still receives a working button.
+        // link so the existing user still receives a working button. Regex is
+        // intentionally broad — Supabase has changed the error wording across
+        // versions ("already registered", "already taken", "already exists").
         if (
           !res.success &&
           effectiveType === "invite" &&
-          /already\s*(been\s*)?registered|already\s*exists|user.*exists/i.test(
+          /already\s*(been\s*)?(registered|taken|exists|in\s*use)|user.*(exists|registered)|duplicate.*(user|email)/i.test(
             res.error ?? "",
           )
         ) {
