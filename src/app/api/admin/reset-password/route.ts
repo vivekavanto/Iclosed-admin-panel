@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { sendAuthEmailViaResend } from "@/lib/sendAuthEmail";
 
 const ALLOWED_ORIGINS = [
-  "https://iclosed-customer-application-rosy.vercel.app",
+  "https://iclosed.ca",
+  "https://www.iclosed.ca",
   "http://localhost:3000",
   "http://localhost:3001",
 ];
@@ -52,7 +53,7 @@ export async function POST(req: Request) {
 
     const customerPortalUrl = (
       process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ??
-      "https://iclosed-customer-application-rosy.vercel.app"
+      "https://iclosed.ca"
     ).replace(/\/+$/, "");
 
     const result = await sendAuthEmailViaResend({

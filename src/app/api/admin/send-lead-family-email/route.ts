@@ -186,7 +186,7 @@ export async function POST(req: NextRequest) {
     // page.
     const customerPortalUrl = (
       process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ??
-      "https://iclosed-customer-application-rosy.vercel.app"
+      "https://iclosed.ca"
     ).replace(/\/+$/, "");
     const redirectTo = `${customerPortalUrl}/api/auth/callback?next=/set-password`;
 
