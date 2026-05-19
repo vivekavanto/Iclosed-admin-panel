@@ -5,10 +5,10 @@ import { consumeInvitationToken } from "@/lib/invitationToken";
 export const dynamic = "force-dynamic";
 
 // Within the 7-day window the click goes through to /set-password as
-// usual. Past the window (or if the token is missing / used / Supabase
-// errors), bounce the user to the customer portal login page with a
-// reason query param so the portal can display a "link expired" banner.
-// We do NOT land them on the admin panel — they're customers, not staff.
+// usual. Past the window (or if the token is missing / Supabase errors),
+// bounce the user to the customer portal login page with a reason query
+// param so the portal can display a "link expired" banner. We do NOT
+// land them on the admin panel — they're customers, not staff.
 function expiredRedirect(reason: string) {
   const customerPortalUrl = (
     process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ?? "https://iclosed.ca"

@@ -15,7 +15,7 @@ export type ConsumedInvitation = {
 
 export type ConsumeResult =
   | { ok: true; data: ConsumedInvitation }
-  | { ok: false; reason: "missing" | "expired" | "used" | "error"; detail?: string };
+  | { ok: false; reason: "missing" | "expired" | "error"; detail?: string };
 
 function resolveBaseUrl(): string {
   const explicit = process.env.NEXT_PUBLIC_ADMIN_APP_URL;
@@ -63,26 +63,30 @@ export async function consumeInvitationToken(token: string): Promise<ConsumeResu
 
   const { data, error } = await supabaseAdmin
     .from("invitation_tokens")
-    .select("type, email, redirect_to, user_data, expires_at, used_at")
+    .select("type, email, redirect_to, user_data, expires_at")
     .eq("token", token)
     .maybeSingle();
 
   if (error) return { ok: false, reason: "error", detail: error.message };
   if (!data) return { ok: false, reason: "missing" };
-  if (data.used_at) return { ok: false, reason: "used" };
   if (new Date(data.expires_at).getTime() < Date.now()) {
     return { ok: false, reason: "expired" };
   }
 
-  const { error: updateError } = await supabaseAdmin
+  // Why we don't enforce single-use here: email scanners (Outlook SafeLinks,
+  // Gmail, Slack/WhatsApp previews, corporate gateways) pre-fetch the link
+  // before the human ever clicks it, which used to trip the used_at check
+  // and bounce real customers to /login?reason=link_expired&detail=used. The
+  // Supabase action_link minted per click below is itself one-time-use and
+  // short-lived, so re-using the wrapper token within the 7-day window is
+  // safe. We still stamp used_at on first hit (best-effort, no .is() guard
+  // needed — overwriting later hits is fine) so admins can see when a token
+  // was first activated; failures here are non-fatal.
+  await supabaseAdmin
     .from("invitation_tokens")
     .update({ used_at: new Date().toISOString() })
     .eq("token", token)
     .is("used_at", null);
-
-  if (updateError) {
-    return { ok: false, reason: "error", detail: updateError.message };
-  }
 
   return {
     ok: true,
