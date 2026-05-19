@@ -39,18 +39,47 @@ export async function GET(req: NextRequest) {
   const { type, email, redirectTo, userData } = consumed.data;
 
   // At click-time the user already exists in auth.users (created at send-time
-  // by sendAuthEmailViaResend's first generateLink call). Re-calling
-  // generateLink({type:'invite'}) here returns "User already registered" /
-  // similar — which we'd treat as an error and bounce to /activation-expired
-  // (i.e. the admin panel). To produce a working set-password session we
-  // mint a `magiclink` for invites (works for existing unconfirmed users)
-  // and keep `recovery` as-is for password resets.
-  const linkType: "magiclink" | "recovery" =
-    type === "invite" ? "magiclink" : "recovery";
+  // by sendAuthEmailViaResend's first generateLink call). We always use
+  // `recovery` — for both invite and reset — because:
+  //   1. `invite` re-calls fail with "User already registered" on the existing
+  //      row.
+  //   2. `magiclink` (the previous workaround for invites) produced sessions
+  //      with AMR="otp"; on those, the customer-portal's
+  //      supabase.auth.updateUser({password}) on /set-password silently
+  //      no-ops on Supabase's API for some project configs — the success
+  //      screen would render but signInWithPassword later returned "Invalid
+  //      login credentials" because the password hash hadn't actually
+  //      changed. `recovery` produces a true recovery session (AMR="recovery")
+  //      where password updates are always honored — this is the
+  //      Supabase-blessed pattern for "set your password" flows.
+  // Recovery works for unconfirmed accounts too; the verify step that
+  // happens when the user follows the action_link itself confirms the email.
+  // We *also* explicitly confirm the user up front via the admin API as a
+  // belt-and-braces guarantee that the eventual signInWithPassword call
+  // doesn't trip the "Email not confirmed" gate on projects that require it.
+  try {
+    const { data: lookup } = await supabaseAdmin.auth.admin.listUsers({
+      page: 1,
+      perPage: 200,
+    });
+    const target = lookup?.users?.find(
+      (u) => (u.email ?? "").toLowerCase() === email.toLowerCase(),
+    );
+    if (target && !target.email_confirmed_at) {
+      await supabaseAdmin.auth.admin.updateUserById(target.id, {
+        email_confirm: true,
+      });
+    }
+  } catch (confirmErr) {
+    // Non-blocking — if the lookup/confirm fails we still try to mint the
+    // recovery link below. The recovery flow itself usually confirms the
+    // email, so this only matters for the email-confirmation gate.
+    console.warn("[Activate] email_confirm bump failed (non-blocking):", confirmErr);
+  }
 
   const { data: linkData, error: linkError } =
     await supabaseAdmin.auth.admin.generateLink({
-      type: linkType,
+      type: "recovery",
       email,
       options: { redirectTo },
     });
@@ -59,7 +88,7 @@ export async function GET(req: NextRequest) {
     console.error(
       `[Activate] Failed to mint Supabase action_link: ${
         linkError?.message ?? "no action_link returned"
-      } email=${email} originalType=${type} linkType=${linkType}`,
+      } email=${email} originalType=${type}`,
     );
     return expiredRedirect("error");
   }
