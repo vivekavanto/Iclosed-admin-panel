@@ -49,6 +49,33 @@ async function sendEmailForDeal(
 
         // Replace placeholders in email body
         const fullName = `${client.first_name ?? ""} ${client.last_name ?? ""}`.trim()
+        const leadType = (deal.type ?? "").toLowerCase()
+        const fileNumber = deal.file_number ?? ""
+
+        // Short-form / specialty tokens used by some templates (retainer agreement etc.)
+        const sideSuffix = leadType.includes("purchase") && leadType.includes("sale")
+            ? " (Purchase & Sale)"
+            : leadType === "sale" || (leadType.includes("sale") && !leadType.includes("purchase"))
+                ? " (Sale)"
+                : ""
+        const computeRole = (l: any): string => {
+            const lt = (l?.lead_type ?? leadType ?? "").toLowerCase().trim();
+            const isCombined = lt.includes("purchase") && lt.includes("sale");
+            const isSaleOnly = lt === "sale" || (lt.includes("sale") && !lt.includes("purchase"));
+            if (l?.parent_lead_id) {
+                if (isSaleOnly) return "Co-Seller";
+                if (isCombined && l?.selling_address_street) return "Co-Seller";
+                if (lt.includes("purchase") && !isSaleOnly) return "Co-Purchaser";
+                if (l?.selling_address_street) return "Co-Seller";
+                return "Co-Purchaser";
+            }
+            if (isCombined) return "Purchaser & Seller";
+            if (isSaleOnly) return "Seller";
+            return "Purchaser";
+        }
+        const role = computeRole(lead)
+        const propertyRoleRow = role ? `Your Role: ${role}` : ""
+
         const placeholders: Record<string, string> = {
             // User placeholders
             "{{ user.first_name }}": client.first_name ?? "",
@@ -70,15 +97,32 @@ async function sendEmailForDeal(
             "{{lead.address_city}}": lead?.address_city ?? "",
             "{{ lead.address_province }}": lead?.address_province ?? "",
             "{{lead.address_province}}": lead?.address_province ?? "",
-            "{{ lead.file_number }}": deal.file_number ?? "",
-            "{{lead.file_number}}": deal.file_number ?? "",
-            "{{ lead_type }}": (deal.type ?? "").toLowerCase(),
-            "{{lead_type}}": (deal.type ?? "").toLowerCase(),
+            "{{ lead.file_number }}": fileNumber,
+            "{{lead.file_number}}": fileNumber,
+            "{{ lead_type }}": leadType,
+            "{{lead_type}}": leadType,
             // Milestone placeholders
             "{{ stage_name }}": milestone?.title ?? "",
             "{{stage_name}}": milestone?.title ?? "",
             "{{ stage_status }}": milestone?.status ?? "Completed",
             "{{stage_status}}": milestone?.status ?? "Completed",
+            // Short-form aliases (retainer agreement and similar templates)
+            "{{ first_name }}": client.first_name ?? "",
+            "{{ last_name }}": client.last_name ?? "",
+            "{{ full_name }}": fullName,
+            "{{ email }}": client.email,
+            "{{ property_address }}": leadAddress,
+            "{{ file_number }}": fileNumber,
+            "{{ side_suffix }}": sideSuffix,
+            "{{ property_role_row }}": propertyRoleRow,
+            "{{first_name}}": client.first_name ?? "",
+            "{{last_name}}": client.last_name ?? "",
+            "{{full_name}}": fullName,
+            "{{email}}": client.email,
+            "{{property_address}}": leadAddress,
+            "{{file_number}}": fileNumber,
+            "{{side_suffix}}": sideSuffix,
+            "{{property_role_row}}": propertyRoleRow,
         }
 
         let processedBody = template.body
@@ -104,6 +148,15 @@ async function sendEmailForDeal(
         processedBody = processedBody.replace(/\{\{\s*lead_type\s*\}\}/gi, (deal.type ?? "").toLowerCase());
         processedBody = processedBody.replace(/\{\{\s*stage_name\s*\}\}/gi, milestone?.title ?? "");
         processedBody = processedBody.replace(/\{\{\s*stage_status\s*\}\}/gi, milestone?.status ?? "Completed");
+        // Short-form alias fallbacks
+        processedBody = processedBody.replace(/\{\{\s*first_name\s*\}\}/gi, client.first_name ?? "");
+        processedBody = processedBody.replace(/\{\{\s*last_name\s*\}\}/gi, client.last_name ?? "");
+        processedBody = processedBody.replace(/\{\{\s*full_name\s*\}\}/gi, fullName);
+        processedBody = processedBody.replace(/\{\{\s*email\s*\}\}/gi, client.email ?? "");
+        processedBody = processedBody.replace(/\{\{\s*property_address\s*\}\}/gi, leadAddress);
+        processedBody = processedBody.replace(/\{\{\s*file_number\s*\}\}/gi, fileNumber);
+        processedBody = processedBody.replace(/\{\{\s*side_suffix\s*\}\}/gi, sideSuffix);
+        processedBody = processedBody.replace(/\{\{\s*property_role_row\s*\}\}/gi, propertyRoleRow);
 
         // No HTML wrapper / logo injection — the DB template owns its layout.
         const htmlBody = processedBody
@@ -119,6 +172,11 @@ async function sendEmailForDeal(
         processedSubject = processedSubject.replace(/\{\{\s*lead\.file_number\s*\}\}/gi, deal.file_number ?? "");
         processedSubject = processedSubject.replace(/\{\{\s*user\.first_name\s*\}\}/gi, client.first_name ?? "");
         processedSubject = processedSubject.replace(/\{\{\s*user\.full_name\s*\}\}/gi, fullName);
+        processedSubject = processedSubject.replace(/\{\{\s*first_name\s*\}\}/gi, client.first_name ?? "");
+        processedSubject = processedSubject.replace(/\{\{\s*full_name\s*\}\}/gi, fullName);
+        processedSubject = processedSubject.replace(/\{\{\s*property_address\s*\}\}/gi, leadAddress);
+        processedSubject = processedSubject.replace(/\{\{\s*file_number\s*\}\}/gi, fileNumber);
+        processedSubject = processedSubject.replace(/\{\{\s*side_suffix\s*\}\}/gi, sideSuffix);
 
         const { data: sendResult, error: sendError } = await resend.emails.send({
             from: fromEmail,

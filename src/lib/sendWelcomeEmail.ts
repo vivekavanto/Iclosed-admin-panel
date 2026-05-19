@@ -39,8 +39,31 @@ export type WelcomeEmailOpts = {
   bypassIdempotency?: boolean;
 };
 
+// Maps a lead's lead_type + parent_lead_id into a human role string used by
+// {{ property_role_row }}. Mirrors the getCoRole logic in components/Leads.tsx.
+function computeRole(lead: any): string {
+  const lt = (lead.lead_type ?? "").toLowerCase().trim();
+  const isCombined = lt.includes("purchase") && lt.includes("sale");
+  const isSaleOnly = lt === "sale" || (lt.includes("sale") && !lt.includes("purchase"));
+
+  if (lead.parent_lead_id) {
+    // Co-lead — pick side from own lead_type, then from selling_address_street fallback.
+    if (isSaleOnly) return "Co-Seller";
+    if (isCombined && lead.selling_address_street) return "Co-Seller";
+    if (lt.includes("purchase") && !isSaleOnly) return "Co-Purchaser";
+    if (lead.selling_address_street) return "Co-Seller";
+    return "Co-Purchaser";
+  }
+  if (isCombined) return "Purchaser & Seller";
+  if (isSaleOnly) return "Seller";
+  return "Purchaser";
+}
+
 function interpolate(text: string, lead: any, fileNumber: string | null = null): string {
-  const fullName = `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim();
+  const firstName = lead.first_name ?? "";
+  const lastName = lead.last_name ?? "";
+  const fullName = `${firstName} ${lastName}`.trim();
+  const email = lead.email ?? "";
   const address = [
     lead.address_street,
     lead.address_city,
@@ -50,12 +73,27 @@ function interpolate(text: string, lead: any, fileNumber: string | null = null):
   const leadType = (lead.lead_type ?? "purchase").toLowerCase();
   const resolvedFileNumber = fileNumber ?? lead.file_number ?? "";
 
+  // Side suffix for subject lines on combined / sale-only leads. Empty for
+  // pure-purchase leads (the common case) so the subject stays clean.
+  const sideSuffix = leadType.includes("purchase") && leadType.includes("sale")
+    ? " (Purchase & Sale)"
+    : leadType === "sale" || (leadType.includes("sale") && !leadType.includes("purchase"))
+      ? " (Sale)"
+      : "";
+
+  // Pre-rendered "Your Role: <role>" line for the body. If no useful role can
+  // be determined the line collapses to empty so the email doesn't show a
+  // stray label.
+  const role = computeRole(lead);
+  const propertyRoleRow = role ? `Your Role: ${role}` : "";
+
   const map: Record<string, string> = {
-    "{{ user.first_name }}": lead.first_name ?? "",
-    "{{ user.last_name }}": lead.last_name ?? "",
+    // Canonical, namespaced placeholders
+    "{{ user.first_name }}": firstName,
+    "{{ user.last_name }}": lastName,
     "{{ user.get_full_name }}": fullName,
     "{{ user.full_name }}": fullName,
-    "{{ user.email }}": lead.email ?? "",
+    "{{ user.email }}": email,
     "{{ lead_address }}": address,
     "{{ lead.address_line1 }}": lead.address_street ?? "",
     "{{ lead.address_city }}": lead.address_city ?? "",
@@ -64,17 +102,34 @@ function interpolate(text: string, lead: any, fileNumber: string | null = null):
     "{{ lead_type }}": leadType,
     "{{ stage_name }}": "",
     "{{ stage_status }}": "",
-    "{{user.first_name}}": lead.first_name ?? "",
-    "{{user.last_name}}": lead.last_name ?? "",
+    "{{user.first_name}}": firstName,
+    "{{user.last_name}}": lastName,
     "{{user.get_full_name}}": fullName,
     "{{user.full_name}}": fullName,
-    "{{user.email}}": lead.email ?? "",
+    "{{user.email}}": email,
     "{{lead_address}}": address,
     "{{lead.address_line1}}": lead.address_street ?? "",
     "{{lead.address_city}}": lead.address_city ?? "",
     "{{lead.address_province}}": lead.address_province ?? "",
     "{{lead.file_number}}": resolvedFileNumber,
     "{{lead_type}}": leadType,
+    // Short-form aliases (used by retainer-agreement and similar templates)
+    "{{ first_name }}": firstName,
+    "{{ last_name }}": lastName,
+    "{{ full_name }}": fullName,
+    "{{ email }}": email,
+    "{{ property_address }}": address,
+    "{{ file_number }}": resolvedFileNumber,
+    "{{ side_suffix }}": sideSuffix,
+    "{{ property_role_row }}": propertyRoleRow,
+    "{{first_name}}": firstName,
+    "{{last_name}}": lastName,
+    "{{full_name}}": fullName,
+    "{{email}}": email,
+    "{{property_address}}": address,
+    "{{file_number}}": resolvedFileNumber,
+    "{{side_suffix}}": sideSuffix,
+    "{{property_role_row}}": propertyRoleRow,
     "{{NAME}}": fullName,
     "{{LEAD_TYPE}}": leadType,
     "{{CLIENT_ADDRESS}}": address,
@@ -88,15 +143,24 @@ function interpolate(text: string, lead: any, fileNumber: string | null = null):
   // Whitespace-tolerant fallbacks
   result = result.replace(/\{\{\s*user\.get_full_name\s*\}\}/gi, fullName);
   result = result.replace(/\{\{\s*user\.full_name\s*\}\}/gi, fullName);
-  result = result.replace(/\{\{\s*user\.first_name\s*\}\}/gi, lead.first_name ?? "");
-  result = result.replace(/\{\{\s*user\.last_name\s*\}\}/gi, lead.last_name ?? "");
-  result = result.replace(/\{\{\s*user\.email\s*\}\}/gi, lead.email ?? "");
+  result = result.replace(/\{\{\s*user\.first_name\s*\}\}/gi, firstName);
+  result = result.replace(/\{\{\s*user\.last_name\s*\}\}/gi, lastName);
+  result = result.replace(/\{\{\s*user\.email\s*\}\}/gi, email);
   result = result.replace(/\{\{\s*lead_type\s*\}\}/gi, leadType);
   result = result.replace(/\{\{\s*lead_address\s*\}\}/gi, address);
   result = result.replace(/\{\{\s*lead\.address_line1\s*\}\}/gi, lead.address_street ?? "");
   result = result.replace(/\{\{\s*lead\.address_city\s*\}\}/gi, lead.address_city ?? "");
   result = result.replace(/\{\{\s*lead\.address_province\s*\}\}/gi, lead.address_province ?? "");
   result = result.replace(/\{\{\s*lead\.file_number\s*\}\}/gi, resolvedFileNumber);
+  // Short-form alias fallbacks
+  result = result.replace(/\{\{\s*first_name\s*\}\}/gi, firstName);
+  result = result.replace(/\{\{\s*last_name\s*\}\}/gi, lastName);
+  result = result.replace(/\{\{\s*full_name\s*\}\}/gi, fullName);
+  result = result.replace(/\{\{\s*email\s*\}\}/gi, email);
+  result = result.replace(/\{\{\s*property_address\s*\}\}/gi, address);
+  result = result.replace(/\{\{\s*file_number\s*\}\}/gi, resolvedFileNumber);
+  result = result.replace(/\{\{\s*side_suffix\s*\}\}/gi, sideSuffix);
+  result = result.replace(/\{\{\s*property_role_row\s*\}\}/gi, propertyRoleRow);
 
   return result;
 }

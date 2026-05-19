@@ -4,9 +4,18 @@ import { consumeInvitationToken } from "@/lib/invitationToken";
 
 export const dynamic = "force-dynamic";
 
-function expiredRedirect(req: NextRequest, reason: string) {
-  const url = new URL("/activation-expired", req.url);
-  url.searchParams.set("reason", reason);
+// Within the 7-day window the click goes through to /set-password as
+// usual. Past the window (or if the token is missing / used / Supabase
+// errors), bounce the user to the customer portal login page with a
+// reason query param so the portal can display a "link expired" banner.
+// We do NOT land them on the admin panel — they're customers, not staff.
+function expiredRedirect(reason: string) {
+  const customerPortalUrl = (
+    process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ?? "https://iclosed.ca"
+  ).replace(/\/+$/, "");
+  const url = new URL(`${customerPortalUrl}/login`);
+  url.searchParams.set("reason", "link_expired");
+  url.searchParams.set("detail", reason);
   return NextResponse.redirect(url, 302);
 }
 
@@ -24,7 +33,7 @@ export async function GET(req: NextRequest) {
 
   const consumed = await consumeInvitationToken(token);
   if (!consumed.ok) {
-    return expiredRedirect(req, consumed.reason);
+    return expiredRedirect(consumed.reason);
   }
 
   const { type, email, redirectTo, userData } = consumed.data;
@@ -52,7 +61,7 @@ export async function GET(req: NextRequest) {
         linkError?.message ?? "no action_link returned"
       } email=${email} originalType=${type} linkType=${linkType}`,
     );
-    return expiredRedirect(req, "error");
+    return expiredRedirect("error");
   }
 
   // userData is intentionally not re-applied here — it was already attached

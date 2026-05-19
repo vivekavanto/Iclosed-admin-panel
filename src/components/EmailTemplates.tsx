@@ -12,6 +12,7 @@ import {
   ChevronDown,
   X,
   Edit,
+  Trash2,
 } from "lucide-react";
 import { formatLocalDate } from "@/lib/formatDate";
 
@@ -28,11 +29,19 @@ const EMAIL_VARIABLES = [
   { key: "{{ user.first_name }}", description: "Client's first name" },
   { key: "{{ user.last_name }}", description: "Client's last name" },
   { key: "{{ user.get_full_name }}", description: "Client's full name" },
+  { key: "{{ first_name }}", description: "Short alias for first name" },
+  { key: "{{ last_name }}", description: "Short alias for last name" },
+  { key: "{{ full_name }}", description: "Short alias for full name" },
+  { key: "{{ email }}", description: "Client's email address" },
   { key: "{{ lead_address }}", description: "Formatted address string" },
+  { key: "{{ property_address }}", description: "Short alias for formatted address" },
   { key: "{{ lead.address_line1 }}", description: "Address line 1" },
   { key: "{{ lead.address_city }}", description: "City" },
   { key: "{{ lead.address_province }}", description: "Province" },
   { key: "{{ lead.file_number }}", description: "File number" },
+  { key: "{{ file_number }}", description: "Short alias for file number" },
+  { key: "{{ side_suffix }}", description: "Subject suffix: '', ' (Sale)', or ' (Purchase & Sale)'" },
+  { key: "{{ property_role_row }}", description: "Pre-rendered 'Your Role: Purchaser/Seller/Co-…' line" },
   { key: "{{ stage_name }}", description: "Stage template name" },
   { key: "{{ stage_status }}", description: "Current stage status" },
   { key: "{{ confirmation_url }}", description: "Auth action link (invite / reset password)" },
@@ -46,6 +55,8 @@ const EmailTemplates: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [templates, setTemplates] = useState<EmailTemplate[]>([]);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<EmailTemplate | null>(null);
 
   const [form, setForm] = useState({
     id: "",
@@ -67,6 +78,29 @@ const EmailTemplates: React.FC = () => {
   const resetForm = () => {
     setForm({ id: "", name: "", subject: "", body: "", is_active: true });
   };
+  const handleDelete = async (template: EmailTemplate) => {
+    setDeletingId(template.id);
+    try {
+      const res = await fetch(
+        `/api/admin/email-templates?id=${encodeURIComponent(template.id)}`,
+        { method: "DELETE" },
+      );
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.error || `HTTP ${res.status}`);
+      }
+
+      setTemplates((prev) => prev.filter((t) => t.id !== template.id));
+      setConfirmDelete(null);
+    } catch (err: any) {
+      console.error("❌ Delete failed:", err.message);
+      alert(`Failed to delete template: ${err.message}`);
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   const handleEdit = (template: EmailTemplate) => {
     setForm({
       id: template.id,
@@ -240,12 +274,20 @@ const EmailTemplates: React.FC = () => {
                     </span>
                   </td>
                   <td className="px-4 py-4 text-center">
-                    <div className="flex justify-center">
+                    <div className="flex justify-center items-center gap-1">
                       <button
                         onClick={() => handleEdit(template)}
                         className="text-brand-primary hover:text-brand-primaryHover transition-colors p-1"
+                        title="Edit template"
                       >
                         <Edit size={18} />
+                      </button>
+                      <button
+                        onClick={() => setConfirmDelete(template)}
+                        className="text-slate-400 hover:text-red-600 transition-colors p-1"
+                        title="Delete template"
+                      >
+                        <Trash2 size={18} />
                       </button>
                     </div>
                   </td>
@@ -508,6 +550,57 @@ const EmailTemplates: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {confirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-200">
+          <div
+            className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+            onClick={() => deletingId === null && setConfirmDelete(null)}
+          />
+          <div className="bg-white rounded-2xl sm:rounded-3xl shadow-2xl w-full max-w-md relative z-10 animate-in zoom-in-95 duration-200">
+            <div className="p-8">
+              <div className="flex items-start gap-4">
+                <div className="w-12 h-12 bg-red-50 flex items-center justify-center rounded-xl shrink-0">
+                  <Trash2 className="text-red-600" size={22} />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-xl font-black text-slate-900 leading-tight">
+                    Delete Email Template
+                  </h3>
+                  <p className="text-sm text-slate-500 font-medium mt-2 leading-relaxed">
+                    Are you sure you want to delete{" "}
+                    <span className="font-bold text-slate-800">
+                      “{confirmDelete.name}”
+                    </span>
+                    ? This template will no longer be available for stage
+                    triggers.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 mt-8">
+                <button
+                  type="button"
+                  onClick={() => setConfirmDelete(null)}
+                  disabled={deletingId !== null}
+                  className="px-6 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-bold text-sm hover:bg-slate-50 transition-all disabled:opacity-60"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDelete(confirmDelete)}
+                  disabled={deletingId !== null}
+                  className="px-6 py-2.5 bg-red-600 text-white rounded-xl font-bold text-sm shadow-lg shadow-red-600/20 hover:bg-red-700 transition-all active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {deletingId === confirmDelete.id ? "Deleting..." : "Delete"}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

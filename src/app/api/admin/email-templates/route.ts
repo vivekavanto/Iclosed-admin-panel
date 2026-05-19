@@ -8,6 +8,7 @@ export async function GET() {
   const { data, error } = await supabase
     .from('email_templates')
     .select('*')
+    .eq('deleted', false)
     .order('created_at', { ascending: false });
 
   if (error) {
@@ -71,6 +72,47 @@ export async function PUT(req: NextRequest) {
     }
 
     return NextResponse.json(data[0]);
+  } catch (err: any) {
+    console.error(err);
+    return NextResponse.json({ error: err.message }, { status: 500 });
+  }
+}
+
+// DELETE /api/admin/email-templates?id=...
+export async function DELETE(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    let id = searchParams.get('id');
+
+    if (!id) {
+      try {
+        const body = await req.json();
+        id = body?.id ?? null;
+      } catch {
+        // no body — fall through
+      }
+    }
+
+    if (!id) {
+      return NextResponse.json({ error: 'ID required' }, { status: 400 });
+    }
+
+    const { data, error } = await supabase
+      .from('email_templates')
+      .update({ deleted: true, is_active: false })
+      .eq('id', id)
+      .select();
+
+    if (error) {
+      console.error(error);
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    if (!data || data.length === 0) {
+      return NextResponse.json({ error: 'Template not found' }, { status: 404 });
+    }
+
+    return NextResponse.json({ success: true, id });
   } catch (err: any) {
     console.error(err);
     return NextResponse.json({ error: err.message }, { status: 500 });

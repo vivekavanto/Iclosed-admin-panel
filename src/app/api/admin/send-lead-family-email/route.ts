@@ -83,9 +83,10 @@ function detectAuthType(
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { lead_id, template_id } = body as {
+    const { lead_id, template_id, lead_ids } = body as {
       lead_id?: string;
       template_id?: string;
+      lead_ids?: string[];
     };
 
     if (!lead_id) {
@@ -94,6 +95,13 @@ export async function POST(req: NextRequest) {
         { status: 400 },
       );
     }
+
+    // Optional explicit recipient subset. When provided, we restrict the send
+    // to just these family members so the admin can email any single client
+    // (or any combination) without forcing the whole family.
+    const recipientFilter = Array.isArray(lead_ids)
+      ? new Set(lead_ids.filter((id): id is string => typeof id === "string"))
+      : null;
 
     // 1. Fetch the lead the admin clicked on.
     const { data: clicked, error: clickedError } = await supabaseAdmin
@@ -140,18 +148,38 @@ export async function POST(req: NextRequest) {
 
     // 4. Dedupe by lowercased email; drop rows with empty email.
     const seen = new Set<string>();
-    const recipients = family.filter((l) => {
+    let recipients = family.filter((l) => {
       const key = (l.email ?? "").trim().toLowerCase();
       if (!key || seen.has(key)) return false;
       seen.add(key);
       return true;
     });
 
+    // 4b. If the caller passed an explicit subset, restrict to those IDs.
+    //     Every ID must belong to the resolved family — otherwise we'd let a
+    //     caller spam arbitrary lead emails through this endpoint.
+    if (recipientFilter) {
+      const familyIds = new Set(family.map((l) => l.id));
+      const unknown = [...recipientFilter].filter((id) => !familyIds.has(id));
+      if (unknown.length > 0) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `lead_ids contains IDs not in this family: ${unknown.join(", ")}`,
+          },
+          { status: 400 },
+        );
+      }
+      recipients = recipients.filter((l) => recipientFilter.has(l.id));
+    }
+
     if (recipients.length === 0) {
       return NextResponse.json(
         {
           success: false,
-          error: "No family member has a valid email address",
+          error: recipientFilter
+            ? "Selected recipients have no valid email address"
+            : "No family member has a valid email address",
           total: 0,
           sent: 0,
           failed: 0,

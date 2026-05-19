@@ -32,6 +32,8 @@ import {
   Users,
   Link2,
   Trash2,
+  Edit3,
+  Save,
 } from "lucide-react";
 
 interface LeadUser {
@@ -113,6 +115,12 @@ const Leads: React.FC = () => {
     { id: string; name: string; body: string }[]
   >([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  // IDs of family members currently checked in the Send Email modal. Default
+  // is just the lead the admin is viewing — the admin opts in to additional
+  // co-purchasers / co-sellers, instead of being forced to send to everyone.
+  const [selectedRecipientIds, setSelectedRecipientIds] = useState<Set<string>>(
+    new Set(),
+  );
 
   const [expandedSections, setExpandedSections] = useState<string[]>([
     "personal",
@@ -120,6 +128,108 @@ const Leads: React.FC = () => {
     "selling-address",
     "property-personal",
   ]);
+
+  // ── Edit-mode state for the detail view ────────────────────────────────────
+  type LeadEditForm = Pick<
+    LeadUser,
+    | "firstName"
+    | "lastName"
+    | "email"
+    | "phone"
+    | "addressStreet"
+    | "addressCity"
+    | "addressPostalCode"
+    | "addressProvince"
+    | "sellingAddressStreet"
+    | "sellingAddressCity"
+    | "sellingAddressProvince"
+    | "sellingAddressPostalCode"
+  >;
+  const buildEditForm = (l: LeadUser): LeadEditForm => ({
+    firstName: l.firstName ?? "",
+    lastName: l.lastName ?? "",
+    email: l.email ?? "",
+    phone: l.phone ?? "",
+    addressStreet: l.addressStreet ?? "",
+    addressCity: l.addressCity ?? "",
+    addressPostalCode: l.addressPostalCode ?? "",
+    addressProvince: l.addressProvince ?? "",
+    sellingAddressStreet: l.sellingAddressStreet ?? "",
+    sellingAddressCity: l.sellingAddressCity ?? "",
+    sellingAddressProvince: l.sellingAddressProvince ?? "",
+    sellingAddressPostalCode: l.sellingAddressPostalCode ?? "",
+  });
+  const [isEditing, setIsEditing] = useState(false);
+  const [editForm, setEditForm] = useState<LeadEditForm>({
+    firstName: "",
+    lastName: "",
+    email: "",
+    phone: "",
+    addressStreet: "",
+    addressCity: "",
+    addressPostalCode: "",
+    addressProvince: "",
+    sellingAddressStreet: "",
+    sellingAddressCity: "",
+    sellingAddressProvince: "",
+    sellingAddressPostalCode: "",
+  });
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editResult, setEditResult] = useState<{
+    success: boolean;
+    message: string;
+  } | null>(null);
+
+  const cancelEdit = () => {
+    setIsEditing(false);
+    setEditResult(null);
+  };
+  const updateEditField = <K extends keyof LeadEditForm>(
+    key: K,
+    value: LeadEditForm[K],
+  ) => setEditForm((prev) => ({ ...prev, [key]: value }));
+
+  async function saveEdit() {
+    if (!selectedLead) return;
+
+    if (!editForm.firstName.trim() || !editForm.lastName.trim()) {
+      setEditResult({
+        success: false,
+        message: "First name and last name are required.",
+      });
+      return;
+    }
+    if (!editForm.email.trim()) {
+      setEditResult({ success: false, message: "Email is required." });
+      return;
+    }
+
+    setSavingEdit(true);
+    setEditResult(null);
+    try {
+      const res = await fetch(`/api/admin/leads`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: selectedLead.id, ...editForm }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data?.error ?? `HTTP ${res.status}`);
+      }
+      const updated = mapLead(data.lead);
+      setLeads((prev) => prev.map((l) => (l.id === updated.id ? updated : l)));
+      setSelectedLead(updated);
+      setIsEditing(false);
+      setEditResult({ success: true, message: "Lead updated successfully." });
+    } catch (err: any) {
+      setEditResult({
+        success: false,
+        message: err.message ?? "Failed to update lead.",
+      });
+    } finally {
+      setSavingEdit(false);
+    }
+  }
 
   const mapLead = (l: any): LeadUser => ({
     id: l.id,
@@ -210,6 +320,17 @@ const Leads: React.FC = () => {
   const openLead = (lead: LeadUser) => {
     setSelectedLead(lead);
     setConvertResult(null);
+    setIsEditing(false);
+    setEditResult(null);
+    setView("DETAIL");
+  };
+
+  const openLeadForEdit = (lead: LeadUser) => {
+    setSelectedLead(lead);
+    setConvertResult(null);
+    setEditForm(buildEditForm(lead));
+    setIsEditing(true);
+    setEditResult(null);
     setView("DETAIL");
   };
 
@@ -408,11 +529,19 @@ const Leads: React.FC = () => {
   // ── Send Email with selected template to all related clients ─────────────
   // Sends to the primary lead + every co-purchaser/co-seller (deduped by email)
   // via the family endpoint. Reports per-recipient outcomes back to the admin.
-  async function sendEmailToFamily(templateId?: string) {
+  async function sendEmailToFamily(templateId?: string, leadIds?: string[]) {
     if (!selectedLead || selectedLead.status !== "Converted") {
       setWelcomeResult({
         success: false,
         message: "Email can only be sent after the lead has been converted to a deal.",
+      });
+      return;
+    }
+
+    if (leadIds && leadIds.length === 0) {
+      setWelcomeResult({
+        success: false,
+        message: "Select at least one recipient.",
       });
       return;
     }
@@ -422,6 +551,7 @@ const Leads: React.FC = () => {
     try {
       const payload: any = { lead_id: selectedLead.id };
       if (templateId) payload.template_id = templateId;
+      if (leadIds && leadIds.length > 0) payload.lead_ids = leadIds;
 
       const res = await fetch(`/api/admin/send-lead-family-email`, {
         method: "POST",
@@ -697,6 +827,28 @@ const Leads: React.FC = () => {
 
           {/* ── Convert to Deal button ── */}
           <div className="flex items-center gap-3 flex-wrap">
+            {isEditing && (
+              <>
+                <button
+                  onClick={cancelEdit}
+                  disabled={savingEdit}
+                  className="flex items-center gap-2 px-5 py-2.5 bg-white border border-slate-300 text-slate-600 rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-slate-50 transition-all disabled:opacity-60"
+                >
+                  <X size={14} /> Cancel
+                </button>
+                <button
+                  onClick={saveEdit}
+                  disabled={savingEdit}
+                  className="flex items-center gap-2 px-6 py-2.5 bg-brand-primary text-white rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-brand-primaryHover transition-all shadow-lg active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {savingEdit ? (
+                    <><Loader2 size={14} className="animate-spin" /> Saving...</>
+                  ) : (
+                    <><Save size={14} /> Save Changes</>
+                  )}
+                </button>
+              </>
+            )}
             {isConverted ? (
               <div className="flex items-center gap-2 px-5 py-2.5 bg-green-50 border border-green-200 text-green-700 rounded-xl text-xs font-black uppercase tracking-widest">
                 <CheckCircle2 size={14} /> Already Converted
@@ -723,6 +875,7 @@ const Leads: React.FC = () => {
                 }
                 fetchEmailTemplates();
                 setSelectedTemplateId("");
+                setSelectedRecipientIds(new Set([selectedLead.id]));
                 setEmailModalOpen(true);
               }}
               disabled={sendingWelcome || !isConverted}
@@ -758,6 +911,24 @@ const Leads: React.FC = () => {
                 </p>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Edit Result Banner */}
+        {editResult && (
+          <div
+            className={`flex items-center gap-3 px-5 py-4 rounded-xl border text-sm font-semibold ${
+              editResult.success
+                ? "bg-green-50 border-green-200 text-green-800"
+                : "bg-red-50 border-red-200 text-red-700"
+            }`}
+          >
+            {editResult.success ? (
+              <CheckCircle2 size={18} />
+            ) : (
+              <AlertTriangle size={18} />
+            )}
+            {editResult.message}
           </div>
         )}
 
@@ -798,7 +969,9 @@ const Leads: React.FC = () => {
                   <input
                     type="text"
                     className={inputClasses}
-                    defaultValue={selectedLead.firstName}
+                    value={isEditing ? editForm.firstName : (selectedLead.firstName ?? "")}
+                    onChange={(e) => updateEditField("firstName", e.target.value)}
+                    readOnly={!isEditing}
                   />
                 </div>
                 <div className="space-y-2">
@@ -808,7 +981,9 @@ const Leads: React.FC = () => {
                   <input
                     type="text"
                     className={inputClasses}
-                    defaultValue={selectedLead.lastName}
+                    value={isEditing ? editForm.lastName : (selectedLead.lastName ?? "")}
+                    onChange={(e) => updateEditField("lastName", e.target.value)}
+                    readOnly={!isEditing}
                   />
                 </div>
               </div>
@@ -825,7 +1000,9 @@ const Leads: React.FC = () => {
                     <input
                       type="text"
                       className="w-full pl-11 pr-4 py-2.5 border border-slate-300 rounded-xl focus:border-brand-primary focus:ring-4 focus:ring-brand-primary/5 outline-none text-sm font-bold text-black bg-white transition-all"
-                      defaultValue={selectedLead.phone}
+                      value={isEditing ? editForm.phone : (selectedLead.phone ?? "")}
+                      onChange={(e) => updateEditField("phone", e.target.value)}
+                      readOnly={!isEditing}
                     />
                   </div>
                 </div>
@@ -841,7 +1018,9 @@ const Leads: React.FC = () => {
                     <input
                       type="email"
                       className="w-full pl-11 pr-4 py-2.5 border border-slate-300 rounded-xl focus:border-brand-primary focus:ring-4 focus:ring-brand-primary/5 outline-none text-sm font-bold text-black bg-white transition-all"
-                      defaultValue={selectedLead.email}
+                      value={isEditing ? editForm.email : (selectedLead.email ?? "")}
+                      onChange={(e) => updateEditField("email", e.target.value)}
+                      readOnly={!isEditing}
                     />
                   </div>
                 </div>
@@ -864,7 +1043,9 @@ const Leads: React.FC = () => {
                 <input
                   type="text"
                   className={inputClasses}
-                  defaultValue={selectedLead.addressStreet}
+                  value={isEditing ? editForm.addressStreet : (selectedLead.addressStreet ?? "")}
+                  onChange={(e) => updateEditField("addressStreet", e.target.value)}
+                  readOnly={!isEditing}
                   placeholder="e.g. 10 Milner Business Court"
                 />
               </div>
@@ -876,7 +1057,9 @@ const Leads: React.FC = () => {
                   <input
                     type="text"
                     className={inputClasses}
-                    defaultValue={selectedLead.addressCity}
+                    value={isEditing ? editForm.addressCity : (selectedLead.addressCity ?? "")}
+                    onChange={(e) => updateEditField("addressCity", e.target.value)}
+                    readOnly={!isEditing}
                     placeholder="e.g. Toronto"
                   />
                 </div>
@@ -887,7 +1070,9 @@ const Leads: React.FC = () => {
                   <input
                     type="text"
                     className={inputClasses}
-                    defaultValue={selectedLead.addressPostalCode}
+                    value={isEditing ? editForm.addressPostalCode : (selectedLead.addressPostalCode ?? "")}
+                    onChange={(e) => updateEditField("addressPostalCode", e.target.value)}
+                    readOnly={!isEditing}
                     placeholder="e.g. M1B 3C6"
                   />
                 </div>
@@ -912,7 +1097,9 @@ const Leads: React.FC = () => {
                     <input
                       type="text"
                       className={inputClasses}
-                      defaultValue={selectedLead.sellingAddressStreet}
+                      value={isEditing ? editForm.sellingAddressStreet : (selectedLead.sellingAddressStreet ?? "")}
+                      onChange={(e) => updateEditField("sellingAddressStreet", e.target.value)}
+                      readOnly={!isEditing}
                       placeholder="e.g. 10 Milner Business Court"
                     />
                   </div>
@@ -924,7 +1111,9 @@ const Leads: React.FC = () => {
                       <input
                         type="text"
                         className={inputClasses}
-                        defaultValue={selectedLead.sellingAddressCity}
+                        value={isEditing ? editForm.sellingAddressCity : (selectedLead.sellingAddressCity ?? "")}
+                        onChange={(e) => updateEditField("sellingAddressCity", e.target.value)}
+                        readOnly={!isEditing}
                         placeholder="e.g. Toronto"
                       />
                     </div>
@@ -935,7 +1124,9 @@ const Leads: React.FC = () => {
                       <input
                         type="text"
                         className={inputClasses}
-                        defaultValue={selectedLead.sellingAddressProvince}
+                        value={isEditing ? editForm.sellingAddressProvince : (selectedLead.sellingAddressProvince ?? "")}
+                        onChange={(e) => updateEditField("sellingAddressProvince", e.target.value)}
+                        readOnly={!isEditing}
                         placeholder="e.g. ON"
                       />
                     </div>
@@ -946,7 +1137,9 @@ const Leads: React.FC = () => {
                       <input
                         type="text"
                         className={inputClasses}
-                        defaultValue={selectedLead.sellingAddressPostalCode}
+                        value={isEditing ? editForm.sellingAddressPostalCode : (selectedLead.sellingAddressPostalCode ?? "")}
+                        onChange={(e) => updateEditField("sellingAddressPostalCode", e.target.value)}
+                        readOnly={!isEditing}
                         placeholder="e.g. M1B 3C6"
                       />
                     </div>
@@ -1212,50 +1405,114 @@ const Leads: React.FC = () => {
 
         {/* ── Send Email Template Picker Modal ── */}
         {emailModalOpen && createPortal(
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => !sendingWelcome && setEmailModalOpen(false)}>
-            <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[80vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 overflow-y-auto"
+            onClick={() => !sendingWelcome && setEmailModalOpen(false)}
+          >
+            <div
+              className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[85vh] flex flex-col overflow-hidden my-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
               {/* Header */}
-              <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
+              <div className="flex-shrink-0 flex items-center justify-between px-6 py-4 border-b border-slate-200">
                 <div>
                   <h3 className="text-lg font-bold text-slate-900">Send Email</h3>
                   <p className="text-xs text-slate-500 mt-0.5">
                     {emailRecipients.length === 0
                       ? "No related clients have an email address."
-                      : `Sending to ${emailRecipients.length} client${emailRecipients.length === 1 ? "" : "s"}`}
+                      : `${selectedRecipientIds.size} of ${emailRecipients.length} client${emailRecipients.length === 1 ? "" : "s"} selected`}
                   </p>
                 </div>
-                <button onClick={() => !sendingWelcome && setEmailModalOpen(false)} className="text-slate-400 hover:text-slate-600 text-xl font-bold">&times;</button>
+                <button
+                  onClick={() => !sendingWelcome && setEmailModalOpen(false)}
+                  className="text-slate-400 hover:text-slate-600 text-xl font-bold leading-none"
+                  aria-label="Close"
+                >
+                  &times;
+                </button>
               </div>
 
-              {/* Recipient list */}
+              {/* Recipient picker — admin checks who should receive the email */}
               {emailRecipients.length > 0 && (
-                <div className="px-6 py-3 bg-slate-50 border-b border-slate-200 max-h-32 overflow-y-auto">
-                  <ul className="space-y-1.5">
-                    {emailRecipients.map(({ lead: r, role }) => (
-                      <li key={r.id} className="flex items-center gap-2 text-xs">
-                        <span className="font-semibold text-slate-700 truncate">
-                          {r.firstName} {r.lastName}
-                        </span>
-                        <span className="text-slate-500 truncate">— {r.email}</span>
-                        <span
-                          className={`ml-auto px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-tight border whitespace-nowrap ${
-                            role === "Primary"
-                              ? "bg-green-100 text-green-700 border-green-200"
-                              : role === "Co-Seller"
-                              ? "bg-amber-100 text-amber-700 border-amber-200"
-                              : "bg-blue-100 text-blue-700 border-blue-200"
-                          }`}
+                <div className="flex-shrink-0 px-6 py-3 bg-slate-50 border-b border-slate-200 max-h-40 overflow-y-auto">
+                  {emailRecipients.length > 1 && (
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                        Recipients
+                      </p>
+                      <div className="flex items-center gap-2 text-[10px] font-bold">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSelectedRecipientIds(
+                              new Set(emailRecipients.map(({ lead }) => lead.id)),
+                            )
+                          }
+                          className="text-brand-primary hover:underline uppercase tracking-tight"
                         >
-                          {role}
-                        </span>
-                      </li>
-                    ))}
+                          Select all
+                        </button>
+                        <span className="text-slate-300">|</span>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedRecipientIds(new Set())}
+                          className="text-slate-500 hover:underline uppercase tracking-tight"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  <ul className="space-y-1">
+                    {emailRecipients.map(({ lead: r, role }) => {
+                      const checked = selectedRecipientIds.has(r.id);
+                      const toggle = () => {
+                        setSelectedRecipientIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(r.id)) next.delete(r.id);
+                          else next.add(r.id);
+                          return next;
+                        });
+                      };
+                      return (
+                        <li key={r.id}>
+                          <label
+                            className={`flex items-center gap-2 text-xs px-2 py-1.5 rounded-md cursor-pointer transition-colors ${
+                              checked ? "bg-white ring-1 ring-brand-primary/30" : "hover:bg-white"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={toggle}
+                              disabled={sendingWelcome}
+                              className="w-3.5 h-3.5 rounded border-slate-300 text-brand-primary focus:ring-brand-primary/40 cursor-pointer disabled:cursor-not-allowed"
+                            />
+                            <span className="font-semibold text-slate-700 truncate">
+                              {r.firstName} {r.lastName}
+                            </span>
+                            <span className="text-slate-500 truncate">— {r.email}</span>
+                            <span
+                              className={`ml-auto px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-tight border whitespace-nowrap ${
+                                role === "Primary"
+                                  ? "bg-green-100 text-green-700 border-green-200"
+                                  : role === "Co-Seller"
+                                  ? "bg-amber-100 text-amber-700 border-amber-200"
+                                  : "bg-blue-100 text-blue-700 border-blue-200"
+                              }`}
+                            >
+                              {role}
+                            </span>
+                          </label>
+                        </li>
+                      );
+                    })}
                   </ul>
                 </div>
               )}
 
-              {/* Template list */}
-              <div className="px-6 py-4 space-y-2 overflow-y-auto flex-1">
+              {/* Template list — the only section that scrolls */}
+              <div className="flex-1 min-h-0 overflow-y-auto px-6 py-4 space-y-2 [scrollbar-width:thin] [scrollbar-color:#cbd5e1_transparent]">
                 {emailTemplates.length === 0 ? (
                   <p className="text-sm text-slate-400 text-center py-8">No active templates found.</p>
                 ) : (
@@ -1285,23 +1542,39 @@ const Leads: React.FC = () => {
               </div>
 
               {/* Footer */}
-              <div className="flex justify-end gap-3 px-6 py-4 border-t border-slate-200">
+              <div className="flex-shrink-0 flex justify-end gap-3 px-6 py-4 border-t border-slate-200 bg-white">
                 <button
                   onClick={() => setEmailModalOpen(false)}
                   disabled={sendingWelcome}
-                  className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors"
+                  className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors disabled:opacity-60"
                 >
                   Cancel
                 </button>
                 <button
-                  onClick={() => selectedLead && sendEmailToFamily(selectedTemplateId || undefined)}
-                  disabled={sendingWelcome || !selectedTemplateId || emailRecipients.length === 0}
-                  className="flex items-center gap-2 bg-brand-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-brand-primary/90 transition-colors disabled:opacity-50"
+                  onClick={() =>
+                    selectedLead &&
+                    sendEmailToFamily(
+                      selectedTemplateId || undefined,
+                      Array.from(selectedRecipientIds),
+                    )
+                  }
+                  disabled={
+                    sendingWelcome ||
+                    !selectedTemplateId ||
+                    emailRecipients.length === 0 ||
+                    selectedRecipientIds.size === 0
+                  }
+                  className="flex items-center gap-2 bg-brand-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-brand-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {sendingWelcome ? (
                     <><Loader2 size={14} className="animate-spin" /> Sending...</>
                   ) : (
-                    <><Send size={14} /> {emailRecipients.length > 1 ? `Send to ${emailRecipients.length} clients` : "Send Email"}</>
+                    <>
+                      <Send size={14} />{" "}
+                      {selectedRecipientIds.size > 1
+                        ? `Send to ${selectedRecipientIds.size} clients`
+                        : "Send Email"}
+                    </>
                   )}
                 </button>
               </div>
@@ -1378,7 +1651,7 @@ const Leads: React.FC = () => {
                 <th className="px-4 py-3 w-24">Lead Type</th>
                 <th className="px-4 py-3 w-28">Price</th>
                 <th className="px-4 py-3 w-28">Status</th>
-                <th className="px-4 py-3 w-16 text-center">Action</th>
+                <th className="px-4 py-3 w-24 text-center">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -1443,13 +1716,22 @@ const Leads: React.FC = () => {
                     )}
                   </td>
                   <td className="px-4 py-3 text-center">
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleDeleteLead(lead.id, `${lead.firstName} ${lead.lastName}`); }}
-                      className="text-slate-300 hover:text-red-500 transition-colors p-1"
-                      title="Delete lead"
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    <div className="flex justify-center items-center gap-1">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); openLeadForEdit(lead); }}
+                        className="text-slate-400 hover:text-brand-primary transition-colors p-1"
+                        title="Edit lead"
+                      >
+                        <Edit3 size={14} />
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleDeleteLead(lead.id, `${lead.firstName} ${lead.lastName}`); }}
+                        className="text-slate-300 hover:text-red-500 transition-colors p-1"
+                        title="Delete lead"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </td>
                 </tr>
                 );
