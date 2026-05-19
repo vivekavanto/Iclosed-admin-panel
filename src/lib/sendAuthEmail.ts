@@ -1,5 +1,6 @@
 import { Resend } from "resend";
 import supabaseAdmin from "./supabaseAdmin";
+import { createInvitationToken } from "./invitationToken";
 
 /**
  * For each action type, list the template names we'll accept (in priority
@@ -70,8 +71,12 @@ async function findTemplate(type: "invite" | "recovery"): Promise<TemplateLookup
 }
 
 /**
- * Generates a Supabase auth link (invite or recovery) without sending the
- * default Supabase email, then delivers the email through Resend.
+ * Sends an invite or recovery email through Resend with a code-owned
+ * activation URL. The URL is backed by the `invitation_tokens` table
+ * with a 7-day expiry (see src/lib/invitationToken.ts) and points at
+ * the /api/auth/activate handler in this app, which exchanges the
+ * token for a fresh Supabase action_link on click so the customer
+ * portal's /api/auth/callback flow runs unchanged.
  *
  * Email content is fetched from the `email_templates` table. Supports all
  * variables advertised in the admin Email Templates UI:
@@ -104,7 +109,12 @@ export async function sendAuthEmailViaResend(opts: {
 }> {
   const { type, email, redirectTo, userData, templateId } = opts;
 
-  // 1. Generate the auth link (token) without sending Supabase's default email
+  // 1. Generate the Supabase auth link. We DISCARD its action_link — the
+  //    URL we send the user is minted by createInvitationToken() below so
+  //    we own the 7-day expiry rather than inheriting Supabase's 24h
+  //    default. The generateLink() call is still required for its side
+  //    effect: creating the auth.users row (invite) or surfacing the user
+  //    record (recovery) and attaching user_metadata.
   const { data: linkData, error: linkError } =
     await supabaseAdmin.auth.admin.generateLink({
       type,
@@ -119,11 +129,27 @@ export async function sendAuthEmailViaResend(opts: {
     return { success: false, error: linkError.message };
   }
 
-  const actionLink = linkData?.properties?.action_link;
   const user = linkData?.user;
 
-  if (!actionLink) {
-    return { success: false, error: "Failed to generate auth action link" };
+  // 2. Mint our own URL backed by invitation_tokens (7-day TTL). The
+  //    /api/auth/activate handler will exchange this token for a fresh
+  //    Supabase action_link on click, preserving the existing
+  //    customer-portal /api/auth/callback?next=/set-password flow.
+  let actionLink: string;
+  try {
+    const issued = await createInvitationToken({
+      type,
+      email,
+      redirectTo,
+      userData,
+    });
+    actionLink = issued.url;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      success: false,
+      error: `Failed to mint invitation token: ${message}`,
+    };
   }
 
   // 2. Derive user info for placeholders
