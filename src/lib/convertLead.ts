@@ -606,7 +606,7 @@ export async function convertSingleLead(
         alreadyHasLogin = true;
       } else {
         // New user — send invite email via Resend
-        const customerPortalUrl = (process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ?? "https://iclosed.ca").replace(/\/+$/, "");
+        const customerPortalUrl = (process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ?? "https://www.iclosed.ca/").replace(/\/+$/, "");
         const redirectTo = `${customerPortalUrl}/api/auth/callback?next=/set-password`;
 
         const userData = {
