@@ -592,10 +592,24 @@ const Leads: React.FC = () => {
           message: `Sent ${sent} of ${total}. Failed: ${failures.join(", ")}`,
         });
       } else {
+        // Retainer-agreement template fails when the client hasn't signed yet
+        // (no PDF on lead_corporate_docs). When every recipient fails for that
+        // reason we show one clean message instead of the verbose per-recipient
+        // list — the underlying problem is the same for the whole family.
+        const allRetainerUnsigned =
+          results.length > 0 &&
+          results.every(
+            (r) =>
+              !r.success &&
+              typeof r.error === "string" &&
+              r.error.toLowerCase().includes("retainer agreement is not signed"),
+          );
+
         setWelcomeResult({
           success: false,
-          message:
-            failures.length > 0
+          message: allRetainerUnsigned
+            ? "Retainer agreement is not signed yet — ask the client to sign before sending this email."
+            : failures.length > 0
               ? `All sends failed. First error: ${failures[0]}`
               : data?.error ?? "Failed to send email.",
         });

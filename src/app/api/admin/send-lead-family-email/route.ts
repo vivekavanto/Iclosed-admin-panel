@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Resend } from "resend";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { sendWelcomeEmail } from "@/lib/sendWelcomeEmail";
 import { sendAuthEmailViaResend } from "@/lib/sendAuthEmail";
@@ -36,6 +37,256 @@ type RecipientResult = {
 //   underscores, or leading dot.
 const AUTH_URL_PLACEHOLDER_RE =
   /\{\{\s*\.?\s*(confirmation|activation|activate|action|invite|invitation|reset|recovery|password|verification|verify|button)[_\s\.]*(url|link)\s*\}\}/i;
+
+// Manual send needs to mirror the auto-flow that fires when a client signs the
+// retainer in the customer portal (iclosed_web). The portal generates a PDF,
+// stores it under lead_corporate_docs(doc_type='retainer_agreement'), and emails
+// it as an attachment. The admin "Send Email" modal was sending the same
+// template text-only, so admins saw the retainer email with no PDF and with
+// placeholders (side_label, the HTML property_role_row variant) that
+// sendWelcomeEmail's interpolate doesn't cover.
+function isRetainerTemplate(name: string | null | undefined): boolean {
+  return (name ?? "").toLowerCase().includes("retainer agreement");
+}
+
+type RetainerSendResult = {
+  success: boolean;
+  emailId?: string;
+  error?: string;
+  pdfCount?: number;
+};
+
+// Sends the "Retainer Agreement Signed" template to a single recipient, mirroring
+// the customer-portal auto-flow: fetches every signed retainer PDF for the lead,
+// renders the template with the same variable map the portal uses, and attaches
+// all PDFs in one email. Refuses to send when no signed PDF exists — the admin
+// shouldn't be able to deliver a "your retainer is signed" email before the
+// client has actually signed.
+async function sendRetainerEmail(
+  lead: {
+    id: string;
+    first_name: string | null;
+    last_name: string | null;
+    email: string | null;
+    lead_type: string | null;
+    address_street: string | null;
+    address_city: string | null;
+    address_province: string | null;
+    address_postal_code: string | null;
+    selling_address_street: string | null;
+    selling_address_city: string | null;
+    selling_address_province: string | null;
+    selling_address_postal_code: string | null;
+    parent_lead_id: string | null;
+  },
+  template: { name: string | null; subject: string | null; body: string },
+  resend: Resend,
+  fromEmail: string,
+): Promise<RetainerSendResult> {
+  if (!lead.email) {
+    return { success: false, error: "Recipient has no email address" };
+  }
+
+  // 1. Fetch every signed retainer PDF for this lead. For Purchase & Sale leads
+  //    there can be two (one per side); we attach all of them.
+  const { data: retainerDocs, error: docsErr } = await supabaseAdmin
+    .from("lead_corporate_docs")
+    .select("file_name, file_url")
+    .eq("lead_id", lead.id)
+    .eq("doc_type", "retainer_agreement");
+
+  if (docsErr) {
+    return { success: false, error: `Failed to look up retainer PDF: ${docsErr.message}` };
+  }
+
+  const validDocs = (retainerDocs ?? []).filter((d) => !!d.file_url);
+  if (validDocs.length === 0) {
+    return {
+      success: false,
+      error: "Retainer agreement is not signed yet — no PDF available to attach",
+    };
+  }
+
+  // 2. Download each PDF so Resend can carry it as an attachment.
+  const attachments: { filename: string; content: Buffer }[] = [];
+  for (const doc of validDocs) {
+    try {
+      const res = await fetch(doc.file_url as string);
+      if (!res.ok) {
+        return {
+          success: false,
+          error: `Failed to download retainer PDF (status ${res.status})`,
+        };
+      }
+      const bytes = Buffer.from(await res.arrayBuffer());
+      attachments.push({
+        filename: doc.file_name || "retainer-agreement.pdf",
+        content: bytes,
+      });
+    } catch (err: any) {
+      return {
+        success: false,
+        error: `Failed to download retainer PDF: ${err?.message ?? "unknown error"}`,
+      };
+    }
+  }
+
+  // 3. Compute the variable set the auto-flow uses. We're attaching all PDFs in
+  //    one email so side-specific labels stay blank — the template body still
+  //    renders cleanly because side_label/side_suffix/property_role_row are all
+  //    optional. propertyRoleRow is emitted as an HTML <tr><td> so the retainer
+  //    template's signature-block table layout doesn't break.
+  const firstName = (lead.first_name ?? "").trim();
+  const fullName = `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim();
+  const leadType = (lead.lead_type ?? "").trim();
+  const lt = leadType.toLowerCase();
+  const isCombined = lt.includes("purchase") && lt.includes("sale");
+  const isSaleOnly = lt === "sale" || (lt.includes("sale") && !lt.includes("purchase"));
+
+  const propertyAddress = [
+    lead.address_street,
+    lead.address_city,
+    lead.address_province,
+    lead.address_postal_code,
+  ]
+    .filter(Boolean)
+    .join(", ");
+
+  // Co-leads inherit role from the parent's lead_type; standalones use their own.
+  const role = lead.parent_lead_id
+    ? isSaleOnly
+      ? "Co-Seller"
+      : isCombined && lead.selling_address_street
+        ? "Co-Seller"
+        : "Co-Purchaser"
+    : isCombined
+      ? "Purchaser & Seller"
+      : isSaleOnly
+        ? "Seller"
+        : "Purchaser";
+
+  const sideSuffix = isCombined
+    ? " (Purchase & Sale)"
+    : isSaleOnly
+      ? " (Sale)"
+      : "";
+
+  // HTML row matches the format buildRetainerEmailHtml emits in iclosed_web so
+  // the retainer template's table layout is preserved.
+  const propertyRoleRow = role
+    ? `<tr><td style="padding: 4px 12px 4px 0; font-weight: bold; color: #555;">Your Role:</td><td style="padding: 4px 0;">${role}</td></tr>`
+    : "";
+
+  // Plain-text version for templates that use the alias outside a table.
+  const propertyRolePlain = role ? `Your Role: ${role}` : "";
+
+  const placeholders: Record<string, string> = {
+    "{{ first_name }}": firstName || "there",
+    "{{first_name}}": firstName || "there",
+    "{{ last_name }}": lead.last_name ?? "",
+    "{{last_name}}": lead.last_name ?? "",
+    "{{ full_name }}": fullName,
+    "{{full_name}}": fullName,
+    "{{ email }}": lead.email,
+    "{{email}}": lead.email,
+    "{{ user.first_name }}": firstName || "there",
+    "{{user.first_name}}": firstName || "there",
+    "{{ user.last_name }}": lead.last_name ?? "",
+    "{{user.last_name}}": lead.last_name ?? "",
+    "{{ user.full_name }}": fullName,
+    "{{user.full_name}}": fullName,
+    "{{ user.get_full_name }}": fullName,
+    "{{user.get_full_name}}": fullName,
+    "{{ user.email }}": lead.email,
+    "{{user.email}}": lead.email,
+    "{{ property_address }}": propertyAddress || "N/A",
+    "{{property_address}}": propertyAddress || "N/A",
+    "{{ lead_address }}": propertyAddress || "N/A",
+    "{{lead_address}}": propertyAddress || "N/A",
+    "{{ lead_type }}": leadType || "N/A",
+    "{{lead_type}}": leadType || "N/A",
+    "{{ side_label }}": "",
+    "{{side_label}}": "",
+    "{{ side_suffix }}": sideSuffix,
+    "{{side_suffix}}": sideSuffix,
+    "{{ property_role_row }}": propertyRoleRow,
+    "{{property_role_row}}": propertyRoleRow,
+    "{{ property_role }}": propertyRolePlain,
+    "{{property_role}}": propertyRolePlain,
+  };
+
+  let processedBody = template.body
+    .replace(/&#123;/g, "{")
+    .replace(/&#125;/g, "}")
+    .replace(/&nbsp;/g, " ")
+    .replace(/ /g, " ");
+  for (const [key, value] of Object.entries(placeholders)) {
+    processedBody = processedBody.replaceAll(key, value);
+  }
+  // Whitespace-tolerant fallback for any straggler.
+  for (const [bare, value] of [
+    ["first_name", firstName || "there"],
+    ["last_name", lead.last_name ?? ""],
+    ["full_name", fullName],
+    ["email", lead.email],
+    ["user.first_name", firstName || "there"],
+    ["user.last_name", lead.last_name ?? ""],
+    ["user.full_name", fullName],
+    ["user.get_full_name", fullName],
+    ["user.email", lead.email],
+    ["property_address", propertyAddress || "N/A"],
+    ["lead_address", propertyAddress || "N/A"],
+    ["lead_type", leadType || "N/A"],
+    ["side_label", ""],
+    ["side_suffix", sideSuffix],
+    ["property_role_row", propertyRoleRow],
+    ["property_role", propertyRolePlain],
+  ] as const) {
+    const escaped = bare.replace(/\./g, "\\.");
+    processedBody = processedBody.replace(
+      new RegExp(`\\{\\{\\s*${escaped}\\s*\\}\\}`, "gi"),
+      value,
+    );
+  }
+
+  const rawSubject =
+    template.subject && template.subject.trim() !== ""
+      ? template.subject
+      : template.name || `Your Signed Retainer Agreement${sideSuffix} — iClosed`;
+  let processedSubject = rawSubject
+    .replace(/&#123;/g, "{")
+    .replace(/&#125;/g, "}");
+  for (const [key, value] of Object.entries(placeholders)) {
+    processedSubject = processedSubject.replaceAll(key, value);
+  }
+  processedSubject = processedSubject.replace(
+    /\{\{\s*first_name\s*\}\}/gi,
+    firstName || "there",
+  );
+  processedSubject = processedSubject.replace(
+    /\{\{\s*side_suffix\s*\}\}/gi,
+    sideSuffix,
+  );
+
+  const { data: sendResult, error: sendError } = await resend.emails.send({
+    from: fromEmail,
+    replyTo: "iclosed@navawilson.law",
+    to: [lead.email],
+    subject: processedSubject,
+    html: processedBody,
+    attachments,
+  });
+
+  if (sendError) {
+    return { success: false, error: sendError.message };
+  }
+
+  console.log(
+    `[Retainer Email] Sent to ${lead.email} with ${attachments.length} PDF attachment(s), id=${sendResult?.id}`,
+  );
+
+  return { success: true, emailId: sendResult?.id, pdfCount: attachments.length };
+}
 
 // Classify an email_templates row. We look at both the body and the name so a
 // template named "Welcome Email" still routes through the auth path if its
@@ -190,24 +441,47 @@ export async function POST(req: NextRequest) {
     }
 
     // 5. Classify the chosen template so we know whether to use the auth path
-    //    (Activate Account / Reset Password) or the regular welcome path. We
-    //    pull the body too so body-based detection can catch templates whose
-    //    name doesn't hint at an auth flow but whose body contains a
-    //    confirmation_url placeholder.
+    //    (Activate Account / Reset Password), the retainer-PDF path, or the
+    //    regular welcome path. We pull body+subject too — body so body-based
+    //    detectAuthType can catch templates with confirmation_url placeholders,
+    //    and both fields so the retainer handler can render without refetching.
     let authType: "invite" | "recovery" | null = null;
     let templateName: string | null = null;
+    let templateRow: { name: string | null; subject: string | null; body: string } | null = null;
     if (template_id) {
       const { data: tmpl } = await supabaseAdmin
         .from("email_templates")
-        .select("name, body")
+        .select("name, subject, body")
         .eq("id", template_id)
         .maybeSingle();
       templateName = tmpl?.name ?? null;
       authType = detectAuthType(templateName, tmpl?.body);
+      if (tmpl?.body) {
+        templateRow = {
+          name: tmpl.name ?? null,
+          subject: tmpl.subject ?? null,
+          body: tmpl.body,
+        };
+      }
     }
+    const retainerMode = !authType && isRetainerTemplate(templateName) && !!templateRow;
     console.log(
-      `[Family Email] template_id=${template_id ?? "(none)"} name="${templateName ?? "(none)"}" authType=${authType ?? "welcome"} recipients=${recipients.length}`,
+      `[Family Email] template_id=${template_id ?? "(none)"} name="${templateName ?? "(none)"}" authType=${authType ?? "welcome"} retainer=${retainerMode} recipients=${recipients.length}`,
     );
+
+    // Lazy Resend client — only initialized when the retainer path actually
+    // needs it. Skips the env-var requirement for non-retainer sends.
+    let resendClient: Resend | null = null;
+    const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <noreply@iclosed.ca>";
+    if (retainerMode) {
+      if (!process.env.RESEND_API_KEY) {
+        return NextResponse.json(
+          { success: false, error: "Email service not configured (missing RESEND_API_KEY)" },
+          { status: 500 },
+        );
+      }
+      resendClient = new Resend(process.env.RESEND_API_KEY);
+    }
 
     // Customer-portal redirect URL — same pattern used by the auto-invite in
     // convertLead.ts so admins and auto-flows land on the same set-password
@@ -274,6 +548,52 @@ export async function POST(req: NextRequest) {
           skip_reason: res.skipReason,
           error: res.error,
           link_type: effectiveType,
+        });
+        continue;
+      }
+
+      if (retainerMode && templateRow && resendClient) {
+        // ── Retainer template: mirror the iclosed_web auto-flow ─────────────
+        // Fetches signed retainer PDFs from lead_corporate_docs and attaches
+        // them. If the client hasn't signed yet, this recipient fails with a
+        // clear "not signed yet" message — the admin then sees it in the modal.
+        const { data: fullLead } = await supabaseAdmin
+          .from("leads")
+          .select(
+            "id, first_name, last_name, email, lead_type, address_street, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code, parent_lead_id",
+          )
+          .eq("id", r.id)
+          .single();
+
+        if (!fullLead) {
+          results.push({
+            lead_id: r.id,
+            name,
+            email: r.email ?? "",
+            role: r.role,
+            success: false,
+            template_used: templateName ?? undefined,
+            error: "Lead record not found",
+          });
+          continue;
+        }
+
+        const res = await sendRetainerEmail(
+          fullLead,
+          templateRow,
+          resendClient,
+          fromEmail,
+        );
+
+        results.push({
+          lead_id: r.id,
+          name,
+          email: r.email ?? "",
+          role: r.role,
+          success: res.success && !res.error,
+          template_used: templateName ?? undefined,
+          email_id: res.emailId,
+          error: res.error,
         });
         continue;
       }
