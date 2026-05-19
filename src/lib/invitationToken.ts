@@ -20,8 +20,14 @@ export type ConsumeResult =
 function resolveBaseUrl(): string {
   const explicit = process.env.NEXT_PUBLIC_ADMIN_APP_URL;
   if (explicit) return explicit.replace(/\/+$/, "");
-  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
-  return "http://localhost:3000";
+  // Why this default instead of localhost: emails sent from local dev still
+  // need to embed a publicly-clickable URL or recipients land on a dead host.
+  // The hardcoded production admin URL is safe because it always resolves to
+  // a deployment that has /api/auth/activate. VERCEL_URL is intentionally
+  // skipped — it returns the deployment-specific URL (e.g. -abc123.vercel.app)
+  // which expires when a new deployment supersedes it; not stable for 7-day
+  // links.
+  return "https://iclosed-admin-panel.vercel.app";
 }
 
 export async function createInvitationToken(opts: {
