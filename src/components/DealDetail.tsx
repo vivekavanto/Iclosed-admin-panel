@@ -20,6 +20,7 @@ import {
   Copy,
   ExternalLink,
   AlertTriangle,
+  Upload,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
@@ -167,6 +168,11 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const [dealDocuments, setDealDocuments] = useState<{ task_id: string; file_name: string; file_url: string; task_title: string }[]>([]);
   const [loadingDocs, setLoadingDocs] = useState(false);
 
+  // APS upload modal state
+  const [showApsUpload, setShowApsUpload] = useState(false);
+  const [apsFile, setApsFile] = useState<File | null>(null);
+  const [uploadingAps, setUploadingAps] = useState(false);
+
   // Drag and Drop State
   const dragTaskItem = useRef<number | null>(null);
   const dragTaskOverItem = useRef<number | null>(null);
@@ -208,6 +214,39 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       setDealDocuments([]);
     } finally {
       setLoadingDocs(false);
+    }
+  };
+
+  const handleApsUploadSubmit = async () => {
+    if (!apsFile) return;
+    setUploadingAps(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", apsFile);
+      const res = await fetch(`/api/admin/deals/${deal.id}/uploadblobstorage`, {
+        method: "POST",
+        body: fd,
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        throw new Error(json.error || "Upload failed");
+      }
+      showToast(
+        json.already_completed
+          ? "APS document uploaded. Task was already completed."
+          : "APS document uploaded. Task completed and synced.",
+        "success",
+      );
+      setShowApsUpload(false);
+      setApsFile(null);
+      await refetchData();
+      if (showDocuments) {
+        await fetchDealDocuments();
+      }
+    } catch (err: any) {
+      showToast(err?.message ?? "Upload failed", "error");
+    } finally {
+      setUploadingAps(false);
     }
   };
 
@@ -905,6 +944,15 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         </button>
 
         <div className="flex gap-3">
+          {/* Upload APS Document — hidden for now (Vercel Blob token-based flow pending) */}
+          {false && (
+            <button
+              onClick={() => { setApsFile(null); setShowApsUpload(true); }}
+              className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2"
+            >
+              <Upload size={16} /> Upload APS Document
+            </button>
+          )}
           <button
             onClick={() => { setShowDocuments(true); fetchDealDocuments(); }}
             className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2"
@@ -1836,6 +1884,118 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
             </div>
           </div>
 
+        </div>
+      )}
+      {/* APS Upload Modal */}
+      {showApsUpload && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl flex flex-col">
+            <div className="flex items-start justify-between px-6 py-5 border-b border-slate-200">
+              <div>
+                <h3 className="text-lg font-bold text-slate-900 leading-tight">
+                  Upload Complete Agreement of Purchase and Sale and Amendments
+                </h3>
+                <p className="text-sm text-slate-500 mt-1">
+                  Upload the required documents to complete this task.
+                </p>
+              </div>
+              <button
+                onClick={() => { if (!uploadingAps) { setShowApsUpload(false); setApsFile(null); } }}
+                className="text-slate-400 hover:text-slate-600 text-xl font-bold leading-none shrink-0 ml-4"
+                disabled={uploadingAps}
+              >
+                &times;
+              </button>
+            </div>
+
+            <div className="px-6 py-5">
+              <label className="text-sm font-bold text-slate-900 block mb-3">
+                Upload Agreement of Purchase and Sale <span className="text-brand-primary">*</span>
+              </label>
+
+              <div className="relative group">
+                <input
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  className="absolute inset-0 opacity-0 cursor-pointer z-10"
+                  disabled={uploadingAps}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0] || null;
+                    if (!f) {
+                      setApsFile(null);
+                      return;
+                    }
+                    const ok =
+                      f.type === "application/pdf" ||
+                      f.type === "image/jpeg" ||
+                      f.type === "image/jpg" ||
+                      f.type === "image/png";
+                    if (!ok) {
+                      showToast("Only PDF, JPG, JPEG or PNG files are accepted.", "error");
+                      e.target.value = "";
+                      return;
+                    }
+                    if (f.size > 10 * 1024 * 1024) {
+                      showToast("File exceeds the 10MB maximum size.", "error");
+                      e.target.value = "";
+                      return;
+                    }
+                    setApsFile(f);
+                  }}
+                />
+                <div
+                  className={`px-6 py-10 border-2 border-dashed rounded-xl flex flex-col items-center justify-center transition-all ${
+                    apsFile
+                      ? "bg-green-50 border-green-200"
+                      : "bg-slate-50 border-slate-200 group-hover:border-brand-primary group-hover:bg-brand-light/10"
+                  }`}
+                >
+                  {apsFile ? (
+                    <>
+                      <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center text-green-600 mb-3">
+                        <CheckCircle size={22} />
+                      </div>
+                      <p className="text-sm font-bold text-slate-900 truncate max-w-full px-4 text-center">
+                        {apsFile.name}
+                      </p>
+                      <p className="text-xs text-slate-500 mt-1">
+                        {(apsFile.size / (1024 * 1024)).toFixed(2)} MB · Ready to upload
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 mb-3">
+                        <Upload size={22} />
+                      </div>
+                      <p className="text-sm font-bold text-slate-900">
+                        Upload Agreement of Purchase and Sale
+                      </p>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Click or drag &middot; .pdf,.jpg,.jpeg,.png &middot; Max 10MB
+                      </p>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 px-6 py-4 border-t border-slate-200">
+              <button
+                onClick={() => { setShowApsUpload(false); setApsFile(null); }}
+                className="flex-1 px-4 py-3 border border-brand-primary text-brand-primary rounded-lg text-sm font-semibold hover:bg-brand-light/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={uploadingAps}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleApsUploadSubmit}
+                disabled={!apsFile || uploadingAps}
+                className="flex-1 px-4 py-3 bg-brand-primary text-white rounded-lg text-sm font-semibold hover:bg-brand-primaryHover disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {uploadingAps ? "Uploading..." : "Upload & Submit"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
       {/* Documents Modal */}
