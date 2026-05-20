@@ -121,6 +121,22 @@ const Leads: React.FC = () => {
   const [selectedRecipientIds, setSelectedRecipientIds] = useState<Set<string>>(
     new Set(),
   );
+  // Per-recipient retainer-signed lookup. Populated when the Send Email modal
+  // opens with the "Retainer Agreement Signed" template selected; lets the UI
+  // show signed/unsigned badges per recipient before the admin hits Send. Keyed
+  // by lead id; missing keys mean "not yet fetched".
+  //
+  // `signed` = a retainer_signatures row exists (client actually signed)
+  // `has_pdf` = a lead_corporate_docs row with doc_type=retainer_agreement exists
+  //
+  // Both come from /api/admin/retainer-status. They can diverge because the
+  // customer portal inserts the signature row synchronously but the PDF/blob/
+  // doc-row step runs in a fire-and-forget async IIFE — if that fails the
+  // signature exists without a PDF and the email send can't attach anything.
+  const [retainerStatus, setRetainerStatus] = useState<
+    Record<string, { signed: boolean; has_pdf: boolean; pdf_count: number; signature_count: number }>
+  >({});
+  const [retainerStatusLoading, setRetainerStatusLoading] = useState(false);
 
   const [expandedSections, setExpandedSections] = useState<string[]>([
     "personal",
@@ -182,6 +198,12 @@ const Leads: React.FC = () => {
 
   const cancelEdit = () => {
     setIsEditing(false);
+    setEditResult(null);
+  };
+  const startEditing = () => {
+    if (!selectedLead) return;
+    setEditForm(buildEditForm(selectedLead));
+    setIsEditing(true);
     setEditResult(null);
   };
   const updateEditField = <K extends keyof LeadEditForm>(
@@ -409,7 +431,14 @@ const Leads: React.FC = () => {
       const data = await res.json();
       if (data.success || Array.isArray(data.results)) {
         if (Array.isArray(data.results)) {
-          const results = data.results as any[];
+          const allResults = data.results as any[];
+          // Narrow to the family the admin actually sees in their list. The
+          // server may auto-expand to a wider family (e.g. when an intake
+          // address-match silently linked this lead as a co-purchaser of
+          // another deal), but the report should only mention leads the admin
+          // recognizes as related to the one they clicked Convert on.
+          const familyIdSet = new Set(familyLeadIds);
+          const results = allResults.filter((r) => familyIdSet.has(r.lead_id));
           const convertedIds = new Set(results.map((r) => r.lead_id));
           const selectedResult = results.find((r) => r.lead_id === selectedLead.id);
 
@@ -592,10 +621,11 @@ const Leads: React.FC = () => {
           message: `Sent ${sent} of ${total}. Failed: ${failures.join(", ")}`,
         });
       } else {
-        // Retainer-agreement template fails when the client hasn't signed yet
-        // (no PDF on lead_corporate_docs). When every recipient fails for that
-        // reason we show one clean message instead of the verbose per-recipient
-        // list — the underlying problem is the same for the whole family.
+        // Retainer-agreement template fails when no signed PDF is on file. We
+        // collapse the per-recipient list into one clean message when every
+        // failure is the same retainer-missing-PDF case, distinguishing the
+        // two flavours of it: the client never signed at all vs. they signed
+        // but iclosed_web's async PDF/blob step didn't persist the doc.
         const allRetainerUnsigned =
           results.length > 0 &&
           results.every(
@@ -604,14 +634,20 @@ const Leads: React.FC = () => {
               typeof r.error === "string" &&
               r.error.toLowerCase().includes("retainer agreement is not signed"),
           );
+        const someSignedButNoPdf = allRetainerUnsigned
+          && Array.from(selectedRecipientIds).some(
+            (id) => retainerStatus[id]?.signed === true && retainerStatus[id]?.has_pdf === false,
+          );
 
         setWelcomeResult({
           success: false,
-          message: allRetainerUnsigned
-            ? "Retainer agreement is not signed yet — ask the client to sign before sending this email."
-            : failures.length > 0
-              ? `All sends failed. First error: ${failures[0]}`
-              : data?.error ?? "Failed to send email.",
+          message: someSignedButNoPdf
+            ? "Client signed the retainer but the signed PDF isn't on file yet — the agreement can't be attached. Re-trigger PDF generation in the customer portal."
+            : allRetainerUnsigned
+              ? "Retainer agreement is still not signed — nothing to attach."
+              : failures.length > 0
+                ? `All sends failed. First error: ${failures[0]}`
+                : data?.error ?? "Failed to send email.",
         });
       }
     } catch (err) {
@@ -661,20 +697,38 @@ const Leads: React.FC = () => {
 
   // Determine whether a co-lead is a co-purchaser or co-seller.
   //   1. Trust the co-lead's own lead_type when it specifies a single side.
-  //   2. Otherwise (empty, or "Purchase & Sale" mirrored from the parent)
-  //      use the co-lead's selling_address_street as a tiebreaker — only
-  //      co-sellers carry a selling-side address.
-  //   3. Last resort: parent's lead_type (only useful when parent is single-
-  //      sided, e.g. a Sale-only primary). Default to co-purchaser.
+  //   2. For "Purchase & Sale" co-leads, compare the co-lead's purchase and
+  //      selling street addresses against the parent's. The side whose
+  //      address the co-lead shares with the parent is the side they joined
+  //      — e.g. matching purchase address, different selling address ⇒
+  //      they're co-purchasers on the parent's deal (their own sale is
+  //      unrelated).
+  //   3. Both sides match (co-lead inserted via the same intake as the
+  //      parent, so both addresses got mirrored): fall back to the
+  //      selling_address_street presence heuristic, then parent's lead_type.
+  //      Default to co-purchaser.
   const getCoRole = (
-    coLead: Pick<LeadUser, "lead_type" | "sellingAddressStreet">,
-    parent?: Pick<LeadUser, "lead_type"> | null,
+    coLead: Pick<LeadUser, "lead_type" | "addressStreet" | "sellingAddressStreet">,
+    parent?: Pick<LeadUser, "lead_type" | "addressStreet" | "sellingAddressStreet"> | null,
   ): "co-purchaser" | "co-seller" => {
     const ownLt = (coLead.lead_type ?? "").toLowerCase().trim();
     const ownHasPurchase = ownLt.includes("purchase");
     const ownHasSale = ownLt.includes("sale");
     if (ownHasSale && !ownHasPurchase) return "co-seller";
     if (ownHasPurchase && !ownHasSale) return "co-purchaser";
+
+    const norm = (s?: string) => (s ?? "").trim().toLowerCase();
+    if (parent) {
+      const coPurch = norm(coLead.addressStreet);
+      const coSale = norm(coLead.sellingAddressStreet);
+      const pPurch = norm(parent.addressStreet);
+      const pSale = norm(parent.sellingAddressStreet);
+      const purchaseMatch = !!coPurch && !!pPurch && coPurch === pPurch;
+      const saleMatch = !!coSale && !!pSale && coSale === pSale;
+      if (purchaseMatch && !saleMatch) return "co-purchaser";
+      if (saleMatch && !purchaseMatch) return "co-seller";
+    }
+
     if (coLead.sellingAddressStreet) return "co-seller";
     const parentLt = (parent?.lead_type ?? "").toLowerCase().trim();
     if (parentLt === "sale") return "co-seller";
@@ -726,6 +780,47 @@ const Leads: React.FC = () => {
       return true;
     });
   })();
+
+  // The "Retainer Agreement Signed" template attaches the signed PDF, so it
+  // can only be delivered after the client signs. We want the modal to surface
+  // that constraint per recipient instead of letting the admin click Send and
+  // get a generic failure. Matching the backend's substring rule keeps the
+  // logic in lockstep with send-lead-family-email.
+  const selectedTemplate = emailTemplates.find((t) => t.id === selectedTemplateId);
+  const isRetainerTemplateSelected = (selectedTemplate?.name ?? "")
+    .toLowerCase()
+    .includes("retainer agreement");
+
+  // Fetch signed-retainer status for every recipient as soon as the modal opens
+  // with the retainer template selected. Re-fetches when the recipient list
+  // changes (e.g. admin switches the family they're viewing). Failures are
+  // non-blocking — the UI just won't show badges, and the backend will still
+  // enforce the rule on Send.
+  useEffect(() => {
+    if (!emailModalOpen || !isRetainerTemplateSelected) return;
+    const ids = emailRecipients.map(({ lead }) => lead.id);
+    if (ids.length === 0) return;
+    let cancelled = false;
+    setRetainerStatusLoading(true);
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/admin/retainer-status?lead_ids=${encodeURIComponent(ids.join(","))}`,
+        );
+        const data = await res.json();
+        if (!cancelled && data?.success && data.status) {
+          setRetainerStatus(data.status);
+        }
+      } catch {
+        // Silent — admin will still see the backend's send-time error.
+      } finally {
+        if (!cancelled) setRetainerStatusLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [emailModalOpen, isRetainerTemplateSelected, emailRecipients.map((r) => r.lead.id).join(",")]);
 
   // ── DETAIL VIEW ───────────────────────────────────────────────────────────
   if (view === "DETAIL" && selectedLead) {
@@ -862,6 +957,14 @@ const Leads: React.FC = () => {
                   )}
                 </button>
               </>
+            )}
+            {!isEditing && (
+              <button
+                onClick={startEditing}
+                className="flex items-center gap-2 px-5 py-2.5 bg-white border border-slate-300 text-slate-700 rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-slate-50 hover:border-brand-primary hover:text-brand-primary transition-all shadow-sm active:scale-95"
+              >
+                <Edit3 size={14} /> Edit
+              </button>
             )}
             {isConverted ? (
               <div className="flex items-center gap-2 px-5 py-2.5 bg-green-50 border border-green-200 text-green-700 rounded-xl text-xs font-black uppercase tracking-widest">
@@ -1063,7 +1166,7 @@ const Leads: React.FC = () => {
                   placeholder="e.g. 10 Milner Business Court"
                 />
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
                     City
@@ -1075,6 +1178,19 @@ const Leads: React.FC = () => {
                     onChange={(e) => updateEditField("addressCity", e.target.value)}
                     readOnly={!isEditing}
                     placeholder="e.g. Toronto"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                    Province
+                  </label>
+                  <input
+                    type="text"
+                    className={inputClasses}
+                    value={isEditing ? editForm.addressProvince : (selectedLead.addressProvince ?? "")}
+                    onChange={(e) => updateEditField("addressProvince", e.target.value)}
+                    readOnly={!isEditing}
+                    placeholder="e.g. ON"
                   />
                 </div>
                 <div className="space-y-2">
@@ -1506,8 +1622,58 @@ const Leads: React.FC = () => {
                               {r.firstName} {r.lastName}
                             </span>
                             <span className="text-slate-500 truncate">— {r.email}</span>
+                            {isRetainerTemplateSelected && (() => {
+                              const entry = retainerStatus[r.id];
+                              const known = entry !== undefined;
+                              const signed = entry?.signed === true;
+                              const hasPdf = entry?.has_pdf === true;
+                              // Three states the admin needs to distinguish:
+                              //  - unknown/loading      → grey "Checking…"
+                              //  - signed + has PDF     → green, send works
+                              //  - signed but no PDF    → amber; signature is
+                              //    in retainer_signatures but the async PDF
+                              //    step in iclosed_web never persisted to
+                              //    lead_corporate_docs, so nothing to attach
+                              //  - not signed at all    → red
+                              const state =
+                                retainerStatusLoading && !known
+                                  ? "loading"
+                                  : signed && hasPdf
+                                    ? "signed_pdf"
+                                    : signed
+                                      ? "signed_no_pdf"
+                                      : "unsigned";
+                              const label =
+                                state === "loading"
+                                  ? "Checking…"
+                                  : state === "signed_pdf"
+                                    ? "Retainer signed"
+                                    : state === "signed_no_pdf"
+                                      ? "Signed (no PDF)"
+                                      : "Not signed";
+                              const cls =
+                                state === "loading"
+                                  ? "bg-slate-100 text-slate-500 border-slate-200"
+                                  : state === "signed_pdf"
+                                    ? "bg-emerald-100 text-emerald-700 border-emerald-200"
+                                    : state === "signed_no_pdf"
+                                      ? "bg-amber-100 text-amber-700 border-amber-200"
+                                      : "bg-rose-100 text-rose-700 border-rose-200";
+                              return (
+                                <span
+                                  className={`ml-auto px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-tight border whitespace-nowrap ${cls}`}
+                                  title={
+                                    state === "signed_no_pdf"
+                                      ? "Client signed but the retainer PDF wasn't generated — email can't attach it. Re-trigger PDF generation."
+                                      : undefined
+                                  }
+                                >
+                                  {label}
+                                </span>
+                              );
+                            })()}
                             <span
-                              className={`ml-auto px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-tight border whitespace-nowrap ${
+                              className={`${isRetainerTemplateSelected ? "" : "ml-auto "}px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-tight border whitespace-nowrap ${
                                 role === "Primary"
                                   ? "bg-green-100 text-green-700 border-green-200"
                                   : role === "Co-Seller"

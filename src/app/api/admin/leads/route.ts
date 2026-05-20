@@ -34,11 +34,14 @@ const LEAD_FIELD_MAP: Record<string, string> = {
   sellingAddressProvince: 'selling_address_province',
 };
 
-// GET /api/admin/leads
+// GET /api/admin/leads — soft-deleted leads are hidden. They still exist
+// in the DB (along with their deals, signatures, and signed PDFs) so an
+// admin SQL toggle of is_deleted back to false fully restores them.
 export async function GET() {
   const { data, error } = await supabaseAdmin
     .from('leads')
     .select('*')
+    .eq('is_deleted', false)
     .order('created_at', { ascending: false });
 
   if (error) {
@@ -102,6 +105,13 @@ export async function PUT(req: NextRequest) {
 }
 
 // DELETE /api/admin/leads?id=...
+//
+// Soft delete: we set is_deleted=true on the lead and on every co-lead in the
+// same family. Nothing else is touched — deals, retainer_signatures, tasks,
+// milestones, and signed PDFs all stay intact, so a future "restore" is just
+// `UPDATE leads SET is_deleted=false WHERE id=...`. This also sidesteps the
+// FK constraint errors (retainer_signatures_lead_id_fkey etc.) that hard
+// deletes hit.
 export async function DELETE(req: Request) {
   const { searchParams } = new URL(req.url);
   const id = searchParams.get("id");
@@ -110,13 +120,20 @@ export async function DELETE(req: Request) {
     return NextResponse.json({ error: "id is required" }, { status: 400 });
   }
 
+  // Soft-delete the primary lead and every co-lead in the same family in one
+  // call. The OR predicate matches the lead itself plus any row whose
+  // parent_lead_id points at it, so deleting a primary lead hides the whole
+  // co-purchaser/co-seller group from the listing in one shot.
   const { error } = await supabaseAdmin
     .from("leads")
-    .delete()
-    .eq("id", id);
+    .update({ is_deleted: true })
+    .or(`id.eq.${id},parent_lead_id.eq.${id}`);
 
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: `Failed to delete lead: ${error.message}` },
+      { status: 500 },
+    );
   }
 
   return NextResponse.json({ success: true });
