@@ -28,6 +28,7 @@ import {
   NON_CITIZEN_FLAG_TOOLTIP,
 } from "@/lib/isNonCitizenFlagged";
 import { formatLocalDate, formatLocalDateTime } from "@/lib/formatDate";
+import { upload } from "@vercel/blob/client";
 
 interface DealDetailProps {
   deal: Deal;
@@ -221,16 +222,30 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     if (!apsFile) return;
     setUploadingAps(true);
     try {
-      const fd = new FormData();
-      fd.append("file", apsFile);
+      // Step 1: direct browser → Vercel Blob upload (bypasses 4.5MB
+      // serverless body limit). Token issued by /uploadblobstorage/token
+      // also re-runs the already-uploaded guard so we never burn storage
+      // on a deal that already has an APS.
+      const leadId = (rawDeal?.lead_id as string | undefined) ?? deal.id;
+      const pathname = `corporate-docs/${leadId}/${Date.now()}-${apsFile.name}`;
+      const blob = await upload(pathname, apsFile, {
+        access: "public",
+        handleUploadUrl: `/api/admin/deals/${deal.id}/uploadblobstorage/token`,
+        contentType: apsFile.type,
+      });
+
+      // Step 2: finalize — record the doc and complete the APS task
+      // (with family sync + milestone recalc).
       const res = await fetch(`/api/admin/deals/${deal.id}/uploadblobstorage`, {
         method: "POST",
-        body: fd,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ file_url: blob.url, file_name: apsFile.name }),
       });
       const json = await res.json();
       if (!res.ok || !json.success) {
         throw new Error(json.error || "Upload failed");
       }
+
       showToast(
         json.already_completed
           ? "APS document uploaded. Task was already completed."
@@ -944,15 +959,12 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         </button>
 
         <div className="flex gap-3">
-          {/* Upload APS Document — hidden for now (Vercel Blob token-based flow pending) */}
-          {false && (
-            <button
-              onClick={() => { setApsFile(null); setShowApsUpload(true); }}
-              className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2"
-            >
-              <Upload size={16} /> Upload APS Document
-            </button>
-          )}
+          <button
+            onClick={() => { setApsFile(null); setShowApsUpload(true); }}
+            className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2"
+          >
+            <Upload size={16} /> Upload APS Document
+          </button>
           <button
             onClick={() => { setShowDocuments(true); fetchDealDocuments(); }}
             className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2"

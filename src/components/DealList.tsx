@@ -1,12 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { Deal, DealType, DealStatus } from '../types';
-import { Search, Trash2, Users, AlertTriangle, Upload } from 'lucide-react';
+import { Search, Trash2, Users, AlertTriangle, Upload, Pencil } from 'lucide-react';
 import {
   isNonCitizenFlagged,
   NON_CITIZEN_FLAG_TOOLTIP,
 } from '@/lib/isNonCitizenFlagged';
 import { formatLocalDate, parseLocalDate } from '@/lib/formatDate';
+import EditDealModal from './EditDealModal';
 
 interface DealListProps {
   onSelectDeal?: (dealId: string) => void;
@@ -20,8 +21,9 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   const [dateTo, setDateTo] = useState('');
   const [showOnlyFlagged, setShowOnlyFlagged] = useState(false);
   const [deals, setDeals] = useState<Deal[]>([]);
+  const [editingDealId, setEditingDealId] = useState<string | null>(null);
 
-  useEffect(() => {
+  const fetchDeals = useCallback(() => {
     fetch('/api/admin/deals')
       .then(res => res.json())
       .then((data: any[]) => {
@@ -53,6 +55,10 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
       })
       .catch(() => setDeals([]));
   }, []);
+
+  useEffect(() => {
+    fetchDeals();
+  }, [fetchDeals]);
 
   // Exclude co-purchaser deals from all counts and display
   const primaryDeals = deals.filter(d => !(d as any).isCoPurchaser);
@@ -280,7 +286,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
               <th className="px-4 py-3 w-32">Requisition date</th>
               <th className="px-4 py-3 w-40">Steps</th>
               <th className="px-4 py-3 w-32">File status</th>
-              <th className="px-4 py-3 w-16 text-center">Action</th>
+              <th className="px-4 py-3 w-24 text-center">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -373,25 +379,45 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                   </td>
                   <td className="px-4 py-3">{deal.status === DealStatus.CLOSED ? (<span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 text-green-700 border border-green-200 shadow-sm"><span className="mr-1">✓</span> Closed</span>) : (<span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-white text-green-600 border border-green-400">Active</span>)}</td>
                   <td className="px-4 py-3 text-center">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDelete(deal.id);
-                      }}
-                      className="text-slate-300 hover:text-red-500 transition-colors p-1"
-                      title="Delete deal"
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    <div className="inline-flex items-center justify-center gap-1">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditingDealId(deal.id);
+                        }}
+                        className="text-slate-400 hover:text-brand-primary transition-colors p-1"
+                        title="Edit deal"
+                      >
+                        <Pencil size={14} />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDelete(deal.id);
+                        }}
+                        className="text-slate-300 hover:text-red-500 transition-colors p-1"
+                        title="Delete deal"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               );
             }) : (
-              <tr><td colSpan={10} className="px-6 py-12 text-center text-slate-500"><p>No files found.</p></td></tr>
+              <tr><td colSpan={11} className="px-6 py-12 text-center text-slate-500"><p>No files found.</p></td></tr>
             )}
           </tbody>
         </table>
       </div>
+
+      {editingDealId && (
+        <EditDealModal
+          dealId={editingDealId}
+          onClose={() => setEditingDealId(null)}
+          onSaved={fetchDeals}
+        />
+      )}
     </div>
   );
 };

@@ -129,6 +129,147 @@ export async function GET(
   return NextResponse.json({ ...data, linked_deals });
 }
 
+// Whitelist of deal columns that can be updated from the edit modal.
+// Keeps the endpoint safe from arbitrary writes (audit/created_at/etc.).
+const EDITABLE_DEAL_COLUMNS = new Set([
+  "file_number",
+  "file_name",
+  "type",
+  "status",
+  "lawyer_name",
+  "clerk_name",
+  "property_address",
+  "closing_date",
+  "opening_date",
+  "requisition_date",
+  "price",
+  "outstanding_undertakings",
+  "outstanding_requisitions",
+]);
+
+const ALLOWED_TYPES = new Set([
+  "Purchase",
+  "Sale",
+  "Refinance",
+  "Purchase & Sale",
+]);
+
+const ALLOWED_STATUSES = new Set([
+  "Active",
+  "Pending",
+  "Closed",
+  "Cancelled",
+  "Urgent",
+]);
+
+const DATE_COLUMNS = new Set([
+  "closing_date",
+  "opening_date",
+  "requisition_date",
+]);
+
+// Postgres accepts wild years; clamp at the API to match the UI constraint
+// and stop a stray 6-digit year from being persisted.
+const DATE_FORMAT_RE = /^\d{4}-\d{2}-\d{2}$/;
+const DATE_MIN = "1900-01-01";
+const DATE_MAX = "2100-12-31";
+
+export async function PATCH(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+
+  let body: Record<string, any>;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json(
+      { success: false, error: "Invalid JSON body" },
+      { status: 400 },
+    );
+  }
+
+  const updates: Record<string, any> = {};
+  for (const [key, value] of Object.entries(body)) {
+    if (!EDITABLE_DEAL_COLUMNS.has(key)) continue;
+    if (key === "type" && value && !ALLOWED_TYPES.has(value)) {
+      return NextResponse.json(
+        { success: false, error: `Invalid type: ${value}` },
+        { status: 400 },
+      );
+    }
+    if (key === "status" && value && !ALLOWED_STATUSES.has(value)) {
+      return NextResponse.json(
+        { success: false, error: `Invalid status: ${value}` },
+        { status: 400 },
+      );
+    }
+    if (DATE_COLUMNS.has(key)) {
+      // Empty strings on date columns must be sent as null so Postgres accepts them.
+      if (value === "" || value === null || value === undefined) {
+        updates[key] = null;
+        continue;
+      }
+      if (typeof value !== "string" || !DATE_FORMAT_RE.test(value)) {
+        return NextResponse.json(
+          { success: false, error: `Invalid ${key}: expected YYYY-MM-DD` },
+          { status: 400 },
+        );
+      }
+      if (value < DATE_MIN || value > DATE_MAX) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `${key} must be between ${DATE_MIN} and ${DATE_MAX}`,
+          },
+          { status: 400 },
+        );
+      }
+    }
+    updates[key] = value;
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return NextResponse.json(
+      { success: false, error: "No editable fields supplied" },
+      { status: 400 },
+    );
+  }
+
+  // file_number has a UNIQUE index — surface a friendly error for duplicates.
+  if (typeof updates.file_number === "string") {
+    const trimmed = updates.file_number.trim();
+    if (!trimmed) {
+      return NextResponse.json(
+        { success: false, error: "File number cannot be empty" },
+        { status: 400 },
+      );
+    }
+    updates.file_number = trimmed;
+  }
+
+  const { data, error } = await supabase
+    .from("deals")
+    .update(updates)
+    .eq("id", id)
+    .select()
+    .single();
+
+  if (error) {
+    const friendly =
+      error.code === "23505"
+        ? "File number already in use"
+        : error.message;
+    return NextResponse.json(
+      { success: false, error: friendly },
+      { status: 400 },
+    );
+  }
+
+  return NextResponse.json({ success: true, data });
+}
+
 export async function DELETE(
   _req: Request,
   { params }: { params: Promise<{ id: string }> }
