@@ -735,19 +735,65 @@ const Leads: React.FC = () => {
     return "co-purchaser";
   };
 
+  // Build a single lowercased haystack string per lead covering every field
+  // an admin might search by: name (incl. corporate / co-purchaser / co-seller),
+  // contact info, both addresses, lead type & service, price, status label,
+  // and demographic fields. Multi-word queries are split on whitespace and
+  // ALL parts must appear — so "john toronto" finds a John in Toronto without
+  // requiring a single contiguous substring.
+  const buildLeadHaystack = (l: LeadUser): string => {
+    const coLeads = leads.filter((x) => x.parentLeadId === l.id);
+    const statusLabel = l.status === "Converted" ? "Converted" : "Active";
+    const parts: Array<string | undefined | null> = [
+      l.firstName,
+      l.lastName,
+      `${l.firstName ?? ""} ${l.lastName ?? ""}`,
+      l.corporateName,
+      l.incNumber,
+      l.email,
+      l.phone,
+      l.employerPhone,
+      l.addressStreet,
+      l.addressUnit,
+      l.addressCity,
+      l.addressProvince,
+      l.addressPostalCode,
+      [l.addressStreet, l.addressUnit, l.addressCity, l.addressProvince, l.addressPostalCode]
+        .filter(Boolean)
+        .join(" "),
+      l.sellingAddressStreet,
+      l.sellingAddressCity,
+      l.sellingAddressProvince,
+      l.sellingAddressPostalCode,
+      [l.sellingAddressStreet, l.sellingAddressCity, l.sellingAddressProvince, l.sellingAddressPostalCode]
+        .filter(Boolean)
+        .join(" "),
+      l.lead_type,
+      l.service,
+      l.subService,
+      l.propertyType,
+      l.ownershipHistory,
+      l.maritalStatus,
+      l.citizenshipStatus,
+      l.occupation,
+      l.referralSource,
+      l.price,
+      statusLabel,
+      // Co-purchaser / co-seller names so searching by a family member finds
+      // the primary record they roll up under.
+      ...coLeads.flatMap((c) => [c.firstName, c.lastName, `${c.firstName ?? ""} ${c.lastName ?? ""}`, c.email, c.corporateName]),
+    ];
+    return parts.filter(Boolean).join(" | ").toLowerCase();
+  };
+
   const filteredLeads = leads
     .filter((l) => !l.parentLeadId) // Only show primary/standalone leads; co-purchasers/co-sellers visible in detail view
     .filter((l) => {
-      const q = search.toLowerCase();
-      return (
-        l.firstName.toLowerCase().includes(q) ||
-        l.lastName.toLowerCase().includes(q) ||
-        l.email.toLowerCase().includes(q) ||
-        (l.addressStreet ?? "").toLowerCase().includes(q) ||
-        (l.addressCity ?? "").toLowerCase().includes(q) ||
-        (l.lead_type ?? "").toLowerCase().includes(q) ||
-        (l.price ?? "").toLowerCase().includes(q)
-      );
+      const q = search.trim().toLowerCase();
+      if (!q) return true;
+      const haystack = buildLeadHaystack(l);
+      const terms = q.split(/\s+/).filter(Boolean);
+      return terms.every((term) => haystack.includes(term));
     });
 
   const isConverted = selectedLead?.status === "Converted";
@@ -1786,7 +1832,7 @@ const Leads: React.FC = () => {
             />
             <input
               type="text"
-              placeholder="Search leads..."
+              placeholder="Search by name, email, phone, address, lead type, price, status…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="pl-12 pr-6 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-medium outline-none focus:border-brand-primary transition-all w-full md:w-64"

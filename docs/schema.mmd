@@ -1,0 +1,371 @@
+erDiagram
+    clients {
+        uuid id PK
+        text first_name
+        text last_name
+        text email UK
+        text phone
+        timestamptz created_at
+        uuid auth_user_id FK
+        jsonb name_history
+        jsonb name_aliases
+        uuid merged_into_client_id FK
+    }
+
+    deals {
+        uuid id PK
+        text file_number UK
+        uuid client_id FK
+        uuid lead_id FK
+        text type
+        text status
+        text property_address
+        date closing_date
+        date opening_date
+        date requisition_date
+        numeric price
+        int progress
+        bool aps_signed
+        timestamptz created_at
+        timestamptz updated_at
+        numeric selling_price
+        text selling_property_address
+        text clerk_name
+        text lawyer_name
+        text file_name
+        int outstanding_undertakings
+        int outstanding_requisitions
+        text source
+    }
+
+    deals_duplicate {
+        uuid id PK
+        text file_number UK
+        uuid client_id FK
+        uuid lead_id FK
+        text type
+        text status
+        text property_address
+        date closing_date
+        date opening_date
+        date requisition_date
+        numeric price
+        int progress
+        bool aps_signed
+        timestamptz created_at
+        timestamptz updated_at
+        numeric selling_price
+        text selling_property_address
+        text clerk_name
+        text lawyer_name
+        text file_name
+        int outstanding_undertakings
+        int outstanding_requisitions
+        text source
+    }
+
+    deal_co_purchasers {
+        uuid id PK
+        uuid deal_id FK
+        text full_name
+        text email
+        text phone
+        timestamptz created_at
+    }
+
+    deal_documents {
+        uuid id PK
+        uuid deal_id FK
+        text name
+        text type
+        date upload_date
+        text status
+        text file_url
+        timestamptz created_at
+    }
+
+    deal_notes {
+        uuid id PK
+        uuid deal_id FK
+        text note
+        uuid created_by FK
+        timestamptz created_at
+    }
+
+    email_templates {
+        uuid id PK
+        text name
+        text body
+        bool is_active
+        timestamptz created_at
+        text updated_at
+        bool is_deleted
+        text subject
+        bool deleted
+    }
+
+    invitation_tokens {
+        uuid id PK
+        text token UK
+        text email
+        text type
+        text redirect_to
+        jsonb user_data
+        timestamptz expires_at
+        timestamptz used_at
+        timestamptz created_at
+    }
+
+    lead_corporate_docs {
+        uuid id PK
+        uuid lead_id FK
+        text doc_type
+        text custom_type
+        text file_url
+        text file_name
+        timestamptz created_at
+        bool is_identification
+        text document_type
+        text side
+        text side_requirement
+        text confidence
+        text detection_reason
+    }
+
+    lead_identification_docs {
+        uuid id PK
+        uuid lead_id FK
+        text file_url
+        text file_name
+        timestamptz created_at
+    }
+
+    leads {
+        uuid id PK
+        text first_name
+        text last_name
+        text email
+        text phone
+        bool is_corporate
+        text corporate_name
+        text inc_number
+        text address_street
+        text address_city
+        text address_postal_code
+        text property_type
+        text ownership_history
+        text marital_status
+        text citizenship_status
+        text occupation
+        text employer_phone
+        timestamptz created_at
+        text service
+        text sub_service
+        text price
+        text address_unit
+        text address_province
+        bool aps_signed
+        text corporate_email
+        text lead_type
+        text selling_address_street
+        text selling_address_unit
+        text selling_address_city
+        text selling_address_postal_code
+        text selling_address_province
+        text status
+        uuid client_id FK
+        bool welcome_email_sent
+        jsonb co_persons
+        text referral_source
+        uuid parent_lead_id FK
+        jsonb address_match_flag
+        bool aps_uploaded
+        bool aps_signed_purchase
+        bool aps_signed_sale
+        bool aps_uploaded_purchase
+        bool aps_uploaded_sale
+        numeric selling_price
+        bool is_deleted
+    }
+
+    milestones {
+        uuid id PK
+        uuid deal_id FK
+        text title
+        text status
+        date milestone_date
+        timestamptz completed_at
+        bool email_sent
+        int order_index
+        timestamptz created_at
+        uuid email_template_id FK
+        jsonb description
+        uuid stage_template_id FK
+        text side
+    }
+
+    milestones_duplicate {
+        uuid id PK
+        uuid deal_id FK
+        text title
+        text status
+        date milestone_date
+        timestamptz completed_at
+        bool email_sent
+        int order_index
+        timestamptz created_at
+    }
+
+    partners {
+        uuid id PK
+        text brokerage_name
+        text brokerage_type
+        text agent_name
+        text agent_email
+        text agent_phone
+        timestamptz created_at
+    }
+
+    retainer_signatures {
+        uuid id PK
+        uuid lead_id FK
+        text full_name
+        text signature
+        date signed_date
+        timestamptz created_at
+        text side
+    }
+
+    stage_templates {
+        uuid id PK
+        text lead_type
+        int order_index
+        text name
+        text role
+        bool is_shared
+        uuid email_template_id FK
+        timestamptz created_at
+        jsonb description
+        bool auto_complete
+    }
+
+    task_form_fields {
+        uuid id PK
+        uuid task_template_id FK
+        text field_type
+        text label
+        text placeholder
+        bool required
+        int order_index
+        jsonb options
+        timestamptz created_at
+    }
+
+    task_responses {
+        uuid id PK
+        uuid task_id FK
+        uuid field_id FK
+        text field_label
+        text field_type
+        text value
+        text file_url
+        text file_name
+        timestamptz submitted_at
+        timestamptz updated_at
+    }
+
+    task_templates {
+        uuid id PK
+        text lead_type
+        text role_type
+        text name
+        int order_index
+        text deadline_rule
+        bool is_aps_task
+        timestamptz created_at
+        bool is_deleted
+        bool is_default
+        uuid stage_template_id FK
+        bool is_shared
+    }
+
+    tasks {
+        uuid id PK
+        uuid deal_id FK
+        text title
+        bool completed
+        text status
+        date due_date
+        text assignee
+        timestamptz completed_at
+        text document_name
+        text document_url
+        timestamptz created_at
+        uuid task_template_id FK
+        uuid milestone_id FK
+        text role_type
+        bool is_shared
+        text side
+    }
+
+    tasks_duplicate {
+        uuid id PK
+        uuid deal_id FK
+        text title
+        bool completed
+        text status
+        date due_date
+        text assignee
+        timestamptz completed_at
+        text document_name
+        text document_url
+        timestamptz created_at
+        uuid task_template_id FK
+        uuid milestone_id FK
+    }
+
+    users {
+        uuid id PK
+        text name
+        text role
+        text avatar_url
+        timestamptz created_at
+    }
+
+    clients ||--o{ clients : "merged_into_client_id"
+    clients ||--o{ deals : "client_id"
+    clients ||--o{ deals_duplicate : "client_id"
+    clients ||--o{ leads : "client_id"
+
+    leads ||--o{ deals : "lead_id"
+    leads ||--o{ deals_duplicate : "lead_id"
+    leads ||--o{ leads : "parent_lead_id"
+    leads ||--o{ lead_corporate_docs : "lead_id"
+    leads ||--o{ lead_identification_docs : "lead_id"
+    leads ||--o{ retainer_signatures : "lead_id"
+
+    deals ||--o{ deal_co_purchasers : "deal_id"
+    deals ||--o{ deal_documents : "deal_id"
+    deals ||--o{ deal_notes : "deal_id"
+    deals ||--o{ milestones : "deal_id"
+    deals ||--o{ milestones_duplicate : "deal_id"
+    deals ||--o{ tasks : "deal_id"
+    deals ||--o{ tasks_duplicate : "deal_id"
+
+    users ||--o{ deal_notes : "created_by"
+
+    email_templates ||--o{ milestones : "email_template_id"
+    email_templates ||--o{ stage_templates : "email_template_id"
+
+    stage_templates ||--o{ milestones : "stage_template_id"
+    stage_templates ||--o{ task_templates : "stage_template_id"
+
+    task_templates ||--o{ task_form_fields : "task_template_id"
+    task_templates ||--o{ tasks : "task_template_id"
+    task_templates ||--o{ tasks_duplicate : "task_template_id"
+
+    task_form_fields ||--o{ task_responses : "field_id"
+    tasks ||--o{ task_responses : "task_id"
+
+    milestones ||--o{ tasks : "milestone_id"
+    milestones_duplicate ||--o{ tasks_duplicate : "milestone_id"

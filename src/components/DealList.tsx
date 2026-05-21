@@ -13,10 +13,24 @@ interface DealListProps {
   onSelectDeal?: (dealId: string) => void;
 }
 
+// First letter of each whitespace-separated word, max 2 letters, uppercased.
+// "Karthik Nathan" -> "KN", "Suganya" -> "S", "" -> "".
+function getInitials(name: string): string {
+  return name
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase() ?? '')
+    .join('');
+}
+
 const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState('All');
   const [filterStatus, setFilterStatus] = useState('');
+  const [filterLawyer, setFilterLawyer] = useState('');
+  const [filterClerk, setFilterClerk] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [showOnlyFlagged, setShowOnlyFlagged] = useState(false);
@@ -50,7 +64,32 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           hasCoPurchasers: d.has_co_purchasers ?? false,
           leadName: d.lead_name ?? '',
           leadCitizenshipStatus: d.lead_citizenship_status ?? null,
-        } as Deal & { isCoPurchaser: boolean; hasCoPurchasers: boolean; leadName: string; leadCitizenshipStatus: string | null }));
+          fileName: d.file_name ?? '',
+          lawyerName: d.lawyer_name ?? '',
+          clerkName: d.clerk_name ?? '',
+          purchasePropertyAddress: d.purchase_property_address ?? '',
+          addressCity: d.lead_address_city ?? '',
+          addressProvince: d.lead_address_province ?? '',
+          addressPostalCode: d.lead_address_postal_code ?? '',
+          sellingAddressCity: d.lead_selling_address_city ?? '',
+          sellingAddressProvince: d.lead_selling_address_province ?? '',
+          sellingAddressPostalCode: d.lead_selling_address_postal_code ?? '',
+        } as Deal & {
+          isCoPurchaser: boolean;
+          hasCoPurchasers: boolean;
+          leadName: string;
+          leadCitizenshipStatus: string | null;
+          fileName: string;
+          lawyerName: string;
+          clerkName: string;
+          purchasePropertyAddress: string;
+          addressCity: string;
+          addressProvince: string;
+          addressPostalCode: string;
+          sellingAddressCity: string;
+          sellingAddressProvince: string;
+          sellingAddressPostalCode: string;
+        }));
         setDeals(mapped);
       })
       .catch(() => setDeals([]));
@@ -62,6 +101,24 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
 
   // Exclude co-purchaser deals from all counts and display
   const primaryDeals = deals.filter(d => !(d as any).isCoPurchaser);
+
+  // Unique lawyer / clerk names taken directly from the deals data so the
+  // filter dropdowns always reflect what the table actually contains.
+  const lawyerOptions = Array.from(
+    new Set(
+      primaryDeals
+        .map(d => ((d as any).lawyerName ?? '').trim())
+        .filter((n: string) => n.length > 0),
+    ),
+  ).sort((a, b) => a.localeCompare(b));
+  const clerkOptions = Array.from(
+    new Set(
+      primaryDeals
+        .map(d => ((d as any).clerkName ?? '').trim())
+        .filter((n: string) => n.length > 0),
+    ),
+  ).sort((a, b) => a.localeCompare(b));
+
   const countS = primaryDeals.filter(d => d.type === DealType.SALE).length;
   const countP = primaryDeals.filter(d => d.type === DealType.PURCHASE).length;
   const countR = primaryDeals.filter(d => d.type === DealType.REFINANCE).length;
@@ -71,17 +128,91 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   const filteredDeals = primaryDeals.filter(deal => {
 
     if (searchTerm) {
-      const lowerTerm = searchTerm.toLowerCase();
-      const matchesSearch =
-        deal.fileNumber.toLowerCase().includes(lowerTerm) ||
-        deal.propertyAddress.toLowerCase().includes(lowerTerm) ||
-        (deal.sellingPropertyAddress ?? '').toLowerCase().includes(lowerTerm) ||
-        deal.type?.toLowerCase().includes(lowerTerm) ||
-        deal.status?.toLowerCase().includes(lowerTerm);
-      if (!matchesSearch) return false;
+      // Match every whitespace-separated term independently against the
+      // haystack so "carlaw toronto on" still hits a row whose city/
+      // province sit in separate columns. Single-term searches behave
+      // the same as before.
+      const d = deal as any;
+      // Format a date both as raw ISO (so "2026-05" matches) and as a
+      // human "May 2026" string (so "may 2026" matches). Empty in →
+      // empty out.
+      const formatDateForSearch = (val: any): string => {
+        if (!val) return '';
+        const s = String(val);
+        const parsed = parseLocalDate(s) ?? new Date(s);
+        if (Number.isNaN(parsed.getTime())) return s;
+        const monthLong = parsed.toLocaleString('en-US', { month: 'long' });
+        const monthShort = parsed.toLocaleString('en-US', { month: 'short' });
+        const yr = parsed.getFullYear();
+        const dy = parsed.getDate();
+        return `${s} ${monthLong} ${monthShort} ${dy} ${yr}`;
+      };
+      // Price stored as number — also expose comma-formatted version so a
+      // query of "500,000" matches even though the field is numeric.
+      const priceNum = typeof deal.price === 'number' ? deal.price : Number(deal.price);
+      const priceStr = Number.isFinite(priceNum) && priceNum > 0
+        ? `${priceNum} ${priceNum.toLocaleString('en-US')} $${priceNum.toLocaleString('en-US')}`
+        : '';
+      const flagsStr = [
+        d.isCoPurchaser ? 'co-purchaser co-seller co-client' : '',
+        d.hasCoPurchasers ? 'has co-purchaser has co-seller has co-client' : '',
+        isNonCitizenFlagged({ citizenship_status: d.leadCitizenshipStatus }) ? 'non-citizen flagged' : '',
+      ]
+        .filter(Boolean)
+        .join(' ');
+      const haystack = [
+        deal.fileNumber,
+        deal.propertyAddress,
+        deal.sellingPropertyAddress ?? '',
+        deal.type,
+        deal.status,
+        d.fileName ?? '',
+        d.lawyerName ?? '',
+        d.clerkName ?? '',
+        d.leadName ?? '',
+        d.purchasePropertyAddress ?? '',
+        d.addressCity ?? '',
+        d.addressProvince ?? '',
+        d.addressPostalCode ?? '',
+        d.sellingAddressCity ?? '',
+        d.sellingAddressProvince ?? '',
+        d.sellingAddressPostalCode ?? '',
+        // Combined address strings so "123 Main, Toronto, ON" works as a
+        // single query.
+        [d.purchasePropertyAddress, d.addressCity, d.addressProvince, d.addressPostalCode]
+          .filter(Boolean)
+          .join(' '),
+        [deal.sellingPropertyAddress, d.sellingAddressCity, d.sellingAddressProvince, d.sellingAddressPostalCode]
+          .filter(Boolean)
+          .join(' '),
+        // Client (primary contact) details.
+        deal.client?.firstName ?? '',
+        deal.client?.lastName ?? '',
+        deal.client && (deal.client.firstName || deal.client.lastName)
+          ? `${deal.client.firstName ?? ''} ${deal.client.lastName ?? ''}`
+          : '',
+        deal.client?.email ?? '',
+        deal.client?.phone ?? '',
+        // Price (raw + comma-formatted + with $).
+        priceStr,
+        // Dates — raw ISO + month names so "may 2026" / "2026-05" both work.
+        formatDateForSearch(deal.closingDate),
+        formatDateForSearch(deal.openingDate),
+        formatDateForSearch(deal.requisitionDate),
+        // Family / flag labels so "co-purchaser", "co-seller", "flagged"
+        // surface the rows that have those badges.
+        flagsStr,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      const terms = searchTerm.toLowerCase().split(/\s+/).filter(Boolean);
+      if (!terms.every((t) => haystack.includes(t))) return false;
     }
     if (filterType && filterType !== 'All' && deal.type !== filterType) return false;
     if (filterStatus && filterStatus !== '' && deal.status !== filterStatus) return false;
+    if (filterLawyer && ((deal as any).lawyerName ?? '').trim() !== filterLawyer) return false;
+    if (filterClerk && ((deal as any).clerkName ?? '').trim() !== filterClerk) return false;
     if (showOnlyFlagged && !isNonCitizenFlagged({ citizenship_status: (deal as any).leadCitizenshipStatus })) return false;
     if (dateFrom || dateTo) {
       const closing = parseLocalDate(deal.closingDate);
@@ -166,7 +297,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
             <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
             <input
               type="text"
-              placeholder="Search"
+              placeholder="Search by file #, client, address, lawyer, clerk, price, date…"
               className="w-full h-9 pl-8 pr-3 border border-slate-300 rounded text-sm focus:outline-none focus:border-brand-primary"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
@@ -247,14 +378,37 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           </div>
           <div>
             <label className="block text-xs text-slate-500 mb-1">Lawyer</label>
-            <select className="w-full h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white">
-              <option>Choose a lawyer</option>
+            <select
+              value={filterLawyer}
+              onChange={e => setFilterLawyer(e.target.value)}
+              className="w-full h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"
+            >
+              <option value="">Choose a lawyer</option>
+              {lawyerOptions.map((name) => (
+                <option key={name} value={name}>{name}</option>
+              ))}
+              {/* Preserve a legacy/stale selection if the deal it came from is
+                  no longer in the current list, so the filter doesn't silently
+                  reset to "Choose a lawyer". */}
+              {filterLawyer && !lawyerOptions.includes(filterLawyer) && (
+                <option value={filterLawyer}>{filterLawyer}</option>
+              )}
             </select>
           </div>
           <div>
             <label className="block text-xs text-slate-500 mb-1">Clerk</label>
-            <select className="w-full h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white">
-              <option>Suganya Argeen</option>
+            <select
+              value={filterClerk}
+              onChange={e => setFilterClerk(e.target.value)}
+              className="w-full h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"
+            >
+              <option value="">Choose a clerk</option>
+              {clerkOptions.map((name) => (
+                <option key={name} value={name}>{name}</option>
+              ))}
+              {filterClerk && !clerkOptions.includes(filterClerk) && (
+                <option value={filterClerk}>{filterClerk}</option>
+              )}
             </select>
           </div>
           <div>
@@ -266,6 +420,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
             >
               <option value="">Choose a status</option>
               <option value="Active">Active</option>
+              <option value="Inactive">Inactive</option>
               <option value="Closed">Closed</option>
             </select>
           </div>
@@ -303,7 +458,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                   <td className="px-4 py-3 font-medium">{deal.fileNumber}</td>
                   <td className="px-4 py-3">
                     <div>
-                      {deal.propertyAddress}
+                      {(deal as any).fileName || deal.propertyAddress}
                       {(deal as any).isCoPurchaser && (() => {
                         const t = (deal.type ?? "").toLowerCase();
                         const tooltip =
@@ -345,8 +500,30 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       <p className="text-[10px] text-slate-400 mt-0.5">{(deal as any).leadName}</p>
                     )}
                   </td>
-                  <td className="px-4 py-3"><span className="bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded text-[10px] font-bold border border-blue-100">KN</span></td>
-                  <td className="px-4 py-3"><span className="bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded text-[10px] font-bold border border-blue-100">SA</span></td>
+                  <td className="px-4 py-3">
+                    {(deal as any).lawyerName ? (
+                      <span
+                        className="bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded text-[10px] font-bold border border-blue-100"
+                        title={(deal as any).lawyerName}
+                      >
+                        {getInitials((deal as any).lawyerName)}
+                      </span>
+                    ) : (
+                      <span className="text-slate-300">—</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    {(deal as any).clerkName ? (
+                      <span
+                        className="bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded text-[10px] font-bold border border-blue-100"
+                        title={(deal as any).clerkName}
+                      >
+                        {getInitials((deal as any).clerkName)}
+                      </span>
+                    ) : (
+                      <span className="text-slate-300">—</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 max-w-xs" title={isCombined ? `Purchase: ${deal.propertyAddress || "—"}\nSale: ${deal.sellingPropertyAddress || "—"}` : deal.propertyAddress}>
                     {isCombined ? (
                       <div className="flex flex-col gap-1">
@@ -377,7 +554,21 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       <span className="text-[11px] text-slate-500 font-medium">{deal.completedTasks ?? 0}/{deal.totalTasks ?? 0}</span>
                     </div>
                   </td>
-                  <td className="px-4 py-3">{deal.status === DealStatus.CLOSED ? (<span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 text-green-700 border border-green-200 shadow-sm"><span className="mr-1">✓</span> Closed</span>) : (<span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-white text-green-600 border border-green-400">Active</span>)}</td>
+                  <td className="px-4 py-3">
+                    {deal.status === DealStatus.CLOSED ? (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 text-green-700 border border-green-200 shadow-sm">
+                        <span className="mr-1">✓</span> Closed
+                      </span>
+                    ) : deal.status === DealStatus.INACTIVE ? (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200">
+                        Inactive
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-white text-green-600 border border-green-400">
+                        Active
+                      </span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-center">
                     <div className="inline-flex items-center justify-center gap-1">
                       <button

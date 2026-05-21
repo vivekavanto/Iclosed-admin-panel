@@ -26,12 +26,39 @@ export async function GET(
       // Step 1: Get the lead to find parent_lead_id and selling-side address
       const { data: lead } = await supabase
         .from("leads")
-        .select("id, parent_lead_id, first_name, last_name, citizenship_status, lead_type, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code")
+        .select("id, parent_lead_id, first_name, last_name, email, phone, employer_phone, occupation, marital_status, property_type, ownership_history, citizenship_status, corporate_name, inc_number, lead_type, address_street, address_unit, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code")
         .eq("id", data.lead_id)
         .single();
 
       if (lead) {
         data.lead_citizenship_status = lead.citizenship_status ?? null;
+        // Personal / contact details surfaced so the Edit Task modal can
+        // pre-fill template fields (e.g. "Personal Information" task) from
+        // the lead's existing record instead of leaving them blank.
+        data.lead_first_name = lead.first_name ?? null;
+        data.lead_last_name = lead.last_name ?? null;
+        data.lead_email = lead.email ?? null;
+        data.lead_phone = lead.phone ?? null;
+        data.lead_employer_phone = lead.employer_phone ?? null;
+        data.lead_occupation = lead.occupation ?? null;
+        data.lead_marital_status = lead.marital_status ?? null;
+        data.lead_property_type = lead.property_type ?? null;
+        data.lead_ownership_history = lead.ownership_history ?? null;
+        data.lead_corporate_name = lead.corporate_name ?? null;
+        data.lead_inc_number = lead.inc_number ?? null;
+        // Purchase-side address parts surfaced for the deal-detail UI, which
+        // shows city/province/postal under the property heading. The deal's
+        // own `property_address` is a single string, so the structured parts
+        // live on the lead.
+        data.lead_address_street = lead.address_street ?? null;
+        data.lead_address_unit = lead.address_unit ?? null;
+        data.lead_address_city = lead.address_city ?? null;
+        data.lead_address_province = lead.address_province ?? null;
+        data.lead_address_postal_code = lead.address_postal_code ?? null;
+        data.lead_selling_address_street = lead.selling_address_street ?? null;
+        data.lead_selling_address_city = lead.selling_address_city ?? null;
+        data.lead_selling_address_province = lead.selling_address_province ?? null;
+        data.lead_selling_address_postal_code = lead.selling_address_postal_code ?? null;
         data.selling_property_address = [
           lead.selling_address_street,
           lead.selling_address_city,
@@ -156,10 +183,8 @@ const ALLOWED_TYPES = new Set([
 
 const ALLOWED_STATUSES = new Set([
   "Active",
-  "Pending",
+  "Inactive",
   "Closed",
-  "Cancelled",
-  "Urgent",
 ]);
 
 const DATE_COLUMNS = new Set([

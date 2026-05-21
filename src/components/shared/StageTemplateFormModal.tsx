@@ -128,57 +128,76 @@ export default function StageTemplateFormModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-slate-200">
-          <h3 className="text-lg font-bold text-slate-900">
-            {isEditMode ? "Edit Stage Template" : "Add Stage Template"}
-          </h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={isEditMode ? "Edit Stage Template" : "Add Stage Template"}
+      className="fixed inset-0 z-50 flex justify-end items-stretch lg:justify-center lg:items-center bg-black/30 lg:bg-black/40 lg:backdrop-blur-sm lg:p-4 xl:p-12 2xl:p-20"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white shadow-2xl flex flex-col w-full h-full max-w-[520px] slide-in-from-right lg:h-auto lg:max-h-[90vh] lg:max-w-5xl lg:rounded-2xl lg:zoom-in lg:duration-200"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between px-6 py-5 border-b border-gray-100">
+          <div className="min-w-0">
+            <h3 className="text-base font-bold text-gray-900">
+              {isEditMode ? "Edit Stage Template" : "Add Stage Template"}
+            </h3>
+            <p className="text-xs text-gray-400 mt-1">
+              {isEditMode ? "Update this milestone stage template." : "Define a milestone stage for your workflow."}
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-700 shrink-0 ml-4"
+            aria-label="Close"
+          >
             <X size={20} />
           </button>
         </div>
-        <form onSubmit={handleSubmit} className="px-4 sm:px-6 py-4 space-y-4">
+        <form onSubmit={handleSubmit} className="flex flex-col flex-1 overflow-hidden">
+          <div className="px-6 py-6 space-y-5 overflow-y-auto flex-1">
           <div>
-            <label className="block text-xs font-semibold text-slate-600 mb-1">Stage Name *</label>
+            <label className="block text-sm font-semibold text-gray-800 mb-2">Stage Name <span className="text-[#C10007]">*</span></label>
             <input
               type="text"
               value={form.name}
               onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
-              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
+              className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007]"
               placeholder="e.g. Initial Call"
               required
             />
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-600 mb-1">Short Description</label>
+            <label className="block text-sm font-semibold text-gray-800 mb-2">Short Description</label>
             <input
               type="text"
               value={form.description.short}
               onChange={(e) => setForm((p) => ({ ...p, description: { ...p.description, short: e.target.value } }))}
-              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
+              className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007]"
               placeholder="Brief one-line description..."
             />
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-600 mb-1">Modal Description</label>
+            <label className="block text-sm font-semibold text-gray-800 mb-2">Modal Description</label>
             <textarea
               value={form.description.modal}
               onChange={(e) => setForm((p) => ({ ...p, description: { ...p.description, modal: e.target.value } }))}
-              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary resize-none"
+              className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] resize-none"
               placeholder="Description shown in the modal..."
               rows={3}
             />
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-600 mb-1">Task Description</label>
+            <label className="block text-sm font-semibold text-gray-800 mb-2">Task Description</label>
             <textarea
               value={form.description.task}
               onChange={(e) => setForm((p) => ({ ...p, description: { ...p.description, task: e.target.value } }))}
-              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary resize-none"
+              className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] resize-none"
               placeholder="Description for the task view..."
               rows={2}
             />
@@ -187,11 +206,11 @@ export default function StageTemplateFormModal({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {!hideLeadType && (
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Lead Type *</label>
+                <label className="block text-sm font-semibold text-gray-800 mb-2">Lead Type <span className="text-[#C10007]">*</span></label>
                 <select
                   value={form.lead_type}
                   onChange={(e) => setForm((p) => ({ ...p, lead_type: e.target.value as LeadType }))}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
+                  className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007]"
                 >
                   <option value="Purchase">Purchase</option>
                   <option value="Sale">Sale</option>
@@ -201,12 +220,12 @@ export default function StageTemplateFormModal({
               </div>
             )}
             <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Order</label>
+              <label className="block text-sm font-semibold text-gray-800 mb-2">Order</label>
               <input
                 type="number"
                 value={form.order_index}
                 onChange={(e) => setForm((p) => ({ ...p, order_index: parseInt(e.target.value) || 0 }))}
-                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
+                className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007]"
                 min={0}
               />
             </div>
@@ -214,11 +233,11 @@ export default function StageTemplateFormModal({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Role</label>
+              <label className="block text-sm font-semibold text-gray-800 mb-2">Role</label>
               <select
                 value={form.role}
                 onChange={(e) => setForm((p) => ({ ...p, role: e.target.value }))}
-                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
+                className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007]"
               >
                 <option value="Client">Client</option>
                 <option value="Lender">Lender</option>
@@ -228,21 +247,21 @@ export default function StageTemplateFormModal({
               </select>
             </div>
             <div className="flex flex-col gap-2 pb-1 justify-end">
-              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+              <label className="flex items-center gap-2 text-sm text-gray-800 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={form.is_shared}
                   onChange={(e) => setForm((p) => ({ ...p, is_shared: e.target.checked }))}
-                  className="rounded border-slate-300"
+                  className="rounded border-gray-300 text-[#C10007] focus:ring-[#C10007]"
                 />
                 Shared with client
               </label>
-              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+              <label className="flex items-center gap-2 text-sm text-gray-800 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={form.auto_complete}
                   onChange={(e) => setForm((p) => ({ ...p, auto_complete: e.target.checked }))}
-                  className="rounded border-slate-300"
+                  className="rounded border-gray-300 text-[#C10007] focus:ring-[#C10007]"
                 />
                 Auto-complete on creation
               </label>
@@ -250,11 +269,11 @@ export default function StageTemplateFormModal({
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-600 mb-1">Email Template</label>
+            <label className="block text-sm font-semibold text-gray-800 mb-2">Email Template</label>
             <select
               value={form.email_template_id}
               onChange={(e) => setForm((p) => ({ ...p, email_template_id: e.target.value }))}
-              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
+              className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007]"
             >
               <option value="">None</option>
               {emailTemplates.map((et) => (
@@ -262,19 +281,20 @@ export default function StageTemplateFormModal({
               ))}
             </select>
           </div>
+          </div>
 
-          <div className="flex justify-end gap-3 pt-2">
+          <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-3 px-6 py-4 border-t border-gray-100">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors"
+              className="flex-1 py-3 border border-[#C10007] bg-white text-[#C10007] rounded-lg text-sm font-semibold hover:bg-[#FEF2F2]"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={submitting}
-              className="flex items-center gap-2 bg-brand-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-brand-primary/90 transition-colors disabled:opacity-50"
+              className="flex-1 flex items-center justify-center gap-2 py-3 bg-[#C10007] text-white rounded-lg text-sm font-semibold hover:bg-[#a30006] disabled:opacity-50"
             >
               {submitting ? (
                 <Loader2 size={16} className="animate-spin" />

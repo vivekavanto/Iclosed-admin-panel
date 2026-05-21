@@ -97,6 +97,21 @@ export async function GET(req: Request) {
   return NextResponse.json([...(sharedTasks ?? []), ...(personalTasks ?? [])]);
 }
 
+/**
+ * DELETE /api/admin/tasks?id=...
+ *
+ * Cascades through the task's filled-in details so the deal returns to a
+ * clean slate (no orphaned responses, no stale APS doc that would warn
+ * "already exists" on the next upload).
+ *
+ * For shared (synced) tasks, the deletion mirrors across the entire
+ * co-purchaser/co-seller family — matching how PATCH already mirrors
+ * updates. For APS tasks (template flagged `is_aps_task=true`), the
+ * family-wide APS rows in `lead_corporate_docs` are also wiped.
+ *
+ * Blob bytes in Vercel Blob are intentionally left in place — same
+ * orphan policy as the rest of this codebase.
+ */
 export async function DELETE(req: Request) {
   const { searchParams } = new URL(req.url);
   const id = searchParams.get("id");
@@ -105,16 +120,127 @@ export async function DELETE(req: Request) {
     return NextResponse.json({ error: "id is required" }, { status: 400 });
   }
 
-  const { error } = await supabase
+  // 1. Load the task we're deleting so we know its shared/APS status and
+  //    can resolve the family scope.
+  const { data: task, error: taskError } = await supabase
     .from("tasks")
-    .delete()
-    .eq("id", id);
+    .select("id, deal_id, is_shared, task_template_id")
+    .eq("id", id)
+    .single();
 
-  if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  if (taskError || !task) {
+    return NextResponse.json(
+      { success: false, error: taskError?.message ?? "Task not found" },
+      { status: 404 },
+    );
   }
 
-  return NextResponse.json({ success: true });
+  // 2. Determine APS-ness via the template (so we can wipe lead_corporate_docs).
+  let isAps = false;
+  if (task.task_template_id) {
+    const { data: tmpl } = await supabase
+      .from("task_templates")
+      .select("is_aps_task")
+      .eq("id", task.task_template_id)
+      .single();
+    isAps = Boolean(tmpl?.is_aps_task);
+  }
+
+  // 3. Collect the set of task IDs to delete + the set of deal IDs touched.
+  //    For template-backed tasks we ALWAYS scan the entire family — the
+  //    unique constraint `tasks_deal_task_template_unique` covers
+  //    (deal_id, task_template_id) regardless of is_shared, so a leftover
+  //    sibling on a co-purchaser/co-seller deal would block recreation.
+  //    Free-form tasks (no template_id) stay scoped to the single deal.
+  let affectedDealIds: string[] = task.task_template_id
+    ? await getFamilyDealIds(task.deal_id)
+    : [task.deal_id];
+
+  const taskIdSet = new Set<string>([id]);
+
+  if (task.task_template_id) {
+    const { data: matchingTasks } = await supabase
+      .from("tasks")
+      .select("id, deal_id")
+      .eq("task_template_id", task.task_template_id)
+      .in("deal_id", affectedDealIds);
+
+    for (const t of matchingTasks ?? []) {
+      taskIdSet.add(t.id);
+    }
+    if (matchingTasks && matchingTasks.length > 0) {
+      affectedDealIds = [...new Set(matchingTasks.map((t) => t.deal_id))];
+    }
+  }
+
+  const taskIdsToDelete = [...taskIdSet];
+
+  // 4. Wipe filled-in details for every task in scope.
+  const { error: respError } = await supabase
+    .from("task_responses")
+    .delete()
+    .in("task_id", taskIdsToDelete);
+  if (respError) {
+    return NextResponse.json(
+      { success: false, error: `Failed to clear task responses: ${respError.message}` },
+      { status: 500 },
+    );
+  }
+
+  // 5. For APS tasks, also wipe the family-wide APS rows in
+  //    lead_corporate_docs so a fresh upload starts from a clean slate.
+  if (isAps) {
+    const { data: familyDeals } = await supabase
+      .from("deals")
+      .select("lead_id")
+      .in("id", affectedDealIds);
+    const familyLeadIds = [
+      ...new Set((familyDeals ?? []).map((d) => d.lead_id).filter(Boolean)),
+    ];
+
+    if (familyLeadIds.length > 0) {
+      const { error: docError } = await supabase
+        .from("lead_corporate_docs")
+        .delete()
+        .in("lead_id", familyLeadIds)
+        .or(
+          "doc_type.eq.aps,doc_type.eq.aps_purchase,doc_type.eq.aps_sale,custom_type.ilike.%APS%",
+        );
+      if (docError) {
+        return NextResponse.json(
+          { success: false, error: `Failed to clear APS docs: ${docError.message}` },
+          { status: 500 },
+        );
+      }
+    }
+  }
+
+  // 6. Delete the task row(s) themselves.
+  const { error: deleteError } = await supabase
+    .from("tasks")
+    .delete()
+    .in("id", taskIdsToDelete);
+  if (deleteError) {
+    return NextResponse.json(
+      { success: false, error: deleteError.message },
+      { status: 500 },
+    );
+  }
+
+  // 7. Milestone status depends on task completion — recalc for any deal
+  //    that lost a task. Non-blocking; a stale milestone is recoverable.
+  try {
+    const primaryDealId = task.deal_id;
+    await recalcMilestonesForFamily(affectedDealIds, primaryDealId);
+  } catch {
+    // intentionally non-blocking
+  }
+
+  return NextResponse.json({
+    success: true,
+    deleted_tasks: taskIdsToDelete.length,
+    cleared_aps_docs: isAps,
+  });
 }
 
 export async function PATCH(req: Request) {
@@ -144,6 +270,17 @@ export async function PATCH(req: Request) {
     if (body.completed_at !== undefined) updates.completed_at = body.completed_at;
     if (body.due_date !== undefined) updates.due_date = body.due_date;
     if (document_url !== undefined) updates.document_url = document_url;
+    if (body.milestone_id !== undefined) updates.milestone_id = body.milestone_id;
+    if (typeof body.title === "string") {
+      const trimmed = body.title.trim();
+      if (!trimmed) {
+        return NextResponse.json(
+          { success: false, error: "Title cannot be empty" },
+          { status: 400 },
+        );
+      }
+      updates.title = trimmed;
+    }
 
     // Nothing to update
     if (Object.keys(updates).length === 0) {
@@ -268,6 +405,24 @@ export async function POST(req: Request) {
       .single();
 
     if (error) {
+      // Postgres unique-violation (23505) on tasks_deal_task_template_unique
+      // means a row already exists for this (deal_id, task_template_id).
+      // Surface a friendly message so the admin knows what to do — the raw
+      // constraint name is useless to end users.
+      const isDuplicate =
+        (error as any).code === "23505" ||
+        /duplicate key|tasks_deal_task_template_unique/i.test(error.message ?? "");
+      if (isDuplicate) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "A task for this template already exists on this deal. If it isn't visible, it may still exist on a linked co-purchaser/co-seller deal — refresh the page and delete the existing one from the source deal first.",
+            code: "DUPLICATE_TASK_TEMPLATE",
+          },
+          { status: 409 },
+        );
+      }
       return NextResponse.json({ success: false, error: error.message }, { status: 400 });
     }
 

@@ -299,3 +299,223 @@ export async function GET(req: Request) {
 
   return NextResponse.json(dedupedResult);
 }
+
+/**
+ * PATCH /api/admin/task-responses
+ * Body: { id: string, value?: string, file_url?: string, file_name?: string }
+ *
+ * Admin override for a client-submitted response. Supports both textual
+ * `value` edits and file replacement (file_url + file_name).
+ *
+ * For file replacements on a shared task (is_shared=true with a
+ * task_template_id), the new file is mirrored to every matching response
+ * across the co-purchaser/co-seller family — same task_template_id, same
+ * field (matched by field_id, fallback field_label). APS uploads have
+ * their own dedicated flow at /uploadblobstorage and don't go through
+ * here.
+ */
+export async function PATCH(req: Request) {
+  try {
+    const body = await req.json();
+    const { id, value, file_url, file_name } = body as {
+      id?: string;
+      value?: string | null;
+      file_url?: string | null;
+      file_name?: string | null;
+    };
+    if (!id) {
+      return NextResponse.json({ success: false, error: "id is required" }, { status: 400 });
+    }
+    const updates: Record<string, any> = {};
+    if (value !== undefined) updates.value = value === "" ? null : value;
+    if (file_url !== undefined) updates.file_url = file_url || null;
+    if (file_name !== undefined) updates.file_name = file_name || null;
+    if (Object.keys(updates).length === 0) {
+      return NextResponse.json({ success: false, error: "Nothing to update" }, { status: 400 });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from("task_responses")
+      .update(updates)
+      .eq("id", id)
+      .select("id, task_id, field_id, field_label, field_type, file_url, file_name, value")
+      .single();
+    if (error) {
+      return NextResponse.json({ success: false, error: error.message }, { status: 400 });
+    }
+
+    // Family-wide mirror for shared-task file replacements. Only kicks in
+    // when this PATCH actually changed file_url/file_name — pure text edits
+    // stay scoped to the single row.
+    const isFileReplace = file_url !== undefined || file_name !== undefined;
+    let mirroredCount = 0;
+    if (isFileReplace && data) {
+      const { data: srcTask } = await supabaseAdmin
+        .from("tasks")
+        .select("id, deal_id, is_shared, task_template_id")
+        .eq("id", data.task_id)
+        .single();
+
+      if (srcTask?.is_shared && srcTask.task_template_id && srcTask.deal_id) {
+        const familyDealIds = await getFamilyDealIds(srcTask.deal_id);
+
+        const { data: familyTasks } = await supabaseAdmin
+          .from("tasks")
+          .select("id")
+          .eq("is_shared", true)
+          .eq("task_template_id", srcTask.task_template_id)
+          .in("deal_id", familyDealIds);
+        const familyTaskIds = (familyTasks ?? []).map((t) => t.id);
+        const peerTaskIds = familyTaskIds.filter((tid) => tid !== data.task_id);
+
+        if (peerTaskIds.length > 0) {
+          // Match peer responses by field_id (canonical) or field_label
+          // (fallback when field_id is null on older rows).
+          let peerQuery = supabaseAdmin
+            .from("task_responses")
+            .update(updates)
+            .in("task_id", peerTaskIds)
+            .eq("field_type", "file");
+
+          if (data.field_id) {
+            peerQuery = peerQuery.eq("field_id", data.field_id);
+          } else if (data.field_label) {
+            peerQuery = peerQuery.eq("field_label", data.field_label);
+          }
+
+          const { data: mirrored, error: mirrorError } = await peerQuery.select("id");
+          if (mirrorError) {
+            // Don't fail the primary update — surface as a soft warning.
+            return NextResponse.json({
+              success: true,
+              data,
+              mirrored: 0,
+              mirror_warning: mirrorError.message,
+            });
+          }
+          mirroredCount = mirrored?.length ?? 0;
+        }
+      }
+    }
+
+    return NextResponse.json({ success: true, data, mirrored: mirroredCount });
+  } catch (err: any) {
+    return NextResponse.json({ success: false, error: err?.message ?? "Server error" }, { status: 500 });
+  }
+}
+
+/**
+ * POST /api/admin/task-responses
+ * Body: { task_id, field_id, field_label, field_type, value? }
+ *
+ * Creates a new admin-entered response for a form field that the client
+ * left blank. For shared tasks the row is mirrored across the
+ * co-purchaser/co-seller family so every linked deal sees the same
+ * admin override.
+ */
+export async function POST(req: Request) {
+  try {
+    const body = await req.json();
+    const {
+      task_id,
+      field_id,
+      field_label,
+      field_type,
+      value,
+    } = body as {
+      task_id?: string;
+      field_id?: string | null;
+      field_label?: string | null;
+      field_type?: string | null;
+      value?: string | null;
+    };
+    if (!task_id) {
+      return NextResponse.json({ success: false, error: "task_id is required" }, { status: 400 });
+    }
+    if (!field_label || !field_type) {
+      return NextResponse.json(
+        { success: false, error: "field_label and field_type are required" },
+        { status: 400 },
+      );
+    }
+
+    const insertRow = {
+      task_id,
+      field_id: field_id ?? null,
+      field_label,
+      field_type,
+      value: value === "" ? null : value ?? null,
+    };
+
+    const { data, error } = await supabaseAdmin
+      .from("task_responses")
+      .insert(insertRow)
+      .select("id, task_id, field_id, field_label, field_type, value")
+      .single();
+    if (error) {
+      return NextResponse.json({ success: false, error: error.message }, { status: 400 });
+    }
+
+    // Family-wide mirror for shared-task responses — same matching as PATCH
+    // (skip the source task; match peers by field_id or field_label).
+    let mirroredCount = 0;
+    const { data: srcTask } = await supabaseAdmin
+      .from("tasks")
+      .select("id, deal_id, is_shared, task_template_id")
+      .eq("id", task_id)
+      .single();
+    if (srcTask?.is_shared && srcTask.task_template_id && srcTask.deal_id) {
+      const familyDealIds = await getFamilyDealIds(srcTask.deal_id);
+      const { data: familyTasks } = await supabaseAdmin
+        .from("tasks")
+        .select("id")
+        .eq("is_shared", true)
+        .eq("task_template_id", srcTask.task_template_id)
+        .in("deal_id", familyDealIds);
+      const peerTaskIds = (familyTasks ?? [])
+        .map((t) => t.id)
+        .filter((tid) => tid !== task_id);
+      if (peerTaskIds.length > 0) {
+        const peerRows = peerTaskIds.map((tid) => ({
+          task_id: tid,
+          field_id: insertRow.field_id,
+          field_label: insertRow.field_label,
+          field_type: insertRow.field_type,
+          value: insertRow.value,
+        }));
+        const { data: mirrored } = await supabaseAdmin
+          .from("task_responses")
+          .insert(peerRows)
+          .select("id");
+        mirroredCount = mirrored?.length ?? 0;
+      }
+    }
+
+    return NextResponse.json({ success: true, data, mirrored: mirroredCount });
+  } catch (err: any) {
+    return NextResponse.json({ success: false, error: err?.message ?? "Server error" }, { status: 500 });
+  }
+}
+
+/**
+ * DELETE /api/admin/task-responses?id=...
+ *
+ * Removes a single client-submitted response row. Blob bytes (if it was a
+ * file upload) are left in Vercel Blob — matching how lead_corporate_docs
+ * deletions are handled elsewhere in this codebase.
+ */
+export async function DELETE(req: Request) {
+  const { searchParams } = new URL(req.url);
+  const id = searchParams.get("id");
+  if (!id) {
+    return NextResponse.json({ success: false, error: "id is required" }, { status: 400 });
+  }
+  const { error } = await supabaseAdmin
+    .from("task_responses")
+    .delete()
+    .eq("id", id);
+  if (error) {
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
+  return NextResponse.json({ success: true });
+}

@@ -10,7 +10,8 @@ export enum DealStatus {
   PENDING = 'Pending',
   CLOSED = 'Closed',
   CANCELLED = 'Cancelled',
-  URGENT = 'Urgent'
+  URGENT = 'Urgent',
+  INACTIVE = 'Inactive',
 }
 
 export interface Client {

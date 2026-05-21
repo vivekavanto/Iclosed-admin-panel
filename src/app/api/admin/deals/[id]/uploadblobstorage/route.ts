@@ -16,8 +16,11 @@ import { getFamilyDealIds } from "@/lib/familyDeals";
  *   - syncs completion across all linked co-purchaser/co-seller deals
  *   - recalculates milestones for the entire family
  *
- * Refuses to finalize if an APS document is already present anywhere in the
- * deal's family (returns 409).
+ * If an APS document already exists anywhere in the family, the admin
+ * upload REPLACES it: prior `lead_corporate_docs` APS rows and
+ * `task_responses` file rows for family APS tasks are deleted before the
+ * new doc is inserted. (Customer-side uploads still go through a separate
+ * flow with the existing already-uploaded guard.)
  *
  * Body (JSON): { file_url: string, file_name: string }
  */
@@ -94,9 +97,9 @@ export async function POST(
       );
     }
 
-    // ── 3. Already-uploaded guard ────────────────────────────────────────────
-    // Same checks as the token endpoint — racing or stale clients could land
-    // here with the upload already done.
+    // ── 3. Clear any prior APS doc + task_responses across the family ───────
+    // Admin upload replaces an existing APS — wipe family-wide rows so the
+    // doc bridging in completeApsTask binds the new file to every APS task.
     const familyDealIds = await getFamilyDealIds(dealId);
 
     const { data: apsTemplates } = await supabaseAdmin
@@ -115,23 +118,11 @@ export async function POST(
       const apsTaskIds = (apsTasks ?? []).map((t) => t.id);
 
       if (apsTaskIds.length > 0) {
-        const { data: existingResponses } = await supabaseAdmin
+        await supabaseAdmin
           .from("task_responses")
-          .select("id")
+          .delete()
           .in("task_id", apsTaskIds)
-          .eq("field_type", "file")
-          .not("file_url", "is", null)
-          .limit(1);
-
-        if (existingResponses && existingResponses.length > 0) {
-          return NextResponse.json(
-            {
-              success: false,
-              error: "APS document is already uploaded for this deal.",
-            },
-            { status: 409 },
-          );
-        }
+          .eq("field_type", "file");
       }
     }
 
@@ -144,24 +135,13 @@ export async function POST(
     ];
 
     if (familyLeadIds.length > 0) {
-      const { data: existingDocs } = await supabaseAdmin
+      await supabaseAdmin
         .from("lead_corporate_docs")
-        .select("id")
+        .delete()
         .in("lead_id", familyLeadIds)
         .or(
           "doc_type.eq.aps,doc_type.eq.aps_purchase,doc_type.eq.aps_sale,custom_type.ilike.%APS%",
-        )
-        .limit(1);
-
-      if (existingDocs && existingDocs.length > 0) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: "APS document is already uploaded for this deal.",
-          },
-          { status: 409 },
         );
-      }
     }
 
     // ── 4. Insert into lead_corporate_docs ───────────────────────────────────

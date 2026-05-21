@@ -21,6 +21,8 @@ import {
   ExternalLink,
   AlertTriangle,
   Upload,
+  Check,
+  X,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
@@ -173,6 +175,925 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const [showApsUpload, setShowApsUpload] = useState(false);
   const [apsFile, setApsFile] = useState<File | null>(null);
   const [uploadingAps, setUploadingAps] = useState(false);
+  // Preflight: is an APS already uploaded for this deal's family? Used to
+  // warn the admin that submitting will replace the existing doc.
+  const [existingApsFileName, setExistingApsFileName] = useState<string | null>(null);
+  const [apsStatusLoading, setApsStatusLoading] = useState(false);
+
+  // Full task edit modal — Pencil button on a task row opens this, mirroring
+  // the View modal's layout but with editable inputs. Saves are batched:
+  // task fields go through one PATCH /api/admin/tasks; client-response
+  // edits go through PATCH/DELETE /api/admin/task-responses per row.
+  type EditableResponse = {
+    id: string;
+    field_type: string | null;
+    field_label: string | null;
+    field_id: string | null;
+    file_name: string | null;
+    file_url: string | null;
+    value: string | null;
+    // Local-only flags so save can diff against the loaded snapshot.
+    deleted?: boolean;
+  };
+  // Definition of a single configurable form-field on a task template.
+  // Pulled from `task_form_fields` so the admin sees every field the client
+  // form would render — including ones the user left blank.
+  type TaskFormField = {
+    id: string;
+    field_type: string;
+    label: string;
+    placeholder: string | null;
+    required: boolean | null;
+    order_index: number;
+    options: any;
+  };
+
+  // Mapping from a form-field's (normalized lowercase) label to the
+  // camelCase key accepted by PUT /api/admin/leads. Used both for
+  // pre-filling empty fields from the lead's existing record AND for
+  // writing admin overrides back so the leads table (and customer-
+  // facing app) reflects the change.
+  const LEAD_FIELD_BY_LABEL: Record<string, string> = {
+    "first name": "firstName",
+    "given name": "firstName",
+    "last name": "lastName",
+    "surname": "lastName",
+    "family name": "lastName",
+    "email": "email",
+    "email address": "email",
+    "phone": "phone",
+    "phone number": "phone",
+    "mobile": "phone",
+    "mobile number": "phone",
+    "cell": "phone",
+    "cell phone": "phone",
+    "employer phone": "employerPhone",
+    "occupation": "occupation",
+    "marital status": "maritalStatus",
+    "citizenship": "citizenshipStatus",
+    "citizenship status": "citizenshipStatus",
+    "property type": "propertyType",
+    "ownership history": "ownershipHistory",
+    "corporate name": "corporateName",
+    "company name": "corporateName",
+    "inc number": "incNumber",
+    "incorporation number": "incNumber",
+    "address": "addressStreet",
+    "street address": "addressStreet",
+    "street": "addressStreet",
+    "unit": "addressUnit",
+    "apt": "addressUnit",
+    "suite": "addressUnit",
+    "apartment": "addressUnit",
+    "city": "addressCity",
+    "province": "addressProvince",
+    "state": "addressProvince",
+    "postal code": "addressPostalCode",
+    "zip": "addressPostalCode",
+    "zip code": "addressPostalCode",
+    "selling address": "sellingAddressStreet",
+    "selling street": "sellingAddressStreet",
+    "selling city": "sellingAddressCity",
+    "selling province": "sellingAddressProvince",
+    "selling postal code": "sellingAddressPostalCode",
+  };
+
+  // Reverse map: rawDeal column → camelCase key used by the lead PUT.
+  // Lets us pull pre-fill values from rawDeal (which already carries the
+  // lead's columns thanks to the deal [id] GET handler).
+  const RAW_DEAL_LEAD_KEYS: Record<string, string> = {
+    lead_first_name: "firstName",
+    lead_last_name: "lastName",
+    lead_email: "email",
+    lead_phone: "phone",
+    lead_employer_phone: "employerPhone",
+    lead_occupation: "occupation",
+    lead_marital_status: "maritalStatus",
+    lead_citizenship_status: "citizenshipStatus",
+    lead_property_type: "propertyType",
+    lead_ownership_history: "ownershipHistory",
+    lead_corporate_name: "corporateName",
+    lead_inc_number: "incNumber",
+    lead_address_street: "addressStreet",
+    lead_address_unit: "addressUnit",
+    lead_address_city: "addressCity",
+    lead_address_province: "addressProvince",
+    lead_address_postal_code: "addressPostalCode",
+    lead_selling_address_street: "sellingAddressStreet",
+    lead_selling_address_city: "sellingAddressCity",
+    lead_selling_address_province: "sellingAddressProvince",
+    lead_selling_address_postal_code: "sellingAddressPostalCode",
+  };
+
+  const getLeadFieldKeyForLabel = (label: string): string | null => {
+    const norm = label.trim().toLowerCase();
+    if (LEAD_FIELD_BY_LABEL[norm]) return LEAD_FIELD_BY_LABEL[norm];
+    // Loose fallback: try collapsed spacing + remove non-alphanumerics.
+    const loose = norm.replace(/[^a-z0-9]/g, " ").replace(/\s+/g, " ").trim();
+    return LEAD_FIELD_BY_LABEL[loose] ?? null;
+  };
+
+  // CHECK-constraint columns in `leads` only accept exact strings. Admin
+  // form values (free-text or differently-cased) get normalized through
+  // these maps before the PUT so the DB doesn't reject them with
+  // "violates check constraint" errors. Keys = camelCase payload keys
+  // accepted by PUT /api/admin/leads.
+  const LEAD_ENUM_NORMALIZERS: Record<string, Record<string, string>> = {
+    maritalStatus: {
+      "single": "Single",
+      "married": "Married",
+      "common law": "Common Law",
+      "common-law": "Common Law",
+      "commonlaw": "Common Law",
+      "divorced": "Divorced",
+      "widowed": "Widowed",
+      "widow": "Widowed",
+      "widower": "Widowed",
+    },
+    citizenshipStatus: {
+      "canadian citizen": "canadian_citizen",
+      "canadian_citizen": "canadian_citizen",
+      "canadian": "canadian_citizen",
+      "citizen": "canadian_citizen",
+      "permanent resident": "permanent_resident",
+      "permanent_resident": "permanent_resident",
+      "pr": "permanent_resident",
+      "visa": "visa",
+      "refugee status": "refugee_status",
+      "refugee_status": "refugee_status",
+      "refugee": "refugee_status",
+      "non citizen unsure": "non_citizen_unsure",
+      "non-citizen unsure": "non_citizen_unsure",
+      "non_citizen_unsure": "non_citizen_unsure",
+      "unsure": "non_citizen_unsure",
+    },
+    propertyType: {
+      "primary": "Primary",
+      "primary residence": "Primary",
+      "investment": "Investment",
+      "investment property": "Investment",
+      "vacation": "Vacation",
+      "vacation home": "Vacation",
+      "commercial": "Commercial",
+    },
+    ownershipHistory: {
+      "no (first time)": "No (first time)",
+      "no": "No (first time)",
+      "first time": "No (first time)",
+      "first-time": "No (first time)",
+      "yes (previous owner)": "Yes (previous owner)",
+      "yes": "Yes (previous owner)",
+      "previous owner": "Yes (previous owner)",
+      "current owner": "Current owner",
+      "current": "Current owner",
+    },
+    service: {
+      "closing": "closing",
+      "refinance": "refinance",
+      "condo": "condo",
+    },
+    subService: {
+      "buying": "buying",
+      "buy": "buying",
+      "purchasing": "buying",
+      "selling": "selling",
+      "sell": "selling",
+      "both": "both",
+    },
+  };
+
+  // Returns:
+  //   • a normalized string if the lead column has a CHECK constraint and
+  //     the value mapped to a valid enum entry
+  //   • null if the lead column has a CHECK constraint but the value
+  //     doesn't map (caller should SKIP the field, not send raw)
+  //   • undefined if the lead column has no CHECK constraint (caller
+  //     should send the raw value)
+  const normalizeLeadValue = (key: string, raw: string): string | null | undefined => {
+    const map = LEAD_ENUM_NORMALIZERS[key];
+    if (!map) return undefined;
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    const norm = trimmed.toLowerCase();
+    return map[norm] ?? null;
+  };
+
+  // Pull current lead values keyed by the lead camelCase keys, harvested
+  // from rawDeal so we don't need an extra fetch.
+  const getLeadValuesFromRawDeal = (): Record<string, string> => {
+    const out: Record<string, string> = {};
+    if (!rawDeal) return out;
+    for (const [col, key] of Object.entries(RAW_DEAL_LEAD_KEYS)) {
+      const v = rawDeal[col];
+      if (v !== undefined && v !== null && v !== "") {
+        out[key] = String(v);
+      }
+    }
+    return out;
+  };
+
+  // Form-field validation. Returns null on success, or a user-facing
+  // error string. Required-empty is handled separately before this runs.
+  const validateFieldValue = (field: TaskFormField, value: string): string | null => {
+    if (!value) return null; // empty is fine here; required-check runs first
+    const v = value.trim();
+    switch (field.field_type) {
+      case "email": {
+        const ok = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+        return ok ? null : "Enter a valid email address.";
+      }
+      case "phone": {
+        // Accept any format the user types as long as it has at least 7
+        // digits. Strips parentheses, spaces, dashes, dots before counting.
+        const digits = v.replace(/\D/g, "");
+        if (digits.length < 7) return "Phone number must have at least 7 digits.";
+        if (digits.length > 15) return "Phone number is too long.";
+        return null;
+      }
+      case "number": {
+        return Number.isFinite(Number(v)) ? null : "Enter a valid number.";
+      }
+      case "date": {
+        return /^\d{4}-\d{2}-\d{2}$/.test(v) ? null : "Enter a valid date.";
+      }
+      default: {
+        // Heuristic: validate Canadian postal codes when the field is
+        // labelled as such. Accept either the partial FSA (e.g. "N2V")
+        // or the full A1A 1A1 form (case-insensitive, space optional).
+        // Auto-formatter already enforces position rules as the admin
+        // types — this is the final correctness check on save.
+        if (isPostalField(field)) {
+          const ok = /^[A-Za-z]\d[A-Za-z](\s?\d[A-Za-z]\d)?$/.test(v);
+          return ok ? null : "Enter a valid postal code (e.g. N2V or M5V 3L9).";
+        }
+        return null;
+      }
+    }
+  };
+  const [editingTask, setEditingTask] = useState<DisplayTask | null>(null);
+  const [editTaskTitle, setEditTaskTitle] = useState<string>("");
+  const [editTaskStatus, setEditTaskStatus] = useState<string>("Pending");
+  const [editTaskDueDate, setEditTaskDueDate] = useState<string>("");
+  const [editTaskCompletedAt, setEditTaskCompletedAt] = useState<string>("");
+  const [editTaskMilestoneId, setEditTaskMilestoneId] = useState<string>("");
+  const [editTaskResponses, setEditTaskResponses] = useState<EditableResponse[]>([]);
+  const [editTaskInitialResponses, setEditTaskInitialResponses] = useState<EditableResponse[]>([]);
+  const [editTaskFormFields, setEditTaskFormFields] = useState<TaskFormField[]>([]);
+  const [editTaskFieldErrors, setEditTaskFieldErrors] = useState<Record<string, string>>({});
+  const [editTaskLoading, setEditTaskLoading] = useState(false);
+  const [editTaskSaving, setEditTaskSaving] = useState(false);
+
+  const openEditTask = async (task: DisplayTask) => {
+    setEditingTask(task);
+    setEditTaskTitle(task.title ?? "");
+    setEditTaskStatus(task.status ?? "Pending");
+    setEditTaskDueDate(task.dueDate ?? "");
+    setEditTaskCompletedAt(task.completedAt ? task.completedAt.slice(0, 10) : "");
+    setEditTaskMilestoneId(task.milestoneId ?? "");
+    setEditTaskResponses([]);
+    setEditTaskInitialResponses([]);
+    setEditTaskFormFields([]);
+    if (task.isTemplate) return;
+    setEditTaskLoading(true);
+    try {
+      // Fetch template form-field definitions + already-submitted responses
+      // together. The Edit modal renders one row per template field, pre-
+      // filled with the response (matched by field_id, fallback field_label).
+      const fieldsUrl = task.taskTemplateId
+        ? `/api/admin/task-form-fields?task_template_id=${encodeURIComponent(task.taskTemplateId)}`
+        : null;
+      const [responsesRes, fieldsRes] = await Promise.all([
+        fetch(`/api/admin/task-responses?task_id=${task.id}`),
+        fieldsUrl ? fetch(fieldsUrl) : Promise.resolve(null),
+      ]);
+      const responsesData = await responsesRes.json();
+      if (Array.isArray(responsesData)) {
+        const mapped: EditableResponse[] = responsesData.map((r: any) => ({
+          id: r.id ?? r.response_id,
+          field_type: r.field_type ?? null,
+          field_label: r.field_label ?? null,
+          field_id: r.field_id ?? null,
+          file_name: r.file_name ?? null,
+          file_url: r.file_url ?? null,
+          value: r.value ?? r.text_value ?? null,
+        }));
+        setEditTaskResponses(mapped);
+        setEditTaskInitialResponses(mapped.map((r) => ({ ...r })));
+      }
+      if (fieldsRes) {
+        const fieldsData = await fieldsRes.json();
+        if (Array.isArray(fieldsData)) {
+          const fields: TaskFormField[] = fieldsData.map((f: any) => ({
+            id: f.id,
+            field_type: f.field_type,
+            label: f.label,
+            placeholder: f.placeholder ?? null,
+            required: f.required ?? false,
+            order_index: f.order_index ?? 0,
+            options: f.options ?? null,
+          }));
+          setEditTaskFormFields(fields);
+
+          // Pre-fill empty fields from the lead row when the label maps
+          // to a known lead column (e.g. "Phone Number" → leads.phone).
+          // Skips fields that already have a response so we never clobber
+          // a client-submitted value.
+          const existingResponses = Array.isArray(responsesData) ? responsesData : [];
+          const respByFieldId = new Map<string, any>(
+            existingResponses.filter((r: any) => r.field_id).map((r: any) => [r.field_id, r]),
+          );
+          const respByLabel = new Map<string, any>(
+            existingResponses.filter((r: any) => !r.field_id && r.field_label).map((r: any) => [r.field_label, r]),
+          );
+          const leadValues = getLeadValuesFromRawDeal();
+          const prefillRows: EditableResponse[] = [];
+          for (const field of fields) {
+            const alreadyAnswered =
+              respByFieldId.has(field.id) || respByLabel.has(field.label);
+            if (alreadyAnswered) continue;
+            if (field.field_type === "file" || field.field_type === "checkbox") continue;
+            const leadKey = getLeadFieldKeyForLabel(field.label);
+            if (!leadKey) continue;
+            const v = leadValues[leadKey];
+            if (!v) continue;
+            // Normalize phone / postal pre-fills through the same formatter
+            // the input uses so storage matches display once admin saves.
+            const normalized =
+              field.field_type === "phone"
+                ? formatPhoneAsTyped(v)
+                : isPostalField(field)
+                ? formatPostalAsTyped(v)
+                : v;
+            prefillRows.push({
+              id: `tmp-${field.id}`,
+              field_id: field.id,
+              field_label: field.label,
+              field_type: field.field_type,
+              file_name: null,
+              file_url: null,
+              value: normalized,
+            });
+          }
+          if (prefillRows.length > 0) {
+            setEditTaskResponses((prev) => [...prev, ...prefillRows]);
+          }
+        }
+      }
+    } catch {
+      // Non-blocking: editor still works for task fields even if responses fail
+    } finally {
+      setEditTaskLoading(false);
+    }
+  };
+
+  const closeEditTask = () => {
+    setEditingTask(null);
+    setEditTaskTitle("");
+    setEditTaskStatus("Pending");
+    setEditTaskDueDate("");
+    setEditTaskCompletedAt("");
+    setEditTaskMilestoneId("");
+    setEditTaskResponses([]);
+    setEditTaskInitialResponses([]);
+    setEditTaskFormFields([]);
+    setEditTaskFieldErrors({});
+  };
+
+  // Refetch just the task_responses for the currently-edited task. Called
+  // after the APS upload modal completes from within the Edit Task modal so
+  // the newly-bridged file row appears without closing the editor.
+  const refreshEditTaskResponses = async () => {
+    if (!editingTask) return;
+    try {
+      const res = await fetch(`/api/admin/task-responses?task_id=${editingTask.id}`);
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        const mapped: EditableResponse[] = data.map((r: any) => ({
+          id: r.id ?? r.response_id,
+          field_type: r.field_type ?? null,
+          field_label: r.field_label ?? null,
+          field_id: r.field_id ?? null,
+          file_name: r.file_name ?? null,
+          file_url: r.file_url ?? null,
+          value: r.value ?? r.text_value ?? null,
+        }));
+        setEditTaskResponses(mapped);
+        setEditTaskInitialResponses(mapped.map((r) => ({ ...r })));
+      }
+    } catch {
+      // Non-blocking — modal still works without the refreshed list.
+    }
+  };
+
+  const updateResponseValue = (id: string, value: string) => {
+    setEditTaskResponses((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, value } : r)),
+    );
+  };
+
+  // Look up the response row backing a given form field. Match on field_id
+  // first (canonical); fall back to label for legacy rows whose field_id
+  // was never set when the client submitted.
+  const findResponseForField = (field: TaskFormField): EditableResponse | null => {
+    return (
+      editTaskResponses.find((r) => r.field_id === field.id) ??
+      editTaskResponses.find((r) => !r.field_id && r.field_label === field.label) ??
+      null
+    );
+  };
+
+  // Update or create the response backing a form field. New rows get a
+  // temp id prefixed `tmp-` so saveEditTask knows to POST (rather than
+  // PATCH) them at save time. Also clears any prior validation error on
+  // this field so the inline message disappears as the admin fixes it.
+  const setFieldValue = (field: TaskFormField, value: string) => {
+    setEditTaskResponses((prev) => {
+      const existingIdx = prev.findIndex(
+        (r) => r.field_id === field.id || (!r.field_id && r.field_label === field.label),
+      );
+      if (existingIdx >= 0) {
+        const next = prev.slice();
+        next[existingIdx] = { ...next[existingIdx], value, deleted: false };
+        return next;
+      }
+      const tempId = `tmp-${field.id}`;
+      return [
+        ...prev,
+        {
+          id: tempId,
+          field_id: field.id,
+          field_label: field.label,
+          field_type: field.field_type,
+          file_name: null,
+          file_url: null,
+          value,
+        },
+      ];
+    });
+    if (editTaskFieldErrors[field.id]) {
+      setEditTaskFieldErrors((prev) => {
+        const next = { ...prev };
+        delete next[field.id];
+        return next;
+      });
+    }
+  };
+
+  // Auto-format a North American phone number as the admin types so the
+  // input mirrors the placeholder shape (e.g. "(416) 555-1234"). Strips
+  // everything non-numeric, caps at 10 digits, and re-inserts punctuation
+  // based on how many digits are present. Storage uses the formatted
+  // string so the leads list / customer app shows it the same way.
+  const formatPhoneAsTyped = (raw: string): string => {
+    const digits = raw.replace(/\D/g, "").slice(0, 10);
+    if (digits.length === 0) return "";
+    if (digits.length < 4) return `(${digits}`;
+    if (digits.length < 7) return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
+    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+  };
+
+  // Postal code fields (Canadian) are detected by label, not field_type.
+  // The template lists postal as a plain `text` field with label like
+  // "Postal Code" / "Zip Code".
+  const isPostalField = (field: TaskFormField): boolean => {
+    return /postal|zip/.test(field.label.toLowerCase());
+  };
+
+  // Auto-format a Canadian postal code (A1A 1A1) as the admin types:
+  // uppercases, drops chars in the wrong position-class (letter vs digit),
+  // inserts the space after the 3rd char. Accepts an already-formatted
+  // value as a no-op. Caps at 6 alphanumerics.
+  const formatPostalAsTyped = (raw: string): string => {
+    const positions = ["L", "D", "L", "D", "L", "D"] as const;
+    const chars = raw.toUpperCase().split("");
+    const valid: string[] = [];
+    for (const c of chars) {
+      if (valid.length >= 6) break;
+      if (!/[A-Z0-9]/.test(c)) continue;
+      const expected = positions[valid.length];
+      if ((expected === "L" && /[A-Z]/.test(c)) || (expected === "D" && /[0-9]/.test(c))) {
+        valid.push(c);
+      }
+      // else: silently skip — user typed a letter in a digit slot or vice versa
+    }
+    if (valid.length <= 3) return valid.join("");
+    return `${valid.slice(0, 3).join("")} ${valid.slice(3).join("")}`;
+  };
+
+  // Parse the `options` jsonb on a select field into an array of {value,label}.
+  // Tolerates either ["A","B"] or [{value, label}] shapes.
+  const parseFieldOptions = (raw: any): Array<{ value: string; label: string }> => {
+    if (!raw) return [];
+    const arr = Array.isArray(raw) ? raw : [];
+    return arr
+      .map((opt: any) => {
+        if (typeof opt === "string") return { value: opt, label: opt };
+        if (opt && typeof opt === "object") {
+          const v = opt.value ?? opt.val ?? opt.id ?? opt.label ?? "";
+          const l = opt.label ?? opt.name ?? opt.text ?? String(v);
+          return { value: String(v), label: String(l) };
+        }
+        return null;
+      })
+      .filter(Boolean) as Array<{ value: string; label: string }>;
+  };
+  const markResponseDeleted = (id: string) => {
+    setEditTaskResponses((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, deleted: true } : r)),
+    );
+  };
+
+  // Replace a non-APS file response: upload the new file to Vercel Blob,
+  // then PATCH the existing task_responses row with the new url + name.
+  // For shared (synced) tasks, the server-side PATCH mirrors the new file
+  // to every matching response across the co-purchaser/co-seller family.
+  // APS file replacement goes through the dedicated APS upload modal
+  // (which calls /uploadblobstorage), not this path.
+  const replacingFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [replacingFileResponseId, setReplacingFileResponseId] = useState<string | null>(null);
+  const [replacingFileBusy, setReplacingFileBusy] = useState<string | null>(null);
+
+  const triggerReplaceFile = (responseId: string) => {
+    setReplacingFileResponseId(responseId);
+    // Re-open the same input even if user picks the same filename twice.
+    if (replacingFileInputRef.current) {
+      replacingFileInputRef.current.value = "";
+      replacingFileInputRef.current.click();
+    }
+  };
+
+  const handleReplaceFilePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const responseId = replacingFileResponseId;
+    if (!file || !responseId) {
+      setReplacingFileResponseId(null);
+      return;
+    }
+    setReplacingFileBusy(responseId);
+    try {
+      const leadId = (rawDeal?.lead_id as string | undefined) ?? deal.id;
+      const pathname = `task-responses/${leadId}/${Date.now()}-${file.name}`;
+      const blob = await upload(pathname, file, {
+        access: "public",
+        handleUploadUrl: `/api/admin/deals/${deal.id}/uploadblobstorage/token`,
+        contentType: file.type,
+      });
+
+      const pres = await fetch("/api/admin/task-responses", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: responseId,
+          file_url: blob.url,
+          file_name: file.name,
+        }),
+      });
+      const pj = await pres.json();
+      if (!pres.ok || !pj.success) {
+        throw new Error(pj.error || "Failed to replace file");
+      }
+
+      // Refresh everything that surfaces a doc: edit modal list, the task
+      // table's Doc column, and the View Documents modal.
+      await Promise.all([
+        refreshEditTaskResponses(),
+        fetchTaskFileDocs(),
+        fetchDealDocuments(),
+      ]);
+
+      const mirroredCount = typeof pj.mirrored === "number" ? pj.mirrored : 0;
+      showToast(
+        mirroredCount > 0
+          ? `File replaced and synced to ${mirroredCount} linked deal${mirroredCount === 1 ? "" : "s"}.`
+          : "File replaced.",
+      );
+    } catch (err: any) {
+      showToast(err?.message ?? "Failed to replace file", "error");
+    } finally {
+      setReplacingFileBusy(null);
+      setReplacingFileResponseId(null);
+    }
+  };
+
+  const saveEditTask = async () => {
+    if (!editingTask) return;
+    const nextTitle = editTaskTitle.trim();
+    if (!nextTitle) {
+      showToast("Title cannot be empty", "error");
+      return;
+    }
+
+    // Per-field validation pass. Blocks save when any field is invalid
+    // and surfaces a per-field error message under the input.
+    if (editTaskFormFields.length > 0) {
+      const errors: Record<string, string> = {};
+      for (const field of editTaskFormFields) {
+        if (field.field_type === "file") continue;
+        const resp = findResponseForField(field);
+        const value = (resp?.value ?? "").trim();
+        if (field.required && !value && !resp?.deleted) {
+          errors[field.id] = "This field is required.";
+          continue;
+        }
+        const err = validateFieldValue(field, value);
+        if (err) errors[field.id] = err;
+      }
+      if (Object.keys(errors).length > 0) {
+        setEditTaskFieldErrors(errors);
+        showToast("Fix the highlighted fields before saving.", "error");
+        return;
+      }
+      setEditTaskFieldErrors({});
+    }
+    setEditTaskSaving(true);
+    try {
+      // Build the task PATCH payload — only send fields that actually changed
+      // so we don't override values touched elsewhere (e.g. completed_at on
+      // status flip is handled server-side).
+      const payload: Record<string, any> = { id: editingTask.id };
+      if (nextTitle !== editingTask.title) payload.title = nextTitle;
+      if (editTaskStatus !== (editingTask.status ?? "Pending")) {
+        payload.status = editTaskStatus;
+        if (editTaskStatus === "Completed") {
+          payload.completed = true;
+          payload.completed_at = new Date().toISOString();
+        } else {
+          payload.completed = false;
+          payload.completed_at = null;
+        }
+      }
+      const dueChanged = (editTaskDueDate || null) !== (editingTask.dueDate || null);
+      if (dueChanged) payload.due_date = editTaskDueDate || null;
+      const milestoneChanged = (editTaskMilestoneId || null) !== (editingTask.milestoneId || null);
+      if (milestoneChanged) payload.milestone_id = editTaskMilestoneId || null;
+      // Allow manual override of completed_at when the user edits the date
+      // directly. We only treat it as a change when the user picked something
+      // different from the date that's already on file.
+      const initialCompletedSlice = editingTask.completedAt ? editingTask.completedAt.slice(0, 10) : "";
+      if (editTaskCompletedAt !== initialCompletedSlice) {
+        payload.completed_at = editTaskCompletedAt
+          ? new Date(`${editTaskCompletedAt}T00:00:00Z`).toISOString()
+          : null;
+      }
+
+      if (Object.keys(payload).length > 1) {
+        const res = await fetch("/api/admin/tasks", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) throw new Error(data.error || "Failed to save task");
+      }
+
+      // Reconcile client responses:
+      //   - rows flagged `deleted`        → DELETE
+      //   - rows with id "tmp-…"          → POST (admin filled an empty field)
+      //   - existing rows w/ changed value → PATCH
+      //   - file rows                     → skipped (Replace flow handles them)
+      const initialById = new Map(editTaskInitialResponses.map((r) => [r.id, r]));
+      for (const r of editTaskResponses) {
+        const initial = initialById.get(r.id);
+        if (r.deleted) {
+          if (initial) {
+            const dres = await fetch(`/api/admin/task-responses?id=${encodeURIComponent(r.id)}`, {
+              method: "DELETE",
+            });
+            const dj = await dres.json();
+            if (!dres.ok || !dj.success) throw new Error(dj.error || "Failed to delete response");
+          }
+          continue;
+        }
+        if (r.field_type === "file") continue;
+
+        const isTemp = r.id.startsWith("tmp-");
+        if (isTemp) {
+          // Skip empty new rows so the admin isn't forced to POST blanks.
+          if ((r.value ?? "") === "") continue;
+          const cres = await fetch("/api/admin/task-responses", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              task_id: editingTask.id,
+              field_id: r.field_id,
+              field_label: r.field_label,
+              field_type: r.field_type,
+              value: r.value ?? "",
+            }),
+          });
+          const cj = await cres.json();
+          if (!cres.ok || !cj.success) throw new Error(cj.error || "Failed to create response");
+          continue;
+        }
+
+        if (initial && (initial.value ?? "") !== (r.value ?? "")) {
+          const pres = await fetch("/api/admin/task-responses", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: r.id, value: r.value ?? "" }),
+          });
+          const pj = await pres.json();
+          if (!pres.ok || !pj.success) throw new Error(pj.error || "Failed to update response");
+        }
+      }
+
+      // Two-way sync to leads: for any form field whose label maps to a
+      // lead column (phone, address, etc.), also PUT the value back to
+      // /api/admin/leads so the customer-facing app and the leads list
+      // reflect the admin's edit. Non-blocking — task save already
+      // succeeded; a lead-sync failure surfaces as a toast warning.
+      const leadId = rawDeal?.lead_id as string | undefined;
+      if (leadId && editTaskFormFields.length > 0) {
+        const leadPayload: Record<string, any> = {};
+        const skippedEnum: Array<{ label: string; value: string }> = [];
+        for (const field of editTaskFormFields) {
+          if (field.field_type === "file") continue;
+          const leadKey = getLeadFieldKeyForLabel(field.label);
+          if (!leadKey) continue;
+          const resp = findResponseForField(field);
+          if (!resp || resp.deleted) continue;
+          const rawValue = resp.value ?? "";
+
+          // Some lead columns have CHECK constraints (marital_status,
+          // citizenship_status, property_type, ownership_history,
+          // service, sub_service). Normalize through the map so admin-
+          // entered variants ("single", "common-law") become the exact
+          // strings the DB accepts. If no match, skip the field and warn
+          // the admin — better than failing the whole sync.
+          const norm = normalizeLeadValue(leadKey, rawValue);
+          if (norm === null) {
+            skippedEnum.push({ label: field.label, value: rawValue });
+            continue;
+          }
+          leadPayload[leadKey] = norm === undefined ? rawValue : norm;
+        }
+        if (Object.keys(leadPayload).length > 0) {
+          try {
+            const lres = await fetch("/api/admin/leads", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id: leadId, ...leadPayload }),
+            });
+            const lj = await lres.json();
+            if (!lres.ok || !lj.success) {
+              showToast(
+                `Task saved, but lead sync failed: ${lj.error ?? "unknown"}`,
+                "error",
+              );
+            }
+          } catch (err: any) {
+            showToast(
+              `Task saved, but lead sync failed: ${err?.message ?? "network error"}`,
+              "error",
+            );
+          }
+        }
+        if (skippedEnum.length > 0) {
+          const list = skippedEnum
+            .map((s) => `${s.label}="${s.value || "(blank)"}"`)
+            .join(", ");
+          showToast(
+            `Some fields couldn't sync to the lead because the value doesn't match an allowed option: ${list}`,
+            "error",
+          );
+        }
+      }
+
+      showToast("Task updated");
+      closeEditTask();
+      await Promise.all([
+        refetchData(),
+        fetchTaskFileDocs(),
+        fetchDealDocuments(),
+      ]);
+    } catch (err: any) {
+      showToast(err?.message ?? "Failed to save task", "error");
+    } finally {
+      setEditTaskSaving(false);
+    }
+  };
+
+  // Inline milestone title edit — milestones already have status + date
+  // inline; the pencil only handles title because there's no equivalent
+  // "view" modal to mirror for milestones.
+  const [editingMilestoneTitleId, setEditingMilestoneTitleId] = useState<string | null>(null);
+  const [milestoneTitleDraft, setMilestoneTitleDraft] = useState<string>("");
+  const beginEditMilestoneTitle = (id: string, title: string) => {
+    setEditingMilestoneTitleId(id);
+    setMilestoneTitleDraft(title);
+  };
+  const cancelEditMilestoneTitle = () => {
+    setEditingMilestoneTitleId(null);
+    setMilestoneTitleDraft("");
+  };
+  const saveEditMilestoneTitle = async (id: string) => {
+    const next = milestoneTitleDraft.trim();
+    if (!next) {
+      showToast("Title cannot be empty", "error");
+      return;
+    }
+    const prevTitle = milestones.find((m) => m.id === id)?.title;
+    if (next === prevTitle) {
+      cancelEditMilestoneTitle();
+      return;
+    }
+    setMilestones((prev) => prev.map((m) => (m.id === id ? { ...m, title: next } : m)));
+    cancelEditMilestoneTitle();
+    try {
+      const res = await fetch("/api/admin/milestones", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, title: next }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || "Failed to rename milestone");
+      showToast("Milestone renamed");
+    } catch (err: any) {
+      showToast(err?.message ?? "Failed to rename milestone", "error");
+      await refetchData();
+    }
+  };
+
+  // Edit Milestone modal state — Pencil on a milestone row opens this and
+  // lets users edit all milestone details (title, status, date) in one place,
+  // mirroring the Edit Task modal flow.
+  const [editingMilestone, setEditingMilestone] = useState<Milestone | null>(null);
+  const [editMilestoneTitle, setEditMilestoneTitle] = useState<string>("");
+  const [editMilestoneStatus, setEditMilestoneStatus] = useState<Milestone["status"]>("Pending");
+  const [editMilestoneDate, setEditMilestoneDate] = useState<string>("");
+  const [editMilestoneEmailTemplateId, setEditMilestoneEmailTemplateId] = useState<string>("");
+  const [editMilestoneSaving, setEditMilestoneSaving] = useState(false);
+
+  const openEditMilestone = (m: Milestone) => {
+    setEditingMilestone(m);
+    setEditMilestoneTitle(m.title);
+    setEditMilestoneStatus((m.status || "Pending") as Milestone["status"]);
+    setEditMilestoneDate(m.milestoneDate ?? "");
+    setEditMilestoneEmailTemplateId(m.emailTemplateId ?? "");
+  };
+
+  const closeEditMilestone = () => {
+    setEditingMilestone(null);
+    setEditMilestoneTitle("");
+    setEditMilestoneStatus("Pending");
+    setEditMilestoneDate("");
+    setEditMilestoneEmailTemplateId("");
+  };
+
+  const saveEditMilestone = async () => {
+    if (!editingMilestone) return;
+    const id = editingMilestone.id;
+    const nextTitle = editMilestoneTitle.trim();
+    if (!nextTitle) {
+      showToast("Title cannot be empty", "error");
+      return;
+    }
+    setEditMilestoneSaving(true);
+    try {
+      const prev = editingMilestone;
+      const titleChanged = nextTitle !== prev.title;
+      const dateChanged = (editMilestoneDate || "") !== (prev.milestoneDate || "");
+      const statusChanged = (editMilestoneStatus || "Pending") !== (prev.status || "Pending");
+      const emailTemplateChanged = (editMilestoneEmailTemplateId || "") !== (prev.emailTemplateId || "");
+
+      // Patch title/date/email-template directly. Status uses the existing
+      // handler because it cascades to child tasks and may trigger an email.
+      if (titleChanged || dateChanged || emailTemplateChanged) {
+        const payload: any = { id };
+        if (titleChanged) payload.title = nextTitle;
+        if (dateChanged) payload.milestone_date = editMilestoneDate || null;
+        if (emailTemplateChanged) payload.email_template_id = editMilestoneEmailTemplateId || null;
+        const res = await fetch("/api/admin/milestones", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok || data.success === false) {
+          throw new Error(data.error || "Failed to update milestone");
+        }
+        setMilestones((p) => p.map((m) => m.id === id ? {
+          ...m,
+          ...(titleChanged ? { title: nextTitle } : {}),
+          ...(dateChanged ? { milestoneDate: editMilestoneDate || undefined } : {}),
+          ...(emailTemplateChanged ? { emailTemplateId: editMilestoneEmailTemplateId || null } : {}),
+        } : m));
+      }
+
+      if (statusChanged) {
+        await handleMilestoneStatusChange(id, editMilestoneStatus);
+      }
+
+      if (titleChanged || dateChanged || statusChanged || emailTemplateChanged) {
+        showToast("Milestone updated");
+      }
+      closeEditMilestone();
+    } catch (err: any) {
+      showToast(err?.message ?? "Failed to update milestone", "error");
+    } finally {
+      setEditMilestoneSaving(false);
+    }
+  };
 
   // Drag and Drop State
   const dragTaskItem = useRef<number | null>(null);
@@ -218,6 +1139,37 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     }
   };
 
+  // Preflight the APS upload modal: when it opens, ask the server whether
+  // an APS already exists for this deal's family so we can warn that
+  // submitting will replace the existing file.
+  useEffect(() => {
+    if (!showApsUpload) {
+      setExistingApsFileName(null);
+      setApsStatusLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setApsStatusLoading(true);
+    setExistingApsFileName(null);
+    (async () => {
+      try {
+        const res = await fetch(`/api/admin/deals/${deal.id}/aps-status`);
+        const json = await res.json();
+        if (cancelled) return;
+        if (json?.uploaded) {
+          setExistingApsFileName(json.file_name ?? "");
+        }
+      } catch {
+        // Non-blocking — finalize endpoint will still replace if needed.
+      } finally {
+        if (!cancelled) setApsStatusLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showApsUpload, deal.id]);
+
   const handleApsUploadSubmit = async () => {
     if (!apsFile) return;
     setUploadingAps(true);
@@ -254,10 +1206,19 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       );
       setShowApsUpload(false);
       setApsFile(null);
-      await refetchData();
-      if (showDocuments) {
-        await fetchDealDocuments();
-      }
+      // Refresh every doc-backed surface so the new file shows up in the
+      // task table's Doc column and in the View Documents modal — both on
+      // this open render and on next open.
+      await Promise.all([
+        refetchData(),
+        fetchTaskFileDocs(),
+        fetchLeadCorporateDocs(),
+        fetchDealDocuments(),
+        // If the APS upload modal was opened from inside the Edit Task
+        // editor, reload its response list so the freshly-bridged file
+        // row appears in place of the old one without closing the editor.
+        refreshEditTaskResponses(),
+      ]);
     } catch (err: any) {
       showToast(err?.message ?? "Upload failed", "error");
     } finally {
@@ -555,11 +1516,21 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
   const handleDeleteTask = async (taskId: string) => {
     if (!confirm("Are you sure you want to delete this task?")) return;
+    // Capture the template id before we drop the task from state so the
+    // ghost-row suppressor below has something to match against.
+    const deletedTemplateId = tasks.find((t) => t.id === taskId)?.taskTemplateId ?? null;
     try {
       const res = await fetch(`/api/admin/tasks?id=${taskId}`, { method: 'DELETE' });
       const data = await res.json();
       if (data.success) {
         setTasks(prev => prev.filter(t => t.id !== taskId));
+        if (deletedTemplateId) {
+          setSuppressedTemplateIds((prev) => {
+            const next = new Set(prev);
+            next.add(deletedTemplateId);
+            return next;
+          });
+        }
       } else {
         alert('Failed to delete task: ' + data.error);
       }
@@ -576,14 +1547,22 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     if (!taskForm.title || !taskForm.client) return;
 
     try {
-      // Build the task object to send
+      // The dropdown stores the template's id in `taskForm.title` so that
+      // templates sharing a display name (e.g. Purchase vs Sale APS, both
+      // "Upload Complete Agreement of Purchase and Sale and Amendments")
+      // resolve unambiguously. The task title sent to the API is the
+      // template's actual name; is_shared mirrors the template so a
+      // re-added shared task fans out family-wide just like the
+      // auto-seeded original.
+      const selectedTemplate = taskTemplates.find((t) => t.id === taskForm.title) ?? null;
       const taskPayload = {
         deal_id: deal.id,
-        title: taskForm.title,
+        title: selectedTemplate?.name ?? taskForm.title,
         status: taskForm.status,
         due_date: taskForm.deadlineDate || null,
         assignee: taskForm.partner || null,
-        task_template_id: taskTemplates.find(t => t.name === taskForm.title)?.id || null,
+        task_template_id: selectedTemplate?.id ?? null,
+        is_shared: Boolean(selectedTemplate?.is_shared),
         milestone_id: taskForm.milestoneId || null,
         client: taskForm.client,
       };
@@ -645,6 +1624,13 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
   const [clients, setClients] = useState<any[]>([]);
   const [taskTemplates, setTaskTemplates] = useState<any[]>([]);
+  // Templates the admin actively deleted on this deal in the current session.
+  // The "default template" rendering in displayTasks treats any default
+  // template with no matching user task as a ghost placeholder row — that's
+  // intentional for *first-time* deals but a regression after a delete, when
+  // we want the row to disappear cleanly. Tracked in memory only; reloading
+  // restores the placeholder, which matches how default tasks normally seed.
+  const [suppressedTemplateIds, setSuppressedTemplateIds] = useState<Set<string>>(new Set());
   const [taskFileDocs, setTaskFileDocs] = useState<any[]>([]);
   const [taskDocsPopup, setTaskDocsPopup] = useState<{ taskTitle: string; docs: any[] } | null>(null);
 
@@ -776,6 +1762,14 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const dealTypePartsLower = dealTypeParts.map(s => s.toLowerCase());
   const isCombinedDealType = dealTypeParts.length > 1;
 
+  // True when the task currently open in the Edit Task modal is an APS task.
+  // Resolved from the task templates list so the modal can offer the APS
+  // upload/replace action only where it applies.
+  const isEditingApsTask = !!(
+    editingTask?.taskTemplateId &&
+    (taskTemplates as any[]).find((t) => t.id === editingTask.taskTemplateId)?.is_aps_task
+  );
+
   // template id → lead_type lookups (used to resolve a task/milestone's source lead type)
   const taskTemplateLeadTypeMap = new Map<string, string>(
     (taskTemplates as any[]).map(t => [t.id, t.lead_type])
@@ -832,6 +1826,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       .filter(t => t.is_default)
       .filter(t => matchesDealType(t.lead_type))
       .filter(t => !userTitles.has(t.name.toLowerCase()))
+      .filter(t => !suppressedTemplateIds.has(t.id))
       .map((t): DisplayTask => ({
         id: `tpl-${t.id}`,
         title: t.name,
@@ -911,19 +1906,29 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   }, []);
 
 
+  const fetchTaskFileDocs = async () => {
+    try {
+      const res = await fetch(`/api/admin/task-responses?deal_id=${deal.id}`);
+      const data = await res.json();
+      if (Array.isArray(data)) setTaskFileDocs(data);
+    } catch { }
+  };
   useEffect(() => {
-    fetch(`/api/admin/task-responses?deal_id=${deal.id}`)
-      .then(res => res.json())
-      .then(data => { if (Array.isArray(data)) setTaskFileDocs(data); })
-      .catch(() => { });
+    fetchTaskFileDocs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deal.id]);
 
   const [leadCorporateDocs, setLeadCorporateDocs] = useState<any[]>([]);
+  const fetchLeadCorporateDocs = async () => {
+    try {
+      const res = await fetch(`/api/admin/lead-docs?deal_id=${deal.id}`);
+      const data = await res.json();
+      if (Array.isArray(data)) setLeadCorporateDocs(data);
+    } catch { }
+  };
   useEffect(() => {
-    fetch(`/api/admin/lead-docs?deal_id=${deal.id}`)
-      .then(res => res.json())
-      .then(data => { if (Array.isArray(data)) setLeadCorporateDocs(data); })
-      .catch(() => { });
+    fetchLeadCorporateDocs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deal.id]);
 
   const findIdMeta = (doc: { file_name?: string | null; file_url?: string | null; value?: string | null } | null | undefined) => {
@@ -1003,7 +2008,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
               </span>
             </div>
 
-            <h1 className="text-2xl font-bold text-slate-900 mb-4 leading-tight">
+            <h1 className="text-2xl font-bold text-slate-900 mb-2 leading-tight">
               {(() => {
                 // Combined deals follow the active tab; single-side deals
                 // (including co-seller / co-purchaser deals narrowed from a
@@ -1021,7 +2026,48 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
               })()}
             </h1>
 
-            <div className="flex flex-wrap gap-x-8 gap-y-4">
+            {(() => {
+              // Address sub-parts (unit / city / province / postal code).
+              //
+              // Purchase side reads from lead.address_*. Sale side prefers
+              // lead.selling_address_* (only populated when the lead also
+              // has a separate purchase property — e.g. combined deals or
+              // co-seller leads); when that block is empty we fall back to
+              // lead.address_* because convertLead seeds the deal's
+              // property_address from lead.address_street for pure-Sale
+              // leads too.
+              const effectiveSide = isCombinedDealType
+                ? activeWorkflowTab.toLowerCase()
+                : (dealTypeParts[0] ?? "").toLowerCase();
+              const isSale = effectiveSide === "sale";
+              const sellingStreet = rawDeal?.lead_selling_address_street as string | null | undefined;
+              const sellingCity = rawDeal?.lead_selling_address_city as string | null | undefined;
+              const sellingProvince = rawDeal?.lead_selling_address_province as string | null | undefined;
+              const sellingPostal = rawDeal?.lead_selling_address_postal_code as string | null | undefined;
+              const hasSellingAddress = Boolean(
+                sellingStreet || sellingCity || sellingProvince || sellingPostal,
+              );
+              const useSelling = isSale && hasSellingAddress;
+              const unit = useSelling ? null : (rawDeal?.lead_address_unit as string | null | undefined);
+              const city = useSelling
+                ? sellingCity
+                : (rawDeal?.lead_address_city as string | null | undefined);
+              const province = useSelling
+                ? sellingProvince
+                : (rawDeal?.lead_address_province as string | null | undefined);
+              const postal = useSelling
+                ? sellingPostal
+                : (rawDeal?.lead_address_postal_code as string | null | undefined);
+              const parts = [unit && `Unit ${unit}`, city, province, postal].filter(Boolean);
+              if (parts.length === 0) return null;
+              return (
+                <p className="text-sm text-slate-500 mb-4 leading-snug">
+                  {parts.join(" · ")}
+                </p>
+              );
+            })()}
+
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-x-8 gap-y-4">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400">
                   <Calendar size={14} />
@@ -1037,14 +2083,53 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400">
+                  <Calendar size={14} />
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase font-bold text-slate-400 tracking-wider leading-none mb-1">
+                    Opening Date
+                  </p>
+                  <p className="font-bold text-sm text-slate-900 leading-none">
+                    {rawDeal?.opening_date ? formatLocalDate(rawDeal.opening_date as string) : "—"}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400">
+                  <Calendar size={14} />
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase font-bold text-slate-400 tracking-wider leading-none mb-1">
+                    Requisition Date
+                  </p>
+                  <p className="font-bold text-sm text-slate-900 leading-none">
+                    {rawDeal?.requisition_date ? formatLocalDate(rawDeal.requisition_date as string) : "—"}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400">
                   <User size={14} />
                 </div>
                 <div>
                   <p className="text-[10px] uppercase font-bold text-slate-400 tracking-wider leading-none mb-1">
-                    Closing Manager
+                    Lawyer
                   </p>
                   <p className="font-bold text-sm text-slate-900 leading-none">
-                    Suganya Argeen
+                    {(rawDeal?.lawyer_name as string | null | undefined) || "—"}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400">
+                  <User size={14} />
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase font-bold text-slate-400 tracking-wider leading-none mb-1">
+                    Clerk
+                  </p>
+                  <p className="font-bold text-sm text-slate-900 leading-none">
+                    {(rawDeal?.clerk_name as string | null | undefined) || "—"}
                   </p>
                 </div>
               </div>
@@ -1061,6 +2146,36 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                   </p>
                 </div>
               </div>
+              {typeof rawDeal?.price === "number" && rawDeal.price > 0 && (
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400">
+                    <FileText size={14} />
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase font-bold text-slate-400 tracking-wider leading-none mb-1">
+                      Price
+                    </p>
+                    <p className="font-bold text-sm text-slate-900 leading-none">
+                      ${Number(rawDeal.price).toLocaleString()}
+                    </p>
+                  </div>
+                </div>
+              )}
+              {(rawDeal?.file_name as string | null | undefined) && (
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400">
+                    <FileText size={14} />
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase font-bold text-slate-400 tracking-wider leading-none mb-1">
+                      File Name
+                    </p>
+                    <p className="font-bold text-sm text-slate-900 leading-none">
+                      {(rawDeal?.file_name as string | null | undefined) ?? ""}
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -1216,23 +2331,23 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                             Pending
                           </span>
                         ) : (
-                          <div className="relative">
+                          <div className="relative inline-block">
                             <select
-                              className={`text-xs font-semibold border rounded pl-2 pr-6 py-1 w-full outline-none cursor-pointer appearance-none truncate ${getStatusColor(task.status)}`}
                               value={task.status || "Pending"}
                               onChange={(e) =>
-                                handleTaskStatusChange(
-                                  task.id,
-                                  e.target.value as any,
-                                )
+                                handleTaskStatusChange(task.id, e.target.value as Task["status"])
                               }
+                              onClick={(e) => e.stopPropagation()}
+                              className={`text-xs font-semibold border rounded pl-2 pr-6 py-1 outline-none cursor-pointer appearance-none ${getStatusColor(task.status || "Pending")}`}
                             >
                               <option value="Pending">Pending</option>
+                              <option value="In Progress">In Progress</option>
                               <option value="Completed">Completed</option>
                             </select>
-                            <div className="absolute inset-y-0 right-0 flex items-center pr-1.5 pointer-events-none text-slate-500">
-                              <ChevronDown size={10} />
-                            </div>
+                            <ChevronDown
+                              size={12}
+                              className="absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none opacity-60"
+                            />
                           </div>
                         )}
                       </td>
@@ -1307,6 +2422,15 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                       </td>
                       <td className="px-2 py-3 text-center">
                         <div className="flex items-center justify-center gap-1">
+                          {!task.isTemplate && (
+                            <button
+                              onClick={() => openEditTask(task)}
+                              className="text-slate-400 hover:text-brand-primary p-1 transition-colors"
+                              title="Edit task"
+                            >
+                              <Pencil size={14} />
+                            </button>
+                          )}
                           <button onClick={() => openTaskView(task)} className="text-slate-400 hover:text-brand-primary p-1 transition-colors" title="View details">
                             <Eye size={16} />
                           </button>
@@ -1426,25 +2550,26 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                                     Pending
                                   </span>
                                 ) : (
-                                  <div className="relative">
+                                  <div className="relative inline-block">
                                     <select
-                                      className={`text-xs font-semibold border rounded pl-2 pr-6 py-1 w-full outline-none cursor-pointer appearance-none truncate ${getStatusColor(milestone.status)}`}
-                                      value={milestone.status}
+                                      value={milestone.status || "Pending"}
                                       onChange={(e) =>
                                         handleMilestoneStatusChange(
                                           milestone.id,
-                                          e.target.value as any
+                                          e.target.value as Milestone["status"],
                                         )
                                       }
+                                      onClick={(e) => e.stopPropagation()}
+                                      className={`text-xs font-semibold border rounded pl-2 pr-6 py-1 outline-none cursor-pointer appearance-none ${getStatusColor(milestone.status || "Pending")}`}
                                     >
-                                      <option value="">Status</option>
                                       <option value="Pending">Pending</option>
                                       <option value="In Progress">In Progress</option>
                                       <option value="Completed">Completed</option>
                                     </select>
-                                    <div className="absolute inset-y-0 right-0 flex items-center pr-1.5 pointer-events-none text-slate-500">
-                                      <ChevronDown size={10} />
-                                    </div>
+                                    <ChevronDown
+                                      size={12}
+                                      className="absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none opacity-60"
+                                    />
                                   </div>
                                 )}
                               </td>
@@ -1489,6 +2614,15 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
                               <td className="px-2 py-3 text-right">
                                 <div className="flex items-center justify-end gap-1">
+                                  {!milestone.isTemplate && (
+                                    <button
+                                      onClick={() => openEditMilestone(milestone)}
+                                      className="text-slate-400 hover:text-brand-primary p-1 rounded transition-colors"
+                                      title="Edit milestone"
+                                    >
+                                      <Pencil size={14} />
+                                    </button>
+                                  )}
                                   {milestone.emailTemplateId && (
                                     <button
                                       title={milestone.emailSent ? "Email already sent" : "Send Email"}
@@ -1554,21 +2688,42 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         </div>
       </div>
       {showStageForm && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 px-4">
-          <div className="bg-white rounded-xl shadow-lg border border-slate-200 w-full max-w-lg max-h-[90vh] overflow-y-auto p-6">
-            <h3 className="text-lg font-bold text-slate-900 mb-6">Add Stage</h3>
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Add Stage"
+          className="fixed inset-0 z-50 flex justify-end items-stretch lg:justify-center lg:items-center bg-black/30 lg:bg-black/40 lg:backdrop-blur-sm lg:p-4 xl:p-12 2xl:p-20"
+          onClick={() => setShowStageForm(false)}
+        >
+          <div
+            className="bg-white shadow-2xl flex flex-col w-full h-full max-w-[520px] slide-in-from-right lg:h-auto lg:max-h-[90vh] lg:max-w-5xl lg:rounded-2xl lg:zoom-in lg:duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between px-6 py-5 border-b border-gray-100">
+              <div className="min-w-0">
+                <h3 className="text-base font-bold text-gray-900">Add Stage</h3>
+                <p className="text-xs text-gray-400 mt-1">Add a new milestone stage to this deal.</p>
+              </div>
+              <button
+                onClick={() => setShowStageForm(false)}
+                className="text-gray-400 hover:text-gray-700 shrink-0 ml-4"
+                aria-label="Close"
+              >
+                <X size={20} />
+              </button>
+            </div>
 
-            <div className="space-y-4">
+            <div className="px-6 py-6 space-y-5 overflow-y-auto flex-1">
               {/* Stage Template */}
               <div>
-                <label className="text-xs font-bold text-slate-500 uppercase">
+                <label className="text-sm font-semibold text-gray-800 block mb-2">
                   Stage Template
                 </label>
                 <select
                   name="stageTemplate"
                   value={stageForm.stageTemplate}
                   onChange={handleStageFormChange}
-                  className="flex-1 min-w-0 w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-primary outline-none"
+                  className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
                 >
                   <option value="">Select Stage Template</option>
                   {stageTemplates
@@ -1586,14 +2741,14 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
               {/* Client */}
               <div>
-                <label className="text-xs font-bold text-slate-500 uppercase">
+                <label className="text-sm font-semibold text-gray-800 block mb-2">
                   Client
                 </label>
                 <select
                   name="client"
                   value={stageForm.client}
                   onChange={handleStageFormChange}
-                  className="flex-1 min-w-0 w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-primary outline-none"
+                  className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
                 >
                   <option value="">Select Client</option>
                   {clients.map((client) => (
@@ -1604,57 +2759,59 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                 </select>
               </div>
 
-              {/* Status */}
-              <div>
-                <label className="text-xs font-bold text-slate-500 uppercase">
-                  Status
-                </label>
-                <select
-                  name="status"
-                  value={stageForm.status}
-                  onChange={handleStageFormChange}
-                  className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-primary outline-none"
-                >
-                  <option value="Pending">Pending</option>
-                  <option value="In Progress">In Progress</option>
-                  <option value="Completed">Completed</option>
-                </select>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* Status */}
+                <div>
+                  <label className="text-sm font-semibold text-gray-800 block mb-2">
+                    Status
+                  </label>
+                  <select
+                    name="status"
+                    value={stageForm.status}
+                    onChange={handleStageFormChange}
+                    className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
+                  >
+                    <option value="Pending">Pending</option>
+                    <option value="In Progress">In Progress</option>
+                    <option value="Completed">Completed</option>
+                  </select>
+                </div>
+
+                {/* Closing Date */}
+                <div>
+                  <label className="text-sm font-semibold text-gray-800 block mb-2">
+                    Closing Date
+                  </label>
+                  <input
+                    type="date"
+                    name="milestoneDate"
+                    value={stageForm.milestoneDate}
+                    onChange={handleStageFormChange}
+                    min="1900-01-01"
+                    max="2100-12-31"
+                    className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
+                  />
+                </div>
               </div>
 
               {/* Partner */}
               <div>
-                <label className="text-xs font-bold text-slate-500 uppercase">
+                <label className="text-sm font-semibold text-gray-800 block mb-2">
                   Partner
                 </label>
                 <select
                   name="partner"
                   value={stageForm.partner}
                   onChange={handleStageFormChange}
-                  className="flex-1 min-w-0 w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-primary outline-none"
+                  className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
                 >
                   <option value="">Select Partner</option>
                 </select>
               </div>
 
-              {/* Closing Date */}
-              <div>
-                <label className="text-xs font-bold text-slate-500 uppercase">
-                  Closing Date
-                </label>
-                <input
-                  type="date"
-                  name="milestoneDate"
-                  value={stageForm.milestoneDate}
-                  onChange={handleStageFormChange}
-                  min="1900-01-01"
-                  max="2100-12-31"
-                  className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-primary outline-none"
-                />
-              </div>
-
               {/* Email Template */}
               <div>
-                <label className="text-xs font-bold text-slate-500 uppercase">
+                <label className="text-sm font-semibold text-gray-800 block mb-2">
                   Email Template
                 </label>
                 <select
@@ -1662,7 +2819,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                   value={stageForm.emailTemplateId}
                   onChange={handleStageFormChange}
                   disabled={!stageForm.emailTemplateId}
-                  className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-primary outline-none disabled:bg-slate-100 disabled:text-slate-400"
+                  className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white disabled:bg-gray-100 disabled:text-gray-400"
                 >
                   {stageForm.emailTemplateId ? (
                     emailTemplates
@@ -1675,173 +2832,139 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                   )}
                 </select>
               </div>
+            </div>
 
-              {/* Buttons */}
-              <div className="flex justify-end gap-3 mt-6">
-                <button
-                  onClick={() => setShowStageForm(false)}
-                  className="px-4 py-2 border border-slate-300 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleSaveStage}
-                  className="px-4 py-2 bg-brand-primary text-white rounded-lg text-sm font-medium hover:bg-brand-primaryHover"
-                >
-                  Save Stage
-                </button>
-              </div>
+            {/* Buttons */}
+            <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-3 px-6 py-4 border-t border-gray-100">
+              <button
+                onClick={() => setShowStageForm(false)}
+                className="flex-1 py-3 border border-[#C10007] bg-white text-[#C10007] rounded-lg text-sm font-semibold hover:bg-[#FEF2F2]"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveStage}
+                className="flex-1 py-3 bg-[#C10007] text-white rounded-lg text-sm font-semibold hover:bg-[#a30006]"
+              >
+                Save Stage
+              </button>
             </div>
           </div>
         </div>
       )}
 
       {showTaskForm && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 px-4">
-          <div className="bg-white rounded-xl shadow-lg border border-slate-200 w-full max-w-lg max-h-[90vh] overflow-y-auto p-6">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Add Task"
+          className="fixed inset-0 z-50 flex justify-end items-stretch lg:justify-center lg:items-center bg-black/30 lg:bg-black/40 lg:backdrop-blur-sm lg:p-4 xl:p-12 2xl:p-20"
+          onClick={() => setShowTaskForm(false)}
+        >
+          <div
+            className="bg-white shadow-2xl flex flex-col w-full h-full max-w-[520px] slide-in-from-right lg:h-auto lg:max-h-[90vh] lg:max-w-5xl lg:rounded-2xl lg:zoom-in lg:duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between px-6 py-5 border-b border-gray-100">
+              <div className="min-w-0">
+                <h3 className="text-base font-bold text-gray-900">Add Task</h3>
+                <p className="text-xs text-gray-400 mt-1">Create a new task for this deal.</p>
+              </div>
+              <button
+                onClick={() => setShowTaskForm(false)}
+                className="text-gray-400 hover:text-gray-700 shrink-0 ml-4"
+                aria-label="Close"
+              >
+                <X size={20} />
+              </button>
+            </div>
 
-            <h3 className="text-lg font-bold text-slate-900 mb-6">
-              Add Task
-            </h3>
-
-            <div className="space-y-4">
-
+            <div className="px-6 py-6 space-y-5 overflow-y-auto flex-1">
               {/* Client */}
               <div>
-                <label className="text-xs font-bold text-slate-500 uppercase">
+                <label className="text-sm font-semibold text-gray-800 block mb-2">
                   Client
                 </label>
-
-                <div className="flex items-center gap-2 mt-1 min-w-0">
-                  <select
-                    name="client"
-                    value={taskForm.client}
-                    onChange={handleTaskFormChange}
-                    className="flex-1 min-w-0 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-primary outline-none"
-                  >
-                    <option value="">Select Client</option>
-
-                    {clients.map((client) => (
-                      <option key={client.id} value={client.id}>
-                        {client.first_name} {client.last_name}
-                      </option>
-                    ))}
-                  </select>
-
-                  {/* <button className="text-slate-400 hover:text-slate-700">
-                    <Pencil size={16} />
-                  </button>
-
-                  <button className="text-green-600 hover:text-green-700">
-                    <Plus size={16} />
-                  </button>
-
-                  <button className="text-slate-400 hover:text-slate-700">
-                    <Eye size={16} />
-                  </button> */}
-                </div>
+                <select
+                  name="client"
+                  value={taskForm.client}
+                  onChange={handleTaskFormChange}
+                  className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
+                >
+                  <option value="">Select Client</option>
+                  {clients.map((client) => (
+                    <option key={client.id} value={client.id}>
+                      {client.first_name} {client.last_name}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               {/* Partner */}
               <div>
-                <label className="text-xs font-bold text-slate-500 uppercase">
+                <label className="text-sm font-semibold text-gray-800 block mb-2">
                   Partner
                 </label>
-
-                <div className="flex items-center gap-2 mt-1 min-w-0">
-                  <select
-                    name="partner"
-                    value={taskForm.partner}
-                    onChange={handleTaskFormChange}
-                    className="flex-1 min-w-0 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-primary outline-none"
-                  >
-                    <option value="">Select Partner</option>
-                    {/* <option value="partner1">Partner 1</option>
-                    <option value="partner2">Partner 2</option> */}
-                  </select>
-
-                  {/* <button className="text-slate-400 hover:text-slate-700">
-                    <Pencil size={16} />
-                  </button>
-
-                  <button className="text-green-600 hover:text-green-700">
-                    <Plus size={16} />
-                  </button>
-
-                  <button className="text-slate-400 hover:text-slate-700">
-                    <Eye size={16} />
-                  </button> */}
-                </div>
+                <select
+                  name="partner"
+                  value={taskForm.partner}
+                  onChange={handleTaskFormChange}
+                  className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
+                >
+                  <option value="">Select Partner</option>
+                </select>
               </div>
 
               {/* Task Template */}
               <div>
-                <label className="text-xs font-bold text-slate-500 uppercase">
+                <label className="text-sm font-semibold text-gray-800 block mb-2">
                   Task Template
                 </label>
-
-                <div className="flex items-center gap-2 mt-1 min-w-0">
-                  <select
-                    name="title"
-                    value={taskForm.title}
-                    onChange={handleTaskFormChange}
-                    className="flex-1 min-w-0 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-primary outline-none"
-                  >
-                    <option value="">Select Task Template</option>
-
-                    {taskTemplates.map((template) => {
-                      const label = `${template.lead_type} - ${template.role_type} - ${template.name}`;
-                      return (
-                        <option key={template.id} value={template.name} title={label}>
-                          {label.length > 55 ? label.slice(0, 55) + '…' : label}
-                        </option>
-                      );
-                    })}
-                  </select>
-
-                  {/* <button className="text-slate-400 hover:text-slate-700">
-                    <Pencil size={16} />
-                  </button>
-
-                  <button className="text-green-600 hover:text-green-700">
-                    <Plus size={16} />
-                  </button>
-
-                  <button className="text-slate-400 hover:text-slate-700">
-                    <Eye size={16} />
-                  </button> */}
-                </div>
-              </div>
-
-              {/* Status */}
-              <div>
-                <label className="text-xs font-bold text-slate-500 uppercase">
-                  Status
-                </label>
                 <select
-                  name="status"
-                  value={taskForm.status}
+                  name="title"
+                  value={taskForm.title}
                   onChange={handleTaskFormChange}
-                  className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-primary outline-none"
+                  className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
                 >
-                  <option value="Pending">Pending</option>
-                  <option value="Completed">Completed</option>
+                  <option value="">Select Task Template</option>
+                  {taskTemplates.map((template) => {
+                    const label = `${template.lead_type} - ${template.role_type} - ${template.name}`;
+                    return (
+                      <option key={template.id} value={template.id} title={label}>
+                        {label.length > 55 ? label.slice(0, 55) + '…' : label}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
 
-              {/* Deadline */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* Status */}
                 <div>
-                  <label className="text-xs font-bold text-slate-500 uppercase">
+                  <label className="text-sm font-semibold text-gray-800 block mb-2">
+                    Status
+                  </label>
+                  <select
+                    name="status"
+                    value={taskForm.status}
+                    onChange={handleTaskFormChange}
+                    className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
+                  >
+                    <option value="Pending">Pending</option>
+                    <option value="Completed">Completed</option>
+                  </select>
+                </div>
+
+                {/* Deadline */}
+                <div>
+                  <label className="text-sm font-semibold text-gray-800 block mb-2">
                     Deadline Date
                   </label>
-
-                  <div className="relative mt-1">
+                  <div className="relative">
                     <Calendar
                       size={16}
-                      className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                      className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none"
                     />
-
                     <input
                       type="date"
                       name="deadlineDate"
@@ -1849,23 +2972,22 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                       onChange={handleTaskFormChange}
                       min="1900-01-01"
                       max="2100-12-31"
-                      className="w-full border border-slate-200 rounded-lg pl-9 pr-3 py-2 text-sm focus:border-brand-primary outline-none"
+                      className="w-full pl-9 pr-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
                     />
                   </div>
                 </div>
-
               </div>
 
               {/* Milestone */}
               <div>
-                <label className="text-xs font-bold text-slate-500 uppercase">
+                <label className="text-sm font-semibold text-gray-800 block mb-2">
                   Milestone
                 </label>
                 <select
                   name="milestoneId"
                   value={taskForm.milestoneId}
                   onChange={handleTaskFormChange}
-                  className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:border-brand-primary outline-none"
+                  className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
                 >
                   <option value="">No Milestone</option>
                   {milestones.map((m) => (
@@ -1875,57 +2997,196 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                   ))}
                 </select>
               </div>
+            </div>
 
-              {/* Buttons */}
-              <div className="flex justify-end gap-3 mt-6">
-                <button
-                  onClick={() => setShowTaskForm(false)}
-                  className="px-4 py-2 border border-slate-300 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50"
-                >
-                  Cancel
-                </button>
-
-                <button
-                  onClick={handleSaveTask}
-                  className="px-4 py-2 bg-brand-primary text-white rounded-lg text-sm font-medium hover:bg-brand-primaryHover"
-                >
-                  Save Task
-                </button>
-              </div>
-
+            {/* Buttons */}
+            <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-3 px-6 py-4 border-t border-gray-100">
+              <button
+                onClick={() => setShowTaskForm(false)}
+                className="flex-1 py-3 border border-[#C10007] bg-white text-[#C10007] rounded-lg text-sm font-semibold hover:bg-[#FEF2F2]"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveTask}
+                className="flex-1 py-3 bg-[#C10007] text-white rounded-lg text-sm font-semibold hover:bg-[#a30006]"
+              >
+                Save Task
+              </button>
             </div>
           </div>
+        </div>
+      )}
+      {/* Edit Milestone Modal */}
+      {editingMilestone && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Edit Milestone"
+          className="fixed inset-0 z-50 flex justify-end items-stretch lg:justify-center lg:items-center bg-black/30 lg:bg-black/40 lg:backdrop-blur-sm lg:p-4 xl:p-12 2xl:p-20"
+          onClick={() => { if (!editMilestoneSaving) closeEditMilestone(); }}
+        >
+          <div
+            className="bg-white shadow-2xl flex flex-col w-full h-full max-w-[520px] slide-in-from-right lg:h-auto lg:max-h-[90vh] lg:max-w-5xl lg:rounded-2xl lg:zoom-in lg:duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between px-6 py-5 border-b border-gray-100">
+              <div className="min-w-0">
+                <h3 className="text-base font-bold text-gray-900">Edit Milestone</h3>
+                <p className="text-xs text-gray-400 mt-1">Update milestone details such as title, status and deadline.</p>
+              </div>
+              <button
+                onClick={closeEditMilestone}
+                disabled={editMilestoneSaving}
+                className="text-gray-400 hover:text-gray-700 disabled:opacity-50 shrink-0 ml-4"
+                aria-label="Close"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="px-6 py-6 space-y-5 overflow-y-auto flex-1">
+              <div>
+                <label className="text-sm font-semibold text-gray-800 block mb-2">
+                  Milestone Name <span className="text-[#C10007]">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={editMilestoneTitle}
+                  onChange={(e) => setEditMilestoneTitle(e.target.value)}
+                  className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
+                />
+              </div>
 
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm font-semibold text-gray-800 block mb-2">
+                    Status
+                  </label>
+                  <select
+                    value={editMilestoneStatus || "Pending"}
+                    onChange={(e) => setEditMilestoneStatus(e.target.value as Milestone["status"])}
+                    className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
+                  >
+                    <option value="Pending">Pending</option>
+                    <option value="In Progress">In Progress</option>
+                    <option value="Completed">Completed</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-sm font-semibold text-gray-800 block mb-2">
+                    Deadline
+                  </label>
+                  <input
+                    type="date"
+                    min="1900-01-01"
+                    max="2100-12-31"
+                    value={editMilestoneDate}
+                    onChange={(e) => setEditMilestoneDate(e.target.value)}
+                    className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm font-semibold text-gray-800 block mb-2">
+                  Email Template
+                </label>
+                <select
+                  value={editMilestoneEmailTemplateId}
+                  onChange={(e) => setEditMilestoneEmailTemplateId(e.target.value)}
+                  className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
+                >
+                  <option value="">No email template</option>
+                  {emailTemplates.map((et: any) => (
+                    <option key={et.id} value={et.id}>{et.name}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-400 mt-1.5">
+                  Sent to the client when this milestone is marked Completed.
+                </p>
+              </div>
+
+              {editingMilestone.completedAt && (
+                <div>
+                  <p className="text-sm font-semibold text-gray-800">Completed At</p>
+                  <p className="text-sm text-gray-700 mt-1">{editingMilestone.completedAt}</p>
+                </div>
+              )}
+            </div>
+            <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-3 px-6 py-4 border-t border-gray-100">
+              <button
+                onClick={closeEditMilestone}
+                disabled={editMilestoneSaving}
+                className="flex-1 py-3 border border-[#C10007] bg-white text-[#C10007] rounded-lg text-sm font-semibold hover:bg-[#FEF2F2] disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveEditMilestone}
+                disabled={editMilestoneSaving}
+                className="flex-1 py-3 bg-[#C10007] text-white rounded-lg text-sm font-semibold hover:bg-[#a30006] disabled:opacity-50"
+              >
+                {editMilestoneSaving ? "Saving…" : "Save Changes"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
       {/* APS Upload Modal */}
       {showApsUpload && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl flex flex-col">
-            <div className="flex items-start justify-between px-6 py-5 border-b border-slate-200">
-              <div>
-                <h3 className="text-lg font-bold text-slate-900 leading-tight">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Upload Complete Agreement of Purchase and Sale and Amendments"
+          className="fixed inset-0 z-[60] flex justify-end items-stretch lg:justify-center lg:items-center bg-black/30 lg:bg-black/40 lg:backdrop-blur-sm lg:p-4 xl:p-12 2xl:p-20"
+          onClick={() => { if (!uploadingAps) { setShowApsUpload(false); setApsFile(null); } }}
+        >
+          <div
+            className="bg-white shadow-2xl flex flex-col w-full h-full max-w-[520px] slide-in-from-right lg:h-auto lg:max-h-[90vh] lg:max-w-5xl lg:rounded-2xl lg:zoom-in lg:duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between px-6 py-5 border-b border-gray-100">
+              <div className="min-w-0">
+                <h3 className="text-base font-bold text-gray-900 leading-tight">
                   Upload Complete Agreement of Purchase and Sale and Amendments
                 </h3>
-                <p className="text-sm text-slate-500 mt-1">
+                <p className="text-xs text-gray-400 mt-1">
                   Upload the required documents to complete this task.
                 </p>
               </div>
               <button
                 onClick={() => { if (!uploadingAps) { setShowApsUpload(false); setApsFile(null); } }}
-                className="text-slate-400 hover:text-slate-600 text-xl font-bold leading-none shrink-0 ml-4"
+                className="text-gray-400 hover:text-gray-700 shrink-0 ml-4"
                 disabled={uploadingAps}
+                aria-label="Close"
               >
-                &times;
+                <X size={20} />
               </button>
             </div>
 
-            <div className="px-6 py-5">
-              <label className="text-sm font-bold text-slate-900 block mb-3">
-                Upload Agreement of Purchase and Sale <span className="text-brand-primary">*</span>
-              </label>
+            <div className="px-6 py-6 space-y-5 overflow-y-auto">
+              {existingApsFileName !== null && (
+                <div className="flex items-start gap-3 px-4 py-3 rounded-lg border bg-[#FEF2F2] border-[#C10007]/20 text-[#C10007]">
+                  <AlertTriangle size={18} className="mt-0.5 shrink-0" />
+                  <div className="text-sm leading-snug">
+                    <p className="font-semibold">An APS document is already uploaded for this deal.</p>
+                    {existingApsFileName && (
+                      <p className="mt-0.5 text-xs break-all">
+                        Current file: <span className="font-medium">{existingApsFileName}</span>
+                      </p>
+                    )}
+                    <p className="mt-1 text-xs">
+                      Submitting a new file will <span className="font-semibold">replace</span> the existing one.
+                    </p>
+                  </div>
+                </div>
+              )}
+              <div>
+                <label className="text-sm font-semibold text-gray-800 block mb-3">
+                  Upload Agreement of Purchase and Sale <span className="text-[#C10007]">*</span>
+                </label>
 
-              <div className="relative group">
+                <div className="relative group">
                 <input
                   type="file"
                   accept=".pdf,.jpg,.jpeg,.png"
@@ -1959,7 +3220,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                   className={`px-6 py-10 border-2 border-dashed rounded-xl flex flex-col items-center justify-center transition-all ${
                     apsFile
                       ? "bg-green-50 border-green-200"
-                      : "bg-slate-50 border-slate-200 group-hover:border-brand-primary group-hover:bg-brand-light/10"
+                      : "bg-gray-50 border-gray-200 group-hover:border-[#C10007] group-hover:bg-[#FEF2F2]"
                   }`}
                 >
                   {apsFile ? (
@@ -1988,23 +3249,28 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                     </>
                   )}
                 </div>
+                </div>
               </div>
             </div>
 
-            <div className="flex items-center gap-3 px-6 py-4 border-t border-slate-200">
+            <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-3 px-6 py-4 border-t border-gray-100">
               <button
                 onClick={() => { setShowApsUpload(false); setApsFile(null); }}
-                className="flex-1 px-4 py-3 border border-brand-primary text-brand-primary rounded-lg text-sm font-semibold hover:bg-brand-light/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex-1 py-3 border border-[#C10007] bg-white text-[#C10007] rounded-lg text-sm font-semibold hover:bg-[#FEF2F2] disabled:opacity-50 disabled:cursor-not-allowed"
                 disabled={uploadingAps}
               >
                 Cancel
               </button>
               <button
                 onClick={handleApsUploadSubmit}
-                disabled={!apsFile || uploadingAps}
-                className="flex-1 px-4 py-3 bg-brand-primary text-white rounded-lg text-sm font-semibold hover:bg-brand-primaryHover disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={!apsFile || uploadingAps || apsStatusLoading}
+                className="flex-1 py-3 bg-[#C10007] text-white rounded-lg text-sm font-semibold hover:bg-[#a30006] disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {uploadingAps ? "Uploading..." : "Upload & Submit"}
+                {uploadingAps
+                  ? "Uploading..."
+                  : existingApsFileName !== null
+                    ? "Replace & Submit"
+                    : "Upload & Submit"}
               </button>
             </div>
           </div>
@@ -2012,22 +3278,35 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       )}
       {/* Documents Modal */}
       {showDocuments && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[80vh] flex flex-col">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
-              <h3 className="text-lg font-bold text-slate-900">Documents</h3>
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Documents"
+          className="fixed inset-0 z-50 flex justify-end items-stretch lg:justify-center lg:items-center bg-black/30 lg:bg-black/40 lg:backdrop-blur-sm lg:p-4 xl:p-12 2xl:p-20"
+          onClick={() => setShowDocuments(false)}
+        >
+          <div
+            className="bg-white shadow-2xl flex flex-col w-full h-full max-w-[520px] slide-in-from-right lg:h-auto lg:max-h-[90vh] lg:max-w-5xl lg:rounded-2xl lg:zoom-in lg:duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between px-6 py-5 border-b border-gray-100">
+              <div className="min-w-0">
+                <h3 className="text-base font-bold text-gray-900">Documents</h3>
+                <p className="text-xs text-gray-400 mt-1">Review all documents uploaded for this deal.</p>
+              </div>
               <button
                 onClick={() => setShowDocuments(false)}
-                className="text-slate-400 hover:text-slate-600 text-xl font-bold"
+                className="text-gray-400 hover:text-gray-700 shrink-0 ml-4"
+                aria-label="Close"
               >
-                &times;
+                <X size={20} />
               </button>
             </div>
-            <div className="px-6 py-4 overflow-y-auto flex-1">
+            <div className="px-6 py-6 space-y-5 overflow-y-auto flex-1">
               {loadingDocs ? (
-                <p className="text-sm text-slate-400 text-center py-8">Loading documents...</p>
+                <p className="text-sm text-gray-400 text-center py-8">Loading documents...</p>
               ) : dealDocuments.length === 0 ? (
-                <p className="text-sm text-slate-400 text-center py-8">No documents uploaded yet.</p>
+                <p className="text-sm text-gray-400 text-center py-8">No documents uploaded yet.</p>
               ) : (
                 <div className="space-y-5">
                   {Object.entries(
@@ -2039,14 +3318,14 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                     }, {})
                   ).map(([taskTitle, docs]) => (
                     <div key={taskTitle}>
-                      <h4 className="text-sm font-bold text-slate-700 mb-2">{taskTitle}</h4>
+                      <h4 className="text-sm font-semibold text-gray-800 mb-2">{taskTitle}</h4>
                       <ul className="space-y-2">
                         {docs.map((doc: any, idx: number) => (
-                          <li key={`${doc.id}-${idx}`} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
+                          <li key={`${doc.id}-${idx}`} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-100">
                             <div className="flex items-start gap-3 min-w-0">
-                              <FileText size={16} className="text-slate-400 shrink-0 mt-0.5" />
+                              <FileText size={16} className="text-gray-400 shrink-0 mt-0.5" />
                               <div className="min-w-0 flex flex-col">
-                                <p className="text-sm font-medium text-slate-800 truncate">{doc.file_name}</p>
+                                <p className="text-sm font-medium text-gray-800 truncate">{doc.file_name}</p>
                                 <IdentificationChip meta={findIdMeta(doc)} />
                               </div>
                             </div>
@@ -2055,12 +3334,12 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                                 href={doc.file_url}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="text-xs font-medium text-brand-primary hover:underline shrink-0 ml-3"
+                                className="text-xs font-semibold text-[#C10007] hover:underline shrink-0 ml-3"
                               >
                                 View
                               </a>
                             ) : (
-                              <span className="text-xs text-slate-400 shrink-0 ml-3">No file</span>
+                              <span className="text-xs text-gray-400 shrink-0 ml-3">No file</span>
                             )}
                           </li>
                         ))}
@@ -2070,33 +3349,51 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                 </div>
               )}
             </div>
+            <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-3 px-6 py-4 border-t border-gray-100">
+              <button
+                onClick={() => setShowDocuments(false)}
+                className="flex-1 py-3 border border-[#C10007] bg-white text-[#C10007] rounded-lg text-sm font-semibold hover:bg-[#FEF2F2]"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}
       {/* Task Documents Popup */}
       {taskDocsPopup && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[80vh] flex flex-col">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Documents"
+          className="fixed inset-0 z-50 flex justify-end items-stretch lg:justify-center lg:items-center bg-black/30 lg:bg-black/40 lg:backdrop-blur-sm lg:p-4 xl:p-12 2xl:p-20"
+          onClick={() => setTaskDocsPopup(null)}
+        >
+          <div
+            className="bg-white shadow-2xl flex flex-col w-full h-full max-w-[520px] slide-in-from-right lg:h-auto lg:max-h-[90vh] lg:max-w-5xl lg:rounded-2xl lg:zoom-in lg:duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between px-6 py-5 border-b border-gray-100">
               <div className="min-w-0">
-                <h3 className="text-base font-bold text-slate-900">Documents</h3>
-                <p className="text-xs text-slate-500 truncate mt-0.5">{taskDocsPopup.taskTitle}</p>
+                <h3 className="text-base font-bold text-gray-900">Documents</h3>
+                <p className="text-xs text-gray-400 truncate mt-1">{taskDocsPopup.taskTitle}</p>
               </div>
               <button
                 onClick={() => setTaskDocsPopup(null)}
-                className="text-slate-400 hover:text-slate-600 text-xl font-bold shrink-0 ml-3"
+                className="text-gray-400 hover:text-gray-700 shrink-0 ml-4"
+                aria-label="Close"
               >
-                &times;
+                <X size={20} />
               </button>
             </div>
-            <div className="px-5 py-4 overflow-y-auto flex-1">
+            <div className="px-6 py-6 space-y-5 overflow-y-auto flex-1">
               <ul className="space-y-2">
                 {taskDocsPopup.docs.map((doc: any, i: number) => (
-                  <li key={i} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
+                  <li key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-100">
                     <div className="flex items-start gap-3 min-w-0">
-                      <FileText size={16} className="text-slate-400 shrink-0 mt-0.5" />
+                      <FileText size={16} className="text-gray-400 shrink-0 mt-0.5" />
                       <div className="min-w-0 flex flex-col">
-                        <p className="text-sm font-medium text-slate-800 truncate">{doc.file_name}</p>
+                        <p className="text-sm font-medium text-gray-800 truncate">{doc.file_name}</p>
                         <IdentificationChip meta={findIdMeta(doc)} />
                       </div>
                     </div>
@@ -2105,62 +3402,497 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                         href={doc.file_url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-xs font-medium text-brand-primary hover:underline shrink-0 ml-3"
+                        className="text-xs font-semibold text-[#C10007] hover:underline shrink-0 ml-3"
                       >
                         View
                       </a>
                     ) : (
-                      <span className="text-xs text-slate-400 shrink-0 ml-3">No file</span>
+                      <span className="text-xs text-gray-400 shrink-0 ml-3">No file</span>
                     )}
                   </li>
                 ))}
               </ul>
             </div>
+            <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-3 px-6 py-4 border-t border-gray-100">
+              <button
+                onClick={() => setTaskDocsPopup(null)}
+                className="flex-1 py-3 border border-[#C10007] bg-white text-[#C10007] rounded-lg text-sm font-semibold hover:bg-[#FEF2F2]"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Task Modal */}
+      {editingTask && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Edit Task"
+          className="fixed inset-0 z-50 flex justify-end items-stretch lg:justify-center lg:items-center bg-black/30 lg:bg-black/40 lg:backdrop-blur-sm lg:p-4 xl:p-12 2xl:p-20"
+          onClick={() => { if (!editTaskSaving) closeEditTask(); }}
+        >
+          <div
+            className="bg-white shadow-2xl flex flex-col w-full h-full max-w-[520px] slide-in-from-right lg:h-auto lg:max-h-[90vh] lg:max-w-5xl lg:rounded-2xl lg:zoom-in lg:duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between px-6 py-5 border-b border-gray-100">
+              <div className="min-w-0">
+                <h3 className="text-base font-bold text-gray-900">Edit Task</h3>
+                <p className="text-xs text-gray-400 mt-1">Update task details and client responses.</p>
+              </div>
+              <button
+                onClick={closeEditTask}
+                disabled={editTaskSaving}
+                className="text-gray-400 hover:text-gray-700 disabled:opacity-50 shrink-0 ml-4"
+                aria-label="Close"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="px-6 py-6 space-y-5 overflow-y-auto flex-1">
+              <div>
+                <label className="text-sm font-semibold text-gray-800 block mb-2">
+                  Task Name <span className="text-[#C10007]">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={editTaskTitle}
+                  onChange={(e) => setEditTaskTitle(e.target.value)}
+                  className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm font-semibold text-gray-800 block mb-2">
+                    Status
+                  </label>
+                  <select
+                    value={editTaskStatus}
+                    onChange={(e) => setEditTaskStatus(e.target.value)}
+                    className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
+                  >
+                    <option value="Pending">Pending</option>
+                    <option value="Completed">Completed</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-sm font-semibold text-gray-800 block mb-2">
+                    Due Date
+                  </label>
+                  <input
+                    type="date"
+                    min="1900-01-01"
+                    max="2100-12-31"
+                    value={editTaskDueDate}
+                    onChange={(e) => setEditTaskDueDate(e.target.value)}
+                    className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-semibold text-gray-800 block mb-2">
+                    Completed At
+                  </label>
+                  <input
+                    type="date"
+                    min="1900-01-01"
+                    max="2100-12-31"
+                    value={editTaskCompletedAt}
+                    onChange={(e) => setEditTaskCompletedAt(e.target.value)}
+                    className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-semibold text-gray-800 block mb-2">
+                    Milestone
+                  </label>
+                  <select
+                    value={editTaskMilestoneId}
+                    onChange={(e) => setEditTaskMilestoneId(e.target.value)}
+                    className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
+                  >
+                    <option value="">— None —</option>
+                    {milestones.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.title}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Client-submitted responses — text fields editable; file rows
+                  can be removed and (for APS tasks) re-uploaded right here
+                  via the APS upload modal, which replaces the existing doc
+                  family-wide and re-bridges it into this task. */}
+              <div className="border-t border-gray-100 pt-5">
+                <div className="flex items-center justify-between mb-3 gap-3">
+                  <p className="text-sm font-semibold text-gray-800">
+                    Client Responses
+                  </p>
+                  {isEditingApsTask && (
+                    <button
+                      type="button"
+                      onClick={() => { setApsFile(null); setShowApsUpload(true); }}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 border border-[#C10007] bg-white text-[#C10007] rounded-lg text-xs font-semibold hover:bg-[#FEF2F2] shrink-0"
+                    >
+                      <Upload size={14} />
+                      {editTaskResponses.some((r) => r.field_type === "file" && !r.deleted)
+                        ? "Replace APS Document"
+                        : "Upload APS Document"}
+                    </button>
+                  )}
+                </div>
+                {editTaskLoading ? (
+                  <div className="flex items-center gap-2 py-3">
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-[#C10007]" />
+                    <span className="text-xs text-gray-400">Loading…</span>
+                  </div>
+                ) : editTaskFormFields.length > 0 ? (
+                  // Template defines a form: render one row per field, pre-
+                  // filled with any existing response (matched by field_id).
+                  // Empty rows let the admin fill in on the client's behalf.
+                  <div className="space-y-3">
+                    {editTaskFormFields.map((field) => {
+                      const resp = findResponseForField(field);
+                      const currentValue = resp?.value ?? "";
+                      const isFile = field.field_type === "file";
+                      const respId = resp?.id ?? null;
+                      const isTempResp = respId?.startsWith("tmp-") ?? false;
+                      const isPersistedDeleted = Boolean(resp?.deleted);
+                      return (
+                        <div
+                          key={field.id}
+                          className={`bg-gray-50 rounded-lg px-4 py-3 ${isPersistedDeleted ? "opacity-40" : ""}`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="text-xs font-semibold text-gray-800">
+                              {field.label}
+                              {field.required ? <span className="text-[#C10007] ml-1">*</span> : null}
+                            </p>
+                            {isFile && resp && !isPersistedDeleted && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (isEditingApsTask) {
+                                    setApsFile(null);
+                                    setShowApsUpload(true);
+                                  } else {
+                                    triggerReplaceFile(resp.id);
+                                  }
+                                }}
+                                disabled={replacingFileBusy === resp.id}
+                                className="inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold text-[#C10007] border border-[#C10007] rounded hover:bg-[#FEF2F2] disabled:opacity-50"
+                                title="Replace file"
+                              >
+                                <Upload size={12} />
+                                {replacingFileBusy === resp.id ? "Uploading…" : "Replace"}
+                              </button>
+                            )}
+                          </div>
+                          {/* Field input by type */}
+                          {isFile ? (
+                            resp && resp.file_url ? (
+                              <div className="flex items-center gap-2 mt-1">
+                                <FileText size={14} className="text-[#C10007] shrink-0" />
+                                <a
+                                  href={resp.file_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-sm text-[#C10007] hover:underline truncate"
+                                >
+                                  {resp.file_name || "View file"}
+                                </a>
+                              </div>
+                            ) : resp && resp.file_name ? (
+                              <div className="flex items-center gap-2 mt-1">
+                                <FileText size={14} className="text-[#C10007] shrink-0" />
+                                <span className="text-sm text-gray-500">{resp.file_name}</span>
+                              </div>
+                            ) : (
+                              <p className="text-xs text-gray-400 italic mt-2">
+                                No file uploaded. Use the upload/replace button above.
+                              </p>
+                            )
+                          ) : field.field_type === "textarea" ? (
+                            <textarea
+                              value={currentValue}
+                              placeholder={field.placeholder ?? ""}
+                              onChange={(e) => setFieldValue(field, e.target.value)}
+                              rows={3}
+                              className="mt-2 w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
+                            />
+                          ) : field.field_type === "select" ? (
+                            <select
+                              value={currentValue}
+                              onChange={(e) => setFieldValue(field, e.target.value)}
+                              className="mt-2 w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
+                            >
+                              <option value="">— Select —</option>
+                              {parseFieldOptions(field.options).map((opt) => (
+                                <option key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </option>
+                              ))}
+                            </select>
+                          ) : field.field_type === "checkbox" ? (
+                            <label className="mt-2 flex items-center gap-2 text-sm text-gray-700">
+                              <input
+                                type="checkbox"
+                                checked={currentValue === "true" || currentValue === "1" || currentValue === "yes"}
+                                onChange={(e) => setFieldValue(field, e.target.checked ? "true" : "false")}
+                                className="rounded border-gray-300 text-[#C10007] focus:ring-[#C10007]"
+                              />
+                              {field.placeholder || "Yes"}
+                            </label>
+                          ) : (
+                            (() => {
+                              const isPhone = field.field_type === "phone";
+                              const isPostal = isPostalField(field);
+                              const formatter = isPhone
+                                ? formatPhoneAsTyped
+                                : isPostal
+                                ? formatPostalAsTyped
+                                : null;
+                              const displayValue = formatter ? formatter(currentValue) : currentValue;
+                              const defaultPlaceholder = isPhone
+                                ? "(416) 555-1234"
+                                : isPostal
+                                ? "M5V 3L9"
+                                : "";
+                              return (
+                                <input
+                                  type={
+                                    field.field_type === "date"
+                                      ? "date"
+                                      : field.field_type === "email"
+                                      ? "email"
+                                      : isPhone
+                                      ? "tel"
+                                      : field.field_type === "number"
+                                      ? "number"
+                                      : "text"
+                                  }
+                                  inputMode={
+                                    isPhone
+                                      ? "tel"
+                                      : field.field_type === "number"
+                                      ? "numeric"
+                                      : undefined
+                                  }
+                                  maxLength={
+                                    isPhone ? 14 : isPostal ? 7 : undefined
+                                  }
+                                  value={displayValue}
+                                  placeholder={field.placeholder ?? defaultPlaceholder}
+                                  onChange={(e) =>
+                                    setFieldValue(
+                                      field,
+                                      formatter ? formatter(e.target.value) : e.target.value,
+                                    )
+                                  }
+                                  className="mt-2 w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
+                                />
+                              );
+                            })()
+                          )}
+                          {/* Inline validation error */}
+                          {editTaskFieldErrors[field.id] && (
+                            <p className="mt-1 text-[11px] text-[#C10007]">
+                              {editTaskFieldErrors[field.id]}
+                            </p>
+                          )}
+                          {/* Show the persisted-state hint so admin knows
+                              if their edit will create a new row or update. */}
+                          {!isFile && resp && !isTempResp && !editTaskFieldErrors[field.id] && (
+                            <p className="mt-1 text-[10px] text-gray-400">Existing response — saving will update it.</p>
+                          )}
+                          {!isFile && isTempResp && currentValue !== "" && !editTaskFieldErrors[field.id] && (
+                            <p className="mt-1 text-[10px] text-emerald-600">
+                              {(() => {
+                                const leadKey = getLeadFieldKeyForLabel(field.label);
+                                if (leadKey) {
+                                  return "Pre-filled from lead. Saving will store this response and update the lead.";
+                                }
+                                return "New response — saving will add it.";
+                              })()}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : editTaskResponses.length === 0 ? (
+                  <p className="text-sm text-gray-400 italic">
+                    {isEditingApsTask
+                      ? "No APS document uploaded yet. Use the button above to upload one."
+                      : "No responses submitted yet."}
+                  </p>
+                ) : (
+                  // Fallback: no form-field schema (legacy task without a
+                  // template) — keep the old row-per-response renderer so
+                  // admins can still edit/delete existing client submissions.
+                  <div className="space-y-3">
+                    {editTaskResponses.map((resp) => (
+                      <div
+                        key={resp.id}
+                        className={`bg-gray-50 rounded-lg px-4 py-3 ${resp.deleted ? "opacity-40" : ""}`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="text-xs font-semibold text-gray-800">
+                            {resp.field_label || resp.field_id || "Response"}
+                          </p>
+                          {!resp.deleted && (
+                            resp.field_type === "file" ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (isEditingApsTask) {
+                                    setApsFile(null);
+                                    setShowApsUpload(true);
+                                  } else {
+                                    triggerReplaceFile(resp.id);
+                                  }
+                                }}
+                                disabled={replacingFileBusy === resp.id}
+                                className="inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold text-[#C10007] border border-[#C10007] rounded hover:bg-[#FEF2F2] disabled:opacity-50"
+                                title="Replace file"
+                              >
+                                <Upload size={12} />
+                                {replacingFileBusy === resp.id ? "Uploading…" : "Replace"}
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => markResponseDeleted(resp.id)}
+                                className="text-gray-400 hover:text-[#C10007]"
+                                title="Remove this response"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            )
+                          )}
+                        </div>
+                        {resp.field_type === "file" ? (
+                          <div className="flex items-center gap-2 mt-1">
+                            <FileText size={14} className="text-[#C10007] shrink-0" />
+                            {resp.file_url ? (
+                              <a
+                                href={resp.file_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-sm text-[#C10007] hover:underline truncate"
+                              >
+                                {resp.file_name || "View file"}
+                              </a>
+                            ) : (
+                              <span className="text-sm text-gray-500">
+                                {resp.file_name || "File uploaded (no URL)"}
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <input
+                            type="text"
+                            value={resp.value ?? ""}
+                            onChange={(e) => updateResponseValue(resp.id, e.target.value)}
+                            disabled={resp.deleted}
+                            className="mt-2 w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white disabled:bg-gray-100"
+                          />
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-3 px-6 py-4 border-t border-gray-100">
+              <button
+                onClick={closeEditTask}
+                disabled={editTaskSaving}
+                className="flex-1 py-3 border border-[#C10007] bg-white text-[#C10007] rounded-lg text-sm font-semibold hover:bg-[#FEF2F2] disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveEditTask}
+                disabled={editTaskSaving}
+                className="flex-1 py-3 bg-[#C10007] text-white rounded-lg text-sm font-semibold hover:bg-[#a30006] disabled:opacity-50"
+              >
+                {editTaskSaving ? "Saving…" : "Save Changes"}
+              </button>
+            </div>
+            <input
+              ref={replacingFileInputRef}
+              type="file"
+              accept="application/pdf,image/jpeg,image/jpg,image/png"
+              hidden
+              onChange={handleReplaceFilePicked}
+            />
           </div>
         </div>
       )}
 
       {/* View Task Detail Modal */}
       {viewingTask && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={() => setViewingTask(null)}>
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
-              <h3 className="text-lg font-bold text-slate-900">Task Details</h3>
-              <button onClick={() => setViewingTask(null)} className="text-slate-400 hover:text-slate-600 transition-colors">
-                <span className="sr-only">Close</span>&times;
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Task Details"
+          className="fixed inset-0 z-50 flex justify-end items-stretch lg:justify-center lg:items-center bg-black/30 lg:bg-black/40 lg:backdrop-blur-sm lg:p-4 xl:p-12 2xl:p-20"
+          onClick={() => setViewingTask(null)}
+        >
+          <div
+            className="bg-white shadow-2xl flex flex-col w-full h-full max-w-[520px] slide-in-from-right lg:h-auto lg:max-h-[90vh] lg:max-w-5xl lg:rounded-2xl lg:zoom-in lg:duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between px-6 py-5 border-b border-gray-100">
+              <div className="min-w-0">
+                <h3 className="text-base font-bold text-gray-900">Task Details</h3>
+                <p className="text-xs text-gray-400 mt-1">Review task information and client responses.</p>
+              </div>
+              <button
+                onClick={() => setViewingTask(null)}
+                className="text-gray-400 hover:text-gray-700 shrink-0 ml-4"
+                aria-label="Close"
+              >
+                <X size={20} />
               </button>
             </div>
-            <div className="px-6 py-5 space-y-4 max-h-[70vh] overflow-y-auto">
+            <div className="px-6 py-6 space-y-5 overflow-y-auto flex-1">
               <div>
-                <p className="text-[11px] uppercase tracking-wider text-slate-400 font-bold">Task Name</p>
-                <p className="text-sm font-semibold text-slate-800 mt-0.5">{viewingTask.title}</p>
+                <p className="text-sm font-semibold text-gray-800">Task Name</p>
+                <p className="text-sm text-gray-700 mt-1">{viewingTask.title}</p>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <p className="text-[11px] uppercase tracking-wider text-slate-400 font-bold">Status</p>
+                  <p className="text-sm font-semibold text-gray-800">Status</p>
                   <span className={`inline-block mt-1 text-xs font-semibold border rounded px-2 py-1 ${getStatusColor(viewingTask.status || "Pending")}`}>
                     {viewingTask.status || "Pending"}
                   </span>
                 </div>
                 <div>
-                  <p className="text-[11px] uppercase tracking-wider text-slate-400 font-bold">Due Date</p>
-                  <p className="text-sm text-slate-700 mt-0.5">
+                  <p className="text-sm font-semibold text-gray-800">Due Date</p>
+                  <p className="text-sm text-gray-700 mt-1">
                     {viewingTask.dueDate
                       ? formatLocalDate(viewingTask.dueDate)
                       : "—"}
                   </p>
                 </div>
                 <div>
-                  <p className="text-[11px] uppercase tracking-wider text-slate-400 font-bold">Completed At</p>
-                  <p className="text-sm text-slate-700 mt-0.5">
+                  <p className="text-sm font-semibold text-gray-800">Completed At</p>
+                  <p className="text-sm text-gray-700 mt-1">
                     {viewingTask.completedAt
                       ? formatLocalDateTime(viewingTask.completedAt)
                       : "—"}
                   </p>
                 </div>
                 <div>
-                  <p className="text-[11px] uppercase tracking-wider text-slate-400 font-bold">Milestone</p>
-                  <p className="text-sm text-slate-700 mt-0.5">
+                  <p className="text-sm font-semibold text-gray-800">Milestone</p>
+                  <p className="text-sm text-gray-700 mt-1">
                     {viewingTask.milestoneId
                       ? milestones.find((m) => m.id === viewingTask.milestoneId)?.title || "—"
                       : "—"}
@@ -2169,33 +3901,33 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
               </div>
 
               {/* Client-submitted responses */}
-              <div className="border-t border-slate-100 pt-4">
-                <p className="text-[11px] uppercase tracking-wider text-slate-400 font-bold mb-3">Client Responses</p>
+              <div className="border-t border-gray-100 pt-5">
+                <p className="text-sm font-semibold text-gray-800 mb-3">Client Responses</p>
                 {loadingTaskResponses ? (
                   <div className="flex items-center gap-2 py-4">
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-brand-primary"></div>
-                    <span className="text-xs text-slate-400">Loading...</span>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-[#C10007]"></div>
+                    <span className="text-xs text-gray-400">Loading...</span>
                   </div>
                 ) : viewTaskResponses.length > 0 ? (
                   <div className="space-y-3">
                     {viewTaskResponses.map((resp: any, i: number) => (
-                      <div key={i} className="bg-slate-50 rounded-lg px-4 py-3">
-                        <p className="text-[11px] uppercase tracking-wider text-slate-400 font-bold">
+                      <div key={i} className="bg-gray-50 rounded-lg px-4 py-3">
+                        <p className="text-xs font-semibold text-gray-800">
                           {resp.field_label || resp.field_id || `Field ${i + 1}`}
                         </p>
                         {resp.field_type === "file" ? (
                           <div className="flex items-center gap-2 mt-1">
-                            <FileText size={14} className="text-brand-primary shrink-0" />
+                            <FileText size={14} className="text-[#C10007] shrink-0" />
                             {resp.file_url ? (
-                              <a href={resp.file_url} target="_blank" rel="noopener noreferrer" className="text-sm text-brand-primary hover:underline truncate">
+                              <a href={resp.file_url} target="_blank" rel="noopener noreferrer" className="text-sm text-[#C10007] hover:underline truncate">
                                 {resp.file_name || "View file"}
                               </a>
                             ) : (
-                              <span className="text-sm text-slate-500">{resp.file_name || "File uploaded (no URL)"}</span>
+                              <span className="text-sm text-gray-500">{resp.file_name || "File uploaded (no URL)"}</span>
                             )}
                           </div>
                         ) : (
-                          <p className="text-sm text-slate-700 mt-0.5 break-words">
+                          <p className="text-sm text-gray-700 mt-1 break-words">
                             {resp.value || resp.text_value || "—"}
                           </p>
                         )}
@@ -2203,12 +3935,15 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-slate-400 italic">No responses submitted yet.</p>
+                  <p className="text-sm text-gray-400 italic">No responses submitted yet.</p>
                 )}
               </div>
             </div>
-            <div className="px-6 py-3 border-t border-slate-100 flex justify-end">
-              <button onClick={() => setViewingTask(null)} className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors">
+            <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-3 px-6 py-4 border-t border-gray-100">
+              <button
+                onClick={() => setViewingTask(null)}
+                className="flex-1 py-3 border border-[#C10007] bg-white text-[#C10007] rounded-lg text-sm font-semibold hover:bg-[#FEF2F2]"
+              >
                 Close
               </button>
             </div>

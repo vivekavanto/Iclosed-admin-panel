@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { X, Plus, Trash2, Loader2, ExternalLink } from "lucide-react";
+import { X, Loader2, ExternalLink } from "lucide-react";
 import Link from "next/link";
 
 type DealRow = {
@@ -21,26 +21,6 @@ type DealRow = {
   outstanding_requisitions?: number | null;
 };
 
-type TaskRow = {
-  id: string;
-  title: string;
-  status?: string | null;
-  due_date?: string | null;
-  milestone_id?: string | null;
-  is_shared?: boolean | null;
-  task_template_id?: string | null;
-  assignee?: string | null;
-  completed?: boolean | null;
-};
-
-type MilestoneRow = {
-  id: string;
-  title: string;
-  status?: string | null;
-  milestone_date?: string | null;
-  stage_template_id?: string | null;
-};
-
 type Toast = { message: string; type: "success" | "error" } | null;
 
 interface EditDealModalProps {
@@ -50,8 +30,7 @@ interface EditDealModalProps {
 }
 
 const TYPE_OPTIONS = ["Purchase", "Sale", "Refinance", "Purchase & Sale"];
-const STATUS_OPTIONS = ["Active", "Pending", "Closed", "Cancelled", "Urgent"];
-const TASK_STATUS_OPTIONS = ["Pending", "In Progress", "Completed"];
+const STATUS_OPTIONS = ["Active", "Inactive", "Closed"];
 
 // Native <input type="date"> in Chrome allows the user to type a 6-digit
 // year. Restrict to a sane real-world window matching the rest of the app
@@ -80,34 +59,24 @@ function toDateInputValue(value?: string | null): string {
 const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved }) => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [activeTab, setActiveTab] = useState<"details" | "tasks" | "milestones">(
-    "details",
-  );
   const [toast, setToast] = useState<Toast>(null);
   const showToast = (message: string, type: "success" | "error" = "success") => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 2500);
   };
 
-  // Snapshot of editable deal fields (controlled inputs)
+  // Snapshot of editable deal fields (controlled inputs). Tasks and stages
+  // are no longer edited here — they have inline edit affordances on the
+  // deal detail page.
   const [form, setForm] = useState<DealRow>({ id: dealId });
-  const [tasks, setTasks] = useState<TaskRow[]>([]);
-  const [milestones, setMilestones] = useState<MilestoneRow[]>([]);
 
-  // Initial load: deal, tasks, milestones in parallel
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       setLoading(true);
       try {
-        const [dealRes, tasksRes, milestonesRes] = await Promise.all([
-          fetch(`/api/admin/deals/${dealId}`),
-          fetch(`/api/admin/tasks?deal_id=${dealId}`),
-          fetch(`/api/admin/milestones?deal_id=${dealId}`),
-        ]);
+        const dealRes = await fetch(`/api/admin/deals/${dealId}`);
         const deal = await dealRes.json();
-        const t = await tasksRes.json();
-        const m = await milestonesRes.json();
         if (cancelled) return;
         if (deal && !deal.error) {
           setForm({
@@ -127,8 +96,6 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
             outstanding_requisitions: deal.outstanding_requisitions ?? 0,
           });
         }
-        if (Array.isArray(t)) setTasks(t);
-        if (Array.isArray(m)) setMilestones(m);
       } catch (err) {
         console.error("[EditDealModal] load failed", err);
         showToast("Failed to load deal", "error");
@@ -192,259 +159,43 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
     }
   };
 
-  // --- Task handlers --------------------------------------------------------
-
-  const handleTaskFieldChange = (
-    id: string,
-    field: "title" | "status" | "due_date",
-    value: string,
-  ) => {
-    setTasks((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, [field]: value } : t)),
-    );
-  };
-
-  const handleTaskSave = async (task: TaskRow) => {
-    if (!isValidDateInput(task.due_date)) {
-      showToast("Task due date must be between 1900 and 2100", "error");
-      return;
-    }
-    try {
-      const body: Record<string, any> = {
-        id: task.id,
-        status: task.status,
-        due_date: task.due_date || null,
-      };
-      if (task.status === "Completed") {
-        body.completed = true;
-        body.completed_at = new Date().toISOString();
-      } else {
-        body.completed = false;
-        body.completed_at = null;
-      }
-      const res = await fetch("/api/admin/tasks", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || "Failed");
-      showToast("Task saved");
-      onSaved?.();
-    } catch (err: any) {
-      showToast(err?.message ?? "Failed to save task", "error");
-    }
-  };
-
-  const handleTaskDelete = async (id: string) => {
-    if (!confirm("Delete this task?")) return;
-    try {
-      const res = await fetch(`/api/admin/tasks?id=${id}`, { method: "DELETE" });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || "Failed");
-      setTasks((prev) => prev.filter((t) => t.id !== id));
-      showToast("Task deleted");
-      onSaved?.();
-    } catch (err: any) {
-      showToast(err?.message ?? "Failed to delete", "error");
-    }
-  };
-
-  // Empty-row template for the inline add UI
-  const blankTask: { title: string; status: string; due_date: string; milestone_id: string } = {
-    title: "",
-    status: "Pending",
-    due_date: "",
-    milestone_id: "",
-  };
-  const [newTask, setNewTask] = useState(blankTask);
-
-  const handleTaskAdd = async () => {
-    if (!newTask.title.trim()) {
-      showToast("Title is required", "error");
-      return;
-    }
-    if (!isValidDateInput(newTask.due_date)) {
-      showToast("Task due date must be between 1900 and 2100", "error");
-      return;
-    }
-    try {
-      const payload: Record<string, any> = {
-        deal_id: dealId,
-        title: newTask.title.trim(),
-        status: newTask.status,
-        due_date: newTask.due_date || null,
-        milestone_id: newTask.milestone_id || null,
-      };
-      const res = await fetch("/api/admin/tasks", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || "Failed");
-      setTasks((prev) => [...prev, data.data as TaskRow]);
-      setNewTask(blankTask);
-      showToast("Task added");
-      onSaved?.();
-    } catch (err: any) {
-      showToast(err?.message ?? "Failed to add task", "error");
-    }
-  };
-
-  // --- Milestone handlers ---------------------------------------------------
-
-  const handleMilestoneFieldChange = (
-    id: string,
-    field: "title" | "status" | "milestone_date",
-    value: string,
-  ) => {
-    setMilestones((prev) =>
-      prev.map((m) => (m.id === id ? { ...m, [field]: value } : m)),
-    );
-  };
-
-  const handleMilestoneSave = async (m: MilestoneRow) => {
-    if (!isValidDateInput(m.milestone_date)) {
-      showToast("Stage date must be between 1900 and 2100", "error");
-      return;
-    }
-    try {
-      const body: Record<string, any> = {
-        id: m.id,
-        title: m.title,
-        status: m.status,
-        milestone_date: m.milestone_date || null,
-      };
-      if (m.status === "Completed") {
-        body.completed_at = new Date().toISOString();
-      } else {
-        body.completed_at = null;
-        body.email_sent = false;
-      }
-      const res = await fetch("/api/admin/milestones", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || "Failed");
-      showToast("Stage saved");
-      onSaved?.();
-    } catch (err: any) {
-      showToast(err?.message ?? "Failed to save stage", "error");
-    }
-  };
-
-  const handleMilestoneDelete = async (id: string) => {
-    if (!confirm("Delete this stage?")) return;
-    try {
-      const res = await fetch(`/api/admin/milestones?id=${id}`, {
-        method: "DELETE",
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || "Failed");
-      setMilestones((prev) => prev.filter((m) => m.id !== id));
-      showToast("Stage deleted");
-      onSaved?.();
-    } catch (err: any) {
-      showToast(err?.message ?? "Failed to delete", "error");
-    }
-  };
-
-  const blankMilestone = { title: "", status: "Pending", milestone_date: "" };
-  const [newMilestone, setNewMilestone] = useState(blankMilestone);
-
-  const handleMilestoneAdd = async () => {
-    if (!newMilestone.title.trim()) {
-      showToast("Title is required", "error");
-      return;
-    }
-    if (!isValidDateInput(newMilestone.milestone_date)) {
-      showToast("Stage date must be between 1900 and 2100", "error");
-      return;
-    }
-    try {
-      const payload = {
-        deal_id: dealId,
-        title: newMilestone.title.trim(),
-        status: newMilestone.status,
-        milestone_date: newMilestone.milestone_date || null,
-      };
-      const res = await fetch("/api/admin/milestones", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || "Failed");
-      setMilestones((prev) => [...prev, data.data as MilestoneRow]);
-      setNewMilestone(blankMilestone);
-      showToast("Stage added");
-      onSaved?.();
-    } catch (err: any) {
-      showToast(err?.message ?? "Failed to add stage", "error");
-    }
-  };
-
   // ---------------------------------------------------------------- render --
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Edit deal"
+      className="fixed inset-0 z-50 flex justify-end items-stretch lg:justify-center lg:items-center bg-black/30 lg:bg-black/40 lg:backdrop-blur-sm lg:p-4 xl:p-12 2xl:p-20"
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col"
+        className="bg-white shadow-2xl flex flex-col w-full h-full max-w-[520px] slide-in-from-right relative lg:h-auto lg:max-h-[90vh] lg:max-w-5xl lg:rounded-2xl lg:zoom-in lg:duration-200"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
-          <div>
-            <h2 className="text-lg font-bold text-slate-900">Edit deal</h2>
-            <p className="text-xs text-slate-500 mt-0.5">
+        <div className="flex items-start justify-between px-6 py-5 border-b border-gray-100">
+          <div className="min-w-0">
+            <h2 className="text-base font-bold text-gray-900">Edit deal</h2>
+            <p className="text-xs text-gray-400 mt-1">
               {form.file_number ? `File ${form.file_number}` : "Loading…"}
             </p>
           </div>
           <button
             onClick={onClose}
-            className="text-slate-400 hover:text-slate-600 transition-colors"
+            className="text-gray-400 hover:text-gray-700 shrink-0 ml-4"
             aria-label="Close"
           >
             <X size={20} />
           </button>
         </div>
 
-        <div className="border-b border-slate-200 px-6">
-          <div className="flex gap-6 text-sm font-semibold">
-            {(
-              [
-                ["details", "Details"],
-                ["tasks", `Tasks (${tasks.length})`],
-                ["milestones", `Stages (${milestones.length})`],
-              ] as const
-            ).map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => setActiveTab(key)}
-                className={`py-3 border-b-2 transition-colors ${
-                  activeTab === key
-                    ? "border-brand-primary text-brand-primary"
-                    : "border-transparent text-slate-500 hover:text-slate-800"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-6 py-5">
+        <div className="flex-1 overflow-y-auto px-6 py-6">
           {loading ? (
-            <div className="flex items-center justify-center py-12 text-slate-500 gap-2">
+            <div className="flex items-center justify-center py-12 text-gray-500 gap-2">
               <Loader2 size={16} className="animate-spin" /> Loading…
             </div>
-          ) : activeTab === "details" ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <Field label="File number" required>
                 <input
                   type="text"
@@ -486,6 +237,12 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
                       {s}
                     </option>
                   ))}
+                  {/* Legacy values from before the status set was trimmed —
+                      surfaced so admins see the real value and can choose
+                      whether to replace it with one of the three. */}
+                  {form.status && !STATUS_OPTIONS.includes(form.status) && (
+                    <option value={form.status}>{form.status} (legacy)</option>
+                  )}
                 </select>
               </Field>
               <Field label="Lawyer">
@@ -587,253 +344,32 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
                 />
               </Field>
             </div>
-          ) : activeTab === "tasks" ? (
-            <div className="space-y-2">
-              {tasks.length === 0 && (
-                <p className="text-xs text-slate-500 italic">
-                  No tasks for this deal yet.
-                </p>
-              )}
-              {tasks.map((task) => (
-                <div
-                  key={task.id}
-                  className="grid grid-cols-12 gap-2 items-center bg-slate-50 border border-slate-200 rounded px-2 py-2"
-                >
-                  <input
-                    type="text"
-                    value={task.title}
-                    onChange={(e) =>
-                      handleTaskFieldChange(task.id, "title", e.target.value)
-                    }
-                    disabled
-                    title="Task title cannot be renamed here — manage in deal detail view"
-                    className="col-span-5 h-8 text-xs px-2 border border-slate-200 rounded bg-white text-slate-700 disabled:bg-slate-100 disabled:text-slate-500"
-                  />
-                  <select
-                    value={task.status ?? "Pending"}
-                    onChange={(e) =>
-                      handleTaskFieldChange(task.id, "status", e.target.value)
-                    }
-                    className="col-span-3 h-8 text-xs px-2 border border-slate-200 rounded bg-white"
-                  >
-                    {TASK_STATUS_OPTIONS.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    type="date"
-                    min={DATE_MIN}
-                    max={DATE_MAX}
-                    value={toDateInputValue(task.due_date)}
-                    onChange={(e) =>
-                      handleTaskFieldChange(task.id, "due_date", e.target.value)
-                    }
-                    className="col-span-2 h-8 text-xs px-2 border border-slate-200 rounded bg-white"
-                  />
-                  <button
-                    onClick={() => handleTaskSave(task)}
-                    className="col-span-1 h-8 text-[11px] font-bold uppercase tracking-wide bg-brand-primary text-white rounded hover:bg-brand-primaryHover"
-                  >
-                    Save
-                  </button>
-                  <button
-                    onClick={() => handleTaskDelete(task.id)}
-                    className="col-span-1 h-8 flex items-center justify-center text-slate-400 hover:text-red-500"
-                    title="Delete task"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              ))}
-
-              <div className="border-t border-slate-200 pt-3 mt-3">
-                <p className="text-xs font-bold uppercase text-slate-500 mb-2">
-                  Add task
-                </p>
-                <div className="grid grid-cols-12 gap-2 items-center">
-                  <input
-                    type="text"
-                    placeholder="Title"
-                    value={newTask.title}
-                    onChange={(e) =>
-                      setNewTask((p) => ({ ...p, title: e.target.value }))
-                    }
-                    className="col-span-5 h-8 text-xs px-2 border border-slate-300 rounded"
-                  />
-                  <select
-                    value={newTask.status}
-                    onChange={(e) =>
-                      setNewTask((p) => ({ ...p, status: e.target.value }))
-                    }
-                    className="col-span-3 h-8 text-xs px-2 border border-slate-300 rounded bg-white"
-                  >
-                    {TASK_STATUS_OPTIONS.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    type="date"
-                    min={DATE_MIN}
-                    max={DATE_MAX}
-                    value={newTask.due_date}
-                    onChange={(e) =>
-                      setNewTask((p) => ({ ...p, due_date: e.target.value }))
-                    }
-                    className="col-span-2 h-8 text-xs px-2 border border-slate-300 rounded"
-                  />
-                  <button
-                    onClick={handleTaskAdd}
-                    className="col-span-2 h-8 text-[11px] font-bold uppercase tracking-wide bg-brand-primary text-white rounded hover:bg-brand-primaryHover inline-flex items-center justify-center gap-1"
-                  >
-                    <Plus size={12} /> Add
-                  </button>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {milestones.length === 0 && (
-                <p className="text-xs text-slate-500 italic">
-                  No stages for this deal yet.
-                </p>
-              )}
-              {milestones.map((m) => (
-                <div
-                  key={m.id}
-                  className="grid grid-cols-12 gap-2 items-center bg-slate-50 border border-slate-200 rounded px-2 py-2"
-                >
-                  <input
-                    type="text"
-                    value={m.title}
-                    onChange={(e) =>
-                      handleMilestoneFieldChange(m.id, "title", e.target.value)
-                    }
-                    className="col-span-5 h-8 text-xs px-2 border border-slate-200 rounded bg-white"
-                  />
-                  <select
-                    value={m.status ?? "Pending"}
-                    onChange={(e) =>
-                      handleMilestoneFieldChange(m.id, "status", e.target.value)
-                    }
-                    className="col-span-3 h-8 text-xs px-2 border border-slate-200 rounded bg-white"
-                  >
-                    {TASK_STATUS_OPTIONS.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    type="date"
-                    min={DATE_MIN}
-                    max={DATE_MAX}
-                    value={toDateInputValue(m.milestone_date)}
-                    onChange={(e) =>
-                      handleMilestoneFieldChange(
-                        m.id,
-                        "milestone_date",
-                        e.target.value,
-                      )
-                    }
-                    className="col-span-2 h-8 text-xs px-2 border border-slate-200 rounded bg-white"
-                  />
-                  <button
-                    onClick={() => handleMilestoneSave(m)}
-                    className="col-span-1 h-8 text-[11px] font-bold uppercase tracking-wide bg-brand-primary text-white rounded hover:bg-brand-primaryHover"
-                  >
-                    Save
-                  </button>
-                  <button
-                    onClick={() => handleMilestoneDelete(m.id)}
-                    className="col-span-1 h-8 flex items-center justify-center text-slate-400 hover:text-red-500"
-                    title="Delete stage"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              ))}
-
-              <div className="border-t border-slate-200 pt-3 mt-3">
-                <p className="text-xs font-bold uppercase text-slate-500 mb-2">
-                  Add stage
-                </p>
-                <div className="grid grid-cols-12 gap-2 items-center">
-                  <input
-                    type="text"
-                    placeholder="Title"
-                    value={newMilestone.title}
-                    onChange={(e) =>
-                      setNewMilestone((p) => ({ ...p, title: e.target.value }))
-                    }
-                    className="col-span-5 h-8 text-xs px-2 border border-slate-300 rounded"
-                  />
-                  <select
-                    value={newMilestone.status}
-                    onChange={(e) =>
-                      setNewMilestone((p) => ({ ...p, status: e.target.value }))
-                    }
-                    className="col-span-3 h-8 text-xs px-2 border border-slate-300 rounded bg-white"
-                  >
-                    {TASK_STATUS_OPTIONS.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    type="date"
-                    min={DATE_MIN}
-                    max={DATE_MAX}
-                    value={newMilestone.milestone_date}
-                    onChange={(e) =>
-                      setNewMilestone((p) => ({
-                        ...p,
-                        milestone_date: e.target.value,
-                      }))
-                    }
-                    className="col-span-2 h-8 text-xs px-2 border border-slate-300 rounded"
-                  />
-                  <button
-                    onClick={handleMilestoneAdd}
-                    className="col-span-2 h-8 text-[11px] font-bold uppercase tracking-wide bg-brand-primary text-white rounded hover:bg-brand-primaryHover inline-flex items-center justify-center gap-1"
-                  >
-                    <Plus size={12} /> Add
-                  </button>
-                </div>
-              </div>
-            </div>
           )}
         </div>
 
-        <div className="flex items-center justify-between gap-3 px-6 py-4 border-t border-slate-200 bg-slate-50">
+        <div className="flex flex-col gap-3 px-6 py-4 border-t border-gray-100">
           <Link
             href={`/admin/deals/${dealId}`}
-            className="text-xs text-brand-primary hover:underline inline-flex items-center gap-1"
+            className="text-xs font-semibold text-[#C10007] hover:underline inline-flex items-center gap-1 self-start"
           >
             <ExternalLink size={12} />
             Open full deal view
           </Link>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-3">
             <button
               onClick={onClose}
-              className="h-9 px-4 rounded text-xs font-bold uppercase tracking-wide border border-slate-300 text-slate-700 hover:bg-slate-100"
+              className="flex-1 py-3 border border-[#C10007] bg-white text-[#C10007] rounded-lg text-sm font-semibold hover:bg-[#FEF2F2]"
             >
               Close
             </button>
-            {activeTab === "details" && (
-              <button
-                onClick={handleSaveDetails}
-                disabled={saving || loading}
-                className="h-9 px-4 rounded text-xs font-bold uppercase tracking-wide bg-brand-primary text-white hover:bg-brand-primaryHover disabled:opacity-60 inline-flex items-center gap-2"
-              >
-                {saving && <Loader2 size={12} className="animate-spin" />}
-                Save changes
-              </button>
-            )}
+            <button
+              onClick={handleSaveDetails}
+              disabled={saving || loading}
+              className="flex-1 py-3 bg-[#C10007] text-white rounded-lg text-sm font-semibold hover:bg-[#a30006] disabled:opacity-60 inline-flex items-center justify-center gap-2"
+            >
+              {saving && <Loader2 size={14} className="animate-spin" />}
+              Save changes
+            </button>
           </div>
         </div>
 
@@ -854,7 +390,7 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
 };
 
 const inputClass =
-  "w-full h-9 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white";
+  "w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white";
 
 const Field: React.FC<{
   label: string;
@@ -863,9 +399,9 @@ const Field: React.FC<{
   children: React.ReactNode;
 }> = ({ label, required, className, children }) => (
   <div className={className}>
-    <label className="block text-xs font-medium text-slate-600 mb-1">
+    <label className="block text-sm font-semibold text-gray-800 mb-2">
       {label}
-      {required && <span className="text-red-500 ml-0.5">*</span>}
+      {required && <span className="text-[#C10007] ml-0.5">*</span>}
     </label>
     {children}
   </div>

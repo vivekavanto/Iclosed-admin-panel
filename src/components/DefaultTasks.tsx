@@ -570,25 +570,37 @@ const DefaultTasks: React.FC = () => {
 
       {/* Assign Modal */}
       {assignModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[80vh] overflow-y-auto">
-            <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-slate-200">
-              <h3 className="text-lg font-bold text-slate-900">Assign to Stage</h3>
-              <button onClick={() => setAssignModal(null)} className="text-slate-400 hover:text-slate-600">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Assign to Stage"
+          className="fixed inset-0 z-50 flex justify-end items-stretch lg:justify-center lg:items-center bg-black/30 lg:bg-black/40 lg:backdrop-blur-sm lg:p-4 xl:p-12 2xl:p-20"
+          onClick={() => setAssignModal(null)}
+        >
+          <div
+            className="bg-white shadow-2xl flex flex-col w-full h-full max-w-[520px] slide-in-from-right lg:h-auto lg:max-h-[90vh] lg:max-w-5xl lg:rounded-2xl lg:zoom-in lg:duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between px-6 py-5 border-b border-gray-100">
+              <div className="min-w-0">
+                <h3 className="text-base font-bold text-gray-900">Assign to Stage</h3>
+                <p className="text-xs text-gray-400 mt-1">Select which stage milestone this task belongs to.</p>
+              </div>
+              <button
+                onClick={() => setAssignModal(null)}
+                className="text-gray-400 hover:text-gray-700 shrink-0 ml-4"
+                aria-label="Close"
+              >
                 <X size={20} />
               </button>
             </div>
-            <div className="px-4 sm:px-6 py-4 space-y-3">
-              <p className="text-sm text-slate-500 mb-4">
-                Select which stage milestone this task belongs to:
-              </p>
-
+            <div className="px-6 py-6 space-y-3 overflow-y-auto flex-1">
               <button
                 onClick={() => handleAssignTask(assignModal.taskId, null)}
                 className={`w-full text-left px-4 py-3 rounded-lg border transition-colors text-sm ${
                   !assignModal.currentStageId
-                    ? "border-brand-primary bg-brand-light text-brand-primary font-semibold"
-                    : "border-slate-200 hover:bg-slate-50 text-slate-600"
+                    ? "border-[#C10007] bg-[#FEF2F2] text-[#C10007] font-semibold"
+                    : "border-gray-200 hover:bg-gray-50 text-gray-700"
                 }`}
               >
                 No Stage (Unassigned)
@@ -600,19 +612,19 @@ const DefaultTasks: React.FC = () => {
                   onClick={() => handleAssignTask(assignModal.taskId, stage.id)}
                   className={`w-full text-left px-4 py-3 rounded-lg border transition-colors text-sm ${
                     assignModal.currentStageId === stage.id
-                      ? "border-brand-primary bg-brand-light text-brand-primary font-semibold"
-                      : "border-slate-200 hover:bg-slate-50 text-slate-700"
+                      ? "border-[#C10007] bg-[#FEF2F2] text-[#C10007] font-semibold"
+                      : "border-gray-200 hover:bg-gray-50 text-gray-700"
                   }`}
                 >
                   <span className="font-medium">{stage.name}</span>
-                  <span className="text-xs text-slate-400 ml-2">({stage.role})</span>
+                  <span className="text-xs text-gray-400 ml-2">({stage.role})</span>
                 </button>
               ))}
             </div>
-            <div className="px-4 sm:px-6 py-3 border-t border-slate-100 flex justify-end">
+            <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-3 px-6 py-4 border-t border-gray-100">
               <button
                 onClick={() => setAssignModal(null)}
-                className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800"
+                className="flex-1 py-3 border border-[#C10007] bg-white text-[#C10007] rounded-lg text-sm font-semibold hover:bg-[#FEF2F2]"
               >
                 Cancel
               </button>
