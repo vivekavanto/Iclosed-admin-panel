@@ -703,19 +703,37 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     );
   };
 
-  // Replace a non-APS file response: upload the new file to Vercel Blob,
-  // then PATCH the existing task_responses row with the new url + name.
-  // For shared (synced) tasks, the server-side PATCH mirrors the new file
-  // to every matching response across the co-purchaser/co-seller family.
-  // APS file replacement goes through the dedicated APS upload modal
-  // (which calls /uploadblobstorage), not this path.
+  // Single file picker shared by two flows:
+  //   • REPLACE: existing task_responses row → PATCH with new url + name
+  //   • CREATE: no response yet → POST a new task_responses row
+  // For shared (synced) tasks both endpoints mirror across the
+  // co-purchaser/co-seller family. APS uploads go through the dedicated
+  // APS upload modal, not this path.
+  type FileUploadIntent =
+    | { kind: "replace"; responseId: string; busyKey: string }
+    | { kind: "create"; field: TaskFormField; busyKey: string };
   const replacingFileInputRef = useRef<HTMLInputElement | null>(null);
-  const [replacingFileResponseId, setReplacingFileResponseId] = useState<string | null>(null);
+  const [fileUploadIntent, setFileUploadIntent] = useState<FileUploadIntent | null>(null);
+  // busyKey identifies which row/field is currently uploading so the UI
+  // can disable just that button. For replace it's the response id; for
+  // create it's `field-<field.id>`.
   const [replacingFileBusy, setReplacingFileBusy] = useState<string | null>(null);
 
   const triggerReplaceFile = (responseId: string) => {
-    setReplacingFileResponseId(responseId);
+    setFileUploadIntent({ kind: "replace", responseId, busyKey: responseId });
     // Re-open the same input even if user picks the same filename twice.
+    if (replacingFileInputRef.current) {
+      replacingFileInputRef.current.value = "";
+      replacingFileInputRef.current.click();
+    }
+  };
+
+  const triggerUploadFile = (field: TaskFormField) => {
+    setFileUploadIntent({
+      kind: "create",
+      field,
+      busyKey: `field-${field.id}`,
+    });
     if (replacingFileInputRef.current) {
       replacingFileInputRef.current.value = "";
       replacingFileInputRef.current.click();
@@ -724,12 +742,12 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
   const handleReplaceFilePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    const responseId = replacingFileResponseId;
-    if (!file || !responseId) {
-      setReplacingFileResponseId(null);
+    const intent = fileUploadIntent;
+    if (!file || !intent) {
+      setFileUploadIntent(null);
       return;
     }
-    setReplacingFileBusy(responseId);
+    setReplacingFileBusy(intent.busyKey);
     try {
       const leadId = (rawDeal?.lead_id as string | undefined) ?? deal.id;
       const pathname = `task-responses/${leadId}/${Date.now()}-${file.name}`;
@@ -739,39 +757,62 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         contentType: file.type,
       });
 
-      const pres = await fetch("/api/admin/task-responses", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: responseId,
-          file_url: blob.url,
-          file_name: file.name,
-        }),
-      });
-      const pj = await pres.json();
-      if (!pres.ok || !pj.success) {
-        throw new Error(pj.error || "Failed to replace file");
+      let res: Response;
+      if (intent.kind === "replace") {
+        res = await fetch("/api/admin/task-responses", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: intent.responseId,
+            file_url: blob.url,
+            file_name: file.name,
+          }),
+        });
+      } else {
+        if (!editingTask) throw new Error("No task open");
+        res = await fetch("/api/admin/task-responses", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            task_id: editingTask.id,
+            field_id: intent.field.id,
+            field_label: intent.field.label,
+            field_type: intent.field.field_type,
+            file_url: blob.url,
+            file_name: file.name,
+          }),
+        });
+      }
+      const pj = await res.json();
+      if (!res.ok || !pj.success) {
+        throw new Error(pj.error || (intent.kind === "replace" ? "Failed to replace file" : "Failed to upload file"));
       }
 
       // Refresh everything that surfaces a doc: edit modal list, the task
-      // table's Doc column, and the View Documents modal.
+      // table's Doc column, and the View Documents modal. When the server
+      // auto-completed the task (last required file filled), also refresh
+      // tasks + milestones so the table row flips to Completed.
+      const taskCompleted = pj.task_completed === true;
       await Promise.all([
         refreshEditTaskResponses(),
         fetchTaskFileDocs(),
         fetchDealDocuments(),
+        ...(taskCompleted ? [refetchData()] : []),
       ]);
 
       const mirroredCount = typeof pj.mirrored === "number" ? pj.mirrored : 0;
+      const baseMessage = intent.kind === "replace" ? "File replaced" : "File uploaded";
+      const suffix = taskCompleted ? " Task marked Completed." : "";
       showToast(
         mirroredCount > 0
-          ? `File replaced and synced to ${mirroredCount} linked deal${mirroredCount === 1 ? "" : "s"}.`
-          : "File replaced.",
+          ? `${baseMessage} and synced to ${mirroredCount} linked deal${mirroredCount === 1 ? "" : "s"}.${suffix}`
+          : `${baseMessage}.${suffix}`,
       );
     } catch (err: any) {
-      showToast(err?.message ?? "Failed to replace file", "error");
+      showToast(err?.message ?? "Failed to upload file", "error");
     } finally {
       setReplacingFileBusy(null);
-      setReplacingFileResponseId(null);
+      setFileUploadIntent(null);
     }
   };
 
@@ -1187,11 +1228,23 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       });
 
       // Step 2: finalize — record the doc and complete the APS task
-      // (with family sync + milestone recalc).
+      // (with family sync + milestone recalc). When the upload is being
+      // submitted from the Edit Task modal on a specific side's APS
+      // task, pass `side` so the server only touches that side — a
+      // Purchase upload on a P&S deal must not leak into the Sale APS.
+      const editingTemplateLeadType = editingTask?.taskTemplateId
+        ? (taskTemplates as any[]).find((t) => t.id === editingTask.taskTemplateId)?.lead_type
+        : null;
+      const ltNorm = (editingTemplateLeadType ?? "").toString().toLowerCase().trim();
+      const side = ltNorm === "purchase" ? "purchase" : ltNorm === "sale" ? "sale" : null;
       const res = await fetch(`/api/admin/deals/${deal.id}/uploadblobstorage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ file_url: blob.url, file_name: apsFile.name }),
+        body: JSON.stringify({
+          file_url: blob.url,
+          file_name: apsFile.name,
+          ...(side ? { side } : {}),
+        }),
       });
       const json = await res.json();
       if (!res.ok || !json.success) {
@@ -1302,11 +1355,20 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         }
       } else {
         // No email template — update status + completed_at
-        await fetch("/api/admin/milestones", {
+        const r = await fetch("/api/admin/milestones", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ id, status: newStatus, completed_at: new Date().toISOString() }),
         });
+        const rj = await r.json().catch(() => ({}));
+        const mm = typeof rj?.mirroredMilestones === "number" ? rj.mirroredMilestones : 0;
+        const mt = typeof rj?.mirroredTasks === "number" ? rj.mirroredTasks : 0;
+        if (mm > 0 || mt > 0) {
+          const parts: string[] = [];
+          if (mm > 0) parts.push(`${mm} milestone${mm === 1 ? "" : "s"}`);
+          if (mt > 0) parts.push(`${mt} task${mt === 1 ? "" : "s"}`);
+          showToast(`Milestone completed and synced to ${parts.join(" + ")} on linked deals.`);
+        }
       }
     } else {
       // Reset tasks under this milestone to match the new status
@@ -1326,11 +1388,20 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       }
 
       // Moving away from Completed — clear completed_at and reset email_sent
-      await fetch("/api/admin/milestones", {
+      const r = await fetch("/api/admin/milestones", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id, status: newStatus, completed_at: null, email_sent: false }),
       });
+      const rj = await r.json().catch(() => ({}));
+      const mm = typeof rj?.mirroredMilestones === "number" ? rj.mirroredMilestones : 0;
+      const mt = typeof rj?.mirroredTasks === "number" ? rj.mirroredTasks : 0;
+      if (mm > 0 || mt > 0) {
+        const parts: string[] = [];
+        if (mm > 0) parts.push(`${mm} milestone${mm === 1 ? "" : "s"}`);
+        if (mt > 0) parts.push(`${mt} task${mt === 1 ? "" : "s"}`);
+        showToast(`Status synced to ${parts.join(" + ")} on linked deals.`);
+      }
     }
 
     await refetchData();
@@ -1393,8 +1464,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     );
     setTasks(updatedTasks);
 
-    // PATCH task in DB
-    await fetch("/api/admin/tasks", {
+    // PATCH task in DB — for shared tasks the backend mirrors the
+    // update to every co-purchaser / co-seller deal automatically and
+    // returns how many linked rows were touched.
+    const patchRes = await fetch("/api/admin/tasks", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1404,6 +1477,13 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         completed_at: isCompleted ? new Date().toISOString() : null,
       }),
     });
+    const patchJson = await patchRes.json().catch(() => ({}));
+    const mirroredCount: number = typeof patchJson?.mirrored === "number" ? patchJson.mirrored : 0;
+    if (mirroredCount > 0) {
+      showToast(
+        `Task status updated and synced to ${mirroredCount} linked deal${mirroredCount === 1 ? "" : "s"}.`,
+      );
+    }
 
     // Check if all tasks for this milestone are completed → auto-update milestone
     const task = updatedTasks.find((t) => t.id === id);
@@ -1761,6 +1841,56 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const dealTypeParts = deriveDealTypeParts(deal.type, rawDeal?.current_deal_role);
   const dealTypePartsLower = dealTypeParts.map(s => s.toLowerCase());
   const isCombinedDealType = dealTypeParts.length > 1;
+
+  // Build a stable {dealId → numbered role} map across the whole family.
+  // Co-Purchasers/Co-Sellers/Co-Clients are numbered (Co-Purchaser 1,
+  // Co-Purchaser 2, …) sorted alphabetically by lead name so the
+  // numbering is the same on every page render. Primary roles aren't
+  // numbered. Used for the top-right indicator on the Property card
+  // and inside the People involved card so both surfaces agree.
+  const numberedRoles = (() => {
+    type Member = { id: string; role: string; lead_name: string };
+    const currentRole = (rawDeal?.current_deal_role as string | undefined) ?? "";
+    const currentName = [
+      rawDeal?.lead_first_name,
+      rawDeal?.lead_last_name,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    const members: Member[] = [
+      { id: deal.id, role: currentRole, lead_name: currentName },
+      ...((rawDeal?.linked_deals as any[]) ?? []).map((ld) => ({
+        id: ld.id as string,
+        role: (ld.role as string) ?? "",
+        lead_name: (ld.lead_name as string) ?? "",
+      })),
+    ];
+    const groups = new Map<string, Member[]>();
+    for (const m of members) {
+      if (!m.role) continue;
+      const g = groups.get(m.role) ?? [];
+      g.push(m);
+      groups.set(m.role, g);
+    }
+    const byDealId = new Map<string, string>();
+    for (const [role, group] of groups.entries()) {
+      const isPrimaryRole = role.toLowerCase().startsWith("primary");
+      if (isPrimaryRole || group.length <= 1) {
+        // Single occurrence or Primary → no number needed.
+        for (const m of group) byDealId.set(m.id, role);
+        continue;
+      }
+      const sorted = [...group].sort((a, b) =>
+        a.lead_name.localeCompare(b.lead_name, undefined, { sensitivity: "base" }),
+      );
+      sorted.forEach((m, idx) => byDealId.set(m.id, `${role} ${idx + 1}`));
+    }
+    return {
+      current: byDealId.get(deal.id) ?? currentRole,
+      byDealId,
+    };
+  })();
 
   // True when the task currently open in the Edit Task modal is an APS task.
   // Resolved from the task templates list so the modal can offer the APS
@@ -2179,67 +2309,153 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
             </div>
           </div>
 
-          {/* Icon */}
-          <div className="hidden md:block opacity-5 text-slate-900">
-            <Building2 size={80} />
+          {/* Role indicator (top-right of property card). Tells the
+              admin immediately which person in the family they're
+              viewing — Primary Purchaser / Primary Seller, or
+              Co-Purchaser 1 / Co-Seller 1, etc. The Building watermark
+              sits behind it. */}
+          <div className="hidden md:flex flex-col items-end gap-2 relative">
+            {numberedRoles.current && (
+              <span
+                className={`text-base font-bold ${
+                  numberedRoles.current.toLowerCase().startsWith("primary")
+                    ? "text-green-700"
+                    : numberedRoles.current.toLowerCase().includes("co-seller")
+                    ? "text-orange-600"
+                    : "text-blue-600"
+                }`}
+                title="Currently viewing this person's deal"
+              >
+                {numberedRoles.current}
+              </span>
+            )}
+            <div className="opacity-5 text-slate-900">
+              <Building2 size={80} />
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Linked Deals (Co-Purchaser) Section */}
-      {rawDeal?.linked_deals && rawDeal.linked_deals.length > 0 && (
+      {/* People Involved Section — lists every person in the family
+          (primary + co-purchasers + co-sellers) with a clear chip for
+          each role. The currently-viewed deal is highlighted and not
+          clickable; clicking any other entry navigates to that deal so
+          the admin can switch perspectives. */}
+      {((rawDeal?.linked_deals && rawDeal.linked_deals.length > 0) || rawDeal?.current_deal_role) && (
         <div className="bg-white rounded-xl shadow-sm border border-blue-200 p-5 mb-6">
           <div className="flex items-center gap-2 mb-3">
             <div className="w-7 h-7 rounded-full bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600">
               <User size={14} />
             </div>
-            <h3 className="text-sm font-bold text-slate-900">Linked Deals</h3>
-            {rawDeal.current_deal_role && (
-              <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
-                rawDeal.current_deal_role === "Co-Purchaser"
-                  ? "bg-blue-100 text-blue-700 border-blue-200"
-                  : "bg-green-100 text-green-700 border-green-200"
-              }`}>
-                This deal: {rawDeal.current_deal_role}
-              </span>
-            )}
+            <h3 className="text-sm font-bold text-slate-900">People involved</h3>
+            <span className="text-[11px] text-slate-400">
+              Click any person to switch to their view
+            </span>
           </div>
           <div className="space-y-2">
-            {rawDeal.linked_deals.map((ld: any) => (
-              <div
-                key={ld.id}
-                onClick={() => router.push(`/admin/deals/${ld.id}`)}
-                className="flex items-center justify-between px-4 py-3 rounded-lg border border-slate-100 hover:border-blue-200 hover:bg-blue-50/50 cursor-pointer transition-all group"
-              >
-                <div className="flex items-center gap-3">
-                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${
-                    ld.role === "Primary Purchaser"
-                      ? "bg-green-100 text-green-700 border-green-200"
-                      : "bg-blue-100 text-blue-700 border-blue-200"
-                  }`}>
-                    {ld.role}
-                  </span>
-                  <div>
-                    <p className="text-sm font-bold text-slate-800 group-hover:text-blue-700 transition-colors">
-                      {ld.lead_name || "Unknown"}
-                    </p>
-                    <p className="text-[11px] text-slate-400">
-                      {ld.file_number} · {ld.property_address}
-                    </p>
+            {(() => {
+              type Person = {
+                id: string;
+                lead_name: string;
+                role: string;
+                file_number: string;
+                property_address: string;
+                status: string;
+                isCurrent: boolean;
+              };
+              const currentName = [
+                rawDeal?.lead_first_name,
+                rawDeal?.lead_last_name,
+              ]
+                .filter(Boolean)
+                .join(" ")
+                .trim();
+              // Build the current entry from the deal/rawDeal so the
+              // person you're viewing appears alongside the rest. The
+              // role here is the *numbered* form (Co-Purchaser 1 etc.)
+              // computed once at the top of render so this card and the
+              // property header agree.
+              const currentEntry: Person = {
+                id: deal.id,
+                lead_name: currentName || "Current viewer",
+                role: numberedRoles.byDealId.get(deal.id) || rawDeal?.current_deal_role || "Primary",
+                file_number: deal.fileNumber,
+                property_address: deal.propertyAddress || "",
+                status: deal.status,
+                isCurrent: true,
+              };
+              const linked: Person[] = (rawDeal?.linked_deals ?? []).map((ld: any) => ({
+                id: ld.id,
+                lead_name: ld.lead_name || "Unknown",
+                role: numberedRoles.byDealId.get(ld.id) || ld.role || "Co-Client",
+                file_number: ld.file_number || "",
+                property_address: ld.property_address || "",
+                status: ld.status || "Active",
+                isCurrent: false,
+              }));
+              // Sort so the Primary always appears first, then co-purchasers, then co-sellers
+              const sortKey = (p: Person) => {
+                const r = p.role.toLowerCase();
+                if (r.startsWith("primary")) return 0;
+                if (r.includes("co-purchaser")) return 1;
+                if (r.includes("co-seller")) return 2;
+                return 3;
+              };
+              const all = [currentEntry, ...linked].sort(
+                (a, b) => sortKey(a) - sortKey(b),
+              );
+              const roleChipClass = (role: string) => {
+                const r = role.toLowerCase();
+                if (r.startsWith("primary")) return "bg-green-100 text-green-700 border-green-200";
+                if (r.includes("co-seller")) return "bg-orange-100 text-orange-700 border-orange-200";
+                return "bg-blue-100 text-blue-700 border-blue-200";
+              };
+              return all.map((p) => (
+                <div
+                  key={p.id}
+                  onClick={p.isCurrent ? undefined : () => router.push(`/admin/deals/${p.id}`)}
+                  className={`flex items-center justify-between px-4 py-3 rounded-lg border transition-all group ${
+                    p.isCurrent
+                      ? "border-brand-primary bg-brand-light/30 cursor-default"
+                      : "border-slate-100 hover:border-blue-200 hover:bg-blue-50/50 cursor-pointer"
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${roleChipClass(p.role)}`}>
+                      {p.role}
+                    </span>
+                    <div>
+                      <p className={`text-sm font-bold transition-colors ${
+                        p.isCurrent ? "text-brand-primary" : "text-slate-800 group-hover:text-blue-700"
+                      }`}>
+                        {p.lead_name}
+                      </p>
+                      <p className="text-[11px] text-slate-400">
+                        {p.file_number}
+                        {p.property_address ? ` · ${p.property_address}` : ""}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {p.isCurrent && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-brand-primary text-white">
+                        Currently viewing
+                      </span>
+                    )}
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                      p.status === "Closed"
+                        ? "bg-green-100 text-green-700"
+                        : "bg-white text-green-600 border border-green-400"
+                    }`}>
+                      {p.status}
+                    </span>
+                    {!p.isCurrent && (
+                      <ExternalLink size={14} className="text-slate-300 group-hover:text-blue-500" />
+                    )}
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                    ld.status === "Closed"
-                      ? "bg-green-100 text-green-700"
-                      : "bg-white text-green-600 border border-green-400"
-                  }`}>
-                    {ld.status}
-                  </span>
-                  <ExternalLink size={14} className="text-slate-300 group-hover:text-blue-500" />
-                </div>
-              </div>
-            ))}
+              ));
+            })()}
           </div>
         </div>
       )}
@@ -2360,7 +2576,54 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                         {task.isTemplate ? (
                           <span className="text-slate-300 text-xs">-</span>
                         ) : (() => {
-                          const matched = taskFileDocs.filter((d: any) => d.task_id === task.id);
+                          // Match docs to this row in priority order:
+                          //   1. exact task_id (personal tasks / primary view of shared)
+                          //   2. shared_task_key === taskTemplateId (cross-family shared docs)
+                          //   3. fallback: doc's task_title matches task.title
+                          //      (legacy bridged docs with task_id we don't
+                          //      know about — surfaces them anyway so the
+                          //      Doc count never lies)
+                          const matched = taskFileDocs.filter((d: any) => {
+                            if (d.task_id === task.id) return true;
+                            if (
+                              task.taskTemplateId &&
+                              d.shared_task_key &&
+                              d.shared_task_key === task.taskTemplateId
+                            ) {
+                              return true;
+                            }
+                            // Title fallback (loose match): same task name
+                            // across family + same field_type=file.
+                            if (
+                              d.field_type === "file" &&
+                              d.task_title &&
+                              task.title &&
+                              d.task_title.trim().toLowerCase() === task.title.trim().toLowerCase()
+                            ) {
+                              return true;
+                            }
+                            return false;
+                          });
+                          // Diagnostic: print one-time per render if a task
+                          // has a template_id but found zero matches even
+                          // though docs exist with shared_task_key set.
+                          if (process.env.NODE_ENV !== "production" && matched.length === 0 && task.taskTemplateId) {
+                            const candidates = taskFileDocs.filter((d: any) => d.field_type === "file");
+                            if (candidates.length > 0) {
+                              console.log("[Doc column miss]", {
+                                task_id: task.id,
+                                task_template_id: task.taskTemplateId,
+                                task_title: task.title,
+                                candidate_docs: candidates.map((d: any) => ({
+                                  task_id: d.task_id,
+                                  shared_task_key: d.shared_task_key,
+                                  task_title: d.task_title,
+                                  file_name: d.file_name,
+                                  is_shared: d.is_shared,
+                                })),
+                              });
+                            }
+                          }
                           return matched.length > 0 ? (
                             <button
                               type="button"
@@ -3533,18 +3796,6 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                   <p className="text-sm font-semibold text-gray-800">
                     Client Responses
                   </p>
-                  {isEditingApsTask && (
-                    <button
-                      type="button"
-                      onClick={() => { setApsFile(null); setShowApsUpload(true); }}
-                      className="inline-flex items-center gap-1.5 px-3 py-2 border border-[#C10007] bg-white text-[#C10007] rounded-lg text-xs font-semibold hover:bg-[#FEF2F2] shrink-0"
-                    >
-                      <Upload size={14} />
-                      {editTaskResponses.some((r) => r.field_type === "file" && !r.deleted)
-                        ? "Replace APS Document"
-                        : "Upload APS Document"}
-                    </button>
-                  )}
                 </div>
                 {editTaskLoading ? (
                   <div className="flex items-center gap-2 py-3">
@@ -3573,6 +3824,11 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                               {field.label}
                               {field.required ? <span className="text-[#C10007] ml-1">*</span> : null}
                             </p>
+                            {/* Per-row Replace button. For APS tasks it
+                                routes through the dedicated APS upload
+                                modal so the family-wide replace flow
+                                runs; for non-APS it uses the generic
+                                file-PATCH path. */}
                             {isFile && resp && !isPersistedDeleted && (
                               <button
                                 type="button"
@@ -3590,6 +3846,33 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                               >
                                 <Upload size={12} />
                                 {replacingFileBusy === resp.id ? "Uploading…" : "Replace"}
+                              </button>
+                            )}
+                            {/* Upload button for file fields with no
+                                response yet. APS routes through the
+                                dedicated APS upload modal (family-wide
+                                bridging + task completion); other file
+                                tasks (ID, Home Insurance, etc.) use the
+                                generic task-responses path, which
+                                auto-completes the task once every
+                                required file field is filled. */}
+                            {isFile && !resp && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (isEditingApsTask) {
+                                    setApsFile(null);
+                                    setShowApsUpload(true);
+                                  } else {
+                                    triggerUploadFile(field);
+                                  }
+                                }}
+                                disabled={replacingFileBusy === `field-${field.id}`}
+                                className="inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold text-white bg-[#C10007] rounded hover:bg-[#a30006] disabled:opacity-50"
+                                title="Upload file"
+                              >
+                                <Upload size={12} />
+                                {replacingFileBusy === `field-${field.id}` ? "Uploading…" : "Upload"}
                               </button>
                             )}
                           </div>
@@ -3614,7 +3897,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                               </div>
                             ) : (
                               <p className="text-xs text-gray-400 italic mt-2">
-                                No file uploaded. Use the upload/replace button above.
+                                No file uploaded. Use the Upload button to add one.
                               </p>
                             )
                           ) : field.field_type === "textarea" ? (

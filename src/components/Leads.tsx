@@ -69,6 +69,11 @@ interface LeadUser {
   sellingAddressPostalCode?: string;
   sellingAddressProvince?: string;
   parentLeadId?: string | null;
+  // Authoritative co-* role recorded when the co-lead was added at intake
+  // ("purchaser" / "seller"). When present this overrides the address-
+  // matching heuristic in getCoRole(), which can't distinguish roles on
+  // Purchase & Sale parents where both co-leads share both addresses.
+  coPersonRole?: "purchaser" | "seller" | null;
 }
 
 const Leads: React.FC = () => {
@@ -286,6 +291,10 @@ const Leads: React.FC = () => {
     sellingAddressPostalCode: l.selling_address_postal_code,
     sellingAddressProvince: l.selling_address_province,
     parentLeadId: l.parent_lead_id ?? null,
+    coPersonRole:
+      l.co_person_role === "purchaser" || l.co_person_role === "seller"
+        ? l.co_person_role
+        : null,
   });
 
   // ── Fetch leads from local admin API ─────────────────────
@@ -708,9 +717,16 @@ const Leads: React.FC = () => {
   //      selling_address_street presence heuristic, then parent's lead_type.
   //      Default to co-purchaser.
   const getCoRole = (
-    coLead: Pick<LeadUser, "lead_type" | "addressStreet" | "sellingAddressStreet">,
+    coLead: Pick<LeadUser, "lead_type" | "addressStreet" | "sellingAddressStreet" | "coPersonRole">,
     parent?: Pick<LeadUser, "lead_type" | "addressStreet" | "sellingAddressStreet"> | null,
   ): "co-purchaser" | "co-seller" => {
+    // 1. Trust the explicit co_person_role recorded at intake. This is the
+    //    authoritative source — the address-matching heuristic below can't
+    //    tell purchaser from seller on Purchase & Sale parents where both
+    //    co-leads share both addresses.
+    if (coLead.coPersonRole === "purchaser") return "co-purchaser";
+    if (coLead.coPersonRole === "seller") return "co-seller";
+
     const ownLt = (coLead.lead_type ?? "").toLowerCase().trim();
     const ownHasPurchase = ownLt.includes("purchase");
     const ownHasSale = ownLt.includes("sale");
@@ -792,7 +808,12 @@ const Leads: React.FC = () => {
       const q = search.trim().toLowerCase();
       if (!q) return true;
       const haystack = buildLeadHaystack(l);
-      const terms = q.split(/\s+/).filter(Boolean);
+      // Split on commas, dots, semicolons, pipes, slashes, AND whitespace so
+      // pasting a full address ("123 Main St, Toronto, ON") works: each part
+      // becomes its own term and is required to appear somewhere in the
+      // haystack. Without this, "Street," (with comma attached) would never
+      // match because the haystack stores "Street" without the comma.
+      const terms = q.split(/[\s,.;|/]+/).filter(Boolean);
       return terms.every((term) => haystack.includes(term));
     });
 

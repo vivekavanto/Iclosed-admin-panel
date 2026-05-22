@@ -343,17 +343,20 @@ export async function PATCH(req: Request) {
       }
 
       // Also sync to ALL other family deals' shared tasks
+      let mirroredCount = 0;
       try {
         const familyDealIds = await getFamilyDealIds(primaryDealId);
         const otherDealIds = familyDealIds.filter((did) => did !== primaryDealId);
 
         if (otherDealIds.length > 0) {
-          await supabase
+          const { data: mirrored } = await supabase
             .from("tasks")
             .update(updates)
             .eq("task_template_id", existingTask.task_template_id)
             .eq("is_shared", true)
-            .in("deal_id", otherDealIds);
+            .in("deal_id", otherDealIds)
+            .select("id");
+          mirroredCount = mirrored?.length ?? 0;
         }
 
         // Recalculate milestone status for ALL family deals
@@ -365,7 +368,7 @@ export async function PATCH(req: Request) {
         // Non-blocking
       }
 
-      return NextResponse.json({ success: true, data });
+      return NextResponse.json({ success: true, data, mirrored: mirroredCount });
     } else {
       const effectiveAssignee = assignee ?? existingTask.assignee;
       if (effectiveAssignee) {

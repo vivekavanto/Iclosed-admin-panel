@@ -35,6 +35,14 @@ export async function POST(
     const body = await req.json().catch(() => null);
     const fileUrl = body?.file_url;
     const fileName = body?.file_name;
+    // Optional side scoping: "purchase" or "sale". When provided, the
+    // upload only affects that side's APS row + tasks across the family,
+    // so a Purchase-side APS upload on a P&S deal doesn't leak into
+    // the Sale-side APS task. Omitting it falls back to the legacy
+    // generic-aps behaviour (applies to both sides).
+    const rawSide = typeof body?.side === "string" ? body.side.toLowerCase().trim() : null;
+    const side: "purchase" | "sale" | null =
+      rawSide === "purchase" || rawSide === "sale" ? rawSide : null;
 
     if (!fileUrl || typeof fileUrl !== "string") {
       return NextResponse.json(
@@ -100,13 +108,22 @@ export async function POST(
     // ── 3. Clear any prior APS doc + task_responses across the family ───────
     // Admin upload replaces an existing APS — wipe family-wide rows so the
     // doc bridging in completeApsTask binds the new file to every APS task.
+    // When `side` is specified, the wipe is restricted to that side so a
+    // Purchase upload doesn't accidentally clear the family's Sale APS.
     const familyDealIds = await getFamilyDealIds(dealId);
 
-    const { data: apsTemplates } = await supabaseAdmin
+    // Resolve APS templates, optionally scoped to one lead_type.
+    let apsTemplatesQuery = supabaseAdmin
       .from("task_templates")
-      .select("id")
+      .select("id, lead_type")
       .eq("is_aps_task", true)
       .eq("is_deleted", false);
+    if (side) {
+      // task_templates.lead_type is stored capitalized ("Purchase" / "Sale")
+      const lt = side === "purchase" ? "Purchase" : "Sale";
+      apsTemplatesQuery = apsTemplatesQuery.eq("lead_type", lt);
+    }
+    const { data: apsTemplates } = await apsTemplatesQuery;
     const apsTemplateIds = (apsTemplates ?? []).map((t) => t.id);
 
     if (apsTemplateIds.length > 0) {
@@ -135,24 +152,43 @@ export async function POST(
     ];
 
     if (familyLeadIds.length > 0) {
+      // Build the predicate so a side-scoped upload only deletes its
+      // matching APS row (plus the generic "aps" / legacy custom_type
+      // rows, which by definition span both sides).
+      const orPredicate = side === "purchase"
+        ? "doc_type.eq.aps,doc_type.eq.aps_purchase,custom_type.ilike.%APS purchase%"
+        : side === "sale"
+        ? "doc_type.eq.aps,doc_type.eq.aps_sale,custom_type.ilike.%APS sale%"
+        : "doc_type.eq.aps,doc_type.eq.aps_purchase,doc_type.eq.aps_sale,custom_type.ilike.%APS%";
       await supabaseAdmin
         .from("lead_corporate_docs")
         .delete()
         .in("lead_id", familyLeadIds)
-        .or(
-          "doc_type.eq.aps,doc_type.eq.aps_purchase,doc_type.eq.aps_sale,custom_type.ilike.%APS%",
-        );
+        .or(orPredicate);
     }
 
     // ── 4. Insert into lead_corporate_docs ───────────────────────────────────
-    // doc_type = "aps" is the generic value: completeApsTask's bridging treats
-    // it as applying to all APS task lead_types (Purchase + Sale).
+    // doc_type tells the bridge in completeApsTask which APS task(s) to
+    // attach this to:
+    //   "aps_purchase" → Purchase-side APS task only
+    //   "aps_sale"     → Sale-side APS task only
+    //   "aps"          → both sides (legacy / when side isn't known)
+    const docType = side === "purchase"
+      ? "aps_purchase"
+      : side === "sale"
+      ? "aps_sale"
+      : "aps";
+    const customType = side === "purchase"
+      ? "APS Purchase Document"
+      : side === "sale"
+      ? "APS Sale Document"
+      : "APS Document";
     const { error: docError } = await supabaseAdmin
       .from("lead_corporate_docs")
       .insert({
         lead_id: deal.lead_id,
-        doc_type: "aps",
-        custom_type: "APS Document",
+        doc_type: docType,
+        custom_type: customType,
         file_url: fileUrl,
         file_name: fileName,
       });
@@ -168,7 +204,15 @@ export async function POST(
     }
 
     // ── 5. Complete the APS task across the family ───────────────────────────
-    const result = await completeApsTask(dealId);
+    // Pass the explicit side so completeApsTask only completes + bridges
+    // the matching lead_type's APS task, not the other side.
+    const result = await completeApsTask(dealId, {
+      forLeadTypes: side === "purchase"
+        ? ["Purchase"]
+        : side === "sale"
+        ? ["Sale"]
+        : undefined,
+    });
 
     if (!result.success) {
       return NextResponse.json(

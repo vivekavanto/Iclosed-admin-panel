@@ -62,6 +62,10 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           notes: d.notes ?? [],
           isCoPurchaser: d.is_co_purchaser ?? false,
           hasCoPurchasers: d.has_co_purchasers ?? false,
+          coPersonRole:
+            d.co_person_role === "purchaser" || d.co_person_role === "seller"
+              ? d.co_person_role
+              : null,
           leadName: d.lead_name ?? '',
           leadCitizenshipStatus: d.lead_citizenship_status ?? null,
           fileName: d.file_name ?? '',
@@ -77,6 +81,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
         } as Deal & {
           isCoPurchaser: boolean;
           hasCoPurchasers: boolean;
+          coPersonRole: "purchaser" | "seller" | null;
           leadName: string;
           leadCitizenshipStatus: string | null;
           fileName: string;
@@ -206,7 +211,11 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
         .filter(Boolean)
         .join(' ')
         .toLowerCase();
-      const terms = searchTerm.toLowerCase().split(/\s+/).filter(Boolean);
+      // Split on commas, dots, semicolons, pipes, slashes, AND whitespace
+      // so pasting "123 Main St, Toronto, ON" splits cleanly without
+      // leaving a comma stuck to "Street," that would never match the
+      // haystack (which stores fields without punctuation).
+      const terms = searchTerm.toLowerCase().split(/[\s,.;|/]+/).filter(Boolean);
       if (!terms.every((t) => haystack.includes(t))) return false;
     }
     if (filterType && filterType !== 'All' && deal.type !== filterType) return false;
@@ -434,6 +443,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
               <th className="px-4 py-3 w-12">No.</th>
               <th className="px-4 py-3 w-24">File No.</th>
               <th className="px-4 py-3">File name</th>
+              <th className="px-4 py-3 w-48">Client</th>
               <th className="px-4 py-3 w-20">Lawyer</th>
               <th className="px-4 py-3 w-20">Clerk</th>
               <th className="px-4 py-3 w-64">Address</th>
@@ -460,15 +470,28 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                     <div>
                       {(deal as any).fileName || deal.propertyAddress}
                       {(deal as any).isCoPurchaser && (() => {
+                        // Prefer the explicit co_person_role recorded at
+                        // intake. Fall back to the deal type only when
+                        // no role is set (legacy data) — that fallback
+                        // can't distinguish on Purchase & Sale parents.
+                        const explicit = (deal as any).coPersonRole as "purchaser" | "seller" | null | undefined;
                         const t = (deal.type ?? "").toLowerCase();
-                        const tooltip =
-                          t === "sale"
-                            ? "Co-Seller"
-                            : t === "purchase"
-                            ? "Co-Purchaser"
-                            : "Co-Client";
+                        const tooltip = explicit === "seller"
+                          ? "Co-Seller"
+                          : explicit === "purchaser"
+                          ? "Co-Purchaser"
+                          : t === "sale"
+                          ? "Co-Seller"
+                          : t === "purchase"
+                          ? "Co-Purchaser"
+                          : "Co-Client";
+                        const color = tooltip === "Co-Seller"
+                          ? "text-orange-600"
+                          : tooltip === "Co-Purchaser"
+                          ? "text-blue-600"
+                          : "text-purple-600";
                         return (
-                          <span className="ml-2 inline-flex items-center text-blue-600" title={tooltip}>
+                          <span className={`ml-2 inline-flex items-center ${color}`} title={tooltip}>
                             <Users size={14} />
                           </span>
                         );
@@ -496,8 +519,17 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                         </span>
                       )}
                     </div>
-                    {(deal as any).leadName && (
-                      <p className="text-[10px] text-slate-400 mt-0.5">{(deal as any).leadName}</p>
+                  </td>
+                  <td className="px-4 py-3">
+                    {(deal as any).leadName ? (
+                      <span
+                        className="text-xs font-medium text-slate-700"
+                        title={(deal as any).leadName}
+                      >
+                        {(deal as any).leadName}
+                      </span>
+                    ) : (
+                      <span className="text-slate-300">—</span>
                     )}
                   </td>
                   <td className="px-4 py-3">
@@ -596,7 +628,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                 </tr>
               );
             }) : (
-              <tr><td colSpan={11} className="px-6 py-12 text-center text-slate-500"><p>No files found.</p></td></tr>
+              <tr><td colSpan={12} className="px-6 py-12 text-center text-slate-500"><p>No files found.</p></td></tr>
             )}
           </tbody>
         </table>

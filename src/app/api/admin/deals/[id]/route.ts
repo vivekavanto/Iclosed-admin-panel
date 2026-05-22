@@ -26,7 +26,7 @@ export async function GET(
       // Step 1: Get the lead to find parent_lead_id and selling-side address
       const { data: lead } = await supabase
         .from("leads")
-        .select("id, parent_lead_id, first_name, last_name, email, phone, employer_phone, occupation, marital_status, property_type, ownership_history, citizenship_status, corporate_name, inc_number, lead_type, address_street, address_unit, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code")
+        .select("id, parent_lead_id, first_name, last_name, email, phone, employer_phone, occupation, marital_status, property_type, ownership_history, citizenship_status, corporate_name, inc_number, lead_type, co_person_role, address_street, address_unit, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code")
         .eq("id", data.lead_id)
         .single();
 
@@ -72,20 +72,26 @@ export async function GET(
         // Step 2: Find all leads in the family
         const { data: familyLeads } = await supabase
           .from("leads")
-          .select("id, parent_lead_id, first_name, last_name, lead_type, selling_address_street")
+          .select("id, parent_lead_id, first_name, last_name, lead_type, co_person_role, selling_address_street")
           .or(`id.eq.${rootLeadId},parent_lead_id.eq.${rootLeadId}`);
 
-        // Determine a co-lead's role from its own lead_type when specific
-        // (Purchase/Sale). When ambiguous (e.g. "Purchase & Sale" mirrored
-        // from the parent), fall back to selling_address_street presence —
-        // only co-sellers carry a selling-side address — then to the deal's
-        // own type.
+        // Determine a co-lead's role. Priority order:
+        //   1. Authoritative `co_person_role` recorded at intake — the
+        //      only reliable source on a Purchase & Sale parent where
+        //      both co-leads share both addresses.
+        //   2. Specific lead_type ("Purchase" → co-purchaser, etc).
+        //   3. selling_address_street presence (only set for co-sellers
+        //      on non-P&S families).
+        //   4. Fall back to the deal's own type.
         const dealTypeLower = (data.type ?? "").toLowerCase().trim();
         const dealIsSaleOnly = dealTypeLower === "sale";
         const labelForCo = (
           leadType: string | null | undefined,
           sellingAddressStreet?: string | null,
+          coPersonRole?: string | null,
         ): string => {
+          if (coPersonRole === "purchaser") return "Co-Purchaser";
+          if (coPersonRole === "seller") return "Co-Seller";
           const lt = (leadType ?? "").toLowerCase().trim();
           const hasPurchase = lt.includes("purchase");
           const hasSale = lt.includes("sale");
@@ -126,7 +132,11 @@ export async function GET(
                 const isPrimary = dLead ? !dLead.parent_lead_id : false;
                 const role = isPrimary
                   ? labelForPrimary(dLead?.lead_type)
-                  : labelForCo(dLead?.lead_type, dLead?.selling_address_street);
+                  : labelForCo(
+                      dLead?.lead_type,
+                      dLead?.selling_address_street,
+                      dLead?.co_person_role,
+                    );
                 return {
                   id: d.id,
                   file_number: d.file_number,
@@ -143,7 +153,11 @@ export async function GET(
 
           // Also determine the current deal's role
           data.current_deal_role = lead.parent_lead_id
-            ? labelForCo(lead.lead_type, lead.selling_address_street)
+            ? labelForCo(
+                lead.lead_type,
+                lead.selling_address_street,
+                (lead as any).co_person_role,
+              )
             : labelForPrimary(lead.lead_type);
         }
       }

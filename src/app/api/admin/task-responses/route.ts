@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { getFamilyDealIds } from "@/lib/familyDeals";
+import { maybeCompleteFileTask } from "@/lib/maybeCompleteFileTask";
 
 type TaskRow = {
   id: string;
@@ -155,6 +156,38 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "deal_id or task_id is required" }, { status: 400 });
   }
 
+  // Resolve the primary deal in the family. Shared tasks are stored on
+  // the primary deal as the single source of truth (per /api/admin/tasks)
+  // — the doc-count column on the deal detail page renders task.id from
+  // the primary, so we need to rewrite synced doc rows to match that id
+  // (otherwise the count stays empty on co-purchaser/co-seller views).
+  let primaryDealId = dealId;
+  try {
+    const { data: deal } = await supabaseAdmin
+      .from("deals")
+      .select("lead_id")
+      .eq("id", dealId)
+      .single();
+    if (deal?.lead_id) {
+      const { data: lead } = await supabaseAdmin
+        .from("leads")
+        .select("id, parent_lead_id")
+        .eq("id", deal.lead_id)
+        .single();
+      const rootLeadId = lead?.parent_lead_id ?? lead?.id;
+      if (rootLeadId) {
+        const { data: rootDeal } = await supabaseAdmin
+          .from("deals")
+          .select("id")
+          .eq("lead_id", rootLeadId)
+          .maybeSingle();
+        if (rootDeal?.id) primaryDealId = rootDeal.id;
+      }
+    }
+  } catch {
+    // Non-blocking: fallback to dealId
+  }
+
   const { data: dealTasks, error: tasksError } = await supabaseAdmin
     .from("tasks")
     .select("id, deal_id, title, is_shared, task_template_id")
@@ -169,6 +202,10 @@ export async function GET(req: Request) {
   const familyDealIds = sharedTasks.length > 0 ? await getFamilyDealIds(dealId) : [dealId];
 
   let familySharedTasks: TaskRow[] = [];
+  // Tasks on the primary deal that share the same template_ids — used to
+  // rewrite the bridged response rows to point at the primary deal's
+  // task ids (which is what the tasks GET handler returns to the UI).
+  let primarySharedTasks: TaskRow[] = [];
   if (sharedTasks.length > 0) {
     const sharedTemplateIds = sharedTasks
       .map((task) => task.task_template_id)
@@ -182,6 +219,7 @@ export async function GET(req: Request) {
       .in("deal_id", familyDealIds);
 
     familySharedTasks = (data ?? []) as TaskRow[];
+    primarySharedTasks = familySharedTasks.filter((t) => t.deal_id === primaryDealId);
   }
 
   const allSharedTaskIds = familySharedTasks.map((task) => task.id);
@@ -240,16 +278,28 @@ export async function GET(req: Request) {
     }
   }
 
-  // Map shared docs to the *local* deal's task (matched by task_template_id),
-  // not the primary's. The doc-count column on the deal detail page filters
-  // taskFileDocs by `d.task_id === task.id`, so for a co-purchaser/co-seller
-  // page the rewritten id must point at that deal's own mirrored task or the
-  // bridged APS doc never shows on their task row.
-  const templateToLocalTaskId = new Map<string, string>();
-  if (sharedTasks.length > 0) {
+  // Map every shared template_id to the PRIMARY deal's task.id. The
+  // tasks GET handler returns shared tasks from the primary as the
+  // single source of truth, so the deal-detail page's Doc column
+  // filters `taskFileDocs.filter(d => d.task_id === task.id)` against
+  // primary task ids. Rewriting synced doc rows to the primary's task
+  // id keeps the count correct on every family deal's view —
+  // previously a co-purchaser/co-seller saw zero in the Doc column
+  // because the rewrite pointed at their own local task id while the
+  // displayed `task.id` was the primary's.
+  const templateToPrimaryTaskId = new Map<string, string>();
+  for (const task of primarySharedTasks) {
+    if (task.task_template_id) {
+      templateToPrimaryTaskId.set(task.task_template_id, task.id);
+    }
+  }
+  // Fallback: if the primary deal didn't yet have the shared task
+  // (e.g. mid-seed race), use the current deal's local id so the count
+  // is at least never wrong on the primary itself.
+  if (sharedTasks.length > 0 && templateToPrimaryTaskId.size === 0) {
     for (const task of sharedTasks) {
       if (task.task_template_id) {
-        templateToLocalTaskId.set(task.task_template_id, task.id);
+        templateToPrimaryTaskId.set(task.task_template_id, task.id);
       }
     }
   }
@@ -261,6 +311,23 @@ export async function GET(req: Request) {
     }
   }
 
+  // ── Diagnostic: trace the synced-doc rewrite to help debug why a
+  // co-purchaser/co-seller view might not be showing the Doc count.
+  // Safe to remove once verified.
+  console.log("[task-responses GET]", {
+    requested_deal_id: dealId,
+    primary_deal_id: primaryDealId,
+    is_viewing_primary: dealId === primaryDealId,
+    family_deal_ids: familyDealIds,
+    deal_tasks_count: dealTasks.length,
+    shared_task_ids_local: sharedTasks.map(t => t.id),
+    family_shared_task_ids: familySharedTasks.map(t => `${t.id} (deal:${t.deal_id})`),
+    primary_shared_task_ids: primarySharedTasks.map(t => `${t.id} (template:${t.task_template_id})`),
+    template_to_primary_map: Array.from(templateToPrimaryTaskId.entries()),
+    raw_responses_count: data?.length ?? 0,
+    raw_response_task_ids: (data ?? []).map(r => r.task_id),
+  });
+
   const result = (data ?? []).map((response: TaskResponseRow) => {
     const taskMeta = sharedTaskById.get(response.task_id) ?? localTaskById.get(response.task_id);
     const templateId = familyTaskIdToTemplate.get(response.task_id) ?? taskMeta?.task_template_id ?? null;
@@ -269,13 +336,23 @@ export async function GET(req: Request) {
     let effectiveTaskId = response.task_id;
     let title = taskTitleById.get(response.task_id) ?? "Unknown Task";
 
-    if (isSharedDocument && templateId && templateToLocalTaskId.has(templateId)) {
-      effectiveTaskId = templateToLocalTaskId.get(templateId)!;
+    if (isSharedDocument && templateId && templateToPrimaryTaskId.has(templateId)) {
+      effectiveTaskId = templateToPrimaryTaskId.get(templateId)!;
       title =
         taskTitleById.get(effectiveTaskId) ??
         sharedTasks.find((task) => task.task_template_id === templateId)?.title ??
         title;
     }
+
+    // Diagnostic per-row
+    console.log("[task-responses GET → row]", {
+      original_task_id: response.task_id,
+      effective_task_id: effectiveTaskId,
+      template_id: templateId,
+      is_shared_document: isSharedDocument,
+      file_name: response.file_name,
+      rewrote: response.task_id !== effectiveTaskId,
+    });
 
     return {
       ...response,
@@ -398,7 +475,24 @@ export async function PATCH(req: Request) {
       }
     }
 
-    return NextResponse.json({ success: true, data, mirrored: mirroredCount });
+    // Auto-complete file-only tasks (ID, Home Insurance, etc.) once all
+    // required file fields are filled — parity with the APS upload flow.
+    let taskCompleted = false;
+    if (isFileReplace && data?.task_id) {
+      try {
+        const result = await maybeCompleteFileTask(data.task_id);
+        taskCompleted = result.completed;
+      } catch (err) {
+        console.error("[task-responses PATCH] auto-complete failed:", err);
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      data,
+      mirrored: mirroredCount,
+      task_completed: taskCompleted,
+    });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err?.message ?? "Server error" }, { status: 500 });
   }
@@ -406,12 +500,13 @@ export async function PATCH(req: Request) {
 
 /**
  * POST /api/admin/task-responses
- * Body: { task_id, field_id, field_label, field_type, value? }
+ * Body: { task_id, field_id, field_label, field_type, value?, file_url?, file_name? }
  *
  * Creates a new admin-entered response for a form field that the client
- * left blank. For shared tasks the row is mirrored across the
- * co-purchaser/co-seller family so every linked deal sees the same
- * admin override.
+ * left blank. Supports both text values and file uploads (file_url +
+ * file_name for `field_type=file`). For shared tasks the row is
+ * mirrored across the co-purchaser/co-seller family so every linked
+ * deal sees the same admin override.
  */
 export async function POST(req: Request) {
   try {
@@ -422,12 +517,16 @@ export async function POST(req: Request) {
       field_label,
       field_type,
       value,
+      file_url,
+      file_name,
     } = body as {
       task_id?: string;
       field_id?: string | null;
       field_label?: string | null;
       field_type?: string | null;
       value?: string | null;
+      file_url?: string | null;
+      file_name?: string | null;
     };
     if (!task_id) {
       return NextResponse.json({ success: false, error: "task_id is required" }, { status: 400 });
@@ -445,12 +544,14 @@ export async function POST(req: Request) {
       field_label,
       field_type,
       value: value === "" ? null : value ?? null,
+      file_url: file_url || null,
+      file_name: file_name || null,
     };
 
     const { data, error } = await supabaseAdmin
       .from("task_responses")
       .insert(insertRow)
-      .select("id, task_id, field_id, field_label, field_type, value")
+      .select("id, task_id, field_id, field_label, field_type, value, file_url, file_name")
       .single();
     if (error) {
       return NextResponse.json({ success: false, error: error.message }, { status: 400 });
@@ -482,6 +583,8 @@ export async function POST(req: Request) {
           field_label: insertRow.field_label,
           field_type: insertRow.field_type,
           value: insertRow.value,
+          file_url: insertRow.file_url,
+          file_name: insertRow.file_name,
         }));
         const { data: mirrored } = await supabaseAdmin
           .from("task_responses")
@@ -491,7 +594,23 @@ export async function POST(req: Request) {
       }
     }
 
-    return NextResponse.json({ success: true, data, mirrored: mirroredCount });
+    // Auto-complete file-only tasks once all required files are present.
+    let taskCompleted = false;
+    if (field_type === "file" && file_url) {
+      try {
+        const result = await maybeCompleteFileTask(task_id);
+        taskCompleted = result.completed;
+      } catch (err) {
+        console.error("[task-responses POST] auto-complete failed:", err);
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      data,
+      mirrored: mirroredCount,
+      task_completed: taskCompleted,
+    });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err?.message ?? "Server error" }, { status: 500 });
   }

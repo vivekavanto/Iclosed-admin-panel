@@ -11,13 +11,13 @@ const supabase = supabaseAdmin;
 async function syncMilestoneToLinkedDeals(
   milestone: Record<string, any>,
   updates: Record<string, any>,
-) {
+): Promise<{ mirroredMilestones: number; mirroredTasks: number }> {
   const { id: milestoneId, deal_id, stage_template_id } = milestone;
-  if (!deal_id || !stage_template_id) return;
+  if (!deal_id || !stage_template_id) return { mirroredMilestones: 0, mirroredTasks: 0 };
 
   const familyDealIds = await getFamilyDealIds(deal_id);
   const linkedDealIds = familyDealIds.filter((id) => id !== deal_id);
-  if (linkedDealIds.length === 0) return;
+  if (linkedDealIds.length === 0) return { mirroredMilestones: 0, mirroredTasks: 0 };
 
   // Find the milestones in the family with the same stage_template_id
   const { data: familyMilestones } = await supabase
@@ -28,7 +28,8 @@ async function syncMilestoneToLinkedDeals(
 
   const familyMilestoneIds = familyMilestones?.map(m => m.id) || [milestoneId];
 
-
+  let mirroredMilestones = 0;
+  let mirroredTasks = 0;
 
   const syncPayload: Record<string, any> = {};
   if (updates.status !== undefined) syncPayload.status = updates.status;
@@ -37,16 +38,18 @@ async function syncMilestoneToLinkedDeals(
   if (updates.milestone_date !== undefined) syncPayload.milestone_date = updates.milestone_date;
 
   if (Object.keys(syncPayload).length > 0) {
-    const { error } = await supabase
+    const { data: mirroredRows, error } = await supabase
       .from("milestones")
       .update(syncPayload)
       .eq("stage_template_id", stage_template_id)
-      .in("deal_id", linkedDealIds);
+      .in("deal_id", linkedDealIds)
+      .select("id");
 
     if (error) {
       console.error("[MilestoneSync] Failed:", error.message);
     } else {
-      console.log(`[MilestoneSync] Synced milestone (template: ${stage_template_id}) to ${linkedDealIds.length} linked deal(s)`);
+      mirroredMilestones = mirroredRows?.length ?? 0;
+      console.log(`[MilestoneSync] Synced milestone (template: ${stage_template_id}) to ${mirroredMilestones} linked deal(s)`);
     }
   }
 
@@ -61,17 +64,21 @@ async function syncMilestoneToLinkedDeals(
         completed: isCompleted,
         completed_at: isCompleted ? (updates.completed_at || new Date().toISOString()) : null,
       };
-      
+
       // Only cascade to shared tasks on linked deals — personal tasks are independent per person
-      const { error: taskError } = await supabase
+      const { data: mirroredTaskRows, error: taskError } = await supabase
         .from("tasks")
         .update(taskUpdatePayload)
         .in("milestone_id", linkedMilestoneIds)
-        .eq("is_shared", true);
+        .eq("is_shared", true)
+        .select("id");
 
       if (taskError) console.error("[MilestoneSync Tasks] Failed:", taskError.message);
+      else mirroredTasks = mirroredTaskRows?.length ?? 0;
     }
   }
+
+  return { mirroredMilestones, mirroredTasks };
 }
 
 export async function GET(req: Request) {
@@ -136,16 +143,20 @@ export async function PATCH(req: Request) {
     }
 
     // Sync status/completed_at changes to linked co-purchaser deals
+    let mirroredMilestones = 0;
+    let mirroredTasks = 0;
     if (data?.stage_template_id &&
         (updates.status !== undefined || updates.completed_at !== undefined || updates.milestone_date !== undefined)) {
       try {
-        await syncMilestoneToLinkedDeals(data, updates);
+        const result = await syncMilestoneToLinkedDeals(data, updates);
+        mirroredMilestones = result.mirroredMilestones;
+        mirroredTasks = result.mirroredTasks;
       } catch (syncErr) {
         console.error("[MilestoneSync] Non-blocking error:", syncErr);
       }
     }
 
-    return NextResponse.json({ success: true, data });
+    return NextResponse.json({ success: true, data, mirroredMilestones, mirroredTasks });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }

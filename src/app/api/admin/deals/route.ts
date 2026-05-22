@@ -6,7 +6,7 @@ const supabase = supabaseAdmin;
 export async function GET() {
   const { data, error } = await supabase
     .from("deals")
-    .select("*, tasks(id, status), leads(id, parent_lead_id, first_name, last_name, citizenship_status, address_street, address_unit, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code)")
+    .select("*, tasks(id, status), leads(id, parent_lead_id, first_name, last_name, citizenship_status, co_person_role, address_street, address_unit, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code)")
     .or("source.is.null,source.neq.bulk_import")
     .order("created_at", { ascending: false });
 
@@ -60,12 +60,22 @@ export async function GET() {
           .filter(Boolean)
           .join(", ")
       : "";
+    // Authoritative co-* role recorded at intake — "purchaser" or
+    // "seller". The All Files list uses this to label the row badge
+    // correctly instead of guessing from the deal's `type` field
+    // (which can't disambiguate on Purchase & Sale parents where one
+    // co-lead is the purchaser and another is the seller).
+    const coPersonRole: "purchaser" | "seller" | null =
+      lead?.co_person_role === "purchaser" || lead?.co_person_role === "seller"
+        ? lead.co_person_role
+        : null;
     return {
       ...rest,
       totalTasks,
       completedTasks,
       is_co_purchaser: isCoPurchaser,
       has_co_purchasers: hasCoPurchasers,
+      co_person_role: coPersonRole,
       lead_name: lead ? `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim() : null,
       lead_citizenship_status: lead?.citizenship_status ?? null,
       selling_property_address: sellingPropertyAddress,
