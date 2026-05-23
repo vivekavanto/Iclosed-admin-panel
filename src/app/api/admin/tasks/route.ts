@@ -384,6 +384,19 @@ export async function PATCH(req: Request) {
       return NextResponse.json({ success: false, error: error.message }, { status: 400 });
     }
 
+    // Personal-task milestone recalc: when admin flips status/completed on a
+    // personal (non-shared) task, the linked milestone must roll up so the
+    // client dashboard reflects the change. Shared tasks already handle this
+    // earlier in the function via recalcMilestonesForFamily.
+    if (updates.status !== undefined || updates.completed !== undefined) {
+      try {
+        const familyDealIds = await getFamilyDealIds(existingTask.deal_id);
+        await recalcMilestonesForFamily(familyDealIds, existingTask.deal_id);
+      } catch {
+        // Non-blocking: milestone recalc failure shouldn't fail the task update
+      }
+    }
+
     return NextResponse.json({ success: true, data });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });

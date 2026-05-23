@@ -6,7 +6,7 @@ const supabase = supabaseAdmin;
 export async function GET() {
   const { data, error } = await supabase
     .from("deals")
-    .select("*, tasks(id, status), leads(id, parent_lead_id, first_name, last_name, citizenship_status, co_person_role, address_street, address_unit, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code)")
+    .select("*, tasks(id, status), leads(id, parent_lead_id, first_name, last_name, citizenship_status, co_person_role, address_street, address_unit, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code, clients(id, auth_user_id))")
     .or("source.is.null,source.neq.bulk_import")
     .order("created_at", { ascending: false });
 
@@ -16,12 +16,61 @@ export async function GET() {
 
   const deals = data ?? [];
 
+  // Resolve "account created" timestamps from Supabase Auth. The All Files
+  // list surfaces this so admins can see at a glance which clients have
+  // actually signed up vs. who is still on the invite. Fetched in one
+  // batch and mapped to each deal via leads.clients.auth_user_id.
+  const authUserIds = new Set<string>();
+  for (const deal of deals) {
+    const lead = (deal as any).leads as any;
+    const authId = lead?.clients?.auth_user_id;
+    if (authId) authUserIds.add(authId);
+  }
+  const authCreatedAtMap = new Map<string, string>();
+  if (authUserIds.size > 0) {
+    try {
+      let page = 1;
+      const perPage = 1000;
+      while (true) {
+        const { data: usersPage } = await supabase.auth.admin.listUsers({ page, perPage });
+        const users = usersPage?.users ?? [];
+        for (const u of users) {
+          if (authUserIds.has(u.id) && u.created_at) {
+            authCreatedAtMap.set(u.id, u.created_at);
+          }
+        }
+        if (users.length < perPage) break;
+        page += 1;
+      }
+    } catch (err) {
+      console.error("[admin/deals] listUsers failed (non-blocking):", err);
+    }
+  }
+
   // Build a set of primary lead IDs that have co-purchasers pointing to them
   const primaryLeadIds = new Set<string>();
   for (const deal of deals) {
     const lead = deal.leads as any;
     if (lead?.parent_lead_id) {
       primaryLeadIds.add(lead.parent_lead_id);
+    }
+  }
+
+  // Pull co-purchaser/co-seller names for each primary so the All Files
+  // search haystack can match on a co-party's name (the co-* rows themselves
+  // are hidden from the list, so without this their names are unreachable).
+  const coPartyNamesByPrimaryLead = new Map<string, string[]>();
+  if (primaryLeadIds.size > 0) {
+    const { data: coLeads } = await supabase
+      .from("leads")
+      .select("first_name, last_name, parent_lead_id")
+      .in("parent_lead_id", Array.from(primaryLeadIds));
+    for (const cl of coLeads ?? []) {
+      const name = `${cl.first_name ?? ""} ${cl.last_name ?? ""}`.trim();
+      if (!name || !cl.parent_lead_id) continue;
+      const arr = coPartyNamesByPrimaryLead.get(cl.parent_lead_id) ?? [];
+      arr.push(name);
+      coPartyNamesByPrimaryLead.set(cl.parent_lead_id, arr);
     }
   }
 
@@ -69,13 +118,22 @@ export async function GET() {
       lead?.co_person_role === "purchaser" || lead?.co_person_role === "seller"
         ? lead.co_person_role
         : null;
+    const authUserId = lead?.clients?.auth_user_id ?? null;
+    const accountCreatedAt = authUserId ? authCreatedAtMap.get(authUserId) ?? null : null;
+    const coPartyNames =
+      lead && !lead.parent_lead_id
+        ? coPartyNamesByPrimaryLead.get(lead.id) ?? []
+        : [];
     return {
       ...rest,
       totalTasks,
       completedTasks,
+      auth_user_id: authUserId,
       is_co_purchaser: isCoPurchaser,
       has_co_purchasers: hasCoPurchasers,
       co_person_role: coPersonRole,
+      co_party_names: coPartyNames,
+      account_created_at: accountCreatedAt,
       lead_name: lead ? `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim() : null,
       lead_citizenship_status: lead?.citizenship_status ?? null,
       selling_property_address: sellingPropertyAddress,

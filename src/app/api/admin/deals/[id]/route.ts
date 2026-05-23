@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
+import { getFamilyDealIds } from "@/lib/familyDeals";
 
 const supabase = supabaseAdmin;
 
@@ -201,6 +202,24 @@ const ALLOWED_STATUSES = new Set([
   "Closed",
 ]);
 
+// Columns that should mirror across every deal in the same co-purchaser/
+// co-seller family. Excludes:
+//   - file_number: UNIQUE-indexed and each co-* deal has its own number
+//   - type: a Purchase & Sale family has Purchase on one row, Sale on another
+//   - property_address: same reason — purchase address vs selling address
+const MIRROR_DEAL_COLUMNS = new Set([
+  "file_name",
+  "status",
+  "lawyer_name",
+  "clerk_name",
+  "closing_date",
+  "opening_date",
+  "requisition_date",
+  "price",
+  "outstanding_undertakings",
+  "outstanding_requisitions",
+]);
+
 const DATE_COLUMNS = new Set([
   "closing_date",
   "opening_date",
@@ -306,7 +325,33 @@ export async function PATCH(
     );
   }
 
-  return NextResponse.json({ success: true, data });
+  // Mirror file-level fields across every linked co-purchaser/co-seller deal
+  // so a family file stays in sync. Non-blocking: a mirror failure shouldn't
+  // roll back the primary update (which the admin can see succeeded).
+  let mirroredCount = 0;
+  try {
+    const mirrorPayload: Record<string, any> = {};
+    for (const [key, value] of Object.entries(updates)) {
+      if (MIRROR_DEAL_COLUMNS.has(key)) mirrorPayload[key] = value;
+    }
+
+    if (Object.keys(mirrorPayload).length > 0) {
+      const familyDealIds = await getFamilyDealIds(id);
+      const siblingIds = familyDealIds.filter((d) => d !== id);
+      if (siblingIds.length > 0) {
+        const { data: mirrored } = await supabase
+          .from("deals")
+          .update(mirrorPayload)
+          .in("id", siblingIds)
+          .select("id");
+        mirroredCount = mirrored?.length ?? 0;
+      }
+    }
+  } catch (mirrorErr) {
+    console.error("[admin/deals PATCH] mirror to family failed (non-blocking):", mirrorErr);
+  }
+
+  return NextResponse.json({ success: true, data, mirrored: mirroredCount });
 }
 
 export async function DELETE(

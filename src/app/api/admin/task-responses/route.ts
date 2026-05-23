@@ -193,41 +193,50 @@ export async function GET(req: Request) {
     .select("id, deal_id, title, is_shared, task_template_id")
     .eq("deal_id", dealId);
 
-  if (tasksError || !dealTasks?.length) {
+  if (tasksError) {
     return NextResponse.json([]);
   }
 
-  const personalTaskIds = dealTasks.filter((task) => !task.is_shared).map((task) => task.id);
-  const sharedTasks = dealTasks.filter((task) => task.is_shared && task.task_template_id);
-  const familyDealIds = sharedTasks.length > 0 ? await getFamilyDealIds(dealId) : [dealId];
+  // Always scan the whole family for shared tasks — even if the current
+  // (e.g. co-purchaser/co-seller) deal has no local mirror row for a shared
+  // task, the primary's task_responses still need to surface in the Doc
+  // column. The previous behaviour gated the family lookup on the local
+  // deal having shared task rows, which caused APS docs to silently
+  // disappear from co-purchaser views when their mirror row was missing.
+  const localTasks = dealTasks ?? [];
+  const personalTaskIds = localTasks.filter((task) => !task.is_shared).map((task) => task.id);
+  const localSharedTasks = localTasks.filter((task) => task.is_shared && task.task_template_id);
+  const familyDealIds = await getFamilyDealIds(dealId);
 
-  let familySharedTasks: TaskRow[] = [];
-  // Tasks on the primary deal that share the same template_ids — used to
-  // rewrite the bridged response rows to point at the primary deal's
-  // task ids (which is what the tasks GET handler returns to the UI).
-  let primarySharedTasks: TaskRow[] = [];
-  if (sharedTasks.length > 0) {
-    const sharedTemplateIds = sharedTasks
-      .map((task) => task.task_template_id)
-      .filter((taskTemplateId): taskTemplateId is string => Boolean(taskTemplateId));
+  // Pull every shared task across the family so we can surface primary
+  // task_responses on co-* views regardless of local mirror state.
+  const { data: familySharedTasksData } = await supabaseAdmin
+    .from("tasks")
+    .select("id, deal_id, title, is_shared, task_template_id")
+    .eq("is_shared", true)
+    .in("deal_id", familyDealIds);
 
-    const { data } = await supabaseAdmin
-      .from("tasks")
-      .select("id, deal_id, title, is_shared, task_template_id")
-      .eq("is_shared", true)
-      .in("task_template_id", sharedTemplateIds)
-      .in("deal_id", familyDealIds);
+  const familySharedTasks: TaskRow[] = (familySharedTasksData ?? []) as TaskRow[];
+  const primarySharedTasks: TaskRow[] = familySharedTasks.filter((t) => t.deal_id === primaryDealId);
 
-    familySharedTasks = (data ?? []) as TaskRow[];
-    primarySharedTasks = familySharedTasks.filter((t) => t.deal_id === primaryDealId);
+  // Backwards-compatible alias: downstream logic still refers to
+  // `sharedTasks` as the set of shared tasks visible on the current deal.
+  // Prefer local rows; if absent, fall back to primary's so titles &
+  // template ids are still resolvable.
+  const sharedTasks: TaskRow[] = localSharedTasks.length > 0
+    ? localSharedTasks
+    : primarySharedTasks;
+
+  if (!localTasks.length && familySharedTasks.length === 0) {
+    return NextResponse.json([]);
   }
 
   const allSharedTaskIds = familySharedTasks.map((task) => task.id);
   const allTaskIds = [...new Set([...personalTaskIds, ...sharedTasks.map((task) => task.id), ...allSharedTaskIds])];
 
-  const localTaskById = new Map(dealTasks.map((task) => [task.id, task]));
+  const localTaskById = new Map(localTasks.map((task) => [task.id, task]));
   const sharedTaskById = new Map(familySharedTasks.map((task) => [task.id, task]));
-  const taskTitleById = new Map(dealTasks.map((task) => [task.id, task.title ?? "Unknown Task"]));
+  const taskTitleById = new Map(localTasks.map((task) => [task.id, task.title ?? "Unknown Task"]));
 
   if (sharedTasks.length > 0) {
     const templateToTitle = new Map(

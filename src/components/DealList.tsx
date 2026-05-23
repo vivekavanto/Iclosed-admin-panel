@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { Deal, DealType, DealStatus } from '../types';
-import { Search, Trash2, Users, AlertTriangle, Upload, Pencil } from 'lucide-react';
+import { Search, Trash2, Users, AlertTriangle, Upload, Pencil, LogIn } from 'lucide-react';
 import {
   isNonCitizenFlagged,
   NON_CITIZEN_FLAG_TOOLTIP,
@@ -60,6 +60,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           milestones: d.milestones ?? [],
           documents: d.documents ?? [],
           notes: d.notes ?? [],
+          authUserId: d.auth_user_id ?? null,
           isCoPurchaser: d.is_co_purchaser ?? false,
           hasCoPurchasers: d.has_co_purchasers ?? false,
           coPersonRole:
@@ -67,6 +68,8 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
               ? d.co_person_role
               : null,
           leadName: d.lead_name ?? '',
+          coPartyNames: Array.isArray(d.co_party_names) ? d.co_party_names : [],
+          accountCreatedAt: d.account_created_at ?? null,
           leadCitizenshipStatus: d.lead_citizenship_status ?? null,
           fileName: d.file_name ?? '',
           lawyerName: d.lawyer_name ?? '',
@@ -79,10 +82,13 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           sellingAddressProvince: d.lead_selling_address_province ?? '',
           sellingAddressPostalCode: d.lead_selling_address_postal_code ?? '',
         } as Deal & {
+          authUserId: string | null;
           isCoPurchaser: boolean;
           hasCoPurchasers: boolean;
           coPersonRole: "purchaser" | "seller" | null;
           leadName: string;
+          coPartyNames: string[];
+          accountCreatedAt: string | null;
           leadCitizenshipStatus: string | null;
           fileName: string;
           lawyerName: string;
@@ -175,6 +181,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
         d.lawyerName ?? '',
         d.clerkName ?? '',
         d.leadName ?? '',
+        Array.isArray(d.coPartyNames) ? d.coPartyNames.join(' ') : '',
         d.purchasePropertyAddress ?? '',
         d.addressCity ?? '',
         d.addressProvince ?? '',
@@ -202,6 +209,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
         priceStr,
         // Dates — raw ISO + month names so "may 2026" / "2026-05" both work.
         formatDateForSearch(deal.closingDate),
+        formatDateForSearch(d.accountCreatedAt),
         formatDateForSearch(deal.openingDate),
         formatDateForSearch(deal.requisitionDate),
         // Family / flag labels so "co-purchaser", "co-seller", "flagged"
@@ -256,6 +264,28 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
 
   const formatDate = (dateString?: string) => formatLocalDate(dateString);
 
+
+  const handleImpersonate = async (authUserId: string | null) => {
+    if (!authUserId) {
+      alert("This client has not signed up yet — cannot impersonate.");
+      return;
+    }
+    try {
+      const res = await fetch("/api/admin/impersonate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ authUserId }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.url) {
+        throw new Error(json.error || "Failed to generate link");
+      }
+      window.open(json.url, "_blank", "noopener,noreferrer");
+    } catch (err: any) {
+      console.error("Impersonate error:", err);
+      alert(`Failed to impersonate: ${err?.message ?? "unknown error"}`);
+    }
+  };
 
   const handleDelete = async (dealId: string) => {
     const confirmDelete = window.confirm("Are you sure you want to delete this deal?");
@@ -341,7 +371,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
               onChange={e => setDateFrom(e.target.value)}
               min="1900-01-01"
               max="2100-12-31"
-              className="h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none"
+              className="h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none cursor-pointer"
             />
           </div>
           <div>
@@ -352,21 +382,21 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
               onChange={e => setDateTo(e.target.value)}
               min="1900-01-01"
               max="2100-12-31"
-              className="h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none"
+              className="h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none cursor-pointer"
             />
           </div>
           {(dateFrom || dateTo) && (
             <button
               onClick={() => { setDateFrom(''); setDateTo(''); }}
-              className="h-8 px-2 text-xs text-slate-400 hover:text-red-500 transition-colors"
+              className="h-8 px-2 text-xs text-slate-400 hover:text-red-500 transition-colors cursor-pointer"
             >
               ✕ Clear
             </button>
           )}
           <div className="h-8 flex items-center gap-4 ml-auto">
-            <button onClick={() => applyPreset('today')} className="text-xs font-medium text-brand-primary hover:underline">Today</button>
-            <button onClick={() => applyPreset('week')} className="text-xs font-medium text-brand-primary hover:underline">This week</button>
-            <button onClick={() => applyPreset('month')} className="text-xs font-medium text-brand-primary hover:underline">This month</button>
+            <button onClick={() => applyPreset('today')} className="text-xs font-medium text-brand-primary hover:underline cursor-pointer">Today</button>
+            <button onClick={() => applyPreset('week')} className="text-xs font-medium text-brand-primary hover:underline cursor-pointer">This week</button>
+            <button onClick={() => applyPreset('month')} className="text-xs font-medium text-brand-primary hover:underline cursor-pointer">This month</button>
           </div>
         </div>
 
@@ -376,7 +406,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
             <select
               value={filterType}
               onChange={e => setFilterType(e.target.value)}
-              className="w-full h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"
+              className="w-full h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white cursor-pointer"
             >
               <option value="All">All</option>
               <option value="Purchase">Purchase</option>
@@ -390,7 +420,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
             <select
               value={filterLawyer}
               onChange={e => setFilterLawyer(e.target.value)}
-              className="w-full h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"
+              className="w-full h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white cursor-pointer"
             >
               <option value="">Choose a lawyer</option>
               {lawyerOptions.map((name) => (
@@ -409,7 +439,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
             <select
               value={filterClerk}
               onChange={e => setFilterClerk(e.target.value)}
-              className="w-full h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"
+              className="w-full h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white cursor-pointer"
             >
               <option value="">Choose a clerk</option>
               {clerkOptions.map((name) => (
@@ -425,7 +455,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
             <select
               value={filterStatus}
               onChange={e => setFilterStatus(e.target.value)}
-              className="w-full h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white"
+              className="w-full h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white cursor-pointer"
             >
               <option value="">Choose a status</option>
               <option value="Active">Active</option>
@@ -443,7 +473,8 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
               <th className="px-4 py-3 w-12">No.</th>
               <th className="px-4 py-3 w-24">File No.</th>
               <th className="px-4 py-3">File name</th>
-              <th className="px-4 py-3 w-48">Client</th>
+              <th className="px-4 py-3 w-48">Client Name</th>
+              <th className="px-4 py-3 w-32">Account created</th>
               <th className="px-4 py-3 w-20">Lawyer</th>
               <th className="px-4 py-3 w-20">Clerk</th>
               <th className="px-4 py-3 w-64">Address</th>
@@ -533,6 +564,18 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                     )}
                   </td>
                   <td className="px-4 py-3">
+                    {(deal as any).accountCreatedAt ? (
+                      <span
+                        className="text-xs text-slate-700"
+                        title={new Date((deal as any).accountCreatedAt).toLocaleString()}
+                      >
+                        {formatDate((deal as any).accountCreatedAt)}
+                      </span>
+                    ) : (
+                      <span className="text-slate-300" title="Client has not signed up yet">—</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
                     {(deal as any).lawyerName ? (
                       <span
                         className="bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded text-[10px] font-bold border border-blue-100"
@@ -608,7 +651,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                           e.stopPropagation();
                           setEditingDealId(deal.id);
                         }}
-                        className="text-slate-400 hover:text-brand-primary transition-colors p-1"
+                        className="text-slate-400 hover:text-brand-primary transition-colors p-1 cursor-pointer"
                         title="Edit deal"
                       >
                         <Pencil size={14} />
@@ -616,9 +659,20 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
+                          handleImpersonate((deal as any).authUserId ?? null);
+                        }}
+                        disabled={!(deal as any).authUserId}
+                        className="text-slate-400 hover:text-brand-primary transition-colors p-1 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                        title={(deal as any).authUserId ? "Login as this client" : "Client has not signed up yet"}
+                      >
+                        <LogIn size={14} />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
                           handleDelete(deal.id);
                         }}
-                        className="text-slate-300 hover:text-red-500 transition-colors p-1"
+                        className="text-slate-300 hover:text-red-500 transition-colors p-1 cursor-pointer"
                         title="Delete deal"
                       >
                         <Trash2 size={14} />

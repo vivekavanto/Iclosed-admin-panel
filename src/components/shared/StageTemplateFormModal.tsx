@@ -132,7 +132,7 @@ export default function StageTemplateFormModal({
       role="dialog"
       aria-modal="true"
       aria-label={isEditMode ? "Edit Stage Template" : "Add Stage Template"}
-      className="fixed inset-0 z-50 flex justify-end items-stretch lg:justify-center lg:items-center bg-black/30 lg:bg-black/40 lg:backdrop-blur-sm lg:p-4 xl:p-12 2xl:p-20"
+      className="fixed inset-0 md:left-[var(--sidebar-w,256px)] z-50 flex justify-end items-stretch lg:justify-center lg:items-center bg-black/30 lg:bg-black/40 lg:backdrop-blur-sm lg:p-4 xl:p-12 2xl:p-20 transition-[left] duration-300"
       onClick={onClose}
     >
       <div

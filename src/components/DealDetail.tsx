@@ -31,6 +31,7 @@ import {
 } from "@/lib/isNonCitizenFlagged";
 import { formatLocalDate, formatLocalDateTime } from "@/lib/formatDate";
 import { upload } from "@vercel/blob/client";
+import UploadIdentificationDrawer from "./UploadIdentificationDrawer";
 
 interface DealDetailProps {
   deal: Deal;
@@ -443,7 +444,19 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const [editTaskLoading, setEditTaskLoading] = useState(false);
   const [editTaskSaving, setEditTaskSaving] = useState(false);
 
+  // Identification upload drawer — opens instead of the normal Edit Task modal
+  // when the admin clicks Pencil on a task whose title contains "identif".
+  const [idDrawerTaskId, setIdDrawerTaskId] = useState<string | null>(null);
+  const idDrawerLeadId = (rawDeal?.lead_id as string | undefined) ?? deal.id;
+
+  const isIdentificationTask = (task: DisplayTask) =>
+    !task.isTemplate && (task.title ?? "").toLowerCase().includes("identif");
+
   const openEditTask = async (task: DisplayTask) => {
+    if (isIdentificationTask(task)) {
+      setIdDrawerTaskId(task.id);
+      return;
+    }
     setEditingTask(task);
     setEditTaskTitle(task.title ?? "");
     setEditTaskStatus(task.status ?? "Pending");
@@ -2955,7 +2968,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           role="dialog"
           aria-modal="true"
           aria-label="Add Stage"
-          className="fixed inset-0 z-50 flex justify-end items-stretch lg:justify-center lg:items-center bg-black/30 lg:bg-black/40 lg:backdrop-blur-sm lg:p-4 xl:p-12 2xl:p-20"
+          className="fixed inset-0 md:left-[var(--sidebar-w,256px)] z-50 flex justify-end items-stretch lg:justify-center lg:items-center bg-black/30 lg:bg-black/40 lg:backdrop-blur-sm lg:p-4 xl:p-12 2xl:p-20 transition-[left] duration-300"
           onClick={() => setShowStageForm(false)}
         >
           <div
@@ -3121,7 +3134,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           role="dialog"
           aria-modal="true"
           aria-label="Add Task"
-          className="fixed inset-0 z-50 flex justify-end items-stretch lg:justify-center lg:items-center bg-black/30 lg:bg-black/40 lg:backdrop-blur-sm lg:p-4 xl:p-12 2xl:p-20"
+          className="fixed inset-0 md:left-[var(--sidebar-w,256px)] z-50 flex justify-end items-stretch lg:justify-center lg:items-center bg-black/30 lg:bg-black/40 lg:backdrop-blur-sm lg:p-4 xl:p-12 2xl:p-20 transition-[left] duration-300"
           onClick={() => setShowTaskForm(false)}
         >
           <div
@@ -3190,7 +3203,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                   className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
                 >
                   <option value="">Select Task Template</option>
-                  {taskTemplates.map((template) => {
+                  {taskTemplates
+                    .filter((template) => matchesDealType(template.lead_type))
+                    .map((template) => {
                     const label = `${template.lead_type} - ${template.role_type} - ${template.name}`;
                     return (
                       <option key={template.id} value={template.id} title={label}>
@@ -4233,6 +4248,18 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           </div>
         </div>
       )}
+
+      {/* Identification upload drawer — admin-side reuse of the client drawer */}
+      <UploadIdentificationDrawer
+        open={!!idDrawerTaskId}
+        onClose={() => setIdDrawerTaskId(null)}
+        leadId={idDrawerLeadId}
+        taskId={idDrawerTaskId ?? undefined}
+        onSaved={() => {
+          setIdDrawerTaskId(null);
+          if (typeof window !== "undefined") window.location.reload();
+        }}
+      />
     </div>
   );
 };

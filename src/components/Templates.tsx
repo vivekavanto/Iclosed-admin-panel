@@ -107,15 +107,52 @@ const Templates: React.FC = () => {
   };
 
   const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Delete stage template "${name}"?`)) return;
+    // Step 1: ask the server how much deal-side data this delete would touch
+    // so the confirm dialog can spell it out instead of just warning vaguely.
+    let previewMsg = "";
+    try {
+      const previewRes = await fetch(
+        `/api/admin/milestone-templates?id=${id}&preview=1`,
+        { method: "DELETE" },
+      );
+      const preview = await previewRes.json().catch(() => ({}));
+      if (previewRes.ok && preview.preview) {
+        const m = Number(preview.milestones) || 0;
+        const t = Number(preview.tasks) || 0;
+        const r = Number(preview.task_responses) || 0;
+        if (m === 0 && t === 0) {
+          previewMsg = "No deals currently use this stage template.";
+        } else {
+          previewMsg =
+            `Deleting this will also remove:\n` +
+            `  • ${m} milestone${m === 1 ? "" : "s"} across all deals\n` +
+            `  • ${t} task${t === 1 ? "" : "s"} linked to those milestones\n` +
+            `  • ${r} task response${r === 1 ? "" : "s"} filled in by clients\n` +
+            `This cannot be undone.`;
+        }
+      }
+    } catch {
+      // Non-blocking — fall back to a generic warning if the preview fails.
+      previewMsg =
+        "Deleting this will also remove every milestone and linked task that " +
+        "uses this template across all deals. This cannot be undone.";
+    }
+
+    if (!confirm(`Delete stage template "${name}"?\n\n${previewMsg}`)) return;
 
     try {
       const res = await fetch(`/api/admin/milestone-templates?id=${id}`, { method: 'DELETE' });
+      const result = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Failed to delete');
+        throw new Error(result.error || 'Failed to delete');
       }
-      showToast('Stage template deleted');
+      const m = Number(result.deleted_milestones) || 0;
+      const t = Number(result.deleted_tasks) || 0;
+      showToast(
+        m > 0
+          ? `Stage template deleted (also removed ${m} milestone${m === 1 ? '' : 's'} and ${t} task${t === 1 ? '' : 's'})`
+          : 'Stage template deleted',
+      );
       fetchData();
     } catch (err: any) {
       showToast(err.message || 'Failed to delete', 'error');

@@ -227,14 +227,43 @@ const DefaultTasks: React.FC = () => {
 
   // Delete task
   const handleDeleteStage = async (stageId: string) => {
-    if (!confirm("Delete this milestone and all its tasks?")) return;
+    // Ask the server for a preview so the confirm message can list exactly
+    // how many milestones / tasks / responses the cascade will wipe.
+    let previewMsg = "";
+    try {
+      const pr = await fetch(
+        `/api/admin/milestone-templates?id=${stageId}&preview=1`,
+        { method: "DELETE" },
+      );
+      const p = await pr.json().catch(() => ({}));
+      if (pr.ok && p.preview) {
+        const m = Number(p.milestones) || 0;
+        const t = Number(p.tasks) || 0;
+        const r = Number(p.task_responses) || 0;
+        previewMsg =
+          m === 0 && t === 0
+            ? "No deals currently use this milestone template."
+            : `Deleting this will also remove:\n` +
+              `  • ${m} milestone${m === 1 ? "" : "s"} across all deals\n` +
+              `  • ${t} task${t === 1 ? "" : "s"} linked to those milestones\n` +
+              `  • ${r} task response${r === 1 ? "" : "s"} filled in by clients\n` +
+              `This cannot be undone.`;
+      }
+    } catch {
+      previewMsg =
+        "Deleting this will also remove every milestone and linked task that " +
+        "uses this template across all deals. This cannot be undone.";
+    }
+
+    if (!confirm(`Delete this milestone template?\n\n${previewMsg}`)) return;
     try {
       const res = await fetch(`/api/admin/milestone-templates?id=${stageId}`, { method: "DELETE" });
       if (res.ok) {
         setStages((prev) => prev.filter((s) => s.id !== stageId));
         setTasks((prev) => prev.filter((t) => t.stage_template_id !== stageId));
       } else {
-        alert("Failed to delete milestone.");
+        const err = await res.json().catch(() => ({}));
+        alert(err.error || "Failed to delete milestone.");
       }
     } catch {
       alert("Error deleting milestone.");

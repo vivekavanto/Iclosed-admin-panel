@@ -150,7 +150,12 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
       if (!res.ok || !data.success) {
         throw new Error(data.error || "Save failed");
       }
-      showToast("Deal updated");
+      const mirrored = Number(data.mirrored) || 0;
+      showToast(
+        mirrored > 0
+          ? `Deal updated — synced to ${mirrored} linked ${mirrored === 1 ? "deal" : "deals"}`
+          : "Deal updated",
+      );
       onSaved?.();
     } catch (err: any) {
       showToast(err?.message ?? "Save failed", "error");
@@ -195,6 +200,13 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
               <Loader2 size={16} className="animate-spin" /> Loading…
             </div>
           ) : (
+            <>
+            <div className="mb-5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              File-level fields (status, lawyer, clerk, dates, price, file name,
+              outstanding counts) sync across every linked co-purchaser/co-seller
+              deal in this file. File number, type, and property address stay
+              per-deal — edit those from each linked deal's detail page.
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <Field label="File number" required>
                 <input
@@ -344,6 +356,7 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
                 />
               </Field>
             </div>
+            </>
           )}
         </div>
 

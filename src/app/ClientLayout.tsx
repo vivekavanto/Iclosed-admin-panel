@@ -38,7 +38,12 @@ export default function ClientLayout({
   }
 
   return (
-    <div className="bg-slate-50 min-h-screen font-sans text-slate-900 flex">
+    <div
+      className="bg-slate-50 min-h-screen font-sans text-slate-900 flex"
+      // Exposed so fixed-position overlays (Add Task / Add Stage modals, etc.)
+      // can offset themselves past the sidebar instead of covering it.
+      style={{ ["--sidebar-w" as any]: sidebarCollapsed ? "72px" : "256px" }}
+    >
       <Sidebar
         onSearchClick={openSearch}
         collapsed={sidebarCollapsed}
