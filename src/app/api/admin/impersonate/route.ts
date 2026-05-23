@@ -28,7 +28,13 @@ export async function POST(req: Request) {
       );
     }
 
-    const redirectTo = process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL;
+    // Magic link must land on the customer portal's auth callback route so
+    // it exchanges the `?code=...` for a new session — landing on the bare
+    // root skipped that step and left whatever previous impersonated session
+    // active, so clicking impersonate on a second deal kept showing the
+    // first client's portal.
+    const portalBase = (process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ?? "").replace(/\/+$/, "");
+    const redirectTo = portalBase ? `${portalBase}/api/auth/callback` : undefined;
 
     const { data, error } = await supabaseAdmin.auth.admin.generateLink({
       type: "magiclink",
