@@ -35,8 +35,14 @@ export async function GET() {
         const { data: usersPage } = await supabase.auth.admin.listUsers({ page, perPage });
         const users = usersPage?.users ?? [];
         for (const u of users) {
-          if (authUserIds.has(u.id) && u.created_at) {
-            authCreatedAtMap.set(u.id, u.created_at);
+          // Use last_sign_in_at as the "Account created" signal — it stays
+          // NULL until the client actually signs in for the first time
+          // (vs. auth.users.created_at which is set the moment an invite
+          // creates the auth user, even before the client clicks the link).
+          // This keeps the "Account created" column empty for invited-but-
+          // not-yet-signed-up clients, matching the Pending deal status.
+          if (authUserIds.has(u.id) && u.last_sign_in_at) {
+            authCreatedAtMap.set(u.id, u.last_sign_in_at);
           }
         }
         if (users.length < perPage) break;

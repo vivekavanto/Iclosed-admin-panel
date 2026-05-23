@@ -197,6 +197,7 @@ const ALLOWED_TYPES = new Set([
 ]);
 
 const ALLOWED_STATUSES = new Set([
+  "Pending",
   "Active",
   "Inactive",
   "Closed",
