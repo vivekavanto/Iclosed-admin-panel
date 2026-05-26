@@ -99,12 +99,12 @@ const Dashboard: React.FC = () => {
             <div className="w-2 h-2 rounded-full bg-brand-primary"></div>
           </div>
         )}
-        {deal.status === DealStatus.PENDING && (
+        {deal.status === DealStatus.INACTIVE && (
           <div className="flex items-center px-3 py-1 rounded-full border border-slate-200 bg-white">
             <span className="text-xs font-medium text-slate-700 mr-2">
-              Pending
+              Inactive
             </span>
-            <div className="w-2 h-2 rounded-full bg-yellow-500"></div>
+            <div className="w-2 h-2 rounded-full bg-slate-400"></div>
           </div>
         )}
         {deal.status === DealStatus.URGENT && (

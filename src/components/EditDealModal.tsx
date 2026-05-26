@@ -30,7 +30,7 @@ interface EditDealModalProps {
 }
 
 const TYPE_OPTIONS = ["Purchase", "Sale", "Refinance", "Purchase & Sale"];
-const STATUS_OPTIONS = ["Pending", "Active", "Inactive", "Closed"];
+const STATUS_OPTIONS = ["Active", "Inactive", "Closed"];
 
 // Native <input type="date"> in Chrome allows the user to type a 6-digit
 // year. Restrict to a sane real-world window matching the rest of the app

@@ -43,6 +43,7 @@ const ROUTE_MAP: Record<string, string> = {
   leads: "/admin/leads",
   settings: "/admin/settings",
   "default-tasks": "/admin/settings/default-tasks",
+  "account-settings": "/admin/account-settings",
 };
 
 const iconMap: Record<string, React.ReactNode> = {
@@ -76,6 +77,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed =
     const initial = new Set<string>();
     if (pathname.startsWith("/admin/templates")) initial.add("templates");
     if (pathname.startsWith("/admin/settings")) initial.add("settings");
+    if (pathname.startsWith("/admin/account-settings")) initial.add("settings");
     return initial;
   });
 

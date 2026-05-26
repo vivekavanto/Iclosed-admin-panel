@@ -19,6 +19,13 @@ export async function GET(
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
+  // Resolve "account created" (last_sign_in_at) for the current lead and
+  // every family member. Mirrors the All Files list so the detail page
+  // can show the same Pending/Active and per-person Active/Inactive
+  // status that the list does.
+  const accountCreatedByAuthId = new Map<string, string>();
+  const accountCreatedByLeadId = new Map<string, string | null>();
+
   // ── Fetch linked deals (co-purchaser relationships) ──────────────────────
   let linked_deals: any[] = [];
 
@@ -109,6 +116,50 @@ export async function GET(
           return dealIsSaleOnly ? "Primary Seller" : "Primary Purchaser";
         };
 
+        // Look up auth_user_id for every lead in the family (including
+        // the current one) so we can resolve last_sign_in_at in a single
+        // listUsers pass below.
+        const allFamilyLeadIds = (familyLeads ?? [lead]).map((l) => l.id);
+        const { data: familyClients } = await supabase
+          .from("clients")
+          .select("auth_user_id, lead_id")
+          .in("lead_id", allFamilyLeadIds);
+        const authIdByLeadId = new Map<string, string>();
+        const familyAuthIds = new Set<string>();
+        for (const c of familyClients ?? []) {
+          if (c.auth_user_id && c.lead_id) {
+            authIdByLeadId.set(c.lead_id, c.auth_user_id);
+            familyAuthIds.add(c.auth_user_id);
+          }
+        }
+        if (familyAuthIds.size > 0) {
+          try {
+            let page = 1;
+            const perPage = 1000;
+            while (true) {
+              const { data: usersPage } = await supabase.auth.admin.listUsers({ page, perPage });
+              const users = usersPage?.users ?? [];
+              for (const u of users) {
+                if (familyAuthIds.has(u.id) && u.last_sign_in_at) {
+                  accountCreatedByAuthId.set(u.id, u.last_sign_in_at);
+                }
+              }
+              if (users.length < perPage) break;
+              page += 1;
+            }
+          } catch (err) {
+            console.error("[admin/deals/:id] listUsers failed (non-blocking):", err);
+          }
+        }
+        for (const leadId of allFamilyLeadIds) {
+          const authId = authIdByLeadId.get(leadId);
+          accountCreatedByLeadId.set(
+            leadId,
+            authId ? accountCreatedByAuthId.get(authId) ?? null : null,
+          );
+        }
+        data.account_created_at = accountCreatedByLeadId.get(lead.id) ?? null;
+
         if (familyLeads && familyLeads.length > 1) {
           // Get all family lead IDs except the current deal's lead
           const otherLeadIds = familyLeads
@@ -143,6 +194,7 @@ export async function GET(
                   file_number: d.file_number,
                   property_address: d.property_address,
                   status: d.status,
+                  account_created_at: accountCreatedByLeadId.get(d.lead_id) ?? null,
                   lead_name: dLead
                     ? `${dLead.first_name ?? ""} ${dLead.last_name ?? ""}`.trim()
                     : null,
@@ -197,7 +249,6 @@ const ALLOWED_TYPES = new Set([
 ]);
 
 const ALLOWED_STATUSES = new Set([
-  "Pending",
   "Active",
   "Inactive",
   "Closed",

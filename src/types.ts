@@ -7,7 +7,6 @@ export enum DealType {
 
 export enum DealStatus {
   ACTIVE = 'Active',
-  PENDING = 'Pending',
   CLOSED = 'Closed',
   CANCELLED = 'Cancelled',
   URGENT = 'Urgent',

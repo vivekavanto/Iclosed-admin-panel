@@ -458,7 +458,6 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
               className="w-full h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none bg-white cursor-pointer"
             >
               <option value="">Choose a status</option>
-              <option value="Pending">Pending</option>
               <option value="Active">Active</option>
               <option value="Inactive">Inactive</option>
               <option value="Closed">Closed</option>
@@ -635,29 +634,16 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 text-green-700 border border-green-200 shadow-sm">
                         <span className="mr-1">✓</span> Closed
                       </span>
-                    ) : deal.status === DealStatus.INACTIVE ? (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200">
-                        Inactive
-                      </span>
-                    ) : deal.status === DealStatus.PENDING ||
-                      !(deal as any).accountCreatedAt ? (
-                      // If the client has no "Account created" timestamp yet
-                      // (= they haven't actually signed in to the portal), we
-                      // surface Pending regardless of what's in the DB. Keeps
-                      // the badge in sync with the Account-created column.
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-300">
-                        Pending
-                      </span>
-                    ) : deal.status === DealStatus.ACTIVE ? (
+                    ) : (deal as any).accountCreatedAt ? (
+                      // "Active" = the linked client has signed in to the
+                      // portal at least once. The DB also gets flipped to
+                      // Active on first sign-in via a trigger.
                       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-white text-green-600 border border-green-400">
                         Active
                       </span>
                     ) : (
-                      // Any legacy / unexpected status from the DB renders its
-                      // actual value instead of being silently relabeled
-                      // "Active". Makes drift visible at a glance.
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-50 text-slate-600 border border-slate-200">
-                        {deal.status || "—"}
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200">
+                        Inactive
                       </span>
                     )}
                   </td>

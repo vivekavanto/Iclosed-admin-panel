@@ -179,10 +179,10 @@ export async function convertSingleLead(
         client_id: clientId,
         file_number: generatedFileNumber,
         type: lead.lead_type ?? "Purchase",
-        // New deals start as "Pending" — a Postgres trigger
+        // New deals start as "Inactive" — a Postgres trigger
         // (activate_deals_on_first_signin) flips this to "Active" the first
         // time the linked client signs in to the portal.
-        status: "Pending",
+        status: "Inactive",
         property_address: lead.address_street ?? "Address TBD",
         closing_date: opts.closing_date ?? null,
         price: cleanPrice ?? 0,

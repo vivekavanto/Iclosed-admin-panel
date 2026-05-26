@@ -3,23 +3,14 @@
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
-import { Eye, EyeOff, ArrowLeft, Check } from "lucide-react";
+import { Eye, EyeOff, ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useAuth } from "@/lib/AuthProvider";
 
-export default function AccountSettingsPage() {
+export default function ChangePasswordPage() {
   const router = useRouter();
   const { user } = useAuth();
 
-  // Display name state
-  const [displayName, setDisplayName] = useState(
-    (user?.user_metadata?.display_name as string) || ""
-  );
-  const [nameSaving, setNameSaving] = useState(false);
-  const [nameSuccess, setNameSuccess] = useState(false);
-  const [nameError, setNameError] = useState("");
-
-  // Password state
   const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -28,32 +19,6 @@ export default function AccountSettingsPage() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [pwLoading, setPwLoading] = useState(false);
   const [pwError, setPwError] = useState("");
-
-  const handleNameUpdate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setNameError("");
-    setNameSuccess(false);
-
-    if (!displayName.trim()) {
-      setNameError("Display name cannot be empty.");
-      return;
-    }
-
-    setNameSaving(true);
-
-    const { error } = await supabase.auth.updateUser({
-      data: { display_name: displayName.trim() },
-    });
-
-    if (error) {
-      setNameError(error.message);
-    } else {
-      setNameSuccess(true);
-      setTimeout(() => setNameSuccess(false), 3000);
-    }
-
-    setNameSaving(false);
-  };
 
   const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -102,7 +67,7 @@ export default function AccountSettingsPage() {
   };
 
   return (
-    <div className="max-w-lg mx-auto mt-12">
+    <div className="max-w-lg mx-auto mt-12 mb-12">
       <Link
         href="/admin/dashboard"
         className="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-700 mb-6"
@@ -113,64 +78,7 @@ export default function AccountSettingsPage() {
 
       <h1 className="text-2xl font-bold text-slate-900 mb-3">Change Password</h1>
 
-      {/* Display Name Section */}
-      {/* <div className="bg-white rounded-2xl shadow-lg border border-slate-200 p-8 mb-6">
-        <h2 className="text-lg font-semibold text-slate-900 mb-1">Display Name</h2>
-        <p className="text-sm text-slate-500 mb-5">
-          This name will be shown in the dashboard greeting and sidebar.
-        </p>
-
-        <form onSubmit={handleNameUpdate} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">
-              Name
-            </label>
-            <input
-              type="text"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="Enter your display name"
-              required
-              className="w-full px-4 py-3 rounded-lg border border-slate-300 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent transition-all"
-            />
-          </div>
-
-          <div className="flex items-center gap-3">
-            <p className="text-xs text-slate-400">
-              Email: {user?.email}
-            </p>
-          </div>
-
-          {nameError && (
-            <div className="bg-red-50 border border-red-200 text-red-600 text-sm rounded-lg px-4 py-3">
-              {nameError}
-            </div>
-          )}
-
-          {nameSuccess && (
-            <div className="flex items-center gap-2 bg-green-50 border border-green-200 text-green-600 text-sm rounded-lg px-4 py-3">
-              <Check size={16} />
-              Display name updated successfully.
-            </div>
-          )}
-
-          <button
-            type="submit"
-            disabled={nameSaving}
-            className="bg-slate-900 hover:bg-slate-800 text-white font-medium px-6 py-2.5 rounded-lg transition-colors disabled:opacity-50 text-sm"
-          >
-            {nameSaving ? "Saving..." : "Update Name"}
-          </button>
-        </form>
-      </div> */}
- 
-        {/* <p className="text-sm text-slate-500 mb-5">
-          Enter your old password, then enter your new password twice to confirm.
-        </p> */}
-      {/* Change Password Section */}
       <div className="bg-white rounded-2xl shadow-lg border border-slate-200 p-8">
-       
-
         <form onSubmit={handlePasswordChange} className="space-y-5">
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1.5">

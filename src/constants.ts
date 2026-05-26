@@ -100,7 +100,7 @@ export const MOCK_DEALS: Deal[] = [
     fileNumber: '#26R-0062',
     client: { id: 'c4', firstName: 'Bob', lastName: 'Builder', email: 'bob@example.com', phone: '555-1111' },
     type: DealType.REFINANCE,
-    status: DealStatus.PENDING,
+    status: DealStatus.INACTIVE,
     propertyAddress: 'Refinance of 55-57 Deacon Lane',
     closingDate: '2026-03-01',
     openingDate: '2026-01-27',
@@ -259,6 +259,7 @@ export const NAV_ITEMS = [
     icon: 'Settings',
     children: [
       { label: 'Default Tasks', id: 'default-tasks' },
+      { label: 'Account Settings', id: 'account-settings' },
     ]
   },
 ];

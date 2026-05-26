@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from "react";
-import { Deal, Task, Milestone } from "../types";
+import { Deal, Task, Milestone, DealStatus } from "../types";
 import {
   ArrowLeft,
   Calendar,
@@ -32,6 +32,7 @@ import {
 import { formatLocalDate, formatLocalDateTime } from "@/lib/formatDate";
 import { upload } from "@vercel/blob/client";
 import UploadIdentificationDrawer from "./UploadIdentificationDrawer";
+import UploadHomeInsuranceDrawer from "./UploadHomeInsuranceDrawer";
 
 interface DealDetailProps {
   deal: Deal;
@@ -452,12 +453,53 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const isIdentificationTask = (task: DisplayTask) =>
     !task.isTemplate && (task.title ?? "").toLowerCase().includes("identif");
 
-  const openEditTask = async (task: DisplayTask) => {
-    if (isIdentificationTask(task)) {
-      setIdDrawerTaskId(task.id);
-      return;
+  // Home Insurance upload drawer — reuses the client-portal drawer (copied into
+  // the admin app) so admin can upload the policy on behalf of the client.
+  const [homeInsDrawerTaskId, setHomeInsDrawerTaskId] = useState<string | null>(null);
+
+  const isHomeInsuranceTask = (task: DisplayTask) => {
+    if (task.isTemplate) return false;
+    const t = (task.title ?? "").toLowerCase();
+    return t.includes("home insurance") || t.includes("insurance policy");
+  };
+
+  type IdDocRow = {
+    id: string;
+    file_name: string | null;
+    file_url: string | null;
+    custom_type: string | null;
+  };
+  const [editTaskIdDocs, setEditTaskIdDocs] = useState<IdDocRow[]>([]);
+  const [editTaskIdDocsLoading, setEditTaskIdDocsLoading] = useState(false);
+
+  const fetchEditTaskIdDocs = async () => {
+    if (!idDrawerLeadId) return;
+    setEditTaskIdDocsLoading(true);
+    try {
+      const res = await fetch(
+        `/api/admin/lead-identification-docs?lead_id=${encodeURIComponent(idDrawerLeadId)}`,
+      );
+      const data = await res.json();
+      if (data.success) setEditTaskIdDocs(data.docs ?? []);
+    } catch {
+      // Non-fatal — the upload drawer can still be opened to add documents.
+    } finally {
+      setEditTaskIdDocsLoading(false);
     }
+  };
+
+  const formatIdDocLabel = (customType: string | null): string => {
+    if (!customType) return "Identification Document";
+    return customType
+      .replace(/_/g, " ")
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+  };
+
+  const openEditTask = async (task: DisplayTask) => {
     setEditingTask(task);
+    if (isIdentificationTask(task)) {
+      void fetchEditTaskIdDocs();
+    }
     setEditTaskTitle(task.title ?? "");
     setEditTaskStatus(task.status ?? "Pending");
     setEditTaskDueDate(task.dueDate ?? "");
@@ -570,6 +612,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     setEditTaskInitialResponses([]);
     setEditTaskFormFields([]);
     setEditTaskFieldErrors({});
+    setEditTaskIdDocs([]);
   };
 
   // Refetch just the task_responses for the currently-edited task. Called
@@ -2285,7 +2328,11 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                     Deal Status
                   </p>
                   <p className="font-bold text-sm text-slate-900 leading-none">
-                    {deal.status}
+                    {deal.status === DealStatus.CLOSED
+                      ? "Closed"
+                      : rawDeal?.account_created_at
+                      ? "Active"
+                      : "Inactive"}
                   </p>
                 </div>
               </div>
@@ -2374,6 +2421,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                 file_number: string;
                 property_address: string;
                 status: string;
+                accountCreated: boolean;
                 isCurrent: boolean;
               };
               const currentName = [
@@ -2395,6 +2443,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                 file_number: deal.fileNumber,
                 property_address: deal.propertyAddress || "",
                 status: deal.status,
+                accountCreated: !!rawDeal?.account_created_at,
                 isCurrent: true,
               };
               const linked: Person[] = (rawDeal?.linked_deals ?? []).map((ld: any) => ({
@@ -2404,6 +2453,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                 file_number: ld.file_number || "",
                 property_address: ld.property_address || "",
                 status: ld.status || "Active",
+                accountCreated: !!ld.account_created_at,
                 isCurrent: false,
               }));
               // Sort so the Primary always appears first, then co-purchasers, then co-sellers
@@ -2455,13 +2505,21 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                         Currently viewing
                       </span>
                     )}
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                      p.status === "Closed"
-                        ? "bg-green-100 text-green-700"
-                        : "bg-white text-green-600 border border-green-400"
-                    }`}>
-                      {p.status}
-                    </span>
+                    {p.accountCreated ? (
+                      <span
+                        className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-white text-green-600 border border-green-400"
+                        title="Client has signed in to the portal"
+                      >
+                        Active
+                      </span>
+                    ) : (
+                      <span
+                        className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200"
+                        title="Client has not signed in to the portal yet"
+                      >
+                        Inactive
+                      </span>
+                    )}
                     {!p.isCurrent && (
                       <ExternalLink size={14} className="text-slate-300 group-hover:text-blue-500" />
                     )}
@@ -3703,8 +3761,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         </div>
       )}
 
-      {/* Edit Task Modal */}
-      {editingTask && (
+      {/* Edit Task Modal — hidden while a sub-drawer (identification / home
+          insurance) is open so the two popups don't visually overlap. */}
+      {editingTask && !idDrawerTaskId && !homeInsDrawerTaskId && (
         <div
           role="dialog"
           aria-modal="true"
@@ -3811,11 +3870,89 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                   <p className="text-sm font-semibold text-gray-800">
                     Client Responses
                   </p>
+                  {editingTask && isIdentificationTask(editingTask) && (
+                    <button
+                      type="button"
+                      onClick={() => setIdDrawerTaskId(editingTask.id)}
+                      className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-[#C10007] rounded-lg hover:bg-[#a30006]"
+                    >
+                      <Upload size={14} />
+                      {editTaskIdDocs.length > 0
+                        ? "Upload More / Replace"
+                        : "Upload Identification Documents"}
+                    </button>
+                  )}
+                  {editingTask && isHomeInsuranceTask(editingTask) && (() => {
+                    const fileField = editTaskFormFields.find(
+                      (f) => f.field_type === "file",
+                    );
+                    const existing = editTaskResponses.find((r) => {
+                      if (r.field_type !== "file" || !r.file_url || r.deleted) return false;
+                      if (fileField?.id && r.field_id === fileField.id) return true;
+                      if (fileField?.label && r.field_label === fileField.label) return true;
+                      return !fileField; // legacy task with no template — match any file response
+                    });
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => setHomeInsDrawerTaskId(editingTask.id)}
+                        className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-[#C10007] rounded-lg hover:bg-[#a30006]"
+                      >
+                        <Upload size={14} />
+                        {existing
+                          ? "Replace Home Insurance Policy"
+                          : "Upload Home Insurance Policy"}
+                      </button>
+                    );
+                  })()}
                 </div>
                 {editTaskLoading ? (
                   <div className="flex items-center gap-2 py-3">
                     <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-[#C10007]" />
                     <span className="text-xs text-gray-400">Loading…</span>
+                  </div>
+                ) : editingTask && isIdentificationTask(editingTask) ? (
+                  // Identification task — reuse the dedicated upload drawer
+                  // (AI classification, camera, expiry, dedup) and list any
+                  // docs the client (or admin) has already saved.
+                  <div className="space-y-3">
+                    {editTaskIdDocsLoading ? (
+                      <p className="text-xs text-gray-400 italic">Loading documents…</p>
+                    ) : editTaskIdDocs.length > 0 ? (
+                      editTaskIdDocs.map((doc) => (
+                        <div
+                          key={doc.id}
+                          className="bg-gray-50 rounded-lg px-4 py-3 flex items-start justify-between gap-2"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-semibold text-gray-800">
+                              {formatIdDocLabel(doc.custom_type)}
+                            </p>
+                            <div className="flex items-center gap-2 mt-1">
+                              <FileText size={14} className="text-[#C10007] shrink-0" />
+                              {doc.file_url ? (
+                                <a
+                                  href={doc.file_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-sm text-[#C10007] hover:underline truncate"
+                                >
+                                  {doc.file_name || "View file"}
+                                </a>
+                              ) : (
+                                <span className="text-sm text-gray-500 truncate">
+                                  {doc.file_name || "—"}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-xs text-gray-400 italic">
+                        No identification documents uploaded yet.
+                      </p>
+                    )}
                   </div>
                 ) : editTaskFormFields.length > 0 ? (
                   // Template defines a form: render one row per field, pre-
@@ -3844,7 +3981,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                                 modal so the family-wide replace flow
                                 runs; for non-APS it uses the generic
                                 file-PATCH path. */}
-                            {isFile && resp && !isPersistedDeleted && (
+                            {isFile && resp && !isPersistedDeleted && !(editingTask && isHomeInsuranceTask(editingTask)) && (
                               <button
                                 type="button"
                                 onClick={() => {
@@ -3871,7 +4008,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                                 generic task-responses path, which
                                 auto-completes the task once every
                                 required file field is filled. */}
-                            {isFile && !resp && (
+                            {isFile && !resp && !(editingTask && isHomeInsuranceTask(editingTask)) && (
                               <button
                                 type="button"
                                 onClick={() => {
@@ -4257,9 +4394,45 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         taskId={idDrawerTaskId ?? undefined}
         onSaved={() => {
           setIdDrawerTaskId(null);
-          if (typeof window !== "undefined") window.location.reload();
+          if (editingTask && isIdentificationTask(editingTask)) {
+            void fetchEditTaskIdDocs();
+          } else if (typeof window !== "undefined") {
+            window.location.reload();
+          }
         }}
       />
+
+      {/* Home Insurance upload drawer — admin-side reuse of the client drawer */}
+      {(() => {
+        const fileField =
+          editingTask && isHomeInsuranceTask(editingTask)
+            ? editTaskFormFields.find((f) => f.field_type === "file")
+            : undefined;
+        const existing =
+          editingTask && isHomeInsuranceTask(editingTask)
+            ? editTaskResponses.find((r) => {
+                if (r.field_type !== "file" || !r.file_url || r.deleted) return false;
+                if (fileField?.id && r.field_id === fileField.id) return true;
+                if (fileField?.label && r.field_label === fileField.label) return true;
+                return !fileField;
+              })
+            : undefined;
+        return (
+          <UploadHomeInsuranceDrawer
+            open={!!homeInsDrawerTaskId}
+            onClose={() => setHomeInsDrawerTaskId(null)}
+            leadId={idDrawerLeadId}
+            taskId={homeInsDrawerTaskId ?? undefined}
+            existingResponseId={existing?.id ?? null}
+            fieldId={fileField?.id ?? null}
+            fieldLabel={fileField?.label ?? null}
+            onSaved={() => {
+              setHomeInsDrawerTaskId(null);
+              if (editingTask) void refreshEditTaskResponses();
+            }}
+          />
+        );
+      })()}
     </div>
   );
 };
