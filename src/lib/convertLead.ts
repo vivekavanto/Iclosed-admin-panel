@@ -53,7 +53,14 @@ export async function convertSingleLead(
         };
       }
 
-      await supabaseAdmin.from("leads").update({ status: "Converted" }).eq("id", leadId);
+      if (existingDeal.client_id) {
+        await supabaseAdmin
+          .from("leads")
+          .update({ status: "Converted", client_id: existingDeal.client_id })
+          .eq("id", leadId);
+      } else {
+        await supabaseAdmin.from("leads").update({ status: "Converted" }).eq("id", leadId);
+      }
 
       return {
         success: true,
@@ -218,7 +225,12 @@ export async function convertSingleLead(
       return idx === -1 ? Number.MAX_SAFE_INTEGER : idx;
     };
 
-    await supabaseAdmin.from("leads").update({ status: "Converted" }).eq("id", leadId);
+    // Link the lead to the client row so auth triggers and admin embeds
+    // (leads → clients) can resolve auth_user_id / first sign-in.
+    await supabaseAdmin
+      .from("leads")
+      .update({ status: "Converted", client_id: clientId })
+      .eq("id", leadId);
 
     // ── Copy stage_templates → milestones ────────────────────────────────────
     const stageToMilestone: Record<string, string> = {};
@@ -628,7 +640,10 @@ export async function convertSingleLead(
         if (inviteResult.success && inviteResult.userId) {
           authUserId = inviteResult.userId;
           inviteSent = true;
-          await supabaseAdmin.from("clients").update({ auth_user_id: authUserId }).eq("id", clientId);
+          await supabaseAdmin
+            .from("clients")
+            .update({ auth_user_id: authUserId })
+            .eq("id", clientId);
         } else if (inviteResult.error) {
           authError = inviteResult.error;
         }

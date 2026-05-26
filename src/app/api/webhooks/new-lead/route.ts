@@ -47,6 +47,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Belt-and-braces: portal first-login should flip Inactive → Active even if
+    // the DB trigger missed (e.g. leads.client_id was not set at convert time).
+    const { error: activateError } = await supabaseAdmin
+      .from("deals")
+      .update({ status: "Active" })
+      .eq("lead_id", leadId)
+      .eq("status", "Inactive");
+    if (activateError) {
+      console.warn(
+        `[new-lead webhook] deal activation failed (non-blocking): ${activateError.message}`,
+      );
+    }
+
     const result = await sendWelcomeEmail(leadId, { source: "first_login" });
 
     if (!result.success) {
