@@ -89,4 +89,12 @@ BEGIN
 END;
 $$;
 
+-- 5. Ensure the trigger exists on auth.users (function alone does nothing).
+DROP TRIGGER IF EXISTS deals_activate_on_first_signin ON auth.users;
+CREATE TRIGGER deals_activate_on_first_signin
+  AFTER UPDATE OF last_sign_in_at ON auth.users
+  FOR EACH ROW
+  WHEN (OLD.last_sign_in_at IS NULL AND NEW.last_sign_in_at IS NOT NULL)
+  EXECUTE FUNCTION public.activate_deals_on_first_signin();
+
 COMMIT;

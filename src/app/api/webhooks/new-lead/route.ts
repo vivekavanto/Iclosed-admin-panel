@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
+import { activateClientDeals } from "@/lib/activateClientDeals";
 import { sendWelcomeEmail } from "@/lib/sendWelcomeEmail";
 
 /**
@@ -47,16 +48,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Belt-and-braces: portal first-login should flip Inactive → Active even if
-    // the DB trigger missed (e.g. leads.client_id was not set at convert time).
-    const { error: activateError } = await supabaseAdmin
-      .from("deals")
-      .update({ status: "Active" })
-      .eq("lead_id", leadId)
-      .eq("status", "Inactive");
-    if (activateError) {
+    const activateResult = await activateClientDeals({
+      leadId,
+      email: body.email ?? null,
+    });
+    if (activateResult.error) {
       console.warn(
-        `[new-lead webhook] deal activation failed (non-blocking): ${activateError.message}`,
+        `[new-lead webhook] deal activation failed (non-blocking): ${activateResult.error}`,
       );
     }
 
