@@ -2453,6 +2453,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                 role: string;
                 file_number: string;
                 property_address: string;
+                selling_property_address: string;
                 status: string;
                 accountCreated: boolean;
                 isCurrent: boolean;
@@ -2479,6 +2480,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                 role: numberedRoles.byDealId.get(deal.id) || rawDeal?.current_deal_role || "Primary",
                 file_number: deal.fileNumber,
                 property_address: deal.propertyAddress || "",
+                selling_property_address: ((deal as any).sellingPropertyAddress as string | undefined) || "",
                 status: deal.status,
                 accountCreated: !!rawDeal?.account_created_at,
                 isCurrent: true,
@@ -2493,6 +2495,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                 role: numberedRoles.byDealId.get(ld.id) || ld.role || "Co-Client",
                 file_number: ld.file_number || "",
                 property_address: ld.property_address || "",
+                selling_property_address: (ld.selling_property_address as string | null) ?? "",
                 status: ld.status || "Active",
                 accountCreated: !!ld.account_created_at,
                 isCurrent: false,
@@ -2538,7 +2541,17 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                       </p>
                       <p className="text-[11px] text-slate-400">
                         {p.file_number}
-                        {p.property_address ? ` · ${p.property_address}` : ""}
+                        {(() => {
+                          // Co-sellers should display their selling property,
+                          // not the deal's stored purchase address. Primaries
+                          // and Co-Purchasers continue to show the purchase
+                          // address (their primary side).
+                          const isCoSeller = p.role.toLowerCase().includes("co-seller");
+                          const addr = isCoSeller
+                            ? (p.selling_property_address || p.property_address)
+                            : p.property_address;
+                          return addr ? ` · ${addr}` : "";
+                        })()}
                       </p>
                       {p.lead_email && (
                         <p className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5">

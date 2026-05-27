@@ -80,7 +80,9 @@ export async function GET(
         // Step 2: Find all leads in the family
         const { data: familyLeads } = await supabase
           .from("leads")
-          .select("id, parent_lead_id, first_name, last_name, email, lead_type, co_person_role, selling_address_street, client_id")
+          .select(
+            "id, parent_lead_id, first_name, last_name, email, lead_type, co_person_role, address_street, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code, client_id",
+          )
           .or(`id.eq.${rootLeadId},parent_lead_id.eq.${rootLeadId}`);
 
         // Determine a co-lead's role. Priority order:
@@ -225,10 +227,24 @@ export async function GET(
                       dLead?.co_person_role,
                     );
                 const idTask = idTaskByDealId.get(d.id);
+                // Per-lead selling address — derived from the lead row so
+                // co-sellers can show what they're actually selling instead
+                // of the deal's stored purchase address.
+                const leadSellingAddress = dLead
+                  ? [
+                      dLead.selling_address_street,
+                      dLead.selling_address_city,
+                      dLead.selling_address_province,
+                      dLead.selling_address_postal_code,
+                    ]
+                      .filter(Boolean)
+                      .join(", ")
+                  : "";
                 return {
                   id: d.id,
                   file_number: d.file_number,
                   property_address: d.property_address,
+                  selling_property_address: leadSellingAddress || null,
                   status: d.status,
                   account_created_at: accountCreatedByLeadId.get(d.lead_id) ?? null,
                   lead_id: d.lead_id,
