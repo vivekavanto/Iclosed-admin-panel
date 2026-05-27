@@ -1,6 +1,9 @@
+
+
 import { Resend } from "resend";
 import supabaseAdmin from "./supabaseAdmin";
 import { createInvitationToken } from "./invitationToken";
+import { formatLeadTypeLabel, buildLeadAddressForEmail } from "./leadEmailAddress";
 
 /**
  * For each action type, list the template names we'll accept (in priority
@@ -182,16 +185,12 @@ export async function sendAuthEmailViaResend(opts: {
     // Non-blocking — lead/deal lookup is optional context for placeholders
   }
 
-  const leadAddress = lead
-    ? [
-        lead.address_street,
-        lead.address_city,
-        lead.address_province,
-        lead.address_postal_code,
-      ].filter(Boolean).join(", ")
-    : "";
+  // Centralized address+type formatting — combines purchase & selling
+  // addresses for P&S leads (with a family-sibling fallback when the two
+  // sides are split across leads) and preserves proper capitalization.
+  const leadAddress = await buildLeadAddressForEmail(lead);
   const fileNumber = dealFileNumber ?? lead?.file_number ?? "";
-  const leadType = (lead?.lead_type ?? "").toLowerCase();
+  const leadType = formatLeadTypeLabel(lead?.lead_type);
 
   // 4. Resolve template
   let subject: string;

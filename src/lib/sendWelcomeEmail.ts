@@ -1,5 +1,6 @@
 import { Resend } from "resend";
 import supabaseAdmin from "./supabaseAdmin";
+import { formatLeadTypeLabel, buildLeadAddressForEmail } from "./leadEmailAddress";
 
 export type WelcomeEmailResult = {
   success: boolean;
@@ -59,25 +60,26 @@ function computeRole(lead: any): string {
   return "Purchaser";
 }
 
-function interpolate(text: string, lead: any, fileNumber: string | null = null): string {
+async function interpolate(text: string, lead: any, fileNumber: string | null = null): Promise<string> {
   const firstName = lead.first_name ?? "";
   const lastName = lead.last_name ?? "";
   const fullName = `${firstName} ${lastName}`.trim();
   const email = lead.email ?? "";
-  const address = [
-    lead.address_street,
-    lead.address_city,
-    lead.address_province,
-    lead.address_postal_code,
-  ].filter(Boolean).join(", ");
-  const leadType = (lead.lead_type ?? "purchase").toLowerCase();
+  // Centralized address+type formatting — combines purchase & selling for
+  // P&S, with a family-sibling fallback for split families. See
+  // src/lib/leadEmailAddress.ts.
+  const address = await buildLeadAddressForEmail(lead);
+  const leadType = formatLeadTypeLabel(lead.lead_type);
   const resolvedFileNumber = fileNumber ?? lead.file_number ?? "";
 
   // Side suffix for subject lines on combined / sale-only leads. Empty for
   // pure-purchase leads (the common case) so the subject stays clean.
-  const sideSuffix = leadType.includes("purchase") && leadType.includes("sale")
+  // leadType is now properly capitalized ("Purchase & Sale"), so compare
+  // against a lowercased copy.
+  const leadTypeLower = leadType.toLowerCase();
+  const sideSuffix = leadTypeLower.includes("purchase") && leadTypeLower.includes("sale")
     ? " (Purchase & Sale)"
-    : leadType === "sale" || (leadType.includes("sale") && !leadType.includes("purchase"))
+    : leadTypeLower === "sale" || (leadTypeLower.includes("sale") && !leadTypeLower.includes("purchase"))
       ? " (Sale)"
       : "";
 
@@ -289,7 +291,7 @@ export async function sendWelcomeEmail(
     .replace(/&nbsp;/g, " ")
     .replace(/ /g, " ");
 
-  const emailBody = interpolate(rawBody, lead, fileNumber);
+  const emailBody = await interpolate(rawBody, lead, fileNumber);
 
   // No HTML wrapper / logo injection — the DB template owns its layout.
   // Admins can include their own logo or footer inside the template body.
@@ -301,7 +303,7 @@ export async function sendWelcomeEmail(
     template.subject && template.subject.trim() !== ""
       ? template.subject
       : template.name;
-  const subject = interpolate(rawSubject, lead, fileNumber);
+  const subject = await interpolate(rawSubject, lead, fileNumber);
 
   // 7. Send
   if (!process.env.RESEND_API_KEY) {

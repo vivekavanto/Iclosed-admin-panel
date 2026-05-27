@@ -447,8 +447,17 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
   // Identification upload drawer — opens instead of the normal Edit Task modal
   // when the admin clicks Pencil on a task whose title contains "identif".
+  // leadId is state (not derived) so the primary's DealDetail can target a
+  // co-purchaser/co-seller when the user clicks "Upload ID" on their row in
+  // the People Involved section.
+  const primaryLeadId = (rawDeal?.lead_id as string | undefined) ?? deal.id;
   const [idDrawerTaskId, setIdDrawerTaskId] = useState<string | null>(null);
-  const idDrawerLeadId = (rawDeal?.lead_id as string | undefined) ?? deal.id;
+  const [idDrawerLeadId, setIdDrawerLeadId] = useState<string>(primaryLeadId);
+
+  const openIdDrawerFor = (leadId: string, taskId: string) => {
+    setIdDrawerLeadId(leadId);
+    setIdDrawerTaskId(taskId);
+  };
 
   const isIdentificationTask = (task: DisplayTask) =>
     !task.isTemplate && (task.title ?? "").toLowerCase().includes("identif");
@@ -2401,28 +2410,54 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           each role. The currently-viewed deal is highlighted and not
           clickable; clicking any other entry navigates to that deal so
           the admin can switch perspectives. */}
-      {((rawDeal?.linked_deals && rawDeal.linked_deals.length > 0) || rawDeal?.current_deal_role) && (
+      {(
         <div className="bg-white rounded-xl shadow-sm border border-blue-200 p-5 mb-6">
-          <div className="flex items-center gap-2 mb-3">
-            <div className="w-7 h-7 rounded-full bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600">
-              <User size={14} />
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-7 h-7 rounded-full bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 flex-shrink-0">
+                <User size={14} />
+              </div>
+              <h3 className="text-sm font-bold text-slate-900">People involved</h3>
+              <span className="text-[11px] text-slate-400 truncate">
+                Click any person to switch to their view
+              </span>
             </div>
-            <h3 className="text-sm font-bold text-slate-900">People involved</h3>
-            <span className="text-[11px] text-slate-400">
-              Click any person to switch to their view
-            </span>
+            {/* Family-wide identification upload entry point. Only visible on
+                the primary's deal page. Opens the drawer with the primary
+                pre-selected; admin picks the actual family member inside. */}
+            {(() => {
+              const role = ((rawDeal?.current_deal_role as string | undefined) ?? "").toLowerCase();
+              const isPrimaryView = role.startsWith("primary") || !rawDeal?.current_deal_role;
+              const primaryTaskId = rawDeal?.identification_task_id as string | undefined;
+              if (!isPrimaryView || !primaryLeadId || !primaryTaskId) return null;
+              return (
+                <button
+                  type="button"
+                  onClick={() => openIdDrawerFor(primaryLeadId, primaryTaskId)}
+                  className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-[#C10007] text-white hover:bg-[#a30006] transition-colors shadow-sm"
+                  title="Upload identification documents for any family member"
+                >
+                  <Upload size={13} />
+                  Upload Identification
+                </button>
+              );
+            })()}
           </div>
           <div className="space-y-2">
             {(() => {
               type Person = {
                 id: string;
+                lead_id: string | null;
                 lead_name: string;
+                lead_email: string;
                 role: string;
                 file_number: string;
                 property_address: string;
                 status: string;
                 accountCreated: boolean;
                 isCurrent: boolean;
+                identificationTaskId: string | null;
+                identificationStatus: string | null;
               };
               const currentName = [
                 rawDeal?.lead_first_name,
@@ -2438,23 +2473,31 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
               // property header agree.
               const currentEntry: Person = {
                 id: deal.id,
+                lead_id: primaryLeadId,
                 lead_name: currentName || "Current viewer",
+                lead_email: (rawDeal?.lead_email as string | null) || "",
                 role: numberedRoles.byDealId.get(deal.id) || rawDeal?.current_deal_role || "Primary",
                 file_number: deal.fileNumber,
                 property_address: deal.propertyAddress || "",
                 status: deal.status,
                 accountCreated: !!rawDeal?.account_created_at,
                 isCurrent: true,
+                identificationTaskId: (rawDeal?.identification_task_id as string | null) ?? null,
+                identificationStatus: (rawDeal?.identification_status as string | null) ?? null,
               };
               const linked: Person[] = (rawDeal?.linked_deals ?? []).map((ld: any) => ({
                 id: ld.id,
+                lead_id: (ld.lead_id as string | null) ?? null,
                 lead_name: ld.lead_name || "Unknown",
+                lead_email: ld.lead_email || "",
                 role: numberedRoles.byDealId.get(ld.id) || ld.role || "Co-Client",
                 file_number: ld.file_number || "",
                 property_address: ld.property_address || "",
                 status: ld.status || "Active",
                 accountCreated: !!ld.account_created_at,
                 isCurrent: false,
+                identificationTaskId: (ld.identification_task_id as string | null) ?? null,
+                identificationStatus: (ld.identification_status as string | null) ?? null,
               }));
               // Sort so the Primary always appears first, then co-purchasers, then co-sellers
               const sortKey = (p: Person) => {
@@ -2497,9 +2540,24 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                         {p.file_number}
                         {p.property_address ? ` · ${p.property_address}` : ""}
                       </p>
+                      {p.lead_email && (
+                        <p className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5">
+                          <Mail size={11} className="text-slate-400" />
+                          <a
+                            href={`mailto:${p.lead_email}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="hover:text-brand-primary hover:underline"
+                          >
+                            {p.lead_email}
+                          </a>
+                        </p>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
+                    {/* Per-row identification pill removed — the family-wide
+                        "Upload Identification" entry point now lives in the
+                        People involved section header (primary view only). */}
                     {p.isCurrent && (
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-brand-primary text-white">
                         Currently viewing
@@ -3873,7 +3931,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                   {editingTask && isIdentificationTask(editingTask) && (
                     <button
                       type="button"
-                      onClick={() => setIdDrawerTaskId(editingTask.id)}
+                      onClick={() => openIdDrawerFor(primaryLeadId, editingTask.id)}
                       className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-[#C10007] rounded-lg hover:bg-[#a30006]"
                     >
                       <Upload size={14} />
@@ -4386,21 +4444,71 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         </div>
       )}
 
-      {/* Identification upload drawer — admin-side reuse of the client drawer */}
-      <UploadIdentificationDrawer
-        open={!!idDrawerTaskId}
-        onClose={() => setIdDrawerTaskId(null)}
-        leadId={idDrawerLeadId}
-        taskId={idDrawerTaskId ?? undefined}
-        onSaved={() => {
-          setIdDrawerTaskId(null);
-          if (editingTask && isIdentificationTask(editingTask)) {
-            void fetchEditTaskIdDocs();
-          } else if (typeof window !== "undefined") {
-            window.location.reload();
+      {/* Identification upload drawer — admin-side reuse of the client drawer.
+          When the viewer is on the PRIMARY's deal, a "Uploading for" person
+          selector is shown inside the drawer so the primary can pick which
+          family member's ID this upload belongs to. Switching person remounts
+          the drawer (via key) so staged-file/detection state resets. */}
+      {(() => {
+        const isPrimaryView = ((rawDeal?.current_deal_role as string | undefined) ?? "")
+          .toLowerCase()
+          .startsWith("primary") || !rawDeal?.current_deal_role;
+        const primaryName = [rawDeal?.lead_first_name, rawDeal?.lead_last_name]
+          .filter(Boolean)
+          .join(" ")
+          .trim() || "Primary";
+        type Opt = { leadId: string; taskId: string; name: string; role: string; completed: boolean };
+        const opts: Opt[] = [];
+        const primaryTaskId = rawDeal?.identification_task_id as string | undefined;
+        if (isPrimaryView && primaryLeadId && primaryTaskId) {
+          opts.push({
+            leadId: primaryLeadId,
+            taskId: primaryTaskId,
+            name: primaryName,
+            role: (rawDeal?.current_deal_role as string | undefined) ?? "Primary",
+            completed: (rawDeal?.identification_status as string | undefined) === "Completed",
+          });
+        }
+        if (isPrimaryView) {
+          for (const ld of (rawDeal?.linked_deals ?? []) as any[]) {
+            if (ld.lead_id && ld.identification_task_id) {
+              opts.push({
+                leadId: ld.lead_id as string,
+                taskId: ld.identification_task_id as string,
+                name: (ld.lead_name as string) || "Family member",
+                role: (ld.role as string) || "Co-Client",
+                completed: ld.identification_status === "Completed",
+              });
+            }
           }
-        }}
-      />
+        }
+        return (
+          <UploadIdentificationDrawer
+            key={idDrawerLeadId}
+            open={!!idDrawerTaskId}
+            onClose={() => {
+              setIdDrawerTaskId(null);
+              setIdDrawerLeadId(primaryLeadId);
+            }}
+            leadId={idDrawerLeadId}
+            taskId={idDrawerTaskId ?? undefined}
+            personOptions={isPrimaryView && opts.length > 1 ? opts : undefined}
+            onPersonChange={(newLeadId, newTaskId) => {
+              setIdDrawerLeadId(newLeadId);
+              setIdDrawerTaskId(newTaskId);
+            }}
+            onSaved={() => {
+              setIdDrawerTaskId(null);
+              setIdDrawerLeadId(primaryLeadId);
+              if (editingTask && isIdentificationTask(editingTask)) {
+                void fetchEditTaskIdDocs();
+              } else if (typeof window !== "undefined") {
+                window.location.reload();
+              }
+            }}
+          />
+        );
+      })()}
 
       {/* Home Insurance upload drawer — admin-side reuse of the client drawer */}
       {(() => {

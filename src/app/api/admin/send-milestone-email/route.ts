@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import supabaseAdmin from "@/lib/supabaseAdmin"
 import { Resend } from "resend"
 import { getFamilyDealIds } from "@/lib/familyDeals"
+import { formatLeadTypeLabel, buildLeadAddressForEmail } from "@/lib/leadEmailAddress"
 
 /**
  * Sends a milestone email to the client of a single deal.
@@ -42,20 +43,21 @@ async function sendEmailForDeal(
             lead = leadData;
         }
 
-        // Build formatted address
-        const leadAddress = lead
-            ? [lead.address_street, lead.address_city, lead.address_province, lead.address_postal_code].filter(Boolean).join(", ")
-            : deal.property_address ?? "";
+        // Build formatted address — combines purchase + selling for P&S
+        // and pulls the missing side from family-sibling leads when needed.
+        const leadAddress =
+            (await buildLeadAddressForEmail(lead)) || deal.property_address || ""
 
         // Replace placeholders in email body
         const fullName = `${client.first_name ?? ""} ${client.last_name ?? ""}`.trim()
-        const leadType = (deal.type ?? "").toLowerCase()
+        const leadType = formatLeadTypeLabel(lead?.lead_type ?? deal.type)
         const fileNumber = deal.file_number ?? ""
 
         // Short-form / specialty tokens used by some templates (retainer agreement etc.)
-        const sideSuffix = leadType.includes("purchase") && leadType.includes("sale")
+        const leadTypeLower = leadType.toLowerCase()
+        const sideSuffix = leadTypeLower.includes("purchase") && leadTypeLower.includes("sale")
             ? " (Purchase & Sale)"
-            : leadType === "sale" || (leadType.includes("sale") && !leadType.includes("purchase"))
+            : leadTypeLower === "sale" || (leadTypeLower.includes("sale") && !leadTypeLower.includes("purchase"))
                 ? " (Sale)"
                 : ""
         const computeRole = (l: any): string => {
@@ -145,7 +147,7 @@ async function sendEmailForDeal(
         processedBody = processedBody.replace(/\{\{\s*lead\.address_city\s*\}\}/gi, lead?.address_city ?? "");
         processedBody = processedBody.replace(/\{\{\s*lead\.address_province\s*\}\}/gi, lead?.address_province ?? "");
         processedBody = processedBody.replace(/\{\{\s*lead\.file_number\s*\}\}/gi, deal.file_number ?? "");
-        processedBody = processedBody.replace(/\{\{\s*lead_type\s*\}\}/gi, (deal.type ?? "").toLowerCase());
+        processedBody = processedBody.replace(/\{\{\s*lead_type\s*\}\}/gi, leadType);
         processedBody = processedBody.replace(/\{\{\s*stage_name\s*\}\}/gi, milestone?.title ?? "");
         processedBody = processedBody.replace(/\{\{\s*stage_status\s*\}\}/gi, milestone?.status ?? "Completed");
         // Short-form alias fallbacks

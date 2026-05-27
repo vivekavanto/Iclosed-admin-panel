@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
+import { getFamilyDealIds } from "@/lib/familyDeals";
+import { recalcMilestonesForFamily } from "@/lib/recalcMilestones";
 
 /**
  * POST /api/admin/task-responses-batch
@@ -64,6 +66,33 @@ export async function POST(req: Request) {
           completed_at: new Date().toISOString(),
         })
         .eq("id", task_id);
+
+      // Explicit milestone recalc so the co-purchaser's milestone advances
+      // server-side instead of relying on the client to reload. Looks up the
+      // task's deal to resolve the family. Non-blocking on failure.
+      try {
+        const { data: taskRow } = await supabaseAdmin
+          .from("tasks")
+          .select("deal_id")
+          .eq("id", task_id)
+          .single();
+        const dealId = taskRow?.deal_id as string | undefined;
+        if (dealId) {
+          const familyDealIds = await getFamilyDealIds(dealId);
+          if (familyDealIds.length > 0) {
+            // Pass the task's own deal as primaryDealId — matches the pattern
+            // used by tasks/route.ts (personal-task recalc) and
+            // maybeCompleteFileTask. ID tasks are non-shared so the primary
+            // arg only governs shared-task sourcing, which is empty here.
+            await recalcMilestonesForFamily(familyDealIds, dealId);
+          }
+        }
+      } catch (recalcErr) {
+        console.error(
+          "[task-responses-batch] milestone recalc failed (non-blocking):",
+          recalcErr,
+        );
+      }
     }
 
     return NextResponse.json({ success: true, draft: !!draft });

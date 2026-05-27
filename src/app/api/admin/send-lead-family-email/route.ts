@@ -3,6 +3,7 @@ import { Resend } from "resend";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { sendWelcomeEmail } from "@/lib/sendWelcomeEmail";
 import { sendAuthEmailViaResend } from "@/lib/sendAuthEmail";
+import { formatLeadTypeLabel, buildLeadAddressForEmail } from "@/lib/leadEmailAddress";
 
 /**
  * POST /api/admin/send-lead-family-email
@@ -138,19 +139,15 @@ async function sendRetainerEmail(
   //    template's signature-block table layout doesn't break.
   const firstName = (lead.first_name ?? "").trim();
   const fullName = `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim();
-  const leadType = (lead.lead_type ?? "").trim();
+  const leadType = formatLeadTypeLabel(lead.lead_type);
   const lt = leadType.toLowerCase();
   const isCombined = lt.includes("purchase") && lt.includes("sale");
   const isSaleOnly = lt === "sale" || (lt.includes("sale") && !lt.includes("purchase"));
 
-  const propertyAddress = [
-    lead.address_street,
-    lead.address_city,
-    lead.address_province,
-    lead.address_postal_code,
-  ]
-    .filter(Boolean)
-    .join(", ");
+  // Combined "Purchase & Sale" leads surface BOTH the purchase and the
+  // selling address. Falls back to family-sibling leads if either side is
+  // missing on this row.
+  const propertyAddress = await buildLeadAddressForEmail(lead);
 
   // Co-leads inherit role from the parent's lead_type; standalones use their own.
   const role = lead.parent_lead_id

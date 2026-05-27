@@ -4,6 +4,7 @@ import { sendAuthEmailViaResend } from "./sendAuthEmail";
 import { getFamilyDealIds } from "./familyDeals";
 import { recalcMilestonesForFamily } from "./recalcMilestones";
 import { sendWelcomeEmail } from "./sendWelcomeEmail";
+import { formatLeadTypeLabel, buildLeadAddressForEmail } from "./leadEmailAddress";
 
 export type ConvertOneResult = {
   success: boolean;
@@ -356,7 +357,10 @@ export async function convertSingleLead(
                       const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <noreply@iclosed.ca>";
 
                       const fullName = `${clientData.first_name ?? ""} ${clientData.last_name ?? ""}`.trim();
-                      const leadAddress = [lead.address_street, lead.address_city, lead.address_province, lead.address_postal_code].filter(Boolean).join(", ");
+                      // Combines purchase + selling for P&S leads, with a
+                      // family-sibling fallback for split families.
+                      const leadAddress = await buildLeadAddressForEmail(lead);
+                      const leadTypeLabel = formatLeadTypeLabel(leadType);
 
                       // Replace placeholders in body
                       let processedBody = emailTemplate.body
@@ -373,7 +377,7 @@ export async function convertSingleLead(
                         "{{ lead.address_city }}": lead.address_city ?? "",
                         "{{ lead.address_province }}": lead.address_province ?? "",
                         "{{ lead.file_number }}": generatedFileNumber ?? "",
-                        "{{ lead_type }}": (leadType ?? "").toLowerCase(),
+                        "{{ lead_type }}": leadTypeLabel,
                         "{{ stage_name }}": st.name ?? "",
                         "{{user.first_name}}": clientData.first_name ?? "",
                         "{{user.last_name}}": clientData.last_name ?? "",
@@ -385,7 +389,7 @@ export async function convertSingleLead(
                         "{{lead.address_city}}": lead.address_city ?? "",
                         "{{lead.address_province}}": lead.address_province ?? "",
                         "{{lead.file_number}}": generatedFileNumber ?? "",
-                        "{{lead_type}}": (leadType ?? "").toLowerCase(),
+                        "{{lead_type}}": leadTypeLabel,
                         "{{stage_name}}": st.name ?? "",
                       };
                       for (const [key, value] of Object.entries(placeholders)) {
@@ -403,7 +407,7 @@ export async function convertSingleLead(
                       processedBody = processedBody.replace(/\{\{\s*lead\.address_city\s*\}\}/gi, lead.address_city ?? "");
                       processedBody = processedBody.replace(/\{\{\s*lead\.address_province\s*\}\}/gi, lead.address_province ?? "");
                       processedBody = processedBody.replace(/\{\{\s*lead\.file_number\s*\}\}/gi, generatedFileNumber ?? "");
-                      processedBody = processedBody.replace(/\{\{\s*lead_type\s*\}\}/gi, (leadType ?? "").toLowerCase());
+                      processedBody = processedBody.replace(/\{\{\s*lead_type\s*\}\}/gi, leadTypeLabel);
                       processedBody = processedBody.replace(/\{\{\s*stage_name\s*\}\}/gi, st.name ?? "");
 
                       // Replace placeholders in subject — derived from template only.

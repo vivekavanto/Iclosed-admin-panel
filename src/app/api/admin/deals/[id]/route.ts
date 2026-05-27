@@ -80,7 +80,7 @@ export async function GET(
         // Step 2: Find all leads in the family
         const { data: familyLeads } = await supabase
           .from("leads")
-          .select("id, parent_lead_id, first_name, last_name, lead_type, co_person_role, selling_address_street")
+          .select("id, parent_lead_id, first_name, last_name, email, lead_type, co_person_role, selling_address_street, client_id")
           .or(`id.eq.${rootLeadId},parent_lead_id.eq.${rootLeadId}`);
 
         // Determine a co-lead's role. Priority order:
@@ -118,19 +118,32 @@ export async function GET(
 
         // Look up auth_user_id for every lead in the family (including
         // the current one) so we can resolve last_sign_in_at in a single
-        // listUsers pass below.
-        const allFamilyLeadIds = (familyLeads ?? [lead]).map((l) => l.id);
-        const { data: familyClients } = await supabase
-          .from("clients")
-          .select("auth_user_id, lead_id")
-          .in("lead_id", allFamilyLeadIds);
-        const authIdByLeadId = new Map<string, string>();
+        // listUsers pass below. The leads → clients relationship lives on
+        // leads.client_id (clients has no lead_id column), so we collect
+        // client_ids off the family rows and join from there.
+        const familyLeadsForLookup = (familyLeads ?? [lead]) as any[];
+        const allFamilyLeadIds = familyLeadsForLookup.map((l) => l.id);
+        const clientIds = Array.from(
+          new Set(familyLeadsForLookup.map((l) => l.client_id).filter(Boolean) as string[]),
+        );
+        const { data: familyClients } = clientIds.length > 0
+          ? await supabase
+              .from("clients")
+              .select("id, auth_user_id")
+              .in("id", clientIds)
+          : { data: [] as { id: string; auth_user_id: string | null }[] };
+        const authIdByClientId = new Map<string, string>();
         const familyAuthIds = new Set<string>();
         for (const c of familyClients ?? []) {
-          if (c.auth_user_id && c.lead_id) {
-            authIdByLeadId.set(c.lead_id, c.auth_user_id);
+          if (c.auth_user_id) {
+            authIdByClientId.set(c.id, c.auth_user_id);
             familyAuthIds.add(c.auth_user_id);
           }
+        }
+        const authIdByLeadId = new Map<string, string>();
+        for (const fl of familyLeadsForLookup) {
+          const authId = fl.client_id ? authIdByClientId.get(fl.client_id) : undefined;
+          if (authId) authIdByLeadId.set(fl.id, authId);
         }
         if (familyAuthIds.size > 0) {
           try {
@@ -179,6 +192,28 @@ export async function GET(
                 familyLeads.map((l) => [l.id, l])
               );
 
+              // Batched lookup of each family deal's identification task so the
+              // primary's DealDetail page can render an "Upload ID" affordance
+              // per co-purchaser/co-seller without N+1 calls. Matches the
+              // client-side detector at DealDetail.tsx (title contains "identif").
+              const idTaskDealIds = [id, ...otherDeals.map((d) => d.id)];
+              const { data: idTasksRows } = await supabase
+                .from("tasks")
+                .select("id, deal_id, status")
+                .in("deal_id", idTaskDealIds)
+                .ilike("title", "%identif%");
+              const idTaskByDealId = new Map<string, { id: string; status: string | null }>();
+              for (const t of idTasksRows ?? []) {
+                // Prefer the latest if duplicates exist; first-wins is fine for
+                // the typical seeded single task per deal.
+                if (!idTaskByDealId.has(t.deal_id as string)) {
+                  idTaskByDealId.set(t.deal_id as string, {
+                    id: t.id as string,
+                    status: (t.status as string | null) ?? null,
+                  });
+                }
+              }
+
               linked_deals = otherDeals.map((d) => {
                 const dLead = leadMap.get(d.lead_id) as any;
                 const isPrimary = dLead ? !dLead.parent_lead_id : false;
@@ -189,18 +224,29 @@ export async function GET(
                       dLead?.selling_address_street,
                       dLead?.co_person_role,
                     );
+                const idTask = idTaskByDealId.get(d.id);
                 return {
                   id: d.id,
                   file_number: d.file_number,
                   property_address: d.property_address,
                   status: d.status,
                   account_created_at: accountCreatedByLeadId.get(d.lead_id) ?? null,
+                  lead_id: d.lead_id,
                   lead_name: dLead
                     ? `${dLead.first_name ?? ""} ${dLead.last_name ?? ""}`.trim()
                     : null,
+                  lead_email: dLead?.email ?? null,
                   role,
+                  identification_task_id: idTask?.id ?? null,
+                  identification_status: idTask?.status ?? null,
                 };
               });
+
+              // Surface the same fields for the current/primary deal so the
+              // primary row in "People Involved" can render the same control.
+              const primaryIdTask = idTaskByDealId.get(id);
+              data.identification_task_id = primaryIdTask?.id ?? null;
+              data.identification_status = primaryIdTask?.status ?? null;
             }
           }
 
