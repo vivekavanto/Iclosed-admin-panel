@@ -3,13 +3,18 @@
 import { Resend } from "resend";
 import supabaseAdmin from "./supabaseAdmin";
 import { createInvitationToken } from "./invitationToken";
-import { formatLeadTypeLabel, buildLeadAddressForEmail } from "./leadEmailAddress";
+import {
+  formatLeadTypeLabel,
+  buildLeadAddressPartsForEmail,
+  renderTransactionPhrase,
+} from "./leadEmailAddress";
 
 /**
  * For each action type, list the template names we'll accept (in priority
  * order). The first active, non-empty match wins. Matching is case-insensitive
  * and uses a contains-check, so any template name like "Activate Account" or
- * "Invite User" works without requiring an exact rename in the DB.
+ * "Invite User" w
+ * orks without requiring an exact rename in the DB.
  */
 const TEMPLATE_NAME_CANDIDATES: Record<"invite" | "recovery", string[]> = {
   invite: ["Invite User", "Activate", "Activate Account", "Welcome Invite"],
@@ -103,6 +108,14 @@ export async function sendAuthEmailViaResend(opts: {
    * multiple invite/recovery templates exist.
    */
   templateId?: string;
+  /**
+   * Optional explicit lead row to use for placeholder rendering. When set we
+   * skip the "most-recent lead by email" lookup — important when the same
+   * email appears on more than one lead (e.g. a client on a Purchase-only file
+   * AND on a separate Purchase & Sale file). Without this the wrong addresses
+   * end up in the email body.
+   */
+  leadId?: string;
 }): Promise<{
   success: boolean;
   userId?: string;
@@ -110,7 +123,7 @@ export async function sendAuthEmailViaResend(opts: {
   skipReason?: string;
   error?: string;
 }> {
-  const { type, email, redirectTo, userData, templateId } = opts;
+  const { type, email, redirectTo, userData, templateId, leadId } = opts;
 
   // 1. Generate the Supabase auth link. We DISCARD its action_link — the
   //    URL we send the user is minted by createInvitationToken() below so
@@ -160,18 +173,21 @@ export async function sendAuthEmailViaResend(opts: {
   const lastName = user?.user_metadata?.last_name || userData?.last_name || "";
   const fullName = `${firstName} ${lastName}`.trim();
 
-  // 3. Look up lead by email so we can fill in lead.* placeholders
+  // 3. Look up lead so we can fill in lead.* placeholders. Caller must pass
+  //    the explicit lead_id — email-based lookup is unsafe when the same
+  //    email appears on multiple leads (e.g. a client on a Purchase-only file
+  //    AND on a separate Purchase & Sale file).
   let lead: any = null;
   let dealFileNumber: string | null = null;
   try {
-    const { data: leadData } = await supabaseAdmin
-      .from("leads")
-      .select("*")
-      .eq("email", email)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    lead = leadData ?? null;
+    if (leadId) {
+      const { data } = await supabaseAdmin
+        .from("leads")
+        .select("*")
+        .eq("id", leadId)
+        .maybeSingle();
+      lead = data ?? null;
+    }
 
     if (lead?.id) {
       const { data: deal } = await supabaseAdmin
@@ -188,9 +204,15 @@ export async function sendAuthEmailViaResend(opts: {
   // Centralized address+type formatting — combines purchase & selling
   // addresses for P&S leads (with a family-sibling fallback when the two
   // sides are split across leads) and preserves proper capitalization.
-  const leadAddress = await buildLeadAddressForEmail(lead);
+  const addressParts = await buildLeadAddressPartsForEmail(lead);
+  const leadAddress = addressParts.treatAsCombined
+    ? [addressParts.purchase, addressParts.selling].filter(Boolean).join(" and ")
+    : addressParts.typeIsSaleOnly
+      ? (addressParts.selling || addressParts.purchase)
+      : addressParts.purchase;
   const fileNumber = dealFileNumber ?? lead?.file_number ?? "";
   const leadType = formatLeadTypeLabel(lead?.lead_type);
+  const transactionPhrase = renderTransactionPhrase(addressParts, leadType);
 
   // 4. Resolve template
   let subject: string;
@@ -313,7 +335,14 @@ export async function sendAuthEmailViaResend(opts: {
       "{{.UserMetadata.email}}": email,
     };
 
+    // Pair-up pattern: "{{ lead_type }} of {{ lead_address }}" must render as
+    // "Purchase of <P> and Sale of <S>" for combined files, not
+    // "Purchase & Sale of <P> and <S>" which collapses the two sides.
+    const transactionPhrasePattern =
+      /\{\{\s*lead_type\s*\}\}\s+of\s+\{\{\s*lead_address\s*\}\}/gi;
+
     let processedBody = template.body
+      .replace(transactionPhrasePattern, transactionPhrase)
       .replace(/&#123;/g, "{")
       .replace(/&#125;/g, "}")
       .replace(/&nbsp;/g, " ")
@@ -368,7 +397,8 @@ export async function sendAuthEmailViaResend(opts: {
     let rawSubject = template.subject || template.name;
     rawSubject = rawSubject
       .replace(/&#123;/g, "{")
-      .replace(/&#125;/g, "}");
+      .replace(/&#125;/g, "}")
+      .replace(transactionPhrasePattern, transactionPhrase);
     for (const [key, value] of Object.entries(placeholders)) {
       rawSubject = rawSubject.replaceAll(key, value);
     }
@@ -405,7 +435,7 @@ export async function sendAuthEmailViaResend(opts: {
   }
 
   const resend = new Resend(process.env.RESEND_API_KEY);
-  const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <noreply@iclosed.ca>";
+  const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <support@iclosed.ca>";
 
   const { error: sendError } = await resend.emails.send({
     from: fromEmail,

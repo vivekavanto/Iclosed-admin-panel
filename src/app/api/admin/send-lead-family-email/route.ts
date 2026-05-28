@@ -469,7 +469,7 @@ export async function POST(req: NextRequest) {
     // Lazy Resend client — only initialized when the retainer path actually
     // needs it. Skips the env-var requirement for non-retainer sends.
     let resendClient: Resend | null = null;
-    const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <noreply@iclosed.ca>";
+    const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <support@iclosed.ca>";
     if (retainerMode) {
       if (!process.env.RESEND_API_KEY) {
         return NextResponse.json(
@@ -511,6 +511,7 @@ export async function POST(req: NextRequest) {
           redirectTo,
           userData,
           templateId: template_id,
+          leadId: r.id,
         });
 
         // Invite to an email that already has an auth user → Supabase rejects
@@ -531,6 +532,7 @@ export async function POST(req: NextRequest) {
             email: r.email ?? "",
             redirectTo,
             templateId: template_id,
+            leadId: r.id,
           });
         }
 

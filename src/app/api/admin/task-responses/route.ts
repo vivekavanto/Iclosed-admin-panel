@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { getFamilyDealIds } from "@/lib/familyDeals";
+import { findFamilySharedTaskPeers } from "@/lib/findFamilySharedTaskPeers";
 import { maybeCompleteFileTask } from "@/lib/maybeCompleteFileTask";
 
 type TaskRow = {
@@ -47,7 +48,7 @@ function getDocumentIdentity(
 async function getSharedTaskIds(taskId: string): Promise<string[]> {
   const { data: task } = await supabaseAdmin
     .from("tasks")
-    .select("id, deal_id, is_shared, task_template_id")
+    .select("id, deal_id, is_shared, task_template_id, title")
     .eq("id", taskId)
     .single();
 
@@ -55,15 +56,38 @@ async function getSharedTaskIds(taskId: string): Promise<string[]> {
 
   const familyDealIds = await getFamilyDealIds(task.deal_id);
 
-  const { data: familyTasks } = await supabaseAdmin
+  // APS keeps its template-id-only scope. Other shared tasks also include
+  // title-equivalent siblings so Purchase ↔ Sale rows in a P&S family stay
+  // linked even though their templates have different ids.
+  const { data: tmpl } = await supabaseAdmin
+    .from("task_templates")
+    .select("is_aps_task")
+    .eq("id", task.task_template_id)
+    .maybeSingle();
+  const isApsTask = Boolean(tmpl?.is_aps_task);
+
+  const ids = new Set<string>([taskId]);
+
+  const { data: byTemplate } = await supabaseAdmin
     .from("tasks")
     .select("id")
     .eq("task_template_id", task.task_template_id)
     .eq("is_shared", true)
     .in("deal_id", familyDealIds);
+  for (const t of byTemplate ?? []) ids.add(t.id);
 
-  if (!familyTasks) return [taskId];
-  return familyTasks.map((t) => t.id);
+  const trimmedTitle = task.title?.trim();
+  if (!isApsTask && trimmedTitle) {
+    const { data: byTitle } = await supabaseAdmin
+      .from("tasks")
+      .select("id")
+      .ilike("title", trimmedTitle)
+      .eq("is_shared", true)
+      .in("deal_id", familyDealIds);
+    for (const t of byTitle ?? []) ids.add(t.id);
+  }
+
+  return [...ids];
 }
 
 export async function GET(req: Request) {
@@ -438,21 +462,26 @@ export async function PATCH(req: Request) {
     if (isFileReplace && data) {
       const { data: srcTask } = await supabaseAdmin
         .from("tasks")
-        .select("id, deal_id, is_shared, task_template_id")
+        .select("id, deal_id, is_shared, task_template_id, title")
         .eq("id", data.task_id)
         .single();
 
       if (srcTask?.is_shared && srcTask.task_template_id && srcTask.deal_id) {
-        const familyDealIds = await getFamilyDealIds(srcTask.deal_id);
+        const { data: tmpl } = await supabaseAdmin
+          .from("task_templates")
+          .select("is_aps_task")
+          .eq("id", srcTask.task_template_id)
+          .maybeSingle();
+        const isApsTask = Boolean(tmpl?.is_aps_task);
 
-        const { data: familyTasks } = await supabaseAdmin
-          .from("tasks")
-          .select("id")
-          .eq("is_shared", true)
-          .eq("task_template_id", srcTask.task_template_id)
-          .in("deal_id", familyDealIds);
-        const familyTaskIds = (familyTasks ?? []).map((t) => t.id);
-        const peerTaskIds = familyTaskIds.filter((tid) => tid !== data.task_id);
+        const peers = await findFamilySharedTaskPeers({
+          sourceTaskId: srcTask.id,
+          dealId: srcTask.deal_id,
+          taskTemplateId: srcTask.task_template_id,
+          title: srcTask.title ?? null,
+          isApsTask,
+        });
+        const peerTaskIds = peers;
 
         if (peerTaskIds.length > 0) {
           // Match peer responses by field_id (canonical) or field_label
@@ -571,20 +600,24 @@ export async function POST(req: Request) {
     let mirroredCount = 0;
     const { data: srcTask } = await supabaseAdmin
       .from("tasks")
-      .select("id, deal_id, is_shared, task_template_id")
+      .select("id, deal_id, is_shared, task_template_id, title")
       .eq("id", task_id)
       .single();
     if (srcTask?.is_shared && srcTask.task_template_id && srcTask.deal_id) {
-      const familyDealIds = await getFamilyDealIds(srcTask.deal_id);
-      const { data: familyTasks } = await supabaseAdmin
-        .from("tasks")
-        .select("id")
-        .eq("is_shared", true)
-        .eq("task_template_id", srcTask.task_template_id)
-        .in("deal_id", familyDealIds);
-      const peerTaskIds = (familyTasks ?? [])
-        .map((t) => t.id)
-        .filter((tid) => tid !== task_id);
+      const { data: tmpl } = await supabaseAdmin
+        .from("task_templates")
+        .select("is_aps_task")
+        .eq("id", srcTask.task_template_id)
+        .maybeSingle();
+      const isApsTask = Boolean(tmpl?.is_aps_task);
+
+      const peerTaskIds = await findFamilySharedTaskPeers({
+        sourceTaskId: srcTask.id,
+        dealId: srcTask.deal_id,
+        taskTemplateId: srcTask.task_template_id,
+        title: srcTask.title ?? null,
+        isApsTask,
+      });
       if (peerTaskIds.length > 0) {
         const peerRows = peerTaskIds.map((tid) => ({
           task_id: tid,

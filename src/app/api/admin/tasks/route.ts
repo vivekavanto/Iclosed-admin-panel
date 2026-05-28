@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { getFamilyDealIds } from "@/lib/familyDeals";
 import { recalcMilestonesForFamily } from "@/lib/recalcMilestones";
+import { findFamilySharedTaskPeers } from "@/lib/findFamilySharedTaskPeers";
 
 const supabase = supabaseAdmin;
 
@@ -255,7 +256,7 @@ export async function PATCH(req: Request) {
     // Step 1: Load the task to decide shared vs personal update rules
     const { data: existingTask, error: fetchError } = await supabase
       .from("tasks")
-      .select("id, deal_id, is_shared, assignee, task_template_id")
+      .select("id, deal_id, is_shared, assignee, task_template_id, title")
       .eq("id", id)
       .single();
 
@@ -342,19 +343,39 @@ export async function PATCH(req: Request) {
         return NextResponse.json({ success: false, error: error.message }, { status: 400 });
       }
 
-      // Also sync to ALL other family deals' shared tasks
+      // Also sync to ALL other family deals' shared tasks. Matches by
+      // task_template_id AND (for non-APS) by case-insensitive title so the
+      // mirror crosses sides on a Purchase & Sale family — a co-seller's
+      // Sale-side "Status of Mortgage" stays in lockstep with the
+      // Purchase-side row on the primary even though their template ids
+      // differ. APS keeps its existing side-scoped behaviour.
       let mirroredCount = 0;
       try {
         const familyDealIds = await getFamilyDealIds(primaryDealId);
-        const otherDealIds = familyDealIds.filter((did) => did !== primaryDealId);
 
-        if (otherDealIds.length > 0) {
+        let isApsTask = false;
+        if (existingTask.task_template_id) {
+          const { data: tmpl } = await supabase
+            .from("task_templates")
+            .select("is_aps_task")
+            .eq("id", existingTask.task_template_id)
+            .maybeSingle();
+          isApsTask = Boolean(tmpl?.is_aps_task);
+        }
+
+        const peerIds = await findFamilySharedTaskPeers({
+          sourceTaskId: existingTask.id,
+          dealId: primaryDealId,
+          taskTemplateId: existingTask.task_template_id,
+          title: existingTask.title ?? null,
+          isApsTask,
+        });
+
+        if (peerIds.length > 0) {
           const { data: mirrored } = await supabase
             .from("tasks")
             .update(updates)
-            .eq("task_template_id", existingTask.task_template_id)
-            .eq("is_shared", true)
-            .in("deal_id", otherDealIds)
+            .in("id", peerIds)
             .select("id");
           mirroredCount = mirrored?.length ?? 0;
         }

@@ -33,6 +33,8 @@ import { formatLocalDate, formatLocalDateTime } from "@/lib/formatDate";
 import { upload } from "@vercel/blob/client";
 import UploadIdentificationDrawer from "./UploadIdentificationDrawer";
 import UploadHomeInsuranceDrawer from "./UploadHomeInsuranceDrawer";
+import ClonePreviousDealDrawer from "./ClonePreviousDealDrawer";
+import EditDealModal from "./EditDealModal";
 
 interface DealDetailProps {
   deal: Deal;
@@ -172,6 +174,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const [showDocuments, setShowDocuments] = useState(false);
   const [dealDocuments, setDealDocuments] = useState<{ task_id: string; file_name: string; file_url: string; task_title: string }[]>([]);
   const [loadingDocs, setLoadingDocs] = useState(false);
+
+  // Edit deal modal — opens the existing EditDealModal so closing/opening/
+  // requisition dates and lawyer/clerk names can be updated from the header.
+  const [showEditDeal, setShowEditDeal] = useState(false);
 
   // APS upload modal state
   const [showApsUpload, setShowApsUpload] = useState(false);
@@ -405,10 +411,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         return ok ? null : "Enter a valid email address.";
       }
       case "phone": {
-        // Accept any format the user types as long as it has at least 7
+        // Accept any format the user types as long as it has at least 10
         // digits. Strips parentheses, spaces, dashes, dots before counting.
         const digits = v.replace(/\D/g, "");
-        if (digits.length < 7) return "Phone number must have at least 7 digits.";
+        if (digits.length < 10) return "Phone number must have at least 10 digits.";
         if (digits.length > 15) return "Phone number is too long.";
         return null;
       }
@@ -458,6 +464,11 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     setIdDrawerLeadId(leadId);
     setIdDrawerTaskId(taskId);
   };
+
+  // Clone-from-previous drawer — prepopulates the current lead's personal
+  // fields and identification documents from a prior deal belonging to the
+  // same client (matched by email). Only visible on the primary's deal view.
+  const [cloneDrawerOpen, setCloneDrawerOpen] = useState(false);
 
   const isIdentificationTask = (task: DisplayTask) =>
     !task.isTemplate && (task.title ?? "").toLowerCase().includes("identif");
@@ -2160,6 +2171,12 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
         <div className="flex gap-3">
           <button
+            onClick={() => setShowEditDeal(true)}
+            className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2"
+          >
+            <Pencil size={16} /> Edit Deal
+          </button>
+          <button
             onClick={() => { setApsFile(null); setShowApsUpload(true); }}
             className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2"
           >
@@ -2173,6 +2190,17 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           </button>
         </div>
       </div>
+
+      {showEditDeal && (
+        <EditDealModal
+          dealId={deal.id}
+          onClose={() => setShowEditDeal(false)}
+          onSaved={() => {
+            setShowEditDeal(false);
+            refetchData();
+          }}
+        />
+      )}
 
       {/* Citizenship flag banner */}
       {isNonCitizenFlagged({ citizenship_status: rawDeal?.lead_citizenship_status }) && (
@@ -2429,17 +2457,33 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
               const role = ((rawDeal?.current_deal_role as string | undefined) ?? "").toLowerCase();
               const isPrimaryView = role.startsWith("primary") || !rawDeal?.current_deal_role;
               const primaryTaskId = rawDeal?.identification_task_id as string | undefined;
-              if (!isPrimaryView || !primaryLeadId || !primaryTaskId) return null;
+              if (!isPrimaryView || !primaryLeadId) return null;
+              const hasEmail = !!(rawDeal?.lead_email as string | undefined);
               return (
-                <button
-                  type="button"
-                  onClick={() => openIdDrawerFor(primaryLeadId, primaryTaskId)}
-                  className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-[#C10007] text-white hover:bg-[#a30006] transition-colors shadow-sm"
-                  title="Upload identification documents for any family member"
-                >
-                  <Upload size={13} />
-                  Upload Identification
-                </button>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {hasEmail && (
+                    <button
+                      type="button"
+                      onClick={() => setCloneDrawerOpen(true)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border border-[#C10007] text-[#C10007] bg-white hover:bg-[#FEF2F2] transition-colors"
+                      title="Prefill personal fields and identification documents from a previous deal for this client"
+                    >
+                      <Copy size={13} />
+                      Clone from previous deal
+                    </button>
+                  )}
+                  {primaryTaskId && (
+                    <button
+                      type="button"
+                      onClick={() => openIdDrawerFor(primaryLeadId, primaryTaskId)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-[#C10007] text-white hover:bg-[#a30006] transition-colors shadow-sm"
+                      title="Upload identification documents for any family member"
+                    >
+                      <Upload size={13} />
+                      Upload Identification
+                    </button>
+                  )}
+                </div>
               );
             })()}
           </div>
@@ -3805,14 +3849,56 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                       </div>
                     </div>
                     {doc.file_url ? (
-                      <a
-                        href={doc.file_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-xs font-semibold text-[#C10007] hover:underline shrink-0 ml-3"
-                      >
-                        View
-                      </a>
+                      <div className="flex items-center gap-1 shrink-0 ml-3">
+                        <a
+                          href={doc.file_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center justify-center w-8 h-8 rounded-md text-slate-500 hover:text-[#C10007] hover:bg-white transition-colors"
+                          title="View"
+                          aria-label={`View ${doc.file_name ?? "file"}`}
+                        >
+                          <Eye size={16} />
+                        </a>
+                        <button
+                          type="button"
+                          onClick={async (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            // Fetch-then-blob so cross-origin storage URLs
+                            // (Vercel Blob, S3) actually download instead of
+                            // navigating away. Falls back to a plain anchor
+                            // click if fetch is blocked by CORS.
+                            try {
+                              const res = await fetch(doc.file_url, { credentials: "omit" });
+                              if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                              const blob = await res.blob();
+                              const blobUrl = URL.createObjectURL(blob);
+                              const a = document.createElement("a");
+                              a.href = blobUrl;
+                              a.download = doc.file_name || "download";
+                              document.body.appendChild(a);
+                              a.click();
+                              a.remove();
+                              setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+                            } catch {
+                              const a = document.createElement("a");
+                              a.href = doc.file_url;
+                              a.download = doc.file_name || "download";
+                              a.target = "_blank";
+                              a.rel = "noopener noreferrer";
+                              document.body.appendChild(a);
+                              a.click();
+                              a.remove();
+                            }
+                          }}
+                          className="inline-flex items-center justify-center w-8 h-8 rounded-md text-slate-500 hover:text-[#C10007] hover:bg-white transition-colors"
+                          title="Download"
+                          aria-label={`Download ${doc.file_name ?? "file"}`}
+                        >
+                          <Download size={16} />
+                        </button>
+                      </div>
                     ) : (
                       <span className="text-xs text-gray-400 shrink-0 ml-3">No file</span>
                     )}
@@ -4522,6 +4608,20 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           />
         );
       })()}
+
+      {/* Clone-from-previous drawer — lets admin pick a prior deal for the
+          same client (matched by email) and prefill personal fields +
+          reuse identification docs by reference. */}
+      <ClonePreviousDealDrawer
+        open={cloneDrawerOpen}
+        onClose={() => setCloneDrawerOpen(false)}
+        leadId={primaryLeadId}
+        onApplied={() => {
+          if (typeof window !== "undefined") {
+            window.location.reload();
+          }
+        }}
+      />
 
       {/* Home Insurance upload drawer — admin-side reuse of the client drawer */}
       {(() => {

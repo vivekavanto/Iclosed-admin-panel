@@ -1,6 +1,11 @@
 import { Resend } from "resend";
 import supabaseAdmin from "./supabaseAdmin";
-import { formatLeadTypeLabel, buildLeadAddressForEmail } from "./leadEmailAddress";
+import {
+  formatLeadTypeLabel,
+  buildLeadAddressForEmail,
+  buildLeadAddressPartsForEmail,
+  renderTransactionPhrase,
+} from "./leadEmailAddress";
 
 export type WelcomeEmailResult = {
   success: boolean;
@@ -68,8 +73,14 @@ async function interpolate(text: string, lead: any, fileNumber: string | null = 
   // Centralized address+type formatting — combines purchase & selling for
   // P&S, with a family-sibling fallback for split families. See
   // src/lib/leadEmailAddress.ts.
-  const address = await buildLeadAddressForEmail(lead);
+  const addressParts = await buildLeadAddressPartsForEmail(lead);
+  const address = addressParts.treatAsCombined
+    ? [addressParts.purchase, addressParts.selling].filter(Boolean).join(" and ")
+    : addressParts.typeIsSaleOnly
+      ? (addressParts.selling || addressParts.purchase)
+      : addressParts.purchase;
   const leadType = formatLeadTypeLabel(lead.lead_type);
+  const transactionPhrase = renderTransactionPhrase(addressParts, leadType);
   const resolvedFileNumber = fileNumber ?? lead.file_number ?? "";
 
   // Side suffix for subject lines on combined / sale-only leads. Empty for
@@ -138,6 +149,16 @@ async function interpolate(text: string, lead: any, fileNumber: string | null = 
   };
 
   let result = text;
+
+  // Pair-up pattern: "{{ lead_type }} of {{ lead_address }}" must render as
+  // "Purchase of <P> and Sale of <S>" for combined files, not
+  // "Purchase & Sale of <P> and <S>" which collapses the two sides. Replace
+  // the whole phrase before the individual placeholders run.
+  result = result.replace(
+    /\{\{\s*lead_type\s*\}\}\s+of\s+\{\{\s*lead_address\s*\}\}/gi,
+    transactionPhrase,
+  );
+
   for (const [key, value] of Object.entries(map)) {
     result = result.split(key).join(value);
   }
@@ -311,7 +332,7 @@ export async function sendWelcomeEmail(
   }
 
   const resend = new Resend(process.env.RESEND_API_KEY);
-  const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <noreply@iclosed.ca>";
+  const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <support@iclosed.ca>";
 
   const { data: sendResult, error: sendError } = await resend.emails.send({
     from: fromEmail,

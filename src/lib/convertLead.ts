@@ -354,7 +354,7 @@ export async function convertSingleLead(
                     if (clientData?.email) {
                       const { Resend } = await import("resend");
                       const resend = new Resend(process.env.RESEND_API_KEY);
-                      const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <noreply@iclosed.ca>";
+                      const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <support@iclosed.ca>";
 
                       const fullName = `${clientData.first_name ?? ""} ${clientData.last_name ?? ""}`.trim();
                       // Combines purchase + selling for P&S leads, with a
@@ -639,6 +639,7 @@ export async function convertSingleLead(
           email: lead.email,
           redirectTo,
           userData,
+          leadId: lead.id,
         });
 
         if (inviteResult.success && inviteResult.userId) {

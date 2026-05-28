@@ -1,6 +1,7 @@
 import supabaseAdmin from "./supabaseAdmin";
 import { getFamilyDealIds } from "./familyDeals";
 import { recalcMilestonesForFamily } from "./recalcMilestones";
+import { findFamilySharedTaskPeers } from "./findFamilySharedTaskPeers";
 
 /**
  * If `taskId`'s template has required file fields and every one of them now
@@ -22,7 +23,7 @@ export async function maybeCompleteFileTask(
 ): Promise<{ completed: boolean }> {
   const { data: task } = await supabaseAdmin
     .from("tasks")
-    .select("id, deal_id, task_template_id, is_shared, status")
+    .select("id, deal_id, task_template_id, is_shared, status, title")
     .eq("id", taskId)
     .maybeSingle();
 
@@ -77,17 +78,35 @@ export async function maybeCompleteFileTask(
     .update(completionPayload)
     .eq("id", task.id);
 
-  // Mirror completion to shared peers on the rest of the family.
+  // Mirror completion to shared peers on the rest of the family. We match by
+  // task_template_id AND by case-insensitive title, so Purchase-side rows
+  // mirror to Sale-side peers on a co-seller's deal even though the two
+  // templates have different ids. APS stays side-scoped via completeApsTask.
   if (task.is_shared) {
     const familyDealIds = await getFamilyDealIds(task.deal_id);
-    const otherDealIds = familyDealIds.filter((id) => id !== task.deal_id);
-    if (otherDealIds.length > 0) {
+    // Guard: APS has its own side-scoped sync via completeApsTask. Detect via
+    // the template flag and disable the cross-side title-fallback in that case.
+    let isApsTask = false;
+    if (task.task_template_id) {
+      const { data: tmpl } = await supabaseAdmin
+        .from("task_templates")
+        .select("is_aps_task")
+        .eq("id", task.task_template_id)
+        .maybeSingle();
+      isApsTask = Boolean(tmpl?.is_aps_task);
+    }
+    const peerIds = await findFamilySharedTaskPeers({
+      sourceTaskId: task.id,
+      dealId: task.deal_id,
+      taskTemplateId: task.task_template_id,
+      title: task.title ?? null,
+      isApsTask,
+    });
+    if (peerIds.length > 0) {
       await supabaseAdmin
         .from("tasks")
         .update(completionPayload)
-        .eq("task_template_id", task.task_template_id)
-        .eq("is_shared", true)
-        .in("deal_id", otherDealIds);
+        .in("id", peerIds);
     }
     await recalcMilestonesForFamily(familyDealIds, task.deal_id);
   } else {
