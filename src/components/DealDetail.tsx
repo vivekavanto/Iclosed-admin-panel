@@ -4116,8 +4116,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       )}
 
       {/* Edit Task Modal — hidden while a sub-drawer (identification / home
-          insurance) is open so the two popups don't visually overlap. */}
-      {editingTask && !idDrawerTaskId && !homeInsDrawerTaskId && (
+          insurance / clone-from-previous) is open so the two popups don't
+          visually overlap. */}
+      {editingTask && !idDrawerTaskId && !homeInsDrawerTaskId && !cloneDrawerOpen && (
         <div
           role="dialog"
           aria-modal="true"
