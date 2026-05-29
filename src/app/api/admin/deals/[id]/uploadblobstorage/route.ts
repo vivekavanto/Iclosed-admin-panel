@@ -152,13 +152,16 @@ export async function POST(
     ];
 
     if (familyLeadIds.length > 0) {
-      // Build the predicate so a side-scoped upload only deletes its
-      // matching APS row (plus the generic "aps" / legacy custom_type
-      // rows, which by definition span both sides).
+      // Build the predicate so a side-scoped upload only deletes ITS OWN
+      // side's APS row. We intentionally do NOT delete the generic "aps"
+      // row here: on a combined Purchase & Sale deal that generic row may
+      // belong to the OTHER side (e.g. an intake upload), and deleting it
+      // would wipe the other side's document. A null side (legacy generic
+      // upload) still clears everything.
       const orPredicate = side === "purchase"
-        ? "doc_type.eq.aps,doc_type.eq.aps_purchase,custom_type.ilike.%APS purchase%"
+        ? "doc_type.eq.aps_purchase,custom_type.ilike.%APS purchase%"
         : side === "sale"
-        ? "doc_type.eq.aps,doc_type.eq.aps_sale,custom_type.ilike.%APS sale%"
+        ? "doc_type.eq.aps_sale,custom_type.ilike.%APS sale%"
         : "doc_type.eq.aps,doc_type.eq.aps_purchase,doc_type.eq.aps_sale,custom_type.ilike.%APS%";
       await supabaseAdmin
         .from("lead_corporate_docs")

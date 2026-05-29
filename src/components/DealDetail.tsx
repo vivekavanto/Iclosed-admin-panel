@@ -3932,12 +3932,21 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
               ) : (
                 <div className="space-y-5">
                   {Object.entries(
-                    dealDocuments.reduce((acc: Record<string, any[]>, doc) => {
-                      const key = doc.task_title || "Other";
-                      if (!acc[key]) acc[key] = [];
-                      acc[key].push(doc);
-                      return acc;
-                    }, {})
+                    dealDocuments
+                      // Only show documents for the side(s) this deal actually
+                      // covers: a co-seller sees the Sale APS, a co-purchaser
+                      // the Purchase APS, and a combined primary sees both.
+                      // Side-agnostic docs (no resolvable lead type) always show.
+                      .filter((doc) => {
+                        const s = docSide(doc);
+                        return !s || matchesDealType(s);
+                      })
+                      .reduce((acc: Record<string, any[]>, doc) => {
+                        const key = doc.task_title || "Other";
+                        if (!acc[key]) acc[key] = [];
+                        acc[key].push(doc);
+                        return acc;
+                      }, {})
                   ).map(([taskTitle, docs]) => (
                     <div key={taskTitle}>
                       <h4 className="text-sm font-semibold text-gray-800 mb-2">{taskTitle}</h4>

@@ -212,21 +212,53 @@ export async function completeApsTask(
             const taskLeadType = apsTemplateLeadTypeMap.get(apsTaskRow.task_template_id ?? "") ?? "";
             if (!taskLeadType) continue;
 
-            const matchingDocs = apsDocs.filter((doc) =>
-              docTargetsLeadType(doc).has(taskLeadType),
-            );
+            // Prefer this side's own doc. A side-specific upload
+            // (aps_purchase / aps_sale) wins over a generic "aps" doc, so a
+            // combined Purchase & Sale deal doesn't show the generic doc on
+            // BOTH sides alongside the side-specific one (which is what made
+            // a co-purchaser/co-seller see two APS documents). Only when a
+            // side has no specific doc do we fall back to the generic/legacy
+            // docs.
+            const sideSpecificDocs = apsDocs.filter((doc) => {
+              const dt = (doc.doc_type ?? "").toLowerCase();
+              return (
+                (taskLeadType === "purchase" && dt === "aps_purchase") ||
+                (taskLeadType === "sale" && dt === "aps_sale")
+              );
+            });
+            const matchingDocs = sideSpecificDocs.length > 0
+              ? sideSpecificDocs
+              : apsDocs.filter((doc) => docTargetsLeadType(doc).has(taskLeadType));
             if (matchingDocs.length === 0) continue;
+
+            const desiredKeys = new Set(
+              matchingDocs
+                .filter((doc) => doc.file_name)
+                .map((doc) => `${doc.file_name}|${doc.file_url ?? ""}`),
+            );
 
             const { data: existingResponses } = await supabaseAdmin
               .from("task_responses")
-              .select("file_name, file_url")
+              .select("id, file_name, file_url")
               .eq("task_id", apsTaskRow.id)
               .eq("field_type", "file");
 
+            // Reconcile: drop any file response on this side's task that is no
+            // longer one of the chosen docs (e.g. a stale generic doc now
+            // superseded by a side-specific upload) so the Doc count reflects
+            // exactly this side's APS. This also self-heals decks created by
+            // the previous both-sides bridging.
+            const staleIds = (existingResponses ?? [])
+              .filter((r) => !desiredKeys.has(`${r.file_name ?? ""}|${r.file_url ?? ""}`))
+              .map((r) => r.id);
+            if (staleIds.length > 0) {
+              await supabaseAdmin.from("task_responses").delete().in("id", staleIds);
+            }
+
             const existingKeys = new Set(
-              (existingResponses ?? []).map(
-                (r) => `${r.file_name ?? ""}|${r.file_url ?? ""}`,
-              ),
+              (existingResponses ?? [])
+                .filter((r) => desiredKeys.has(`${r.file_name ?? ""}|${r.file_url ?? ""}`))
+                .map((r) => `${r.file_name ?? ""}|${r.file_url ?? ""}`),
             );
 
             const newResponses = matchingDocs
