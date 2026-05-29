@@ -183,6 +183,11 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const [showApsUpload, setShowApsUpload] = useState(false);
   const [apsFile, setApsFile] = useState<File | null>(null);
   const [uploadingAps, setUploadingAps] = useState(false);
+  // Which side this APS upload targets. Set explicitly when the modal is
+  // opened from the header (so a Purchase & Sale deal can upload a Purchase
+  // APS and a Sale APS separately). Left null when opened from an APS task's
+  // Edit modal — there the side is derived from the task's template lead_type.
+  const [apsUploadSide, setApsUploadSide] = useState<"purchase" | "sale" | null>(null);
   // Preflight: is an APS already uploaded for this deal's family? Used to
   // warn the admin that submitting will replace the existing doc.
   const [existingApsFileName, setExistingApsFileName] = useState<string | null>(null);
@@ -477,13 +482,35 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     setIdDrawerTaskId(taskId);
   };
 
-  // Clone-from-previous drawer — prepopulates the current lead's personal
-  // fields and identification documents from a prior deal belonging to the
-  // same client (matched by email). Only visible on the primary's deal view.
+  // Clone-from-previous drawer — prepopulates a lead's personal fields and
+  // identification documents from a prior deal belonging to the same client
+  // (matched by email). The primary opens it from the header; co-purchasers /
+  // co-sellers each get their own entry point on their People-involved row,
+  // so `cloneDrawerLeadId` tracks which family member is being targeted.
   const [cloneDrawerOpen, setCloneDrawerOpen] = useState(false);
+  const [cloneDrawerLeadId, setCloneDrawerLeadId] = useState<string>(primaryLeadId);
+
+  const openCloneDrawerFor = (leadId: string) => {
+    setCloneDrawerLeadId(leadId);
+    setCloneDrawerOpen(true);
+  };
 
   const isIdentificationTask = (task: DisplayTask) =>
     !task.isTemplate && (task.title ?? "").toLowerCase().includes("identif");
+
+  // Personal-information task — the other place where cloning from a previous
+  // deal makes sense (name/phone/address/citizenship rarely change between a
+  // client's deals). Matched loosely on the template/title wording.
+  const isPersonalInfoTask = (task: DisplayTask) => {
+    if (task.isTemplate) return false;
+    const t = (task.title ?? "").toLowerCase();
+    return t.includes("personal info") || t.includes("personal information");
+  };
+
+  // Tasks where the "Clone from previous deal" shortcut is offered inside the
+  // task modal — only the details that typically carry over unchanged.
+  const isCloneableTask = (task: DisplayTask) =>
+    isIdentificationTask(task) || isPersonalInfoTask(task);
 
   // Home Insurance upload drawer — reuses the client-portal drawer (copied into
   // the admin app) so admin can upload the policy on behalf of the client.
@@ -1284,7 +1311,8 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     setExistingApsFileName(null);
     (async () => {
       try {
-        const res = await fetch(`/api/admin/deals/${deal.id}/aps-status`);
+        const sideQs = apsUploadSide ? `?side=${apsUploadSide}` : "";
+        const res = await fetch(`/api/admin/deals/${deal.id}/aps-status${sideQs}`);
         const json = await res.json();
         if (cancelled) return;
         if (json?.uploaded) {
@@ -1299,7 +1327,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     return () => {
       cancelled = true;
     };
-  }, [showApsUpload, deal.id]);
+  }, [showApsUpload, deal.id, apsUploadSide]);
 
   const handleApsUploadSubmit = async () => {
     if (!apsFile) return;
@@ -1322,11 +1350,14 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       // submitted from the Edit Task modal on a specific side's APS
       // task, pass `side` so the server only touches that side — a
       // Purchase upload on a P&S deal must not leak into the Sale APS.
+      // An explicit side chosen from the header takes precedence; otherwise
+      // fall back to the side derived from the APS task being edited.
       const editingTemplateLeadType = editingTask?.taskTemplateId
         ? (taskTemplates as any[]).find((t) => t.id === editingTask.taskTemplateId)?.lead_type
         : null;
       const ltNorm = (editingTemplateLeadType ?? "").toString().toLowerCase().trim();
-      const side = ltNorm === "purchase" ? "purchase" : ltNorm === "sale" ? "sale" : null;
+      const editSide = ltNorm === "purchase" ? "purchase" : ltNorm === "sale" ? "sale" : null;
+      const side = apsUploadSide ?? editSide;
       const res = await fetch(`/api/admin/deals/${deal.id}/uploadblobstorage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1982,6 +2013,77 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     };
   })();
 
+  // The whole family (current viewer + linked co-purchasers/co-sellers) as a
+  // single sorted list. Lifted to the component body so both the "People
+  // involved" card and the dedicated "Identification Documents" card render
+  // from the same source of truth.
+  type FamilyPerson = {
+    id: string;
+    lead_id: string | null;
+    lead_name: string;
+    lead_email: string;
+    role: string;
+    file_number: string;
+    property_address: string;
+    selling_property_address: string;
+    status: string;
+    accountCreated: boolean;
+    isCurrent: boolean;
+    identificationTaskId: string | null;
+    identificationStatus: string | null;
+  };
+  const familyPeople: FamilyPerson[] = (() => {
+    const currentName = [rawDeal?.lead_first_name, rawDeal?.lead_last_name]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    const currentEntry: FamilyPerson = {
+      id: deal.id,
+      lead_id: primaryLeadId,
+      lead_name: currentName || "Current viewer",
+      lead_email: (rawDeal?.lead_email as string | null) || "",
+      role: numberedRoles.byDealId.get(deal.id) || rawDeal?.current_deal_role || "Primary",
+      file_number: deal.fileNumber,
+      property_address: deal.propertyAddress || "",
+      selling_property_address: ((deal as any).sellingPropertyAddress as string | undefined) || "",
+      status: deal.status,
+      accountCreated: !!rawDeal?.account_created_at,
+      isCurrent: true,
+      identificationTaskId: (rawDeal?.identification_task_id as string | null) ?? null,
+      identificationStatus: (rawDeal?.identification_status as string | null) ?? null,
+    };
+    const linked: FamilyPerson[] = ((rawDeal?.linked_deals ?? []) as any[]).map((ld) => ({
+      id: ld.id,
+      lead_id: (ld.lead_id as string | null) ?? null,
+      lead_name: ld.lead_name || "Unknown",
+      lead_email: ld.lead_email || "",
+      role: numberedRoles.byDealId.get(ld.id) || ld.role || "Co-Client",
+      file_number: ld.file_number || "",
+      property_address: ld.property_address || "",
+      selling_property_address: (ld.selling_property_address as string | null) ?? "",
+      status: ld.status || "Active",
+      accountCreated: !!ld.account_created_at,
+      isCurrent: false,
+      identificationTaskId: (ld.identification_task_id as string | null) ?? null,
+      identificationStatus: (ld.identification_status as string | null) ?? null,
+    }));
+    const sortKey = (p: FamilyPerson) => {
+      const r = p.role.toLowerCase();
+      if (r.startsWith("primary")) return 0;
+      if (r.includes("co-purchaser")) return 1;
+      if (r.includes("co-seller")) return 2;
+      return 3;
+    };
+    return [currentEntry, ...linked].sort((a, b) => sortKey(a) - sortKey(b));
+  })();
+
+  const roleChipClass = (role: string) => {
+    const r = role.toLowerCase();
+    if (r.startsWith("primary")) return "bg-green-100 text-green-700 border-green-200";
+    if (r.includes("co-seller")) return "bg-orange-100 text-orange-700 border-orange-200";
+    return "bg-blue-100 text-blue-700 border-blue-200";
+  };
+
   // True when the task currently open in the Edit Task modal is an APS task.
   // Resolved from the task templates list so the modal can offer the APS
   // upload/replace action only where it applies.
@@ -1994,6 +2096,20 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const taskTemplateLeadTypeMap = new Map<string, string>(
     (taskTemplates as any[]).map(t => [t.id, t.lead_type])
   );
+  // Resolve which lead type (Purchase / Sale) a document belongs to, from the
+  // owning task's source template. Used in the View Documents modal so every
+  // uploaded document — not just APS — is tagged with its side. Tasks whose
+  // template has no lead type (generic / manually-added) return null and stay
+  // unbadged. Falls back to `shared_task_key` for older payloads that predate
+  // the explicit `task_template_id` field.
+  const docSide = (doc: any): string | null => {
+    const key = doc?.task_template_id ?? doc?.shared_task_key;
+    if (!key) return null;
+    const lt = taskTemplateLeadTypeMap.get(key);
+    if (!lt) return null;
+    const n = lt.toLowerCase();
+    return n === "purchase" ? "Purchase" : n === "sale" ? "Sale" : null;
+  };
   const stageTemplateLeadTypeMap = new Map<string, string>(
     (stageTemplates as any[]).map(t => [t.id, t.lead_type])
   );
@@ -2190,12 +2306,37 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           >
             <Pencil size={16} /> Edit Deal
           </button>
-          <button
-            onClick={() => { setApsFile(null); setShowApsUpload(true); }}
-            className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2"
-          >
-            <Upload size={16} /> Upload APS Document
-          </button>
+          {isCombinedDealType ? (
+            // Purchase & Sale deal — offer a separate APS upload per side so
+            // the Purchase APS and the Sale APS can each be uploaded/replaced
+            // without affecting the other.
+            <>
+              <button
+                onClick={() => { setApsFile(null); setApsUploadSide("purchase"); setShowApsUpload(true); }}
+                className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2"
+              >
+                <Upload size={16} /> Upload APS (Purchase)
+              </button>
+              <button
+                onClick={() => { setApsFile(null); setApsUploadSide("sale"); setShowApsUpload(true); }}
+                className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2"
+              >
+                <Upload size={16} /> Upload APS (Sale)
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => {
+                setApsFile(null);
+                const sole = (dealTypeParts[0] ?? "").toLowerCase();
+                setApsUploadSide(sole === "purchase" ? "purchase" : sole === "sale" ? "sale" : null);
+                setShowApsUpload(true);
+              }}
+              className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2"
+            >
+              <Upload size={16} /> Upload APS Document
+            </button>
+          )}
           <button
             onClick={() => { setShowDocuments(true); fetchDealDocuments(); }}
             className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2"
@@ -2464,120 +2605,13 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                 Click any person to switch to their view
               </span>
             </div>
-            {/* Family-wide identification upload entry point. Only visible on
-                the primary's deal page. Opens the drawer with the primary
-                pre-selected; admin picks the actual family member inside. */}
-            {(() => {
-              const role = ((rawDeal?.current_deal_role as string | undefined) ?? "").toLowerCase();
-              const isPrimaryView = role.startsWith("primary") || !rawDeal?.current_deal_role;
-              const primaryTaskId = rawDeal?.identification_task_id as string | undefined;
-              if (!isPrimaryView || !primaryLeadId) return null;
-              const hasEmail = !!(rawDeal?.lead_email as string | undefined);
-              return (
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  {hasEmail && (
-                    <button
-                      type="button"
-                      onClick={() => setCloneDrawerOpen(true)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border border-[#C10007] text-[#C10007] bg-white hover:bg-[#FEF2F2] transition-colors"
-                      title="Prefill personal fields and identification documents from a previous deal for this client"
-                    >
-                      <Copy size={13} />
-                      Clone from previous deal
-                    </button>
-                  )}
-                  {primaryTaskId && (
-                    <button
-                      type="button"
-                      onClick={() => openIdDrawerFor(primaryLeadId, primaryTaskId)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-[#C10007] text-white hover:bg-[#a30006] transition-colors shadow-sm"
-                      title="Upload identification documents for any family member"
-                    >
-                      <Upload size={13} />
-                      Upload Identification
-                    </button>
-                  )}
-                </div>
-              );
-            })()}
+            {/* Identification upload lives in its own "Identification
+                Documents" card below, where each family member's ID status
+                and upload action are listed clearly. */}
           </div>
           <div className="space-y-2">
             {(() => {
-              type Person = {
-                id: string;
-                lead_id: string | null;
-                lead_name: string;
-                lead_email: string;
-                role: string;
-                file_number: string;
-                property_address: string;
-                selling_property_address: string;
-                status: string;
-                accountCreated: boolean;
-                isCurrent: boolean;
-                identificationTaskId: string | null;
-                identificationStatus: string | null;
-              };
-              const currentName = [
-                rawDeal?.lead_first_name,
-                rawDeal?.lead_last_name,
-              ]
-                .filter(Boolean)
-                .join(" ")
-                .trim();
-              // Build the current entry from the deal/rawDeal so the
-              // person you're viewing appears alongside the rest. The
-              // role here is the *numbered* form (Co-Purchaser 1 etc.)
-              // computed once at the top of render so this card and the
-              // property header agree.
-              const currentEntry: Person = {
-                id: deal.id,
-                lead_id: primaryLeadId,
-                lead_name: currentName || "Current viewer",
-                lead_email: (rawDeal?.lead_email as string | null) || "",
-                role: numberedRoles.byDealId.get(deal.id) || rawDeal?.current_deal_role || "Primary",
-                file_number: deal.fileNumber,
-                property_address: deal.propertyAddress || "",
-                selling_property_address: ((deal as any).sellingPropertyAddress as string | undefined) || "",
-                status: deal.status,
-                accountCreated: !!rawDeal?.account_created_at,
-                isCurrent: true,
-                identificationTaskId: (rawDeal?.identification_task_id as string | null) ?? null,
-                identificationStatus: (rawDeal?.identification_status as string | null) ?? null,
-              };
-              const linked: Person[] = (rawDeal?.linked_deals ?? []).map((ld: any) => ({
-                id: ld.id,
-                lead_id: (ld.lead_id as string | null) ?? null,
-                lead_name: ld.lead_name || "Unknown",
-                lead_email: ld.lead_email || "",
-                role: numberedRoles.byDealId.get(ld.id) || ld.role || "Co-Client",
-                file_number: ld.file_number || "",
-                property_address: ld.property_address || "",
-                selling_property_address: (ld.selling_property_address as string | null) ?? "",
-                status: ld.status || "Active",
-                accountCreated: !!ld.account_created_at,
-                isCurrent: false,
-                identificationTaskId: (ld.identification_task_id as string | null) ?? null,
-                identificationStatus: (ld.identification_status as string | null) ?? null,
-              }));
-              // Sort so the Primary always appears first, then co-purchasers, then co-sellers
-              const sortKey = (p: Person) => {
-                const r = p.role.toLowerCase();
-                if (r.startsWith("primary")) return 0;
-                if (r.includes("co-purchaser")) return 1;
-                if (r.includes("co-seller")) return 2;
-                return 3;
-              };
-              const all = [currentEntry, ...linked].sort(
-                (a, b) => sortKey(a) - sortKey(b),
-              );
-              const roleChipClass = (role: string) => {
-                const r = role.toLowerCase();
-                if (r.startsWith("primary")) return "bg-green-100 text-green-700 border-green-200";
-                if (r.includes("co-seller")) return "bg-orange-100 text-orange-700 border-orange-200";
-                return "bg-blue-100 text-blue-700 border-blue-200";
-              };
-              return all.map((p) => (
+              return familyPeople.map((p) => (
                 <div
                   key={p.id}
                   onClick={p.isCurrent ? undefined : () => router.push(`/admin/deals/${p.id}`)}
@@ -2601,14 +2635,31 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                         {p.file_number}
                         {(() => {
                           // Co-sellers should display their selling property,
-                          // not the deal's stored purchase address. Primaries
-                          // and Co-Purchasers continue to show the purchase
-                          // address (their primary side).
-                          const isCoSeller = p.role.toLowerCase().includes("co-seller");
-                          const addr = isCoSeller
-                            ? (p.selling_property_address || p.property_address)
-                            : p.property_address;
-                          return addr ? ` · ${addr}` : "";
+                          // not the deal's stored purchase address.
+                          const role = p.role.toLowerCase();
+                          const isCoSeller = role.includes("co-seller");
+                          const isPrimary = role.startsWith("primary");
+                          const purchaseAddr = p.property_address;
+                          const saleAddr = p.selling_property_address;
+                          if (isCoSeller) {
+                            const addr = saleAddr || purchaseAddr;
+                            return addr ? ` · ${addr}` : "";
+                          }
+                          // The primary on a combined Purchase & Sale deal acts
+                          // on both sides, so surface both the purchase and the
+                          // selling address (not just the purchase one).
+                          if (
+                            isPrimary &&
+                            isCombinedDealType &&
+                            saleAddr &&
+                            saleAddr !== purchaseAddr
+                          ) {
+                            const addrs = [purchaseAddr, saleAddr].filter(Boolean);
+                            return addrs.length ? ` · ${addrs.join(" · ")}` : "";
+                          }
+                          // Primaries / Co-Purchasers otherwise show the
+                          // purchase address (their primary side).
+                          return purchaseAddr ? ` · ${purchaseAddr}` : "";
                         })()}
                       </p>
                       {p.lead_email && (
@@ -2626,9 +2677,6 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    {/* Per-row identification pill removed — the family-wide
-                        "Upload Identification" entry point now lives in the
-                        People involved section header (primary view only). */}
                     {p.isCurrent && (
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-brand-primary text-white">
                         Currently viewing
@@ -2656,6 +2704,79 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                 </div>
               ));
             })()}
+          </div>
+        </div>
+      )}
+
+      {/* Identification Documents — dedicated card so the admin can upload
+          identification on behalf of each family member (primary,
+          co-purchaser, co-seller). Each row shows the person's current ID
+          status and an upload/replace action scoped to that person. Rendered
+          only when at least one person has an identification task. */}
+      {familyPeople.some(
+        (p) => p.identificationTaskId && !p.role.toLowerCase().startsWith("primary"),
+      ) && (
+        <div className="bg-white rounded-xl shadow-sm border border-blue-200 p-5 mb-6">
+          <div className="flex items-center gap-2 mb-4">
+            <div className="w-7 h-7 rounded-full bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 flex-shrink-0">
+              <FileText size={14} />
+            </div>
+            <h3 className="text-sm font-bold text-slate-900">Identification Documents</h3>
+            <span className="text-[11px] text-slate-400 truncate">
+              Upload ID documents on behalf of each co-purchaser / co-seller
+            </span>
+          </div>
+          <div className="space-y-2">
+            {familyPeople
+              .filter(
+                (p) => p.identificationTaskId && !p.role.toLowerCase().startsWith("primary"),
+              )
+              .map((p) => {
+                const done = p.identificationStatus === "Completed";
+                return (
+                  <div
+                    key={p.id}
+                    className="flex items-center justify-between gap-3 px-4 py-3 rounded-lg border border-slate-100 bg-slate-50/40"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${roleChipClass(p.role)}`}>
+                        {p.role}
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-bold text-slate-800 truncate">
+                          {p.lead_name}
+                        </p>
+                        <p className="text-[11px] flex items-center gap-1 mt-0.5">
+                          {done ? (
+                            <span className="inline-flex items-center gap-1 text-green-600 font-semibold">
+                              <CheckCircle size={11} /> Documents uploaded
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">No documents uploaded yet</span>
+                          )}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => openIdDrawerFor(p.lead_id ?? primaryLeadId, p.identificationTaskId!)}
+                      className={
+                        done
+                          ? "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border border-slate-300 text-slate-700 bg-white hover:bg-slate-50 transition-colors flex-shrink-0"
+                          : "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-[#C10007] text-white hover:bg-[#a30006] transition-colors shadow-sm flex-shrink-0"
+                      }
+                      title={
+                        done
+                          ? `View or replace ${p.lead_name}'s identification documents`
+                          : `Upload identification documents for ${p.lead_name}`
+                      }
+                    >
+                      <Upload size={13} />
+                      {done ? "View / Replace" : "Upload"}
+                    </button>
+                  </div>
+                );
+              })}
           </div>
         </div>
       )}
@@ -2784,7 +2905,28 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                           //      know about — surfaces them anyway so the
                           //      Doc count never lies)
                           const matched = taskFileDocs.filter((d: any) => {
+                            // 1. Exact task_id always wins (personal tasks /
+                            //    primary view of shared docs).
                             if (d.task_id === task.id) return true;
+
+                            // Never cross sides on the looser matches below: a
+                            // Purchase-side doc must not surface under the
+                            // Sale-side row (and vice-versa) just because the
+                            // two APS tasks share a template-derived title
+                            // ("Upload Complete Agreement of Purchase and Sale
+                            // and Amendments"). Resolve the doc's side from its
+                            // shared template and bail if it conflicts with
+                            // this row's lead type.
+                            const docLeadType = d.shared_task_key
+                              ? taskTemplateLeadTypeMap.get(d.shared_task_key) ?? null
+                              : null;
+                            if (
+                              docLeadType &&
+                              task.leadType &&
+                              docLeadType.toLowerCase() !== task.leadType.toLowerCase()
+                            ) {
+                              return false;
+                            }
                             if (
                               task.taskTemplateId &&
                               d.shared_task_key &&
@@ -3612,11 +3754,26 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           >
             <div className="flex items-start justify-between px-6 py-5 border-b border-gray-100">
               <div className="min-w-0">
-                <h3 className="text-base font-bold text-gray-900 leading-tight">
-                  Upload Complete Agreement of Purchase and Sale and Amendments
-                </h3>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-base font-bold text-gray-900 leading-tight">
+                    Upload Complete Agreement of Purchase and Sale and Amendments
+                  </h3>
+                  {apsUploadSide && (
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                        apsUploadSide === "sale"
+                          ? "bg-orange-100 text-orange-700 border-orange-200"
+                          : "bg-blue-100 text-blue-700 border-blue-200"
+                      }`}
+                    >
+                      {apsUploadSide === "sale" ? "Sale" : "Purchase"}
+                    </span>
+                  )}
+                </div>
                 <p className="text-xs text-gray-400 mt-1">
-                  Upload the required documents to complete this task.
+                  {apsUploadSide
+                    ? `Upload the ${apsUploadSide === "sale" ? "Sale" : "Purchase"}-side APS document to complete this task.`
+                    : "Upload the required documents to complete this task."}
                 </p>
               </div>
               <button
@@ -3790,7 +3947,24 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                             <div className="flex items-start gap-3 min-w-0">
                               <FileText size={16} className="text-gray-400 shrink-0 mt-0.5" />
                               <div className="min-w-0 flex flex-col">
-                                <p className="text-sm font-medium text-gray-800 truncate">{doc.file_name}</p>
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <p className="text-sm font-medium text-gray-800 truncate">{doc.file_name}</p>
+                                  {(() => {
+                                    const side = docSide(doc);
+                                    if (!side) return null;
+                                    return (
+                                      <span
+                                        className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                                          side === "Sale"
+                                            ? "bg-orange-100 text-orange-700 border-orange-200"
+                                            : "bg-blue-100 text-blue-700 border-blue-200"
+                                        }`}
+                                      >
+                                        {side}
+                                      </span>
+                                    );
+                                  })()}
+                                </div>
                                 <IdentificationChip meta={findIdMeta(doc)} />
                               </div>
                             </div>
@@ -4041,6 +4215,18 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                   <p className="text-sm font-semibold text-gray-800">
                     Client Responses
                   </p>
+                  <div className="flex items-center gap-2">
+                  {editingTask && isCloneableTask(editingTask) && (
+                    <button
+                      type="button"
+                      onClick={() => openCloneDrawerFor(primaryLeadId)}
+                      className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-[#C10007] bg-white border border-[#C10007] rounded-lg hover:bg-[#FEF2F2]"
+                      title="Prefill personal fields and identification documents from a previous deal for this client"
+                    >
+                      <Copy size={14} />
+                      Clone from previous deal
+                    </button>
+                  )}
                   {editingTask && isIdentificationTask(editingTask) && (
                     <button
                       type="button"
@@ -4076,6 +4262,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                       </button>
                     );
                   })()}
+                  </div>
                 </div>
                 {editTaskLoading ? (
                   <div className="flex items-center gap-2 py-3">
@@ -4158,6 +4345,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                                 onClick={() => {
                                   if (isEditingApsTask) {
                                     setApsFile(null);
+                                    setApsUploadSide(null);
                                     setShowApsUpload(true);
                                   } else {
                                     triggerReplaceFile(resp.id);
@@ -4185,6 +4373,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                                 onClick={() => {
                                   if (isEditingApsTask) {
                                     setApsFile(null);
+                                    setApsUploadSide(null);
                                     setShowApsUpload(true);
                                   } else {
                                     triggerUploadFile(field);
@@ -4367,6 +4556,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                                 onClick={() => {
                                   if (isEditingApsTask) {
                                     setApsFile(null);
+                                    setApsUploadSide(null);
                                     setShowApsUpload(true);
                                   } else {
                                     triggerReplaceFile(resp.id);
@@ -4638,7 +4828,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       <ClonePreviousDealDrawer
         open={cloneDrawerOpen}
         onClose={() => setCloneDrawerOpen(false)}
-        leadId={primaryLeadId}
+        leadId={cloneDrawerLeadId}
         onApplied={() => {
           if (typeof window !== "undefined") {
             window.location.reload();

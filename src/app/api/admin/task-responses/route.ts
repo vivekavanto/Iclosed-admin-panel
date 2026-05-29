@@ -255,8 +255,31 @@ export async function GET(req: Request) {
     return NextResponse.json([]);
   }
 
-  const allSharedTaskIds = familySharedTasks.map((task) => task.id);
-  const allTaskIds = [...new Set([...personalTaskIds, ...sharedTasks.map((task) => task.id), ...allSharedTaskIds])];
+  // Family-wide shared docs are surfaced for APS only. Other tasks that
+  // happen to be is_shared (e.g. per-person Identification / Home Insurance)
+  // must stay scoped to the CURRENT deal — otherwise the primary's View
+  // Documents would list every co-purchaser/co-seller's personal documents.
+  // The current deal's own shared tasks (`sharedTasks`) and personal tasks
+  // (`personalTaskIds`) are still included unconditionally below.
+  const { data: apsTemplatesData } = await supabaseAdmin
+    .from("task_templates")
+    .select("id")
+    .eq("is_aps_task", true);
+  const apsTemplateIds = new Set((apsTemplatesData ?? []).map((t) => t.id));
+  const allSharedTaskIds = familySharedTasks
+    .filter((task) => task.task_template_id && apsTemplateIds.has(task.task_template_id))
+    .map((task) => task.id);
+  // Query scope:
+  //   - personalTaskIds        → the current deal's own personal docs
+  //   - localSharedTasks       → the current deal's own shared docs
+  //   - allSharedTaskIds (APS) → the family-wide APS doc only
+  // Deliberately NOT the primary-fallback `sharedTasks` set: on a co-* deal
+  // that would pull the primary's non-APS shared docs onto the co-*'s view.
+  const allTaskIds = [...new Set([
+    ...personalTaskIds,
+    ...localSharedTasks.map((task) => task.id),
+    ...allSharedTaskIds,
+  ])];
 
   const localTaskById = new Map(localTasks.map((task) => [task.id, task]));
   const sharedTaskById = new Map(familySharedTasks.map((task) => [task.id, task]));
@@ -392,6 +415,10 @@ export async function GET(req: Request) {
       response_id: response.id,
       is_shared: isSharedDocument,
       shared_task_key: isSharedDocument ? templateId ?? effectiveTaskId : null,
+      // Source template id for the owning task (shared OR personal). Lets the
+      // client resolve which lead type (Purchase / Sale) the document belongs
+      // to, so every doc — not just APS — can be tagged with its side.
+      task_template_id: templateId,
       task_id: effectiveTaskId,
       task_title: title,
     };

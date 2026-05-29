@@ -19,6 +19,13 @@ export async function GET(
   try {
     const { id: dealId } = await params;
 
+    // Optional side scoping ("purchase" | "sale"). When provided, only that
+    // side's APS counts as "already uploaded" so a Purchase & Sale deal can
+    // warn-per-side instead of treating the whole family as one APS.
+    const rawSide = new URL(_req.url).searchParams.get("side")?.toLowerCase().trim();
+    const side: "purchase" | "sale" | null =
+      rawSide === "purchase" || rawSide === "sale" ? rawSide : null;
+
     const familyDealIds = await getFamilyDealIds(dealId);
 
     // 1. Check lead_corporate_docs for an APS row anywhere in the family.
@@ -31,13 +38,18 @@ export async function GET(
     ];
 
     if (familyLeadIds.length > 0) {
+      // A side-scoped check matches that side's APS row plus the generic
+      // "aps" rows (which by definition span both sides).
+      const orPredicate = side === "purchase"
+        ? "doc_type.eq.aps,doc_type.eq.aps_purchase,custom_type.ilike.%APS purchase%"
+        : side === "sale"
+        ? "doc_type.eq.aps,doc_type.eq.aps_sale,custom_type.ilike.%APS sale%"
+        : "doc_type.eq.aps,doc_type.eq.aps_purchase,doc_type.eq.aps_sale,custom_type.ilike.%APS%";
       const { data: existingDocs } = await supabaseAdmin
         .from("lead_corporate_docs")
         .select("file_name")
         .in("lead_id", familyLeadIds)
-        .or(
-          "doc_type.eq.aps,doc_type.eq.aps_purchase,doc_type.eq.aps_sale,custom_type.ilike.%APS%",
-        )
+        .or(orPredicate)
         .limit(1);
       if (existingDocs && existingDocs.length > 0) {
         return NextResponse.json({
@@ -48,11 +60,16 @@ export async function GET(
     }
 
     // 2. Fallback: a bridged task_response with a file_url on an APS task.
-    const { data: apsTemplates } = await supabaseAdmin
+    let apsTemplatesQuery = supabaseAdmin
       .from("task_templates")
-      .select("id")
+      .select("id, lead_type")
       .eq("is_aps_task", true)
       .eq("is_deleted", false);
+    if (side) {
+      // task_templates.lead_type is stored capitalized ("Purchase" / "Sale").
+      apsTemplatesQuery = apsTemplatesQuery.eq("lead_type", side === "purchase" ? "Purchase" : "Sale");
+    }
+    const { data: apsTemplates } = await apsTemplatesQuery;
     const apsTemplateIds = (apsTemplates ?? []).map((t) => t.id);
 
     if (apsTemplateIds.length > 0) {
