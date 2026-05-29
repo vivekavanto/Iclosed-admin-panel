@@ -405,6 +405,18 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const validateFieldValue = (field: TaskFormField, value: string): string | null => {
     if (!value) return null; // empty is fine here; required-check runs first
     const v = value.trim();
+    // Phone-by-label fallback: some templates (e.g. "Business/Employer Phone")
+    // store the field with field_type="text" in the DB, so the phone case
+    // below wouldn't fire. Recognise any field whose label mentions "phone"
+    // and run the same digit-count check.
+    const labelLower = (field.label ?? "").toLowerCase();
+    const isPhoneByLabel = labelLower.includes("phone");
+    if (field.field_type !== "phone" && isPhoneByLabel) {
+      const digits = v.replace(/\D/g, "");
+      if (digits.length < 10) return "Phone number must have at least 10 digits.";
+      if (digits.length > 15) return "Phone number is too long.";
+      return null;
+    }
     switch (field.field_type) {
       case "email": {
         const ok = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
@@ -593,12 +605,14 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
             if (!v) continue;
             // Normalize phone / postal pre-fills through the same formatter
             // the input uses so storage matches display once admin saves.
-            const normalized =
-              field.field_type === "phone"
-                ? formatPhoneAsTyped(v)
-                : isPostalField(field)
-                ? formatPostalAsTyped(v)
-                : v;
+            const isPhoneField =
+              field.field_type === "phone" ||
+              (field.label ?? "").toLowerCase().includes("phone");
+            const normalized = isPhoneField
+              ? formatPhoneAsTyped(v)
+              : isPostalField(field)
+              ? formatPostalAsTyped(v)
+              : v;
             prefillRows.push({
               id: `tmp-${field.id}`,
               field_id: field.id,
@@ -4242,7 +4256,16 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                             </label>
                           ) : (
                             (() => {
-                              const isPhone = field.field_type === "phone";
+                              // Treat any field labelled "...phone..." as a
+                              // phone input even when the DB has field_type
+                              // set to "text" — same fallback the validator
+                              // uses, so the formatter, placeholder and tel
+                              // keypad all stay consistent with validation.
+                              const labelMentionsPhone = (field.label ?? "")
+                                .toLowerCase()
+                                .includes("phone");
+                              const isPhone =
+                                field.field_type === "phone" || labelMentionsPhone;
                               const isPostal = isPostalField(field);
                               const formatter = isPhone
                                 ? formatPhoneAsTyped

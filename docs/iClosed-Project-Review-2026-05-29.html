@@ -1,0 +1,913 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iClosed Admin Portal — Project Review (2026-05-29)</title>
+<style>
+  :root {
+    --ink:#1a202c; --muted:#4a5568; --soft:#718096;
+    --bg:#ffffff; --panel:#f7fafc; --rule:#e2e8f0;
+    --brand:#6998ea; --brand-soft:#e6efff;
+    --crit:#9b1c1c; --crit-bg:#fde2e2;
+    --high:#9a3412; --high-bg:#fde6cf;
+    --med:#854d0e; --med-bg:#fef3c7;
+    --low:#166534; --low-bg:#dcfce7;
+    --info:#1e3a8a; --info-bg:#dbeafe;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin:0; padding:0; background:var(--bg); color:var(--ink); font-family:var(--sans); line-height:1.55; font-size:15px; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 48px 32px 80px; }
+
+  .cover {
+    background: linear-gradient(135deg, var(--brand) 0%, #1e5fc4 100%);
+    color:#fff; padding: 40px 36px; border-radius: 10px; margin-bottom: 36px;
+    box-shadow: 0 6px 22px rgba(11,61,145,.15);
+  }
+  .cover h1 { margin:0 0 8px; font-size: 28px; letter-spacing:-.01em; }
+  .cover .sub { opacity:.92; font-size: 15px; }
+  .cover .meta { display:grid; grid-template-columns: repeat(2, 1fr); gap: 6px 24px; margin-top: 22px; font-size: 13.5px; }
+  .cover .meta b { font-weight:600; opacity:.85; margin-right:6px; }
+  .cover .conf { margin-top: 18px; font-size: 12.5px; opacity:.88; border-top:1px solid rgba(255,255,255,.25); padding-top:12px; }
+
+  h1, h2, h3, h4 { color:var(--ink); line-height:1.25; }
+  h2 { font-size: 22px; margin: 44px 0 14px; padding-bottom:6px; border-bottom:2px solid var(--brand); }
+  h3 { font-size: 17px; margin: 28px 0 10px; }
+  h4 { font-size: 15px; margin: 22px 0 8px; color:var(--brand); }
+  p, li { color:var(--ink); }
+  a { color:var(--brand); text-decoration:none; }
+  a:hover { text-decoration: underline; }
+
+  code { font-family: var(--mono); font-size: 13px; background: var(--panel); padding: 1px 6px; border-radius:4px; border:1px solid var(--rule); }
+  pre { font-family: var(--mono); font-size: 12.5px; background: #0f172a; color:#e2e8f0; padding: 14px 16px; border-radius:8px; overflow:auto; }
+  pre code { background:transparent; border:0; color:inherit; padding:0; }
+
+  table { width:100%; border-collapse: collapse; margin: 12px 0 18px; font-size: 13.5px; }
+  th, td { text-align:left; border-bottom: 1px solid var(--rule); padding: 9px 10px; vertical-align: top; }
+  th { background: var(--panel); color: var(--muted); font-weight:600; font-size: 12.5px; text-transform: uppercase; letter-spacing:.04em; }
+  tr:hover td { background: #fafcff; }
+
+  .chip { display:inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; letter-spacing:.02em; }
+  .chip.crit { background:var(--crit-bg); color:var(--crit); }
+  .chip.high { background:var(--high-bg); color:var(--high); }
+  .chip.med  { background:var(--med-bg);  color:var(--med); }
+  .chip.low  { background:var(--low-bg);  color:var(--low); }
+  .chip.info { background:var(--info-bg); color:var(--info); }
+
+  .callout {
+    background: var(--brand-soft); border-left:4px solid var(--brand);
+    padding: 14px 18px; border-radius: 6px; margin: 16px 0;
+  }
+  .finding {
+    background: var(--panel); border:1px solid var(--rule); border-left-width: 4px;
+    border-radius: 6px; padding: 14px 18px; margin: 14px 0;
+  }
+  .finding.crit { border-left-color: var(--crit); }
+  .finding.high { border-left-color: var(--high); }
+  .finding.med  { border-left-color: var(--med); }
+  .finding.low  { border-left-color: var(--low); }
+  .finding h4 { margin-top: 0; color: var(--ink); }
+  .finding .row { font-size: 13.5px; margin: 6px 0; }
+  .finding .row b { color: var(--muted); margin-right: 4px; }
+
+  ul.check { list-style: none; padding-left: 4px; }
+  ul.check li { padding: 3px 0 3px 28px; position: relative; }
+  ul.check li::before {
+    content:""; position:absolute; left:4px; top:8px;
+    width:14px; height:14px; border:1.5px solid var(--soft); border-radius:3px; background:#fff;
+  }
+
+  .toc { background: var(--panel); border:1px solid var(--rule); border-radius:8px; padding: 16px 20px; margin: 8px 0 28px; }
+  .toc h3 { margin: 0 0 8px; font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing:.04em; }
+  .toc ol { margin: 0; padding-left: 22px; }
+  .toc ol li { margin: 3px 0; }
+
+  hr { border:0; border-top:1px solid var(--rule); margin: 28px 0; }
+
+  @media print {
+    .wrap { max-width:none; padding: 20px 24px; }
+    .cover { box-shadow:none; }
+    h2 { page-break-after: avoid; }
+    .finding, table { page-break-inside: avoid; }
+    a { color: var(--ink); }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<!-- COVER -->
+<section class="cover">
+  <h1>iClosed Admin Portal — Project Review</h1>
+  <div class="sub">Comprehensive security, functional, architectural, and compliance assessment</div>
+  <div class="meta">
+    <div><b>Version</b>1.1 (DB schema review added)</div>
+    <div><b>Date</b>2026-05-29</div>
+    <div><b>Prepared for</b>iClosed stakeholders</div>
+    <div><b>Prepared by</b>Engineering Review Team</div>
+    <div><b>Scope</b><code style="background:rgba(255,255,255,.18);border-color:rgba(255,255,255,.3);color:#fff;">iclosed_admin</code> (Next.js 16, App Router)</div>
+    <div><b>Format</b>Static code &amp; architecture review</div>
+  </div>
+ 
+</section>
+
+<!-- TOC -->
+<nav class="toc">
+  <h3>Contents</h3>
+  <ol>
+    <li><a href="#sec1">Executive Summary</a></li>
+    <li><a href="#sec2">Scope &amp; Methodology</a></li>
+    <li><a href="#sec3">System Overview</a></li>
+    <li><a href="#sec4">Security Findings</a></li>
+    <li><a href="#sec5">Missing Logic &amp; Functional Gaps</a></li>
+    <li><a href="#sec6">Architecture &amp; Code Quality</a></li>
+    <li><a href="#sec7">Database Schema Review</a></li>
+    <li><a href="#sec8">Compliance &amp; Data Protection</a></li>
+    <li><a href="#sec9">Prioritised Remediation Roadmap</a></li>
+    <li><a href="#sec10">Recommendations Checklist</a></li>
+    <li><a href="#sec11">Appendix</a></li>
+  </ol>
+</nav>
+
+<!-- 1. EXEC SUMMARY -->
+<h2 id="sec1">1. Executive Summary</h2>
+<p>The <b>iClosed Admin Portal</b> is a Next.js 16 (App Router) application supporting a Canadian real-estate transaction workflow: lead intake → conversion → deal management → tasks/milestones → document collection → client communication. The platform integrates Supabase (auth + Postgres), Vercel Blob (file storage), Resend (transactional email), and Google Gemini (AI document identification).</p>
+<p>The product is <b>functionally rich and largely feature-complete</b> for its target use case, with sophisticated family-deal logic (co-purchasers/co-sellers) and a comprehensive intake workflow. However, the review has surfaced a meaningful number of <b>security, compliance, and reliability gaps</b> that should be addressed before the product is scaled beyond a pilot deployment — particularly given the sensitive PII it handles (government-issued IDs, addresses, contact details, transaction documents).</p>
+
+<h3>Risk dashboard</h3>
+<table>
+  <thead><tr><th>Severity</th><th style="text-align:center;width:90px;">Count</th><th>Indicative theme</th></tr></thead>
+  <tbody>
+    <tr><td><span class="chip crit">Critical</span></td><td style="text-align:center;">5</td><td>Missing authentication, unauthenticated webhooks, public PII blobs, duplicate prod tables, type-broken schema</td></tr>
+    <tr><td><span class="chip high">High</span></td><td style="text-align:center;">15</td><td>IDOR, missing rate limits, public ID storage, consent gaps, FK <code>ON DELETE</code> defaults, missing indexes, duplicated state columns</td></tr>
+    <tr><td><span class="chip med">Medium</span></td><td style="text-align:center;">25</td><td>Concurrency, validation, retry, audit, performance, schema drift, missing <code>updated_at</code> / <code>created_by</code></td></tr>
+    <tr><td><span class="chip low">Low / Info</span></td><td style="text-align:center;">25</td><td>Code quality, dependencies, observability, schema cosmetics</td></tr>
+  </tbody>
+</table>
+
+<h3>Top 5 must-fix items</h3>
+<ol>
+  <li><a href="#sec-001"><b>SEC-001</b></a> — Admin API routes accept requests without verifying the caller is authenticated or holds the admin role. Any actor who knows a route URL can read or mutate data.</li>
+  <li><a href="#sec-002"><b>SEC-002</b></a> — Public webhook endpoints have no signature verification. Anyone can trigger deal activation or welcome-email blasts.</li>
+  <li><a href="#sec-003"><b>SEC-003 / CMP-001</b></a> — Government identification documents are uploaded to Vercel Blob with <code>access: "public"</code>. URL guessability is the only control — a PIPEDA red flag.</li>
+  <li><a href="#cmp-002"><b>CMP-002</b></a> — The intake flow collects extensive PII without an explicit consent checkpoint (no privacy-policy acknowledgement, no stored consent timestamp).</li>
+  <li><a href="#cmp-003"><b>CMP-003</b></a> — Government IDs are forwarded to Google Gemini for classification with no documented sub-processor disclosure or data-processing addendum.</li>
+</ol>
+
+<div class="callout"><b>Overall posture.</b> The platform is functionally feature-rich but requires security and compliance hardening before broad rollout. With ~2–4 weeks of focused remediation on the P0 items in §9, the platform can reach a defensible production baseline. The longer-tail items (§9 P1 and P2) bring it to a robust, audit-ready state. The database review in §7 surfaces two additional Critical items — <a href="#db-001">DB-001</a> (duplicate production tables) and <a href="#db-002">DB-002</a> (type-broken <code>updated_at</code>) — that should also be addressed in P0.</div>
+
+<!-- 2. SCOPE -->
+<h2 id="sec2">2. Scope &amp; Methodology</h2>
+<h3>What was reviewed</h3>
+<ul>
+  <li><code>src/app/**</code> — App Router pages and API routes</li>
+  <li><code>src/components/**</code> — UI components</li>
+  <li><code>src/lib/**</code> — business-logic helpers</li>
+  <li><code>src/services/**</code> — third-party integration wrappers</li>
+  <li><code>src/types/**</code> — TypeScript types</li>
+  <li><code>package.json</code>, <code>docs/schema.mmd</code></li>
+  <li>Production <code>public</code> schema export (shared 2026-05-29) — informs §7 Database Schema Review</li>
+</ul>
+<h3>What was <i>not</i> reviewed</h3>
+<ul>
+  <li>Live Supabase RLS policies (not visible from code)</li>
+  <li>Vercel project settings, env-var management UI, deployment pipeline</li>
+  <li>Sister application <code>iclosed_web</code> (client-facing) — recommended for a separate review</li>
+  <li>Runtime penetration testing or DAST — this is a static code &amp; architecture review</li>
+</ul>
+<h3>Severity definitions</h3>
+<table>
+  <thead><tr><th>Severity</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><span class="chip crit">Critical</span></td><td>Direct compromise of confidentiality, integrity, or availability is possible without privileged access. Fix immediately.</td></tr>
+    <tr><td><span class="chip high">High</span></td><td>Realistic exploitation path or material compliance / business risk. Fix before next release.</td></tr>
+    <tr><td><span class="chip med">Medium</span></td><td>Meaningful weakness; fix within the next 30–60 days.</td></tr>
+    <tr><td><span class="chip low">Low</span></td><td>Quality or hygiene concern; address opportunistically.</td></tr>
+    <tr><td><span class="chip info">Info</span></td><td>Observation or recommendation with no immediate risk.</td></tr>
+  </tbody>
+</table>
+
+<!-- 3. SYSTEM OVERVIEW -->
+<h2 id="sec3">3. System Overview</h2>
+<h3>Tech stack</h3>
+<table>
+  <thead><tr><th>Layer</th><th>Technology</th><th>Version</th></tr></thead>
+  <tbody>
+    <tr><td>Framework</td><td>Next.js (App Router)</td><td>16.1.6</td></tr>
+    <tr><td>UI</td><td>React + Tailwind CSS + daisyUI</td><td>19 / 3 / 3</td></tr>
+    <tr><td>Database / auth</td><td>Supabase</td><td>js client 2.98</td></tr>
+    <tr><td>File storage</td><td>Vercel Blob</td><td>2.4</td></tr>
+    <tr><td>Transactional mail</td><td>Resend</td><td>6.9</td></tr>
+    <tr><td>AI / OCR</td><td>Google Gemini (<code>@google/genai</code>)</td><td>1.39</td></tr>
+    <tr><td>Charting</td><td>Recharts</td><td>3.7</td></tr>
+    <tr><td>CSV import</td><td>PapaParse</td><td>5.5</td></tr>
+  </tbody>
+</table>
+
+<h3>High-level architecture</h3>
+<pre><code>                       ┌────────────────────────────────────────────────┐
+                       │            iClosed Admin Portal                │
+                       │            (Next.js App Router)                │
+   Browser  ──────►  ┌──┴─ /admin/* pages ──┐    ┌── /api/admin/* ──┐  │
+   (admin)           │   React components   │    │   Route handlers │  │
+                     │   (Sidebar, Lists)   │◄───┤   (CRUD, files)  │──┼──► Supabase
+                     └──────────────────────┘    └────────┬─────────┘  │     (auth + DB)
+                                                          ├────────────┼──► Vercel Blob
+                                                          ├────────────┼──► Resend
+                                                          └────────────┼──► Google Gemini
+   External ──────► /api/webhooks/* ───────────────────────────────────┘
+   systems          (new-lead, activate-deal)
+</code></pre>
+
+<p>Full ER diagram: <a href="./schema.mmd">docs/schema.mmd</a> (Mermaid) — rendered as <a href="./schema.svg">schema.svg</a> / <a href="./schema.png">schema.png</a>.</p>
+
+<h3>Key flows</h3>
+<table>
+  <thead><tr><th>Flow</th><th>Path</th></tr></thead>
+  <tbody>
+    <tr><td>Lead intake → conversion</td><td><code>Intake.tsx</code> → <code>POST /api/webhooks/new-lead</code> → <code>POST /api/admin/convert-lead</code> → <code>convertLead.ts</code> → deal + family deals</td></tr>
+    <tr><td>Bulk import</td><td><code>BulkImport.tsx</code> → <code>POST /api/admin/bulk-import-deals/preview</code> → <code>POST /api/admin/bulk-import-deals</code></td></tr>
+    <tr><td>Document upload</td><td><code>UploadIdentificationDrawer.tsx</code> → <code>POST /api/admin/uploadblobstorage</code> → Vercel Blob → <code>lead_corporate_docs</code></td></tr>
+    <tr><td>APS finalisation</td><td><code>POST /api/admin/deals/[id]/uploadblobstorage</code> → <code>completeApsTask.ts</code> → <code>recalcMilestones.ts</code></td></tr>
+    <tr><td>Welcome email</td><td><code>convertLead</code> / <code>/api/admin/send-welcome-email</code> → <code>sendWelcomeEmail.ts</code> → Resend</td></tr>
+    <tr><td>Impersonate</td><td><code>POST /api/admin/impersonate</code> → Supabase <code>auth.admin.generateLink</code></td></tr>
+    <tr><td>ID classification</td><td><code>POST /api/admin/identify-document</code> → Google Gemini Vision</td></tr>
+  </tbody>
+</table>
+
+<!-- 4. SECURITY -->
+<h2 id="sec4">4. Security Findings</h2>
+
+<h3>4.1 Critical</h3>
+
+<div class="finding crit" id="sec-001">
+  <h4>SEC-001 — Admin API routes accept requests without authentication or role check <span class="chip crit">Critical</span></h4>
+  <div class="row"><b>Location:</b> <code>src/app/api/admin/leads/route.ts:40-51</code>, <code>src/app/api/admin/deals/route.ts</code>, <code>src/app/api/admin/convert-lead/route.ts:18</code>, <code>src/app/api/admin/task-responses-batch/route.ts</code>, and ~20 sibling routes under <code>src/app/api/admin/*</code>.</div>
+  <div class="row"><b>Description.</b> The vast majority of admin-facing API routes execute <code>supabaseAdmin</code> (service-role) queries without first verifying that the request carries a valid Supabase session or that the session belongs to a user with the <code>admin</code> role. A small subset (e.g. <code>account/update-email</code>) does extract and verify a Bearer token; this pattern is not generalised.</div>
+  <div class="row"><b>Impact.</b> An unauthenticated attacker who discovers a route URL can list, create, update, or delete leads, deals, tasks, documents, and email templates. They can convert leads, send emails to clients on behalf of the platform, or impersonate any customer.</div>
+  <div class="row"><b>Recommendation.</b> (1) Add <code>src/middleware.ts</code> gating <code>/admin/**</code> and <code>/api/admin/**</code>, verifying a Supabase session cookie or <code>Authorization: Bearer</code> header and <code>app_metadata.role === "admin"</code>. (2) Provide a reusable <code>requireAdmin(req): Promise&lt;User&gt;</code> helper in <code>src/lib/</code> and call it at the top of every admin route. (3) Add an integration test that asserts unauthenticated <code>fetch</code> against each <code>/api/admin/*</code> endpoint returns <code>401</code>.</div>
+</div>
+
+<div class="finding crit" id="sec-002">
+  <h4>SEC-002 — Public webhook endpoints accept payloads without signature verification <span class="chip crit">Critical</span></h4>
+  <div class="row"><b>Location:</b> <code>src/app/api/webhooks/new-lead/route.ts</code>, <code>src/app/api/webhooks/activate-deal/route.ts</code></div>
+  <div class="row"><b>Description.</b> Both webhook endpoints accept arbitrary JSON bodies (<code>{ email, lead_id, client_id }</code>) and immediately mutate state — sending welcome emails or activating deals — with no HMAC signature, shared-secret header, or IP allow-list.</div>
+  <div class="row"><b>Impact.</b> Anyone with the public URL can (a) enumerate or harvest lead emails by triggering welcome-email blasts, (b) prematurely activate deals, or (c) cause spurious billing / email-cost spikes.</div>
+  <div class="row"><b>Recommendation.</b> Adopt HMAC-SHA-256. Calling system signs the raw body with <code>WEBHOOK_SHARED_SECRET</code>; the route extracts <code>X-iClosed-Signature</code> and validates via <code>crypto.timingSafeEqual</code>. Reject mismatches with <code>401</code>.</div>
+</div>
+
+<div class="finding crit" id="sec-003">
+  <h4>SEC-003 — Identification and APS documents stored on <i>public</i> Vercel Blob <span class="chip crit">Critical</span></h4>
+  <div class="row"><b>Location:</b> <code>src/app/api/admin/uploadblobstorage/route.ts:31-38</code> (also tracked as compliance issue <a href="#cmp-001">CMP-001</a>)</div>
+  <div class="row"><b>Evidence:</b></div>
+  <pre><code>const blob = await put(
+  `corporate-docs/${lead_id}/${Date.now()}-${file.name}`,
+  file,
+  { access: "public", ... }
+);</code></pre>
+  <div class="row"><b>Description.</b> <code>access: "public"</code> makes every uploaded driver's licence, passport, SIN card, or APS publicly readable by URL. Security relies entirely on URL guessability — there is no token, expiry, or access check on the file itself.</div>
+  <div class="row"><b>Impact.</b> A single leaked URL (browser history, email, screenshot, log file, referrer header) exposes the underlying document indefinitely. For Canadian client data this is also a PIPEDA exposure.</div>
+  <div class="row"><b>Recommendation.</b> Switch all PII uploads to <code>access: "private"</code> (or token). Add a server-side proxy route <code>GET /api/admin/documents/[id]/download</code> that performs auth + access check, then streams the blob via short-TTL signed URL. Migrate existing public blobs.</div>
+</div>
+
+<h3>4.2 High</h3>
+
+<div class="finding high" id="sec-004">
+  <h4>SEC-004 — IDOR on deal PATCH; no ownership check <span class="chip high">High</span></h4>
+  <div class="row"><b>Location:</b> <code>src/app/api/admin/deals/[id]/route.ts:349-468</code></div>
+  <div class="row"><b>Description.</b> Once SEC-001 is fixed, any authenticated admin can still PATCH any deal by ID; there is no row-level check that the actor should have access to the targeted deal.</div>
+  <div class="row"><b>Recommendation.</b> Add per-deal access control. Document the "all admins can edit all deals" assumption explicitly in the short term. Medium-term: enable Supabase RLS as defence in depth.</div>
+</div>
+
+<div class="finding high" id="sec-005">
+  <h4>SEC-005 — Blob URL allow-list uses bypassable <code>endsWith</code> check <span class="chip high">High</span></h4>
+  <div class="row"><b>Location:</b> <code>src/app/api/admin/deals/[id]/uploadblobstorage/route.ts:62-76</code></div>
+  <div class="row"><b>Description.</b> Validates <code>fileUrl</code> by <code>endsWith(".public.blob.vercel-storage.com")</code> against a string. Crafted URLs (<code>https://attacker.com/path?x=foo.public.blob.vercel-storage.com</code> or basic-auth-style misuse) can defeat this.</div>
+  <div class="row"><b>Recommendation.</b> Parse via <code>new URL()</code> and check <code>url.hostname.endsWith(".public.blob.vercel-storage.com")</code>. Better: issue an upload token (already wired in <code>token/route.ts</code>) that encodes <code>deal_id</code> and reconcile the blob path server-side.</div>
+</div>
+
+<div class="finding high" id="sec-006">
+  <h4>SEC-006 — Impersonation route has no audit log and no second-factor gate <span class="chip high">High</span></h4>
+  <div class="row"><b>Location:</b> <code>src/app/api/admin/impersonate/route.ts:39-57</code></div>
+  <div class="row"><b>Description.</b> Any admin can mint a magic-link for any customer via <code>auth.admin.generateLink</code>. There is no record of who initiated impersonation, when, or why; no notification; no step-up authentication.</div>
+  <div class="row"><b>Recommendation.</b> Write an <code>audit_logs</code> row; email the impersonated user; require fresh password / 2FA before issuing the link.</div>
+</div>
+
+<div class="finding high" id="sec-007">
+  <h4>SEC-007 — Password-reset endpoint has no rate limit <span class="chip high">High</span></h4>
+  <div class="row"><b>Location:</b> <code>src/app/api/admin/reset-password/route.ts</code></div>
+  <div class="row"><b>Description.</b> Endpoint correctly returns a generic success message (prevents enumeration), but does not throttle. A trivial loop spams inboxes or burns Resend quota.</div>
+  <div class="row"><b>Recommendation.</b> In-memory or Redis-backed limiter keyed by email and IP (5/hr per email, 30/hr per IP). Reject with the same generic success response.</div>
+</div>
+
+<div class="finding high" id="sec-008">
+  <h4>SEC-008 — Invitation token reusable for up to 7 days <span class="chip high">High</span></h4>
+  <div class="row"><b>Location:</b> <code>src/lib/invitationToken.ts:76-89</code></div>
+  <div class="row"><b>Description.</b> Single-use is intentionally disabled to tolerate email-scanner pre-fetches. The trade-off is reasonable, but no upper bound on consumption count. A leaked token can be replayed multiple times.</div>
+  <div class="row"><b>Recommendation.</b> Track <code>consumption_count</code> and refuse after e.g. 5 uses. Log each consumption with IP + UA. Consider 24-72h TTL for high-sensitivity invitations.</div>
+</div>
+
+<div class="finding high" id="sec-009">
+  <h4>SEC-009 — Email template placeholder substitution allows reflective injection <span class="chip high">High</span></h4>
+  <div class="row"><b>Location:</b> <code>src/lib/sendAuthEmail.ts:264-382</code>, <code>src/lib/sendWelcomeEmail.ts:103-186</code></div>
+  <div class="row"><b>Description.</b> Templates rendered via successive <code>String.replaceAll</code> on <code>{{ var.name }}</code> tokens. If a user-controlled field (e.g. <code>lead.notes</code>) contains a placeholder string, subsequent passes will recursively substitute it. Fallback regex covers only auth-link patterns.</div>
+  <div class="row"><b>Recommendation.</b> Use a proper templating engine (Handlebars / Nunjucks) with sandboxed context. At minimum, perform a single pass over a precompiled token list. HTML-escape every interpolated value.</div>
+</div>
+
+<div class="finding high" id="sec-010">
+  <h4>SEC-010 — No security headers (CSP, HSTS, X-Frame-Options) <span class="chip high">High</span></h4>
+  <div class="row"><b>Location:</b> No <code>src/middleware.ts</code>; no header config in <code>next.config.*</code></div>
+  <div class="row"><b>Recommendation.</b> Set: <code>Strict-Transport-Security: max-age=31536000; includeSubDomains; preload</code>, <code>X-Frame-Options: DENY</code>, <code>X-Content-Type-Options: nosniff</code>, <code>Referrer-Policy: strict-origin-when-cross-origin</code>, a tailored CSP, and a restrictive <code>Permissions-Policy</code>.</div>
+</div>
+
+<div class="finding high" id="sec-011">
+  <h4>SEC-011 — Gemini API key handled via raw env var with no per-user rate limit <span class="chip high">High</span></h4>
+  <div class="row"><b>Location:</b> <code>src/services/geminiService.ts:10-14</code>, <code>src/app/api/admin/identify-document/route.ts:242-245</code></div>
+  <div class="row"><b>Recommendation.</b> Rate-limit per actor (e.g. 30/hr); document rotation cadence; prefer OAuth/service-account credentials and IP allow-listing in Google Cloud Console.</div>
+</div>
+
+<h3>4.3 Medium</h3>
+<table>
+  <thead><tr><th>ID</th><th>Title</th><th>Location</th></tr></thead>
+  <tbody>
+    <tr><td>SEC-012</td><td>Sensitive details echoed in API error messages</td><td><code>src/lib/sendWelcomeEmail.ts:346</code>, <code>src/lib/sendAuthEmail.ts</code></td></tr>
+    <tr><td>SEC-013</td><td><code>.or()</code> filter built via string interpolation in deals fetch</td><td><code>src/app/api/admin/deals/[id]/route.ts:86</code></td></tr>
+    <tr><td>SEC-014</td><td>Verbose <code>console.log</code> with IDs shipped to production</td><td><code>src/app/api/admin/task-responses/route.ts:350-388</code></td></tr>
+    <tr><td>SEC-015</td><td><code>daisyui@^3.0.0</code> is an outdated major (current is 4.x)</td><td><code>package.json:16</code></td></tr>
+    <tr><td>SEC-016</td><td>No pre-commit secret scanner for <code>.env.local</code></td><td>repo root</td></tr>
+    <tr><td>SEC-017</td><td>CORS configured only on <code>reset-password</code>; other public routes have no explicit CORS policy</td><td><code>src/app/api/admin/reset-password/route.ts:4-20</code></td></tr>
+    <tr><td>SEC-018</td><td>Tailwind 3 + <code>@tailwindcss/postcss@4</code> co-installed — build fragility</td><td><code>package.json</code></td></tr>
+    <tr><td>SEC-019</td><td>No automated dependency scanning (npm audit / Snyk / Dependabot)</td><td>repo root</td></tr>
+    <tr><td>SEC-020</td><td>Service-role key cannot be guarded if a <code>'use client'</code> accidentally imports <code>supabaseAdmin</code></td><td><code>src/lib/supabaseAdmin.ts</code></td></tr>
+    <tr><td>SEC-021</td><td>File uploads not virus-scanned before becoming retrievable</td><td><code>src/app/api/admin/uploadblobstorage/route.ts</code></td></tr>
+    <tr><td>SEC-022</td><td>Webhook payloads logged with PII (email addresses)</td><td><code>src/app/api/webhooks/new-lead/route.ts</code></td></tr>
+    <tr><td>SEC-023</td><td>Activate endpoint does not lock account on repeated invalid attempts</td><td><code>src/app/api/auth/activate/route.ts</code></td></tr>
+    <tr><td>SEC-024</td><td>Upload token (deal-scoped) has long TTL; reduce window</td><td><code>src/app/api/admin/deals/[id]/uploadblobstorage/token/route.ts</code></td></tr>
+    <tr><td>SEC-025</td><td>No protection on <code>/api/admin/backfill-shared-tasks</code> — anyone can trigger heavy DB rewrites</td><td><code>src/app/api/admin/backfill-shared-tasks/route.ts</code></td></tr>
+  </tbody>
+</table>
+
+<h3>4.4 Low / Info</h3>
+<table>
+  <thead><tr><th>ID</th><th>Title</th><th>Location</th></tr></thead>
+  <tbody>
+    <tr><td>SEC-026</td><td>Introduce <code>audit_logs</code> table — central recommendation</td><td>DB schema</td></tr>
+    <tr><td>SEC-027</td><td>Document key-rotation cadence for Resend, Gemini, Supabase service-role</td><td>runbook</td></tr>
+    <tr><td>SEC-028</td><td>Add npm-audit / Snyk to CI</td><td>CI pipeline</td></tr>
+  </tbody>
+</table>
+
+<!-- 5. GAPS -->
+<h2 id="sec5">5. Missing Logic &amp; Functional Gaps</h2>
+
+<h3>5.1 Data integrity &amp; concurrency</h3>
+
+<div class="finding med" id="gap-001">
+  <h4>GAP-001 — No optimistic concurrency on deal PATCH (last-write-wins) <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Location:</b> <code>src/app/api/admin/deals/[id]/route.ts:349-468</code></div>
+  <div class="row"><b>Description.</b> When two admins open the same deal and save changes, the later request silently overwrites the first; neither user is informed of the conflict.</div>
+  <div class="row"><b>Recommendation.</b> Require an <code>expected_updated_at</code> field. Compare to current <code>updated_at</code> inside the SQL update predicate; return <code>409 Conflict</code> on mismatch with the latest snapshot.</div>
+</div>
+
+<div class="finding med" id="gap-002">
+  <h4>GAP-002 — Race condition in family-deal lookup on rapid conversions <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Location:</b> <code>src/lib/convertLead.ts:39-43</code></div>
+  <div class="row"><b>Recommendation.</b> Add a partial unique index in Postgres (<code>UNIQUE (root_lead_id) WHERE deleted_at IS NULL</code>) and handle constraint violation as "already exists; return existing row."</div>
+</div>
+
+<div class="finding med" id="gap-003">
+  <h4>GAP-003 — Backfill endpoint has no idempotency guard <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Location:</b> <code>src/app/api/admin/backfill-shared-tasks/route.ts:36-41</code></div>
+  <div class="row"><b>Recommendation.</b> Store a <code>migration_runs</code> row with a unique key per migration; refuse re-runs. Pair with authentication fix from SEC-001 / SEC-025.</div>
+</div>
+
+<div class="finding med" id="gap-004">
+  <h4>GAP-004 — Shared-task mirror creates duplicate rows on retry <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Location:</b> <code>src/app/api/admin/task-responses/route.ts:621-636</code></div>
+  <div class="row"><b>Recommendation.</b> Use <code>UPSERT</code> (<code>ON CONFLICT (task_id, field_id, peer_lead_id) DO UPDATE</code>) with the corresponding unique constraint.</div>
+</div>
+
+<div class="finding med" id="gap-005">
+  <h4>GAP-005 — Deal delete leaves orphan tasks, milestones, and documents <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Location:</b> <code>src/app/api/admin/deals/[id]/route.ts:471-487</code></div>
+  <div class="row"><b>Recommendation.</b> Declare <code>ON DELETE CASCADE</code> on FK constraints, or delete dependents in a single transaction prior to deal removal.</div>
+</div>
+
+<div class="finding med" id="gap-006">
+  <h4>GAP-006 — Deal status transitions not validated <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Location:</b> <code>src/app/api/admin/deals/[id]/route.ts:313-317</code></div>
+  <div class="row"><b>Recommendation.</b> Encode the state machine: <code>Active ↔ Inactive</code>; both → <code>Closed</code> (terminal). Reject invalid transitions with <code>400</code>.</div>
+</div>
+
+<div class="finding med" id="gap-007">
+  <h4>GAP-007 — Task status changes do not always trigger milestone recalc <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Location:</b> <code>src/app/api/admin/task-responses/route.ts:519-526</code></div>
+  <div class="row"><b>Recommendation.</b> Centralise milestone recalculation behind a single helper called by every task-mutating endpoint, or add a Postgres trigger.</div>
+</div>
+
+<h3>5.2 Upload &amp; blob lifecycle</h3>
+
+<div class="finding med" id="gap-008">
+  <h4>GAP-008 — Blob upload succeeds, DB insert fails → orphan bytes in Blob <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Location:</b> <code>src/app/api/admin/uploadblobstorage/route.ts:31-56</code></div>
+  <div class="row"><b>Recommendation.</b> Wrap in try/catch and <code>del()</code> the blob on DB failure. Nightly reconciliation lists Blob keys and deletes any not referenced in the DB.</div>
+</div>
+
+<div class="finding med" id="gap-009">
+  <h4>GAP-009 — No max file count, no file-size limit, no MIME allow-list <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Location:</b> <code>src/app/api/admin/uploadblobstorage/route.ts:31-56</code></div>
+  <div class="row"><b>Recommendation.</b> Cap files at 25 MB; allow only <code>image/jpeg</code>, <code>image/png</code>, <code>application/pdf</code>, <code>image/heic</code>. Enforce per-task and per-deal upload counts.</div>
+</div>
+
+<div class="finding med" id="gap-010">
+  <h4>GAP-010 — APS replacement deletes family-wide rows without scope <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Location:</b> <code>src/app/api/admin/deals/[id]/uploadblobstorage/route.ts:163-167</code></div>
+  <div class="row"><b>Recommendation.</b> Scope the delete to <code>(deal_id, doc_type, side)</code> and run delete + insert in a single transaction.</div>
+</div>
+
+<h3>5.3 Email &amp; notification</h3>
+
+<div class="finding med" id="gap-011">
+  <h4>GAP-011 — <code>welcome_email_sent</code> flag flipped after Resend call → duplicate sends possible <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Location:</b> <code>src/lib/sendWelcomeEmail.ts:351-358</code></div>
+  <div class="row"><b>Recommendation.</b> Flip the flag in the same transaction that originated the send intent, or pass an <code>Idempotency-Key</code> to Resend.</div>
+</div>
+
+<div class="finding med" id="gap-012">
+  <h4>GAP-012 — No retry on Resend transient failure <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Location:</b> <code>src/lib/sendWelcomeEmail.ts:337-347</code></div>
+  <div class="row"><b>Recommendation.</b> 3-attempt exponential backoff; on final failure write a row to <code>email_outbox</code> for out-of-band retry.</div>
+</div>
+
+<div class="finding low" id="gap-013">
+  <h4>GAP-013 — HTML-entity decoding in email body is incomplete <span class="chip low">Low</span></h4>
+  <div class="row"><b>Location:</b> <code>src/lib/sendWelcomeEmail.ts:309-313</code></div>
+  <div class="row"><b>Recommendation.</b> Use the <code>html-entities</code> package or a single regex covering the full entity table.</div>
+</div>
+
+<div class="finding med" id="gap-014">
+  <h4>GAP-014 — Milestone-email fetch failures silently swallowed <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Location:</b> <code>src/lib/recalcMilestones.ts:135-155</code></div>
+  <div class="row"><b>Recommendation.</b> Aggregate per-deal errors and return them in the response; log at WARN with deal IDs.</div>
+</div>
+
+<h3>5.4 Validation</h3>
+<table>
+  <thead><tr><th>ID</th><th>Issue</th><th>Location</th></tr></thead>
+  <tbody>
+    <tr><td>GAP-015</td><td>Bulk import has no file size / MIME validation</td><td><code>src/app/api/admin/bulk-import-deals/route.ts:31-37</code></td></tr>
+    <tr><td>GAP-016</td><td>Lead email accepted without regex / duplicate check</td><td><code>src/app/api/admin/leads/route.ts:55-105</code></td></tr>
+    <tr><td>GAP-017</td><td><code>file_number</code> regex inconsistent between bulk import and PATCH</td><td><code>bulkImportValidation.ts:67</code> vs <code>deals/[id]/route.ts:49</code></td></tr>
+    <tr><td>GAP-018</td><td><code>field_type</code> accepted without enum check on task-response writes</td><td><code>src/app/api/admin/task-responses/route.ts:572</code></td></tr>
+  </tbody>
+</table>
+
+<h3>5.5 Auto-detection &amp; edge cases</h3>
+<table>
+  <thead><tr><th>ID</th><th>Issue</th><th>Location</th></tr></thead>
+  <tbody>
+    <tr><td>GAP-019</td><td><code>completeApsTask</code> auto-detect misses <code>doc_type='document'</code> rows whose <code>custom_type</code> says "APS"</td><td><code>src/lib/completeApsTask.ts:100-104</code></td></tr>
+    <tr><td>GAP-020</td><td><code>activateClientDeals</code> drops the OR filter for whichever ID is missing instead of using a fallback</td><td><code>src/lib/activateClientDeals.ts:44-48</code></td></tr>
+    <tr><td>GAP-021</td><td><code>recalcMilestones</code> keeps zero-task milestones in <code>Pending</code> forever</td><td><code>src/lib/recalcMilestones.ts:95-107</code></td></tr>
+  </tbody>
+</table>
+
+<h3>5.6 Testing</h3>
+<div class="finding med" id="gap-022">
+  <h4>GAP-022 — Zero automated tests in the repository <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Description.</b> No Jest / Vitest / Playwright config, no <code>*.test.ts</code> files. Materially raises regression risk given the complexity of family-deal logic, milestone state machines, and bulk imports — consistent with a commit history dominated by bug-fixes.</div>
+  <div class="row"><b>Recommendation.</b> Build the test pyramid: (1) unit tests for <code>recalcMilestones</code>, <code>convertLead</code>, <code>bulkImportValidation</code>, <code>completeApsTask</code>, <code>activateClientDeals</code>, <code>invitationToken</code>; (2) API integration tests with a Supabase test schema for the top-10 admin routes; (3) Playwright smoke for intake → conversion → first task completion.</div>
+</div>
+
+<!-- 6. ARCHITECTURE -->
+<h2 id="sec6">6. Architecture &amp; Code Quality</h2>
+
+<h3>6.1 API surface</h3>
+
+<div class="finding high" id="arc-001">
+  <h4>ARC-001 — No pagination on <code>/api/admin/deals</code> (entire table returned) <span class="chip high">High</span></h4>
+  <div class="row"><b>Location:</b> <code>src/app/api/admin/deals/route.ts:11</code></div>
+  <div class="row"><b>Recommendation.</b> Switch to <code>.range(offset, offset + pageSize - 1)</code> with <code>count: 'exact'</code>. Surface <code>page</code> / <code>pageSize</code> query params; render server-side pagination controls.</div>
+</div>
+
+<div class="finding med" id="arc-002">
+  <h4>ARC-002 — Unbounded <code>auth.admin.listUsers</code> loop <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Location:</b> <code>src/app/api/admin/deals/route.ts:32-53</code></div>
+  <div class="row"><b>Recommendation.</b> Cache <code>(auth_user_id → email, name)</code> in a Postgres view or materialised table refreshed on user upsert; resolve via a single <code>IN (...)</code> query.</div>
+</div>
+
+<div class="finding med" id="arc-003">
+  <h4>ARC-003 — <code>DealList.tsx</code> renders all rows without virtualization <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Recommendation.</b> Adopt <code>@tanstack/react-virtual</code> after ARC-001 is fixed; render only visible rows.</div>
+</div>
+
+<h3>6.2 Code organisation</h3>
+<table>
+  <thead><tr><th>ID</th><th>Title</th><th>Location</th></tr></thead>
+  <tbody>
+    <tr><td>ARC-004</td><td>Duplicate routing tree — <code>src/app/deals/*</code> etc. only redirect to <code>/admin/*</code></td><td><code>src/app/deals/page.tsx</code> and siblings</td></tr>
+    <tr><td>ARC-005</td><td>Client-side type mapping repeated across list and detail pages</td><td><code>DealList.tsx:44-82</code>, <code>deals/[id]/page.tsx:14-37</code></td></tr>
+    <tr><td>ARC-006</td><td>Pervasive <code>any</code> typing in admin route handlers</td><td><code>src/app/api/admin/deals/route.ts:24-26,59,74,83-84</code></td></tr>
+    <tr><td>ARC-007</td><td>Mixed Tailwind generations in <code>package.json</code> (3 + 4)</td><td><code>package.json</code></td></tr>
+    <tr><td>ARC-008</td><td>No global error boundary / fallback UI</td><td><code>src/app/ClientLayout.tsx</code></td></tr>
+    <tr><td>ARC-009</td><td>Inconsistent API error response schema</td><td>all admin routes</td></tr>
+    <tr><td>ARC-010</td><td>No <code>CLAUDE.md</code> / README / architecture brief</td><td>repo root</td></tr>
+    <tr><td>ARC-011</td><td>Production <code>console.log</code> noise</td><td><code>src/app/api/admin/task-responses/route.ts:350-388</code></td></tr>
+    <tr><td>ARC-012</td><td>Bug-fix-dominated recent git history signals regression risk</td><td>git log</td></tr>
+  </tbody>
+</table>
+
+<!-- 7. DATABASE -->
+<h2 id="sec7">7. Database Schema Review</h2>
+<p>Findings below derive from the production <code>public</code> schema export shared on 2026-05-29. Prefix: <code>DB-</code>. Confirmation of these findings against live RLS policies, row counts, and existing indexes is pending Supabase dashboard access.</p>
+
+<h3>7.1 Critical</h3>
+
+<div class="finding crit" id="db-001">
+  <h4>DB-001 — <code>_duplicate</code> tables present in the production schema <span class="chip crit">Critical</span></h4>
+  <div class="row"><b>Location:</b> <code>public.deals_duplicate</code>, <code>public.milestones_duplicate</code>, <code>public.tasks_duplicate</code></div>
+  <div class="row"><b>Description.</b> Three near-identical copies of production tables live in the production database. Their column sets diverge subtly from the originals — e.g. <code>deals_duplicate.status</code> permits <code>'Cancelled'</code> and <code>'Urgent'</code>, values the canonical <code>deals.status</code> CHECK rejects. Their RLS posture, indexes, and FK constraints are unknown without dashboard access.</div>
+  <div class="row"><b>Impact.</b> (1) If these tables are reachable via PostgREST without RLS, they may leak data that the canonical tables protect. (2) Stale data inside them creates analytics confusion. (3) Future engineers will guess which table is authoritative; mis-routed writes will silently diverge from the canonical row.</div>
+  <div class="row"><b>Recommendation.</b> Audit row counts and last-modified timestamps. If not in use, <code>DROP TABLE</code>. If still referenced anywhere, rename to <code>archive_*</code> and document. Run an unauthenticated probe against <code>GET /rest/v1/deals_duplicate</code> — if it returns rows, that's a data-leak incident requiring immediate notification.</div>
+</div>
+
+<div class="finding crit" id="db-002">
+  <h4>DB-002 — <code>email_templates.updated_at</code> declared as <code>text</code> instead of <code>timestamptz</code> <span class="chip crit">Critical</span></h4>
+  <div class="row"><b>Evidence:</b> <code>updated_at text DEFAULT now()</code></div>
+  <div class="row"><b>Description.</b> <code>now()</code> returns <code>timestamptz</code> but the column is <code>text</code>, so the default value is implicitly cast to a string at insert time. Any UPDATE that relies on date comparison, ordering, or filtering against this column will behave incorrectly (lexicographic vs chronological ordering will <i>usually</i> agree because ISO-8601 sorts alphabetically — but not reliably, and not for any range arithmetic).</div>
+  <div class="row"><b>Recommendation.</b> Migrate the column type: <code>ALTER TABLE email_templates ALTER COLUMN updated_at TYPE timestamptz USING updated_at::timestamptz;</code>. Add a <code>BEFORE UPDATE</code> trigger to maintain it.</div>
+</div>
+
+<h3>7.2 High</h3>
+
+<div class="finding high" id="db-003">
+  <h4>DB-003 — Foreign keys have no <code>ON DELETE</code> action — orphan rows or failed deletes <span class="chip high">High</span></h4>
+  <div class="row"><b>Affected FKs:</b> nearly every table — <code>tasks.deal_id</code>, <code>milestones.deal_id</code>, <code>task_responses.task_id</code>, <code>lead_corporate_docs.lead_id</code>, <code>retainer_signatures.lead_id</code>, <code>deal_documents.deal_id</code>, <code>deal_notes.deal_id</code>, <code>deal_co_purchasers.deal_id</code>, <code>leads.parent_lead_id</code>, etc.</div>
+  <div class="row"><b>Description.</b> Postgres defaults FKs to <code>NO ACTION</code> when no behaviour is specified. Deleting a referenced parent row will fail. This is the root cause of <a href="#gap-005">GAP-005</a>: the application's <code>DELETE /api/admin/deals/[id]</code> path can either error outright in production or, if a dev's local DB has different constraints, succeed and leave orphans.</div>
+  <div class="row"><b>Recommendation.</b> Decide policy per relationship and declare it explicitly: <code>ON DELETE CASCADE</code> for owned children (<code>task_responses</code> follows <code>tasks</code>; <code>milestones</code> follow <code>deals</code>), <code>ON DELETE RESTRICT</code> for protected references (<code>milestones.email_template_id</code>), <code>ON DELETE SET NULL</code> where appropriate (<code>deal_notes.created_by</code>).</div>
+</div>
+
+<div class="finding high" id="db-004">
+  <h4>DB-004 — Missing indexes on FK columns and frequent lookup columns <span class="chip high">High</span></h4>
+  <div class="row"><b>Likely-missing indexes:</b> <code>tasks.deal_id</code>, <code>tasks.milestone_id</code>, <code>tasks.task_template_id</code>, <code>milestones.deal_id</code>, <code>milestones.email_template_id</code>, <code>milestones.stage_template_id</code>, <code>task_responses.task_id</code>, <code>task_responses.field_id</code>, <code>lead_corporate_docs.lead_id</code>, <code>lead_identification_docs.lead_id</code>, <code>retainer_signatures.lead_id</code>, <code>deal_documents.deal_id</code>, <code>deal_co_purchasers.deal_id</code>, <code>deals.client_id</code>, <code>deals.lead_id</code>, <code>leads.parent_lead_id</code>, <code>leads.client_id</code>, <code>leads.email</code>, <code>clients.auth_user_id</code>.</div>
+  <div class="row"><b>Description.</b> Postgres does <b>not</b> auto-create indexes for foreign-key columns (only for the primary key on the referenced side). As row counts grow, every join, every <code>WHERE deal_id = …</code>, and every cascade check becomes a sequential scan.</div>
+  <div class="row"><b>Recommendation.</b> Add B-tree indexes on every FK column and on lookup columns. Use <code>CREATE INDEX CONCURRENTLY</code> in production to avoid table locks. (Confirmation pending — Supabase dashboard access may reveal some of these already exist outside the public schema export.)</div>
+</div>
+
+<div class="finding high" id="db-005">
+  <h4>DB-005 — <code>email_templates</code> has both <code>is_deleted</code> and <code>deleted</code> columns <span class="chip high">High</span></h4>
+  <div class="row"><b>Evidence:</b> <code>is_deleted boolean</code> (nullable, no default) <i>and</i> <code>deleted boolean NOT NULL DEFAULT false</code>.</div>
+  <div class="row"><b>Description.</b> Two columns for the same logical concept with different defaults and nullability. Application code likely reads one and writes the other in different places — a classic source of "I deleted it but it still shows up" bugs.</div>
+  <div class="row"><b>Recommendation.</b> Pick one (<code>deleted</code> is better-defined). Backfill from <code>is_deleted</code>, update all code, then <code>DROP COLUMN is_deleted</code>.</div>
+</div>
+
+<div class="finding high" id="db-006">
+  <h4>DB-006 — <code>tasks.completed</code> and <code>tasks.status</code> duplicate the same state <span class="chip high">High</span></h4>
+  <div class="row"><b>Description.</b> Both columns track completion. They can disagree: <code>completed=false, status='Completed'</code> (or vice versa) is allowed at the DB level. Application logic must remember to update both, every time, in every code path — and it does not (cross-references <a href="#gap-007">GAP-007</a>).</div>
+  <div class="row"><b>Recommendation.</b> Keep <code>status</code> (richer enum). Drop <code>completed</code>. If client code still needs the boolean, expose it as a generated column: <code>completed boolean GENERATED ALWAYS AS (status = 'Completed') STORED</code>.</div>
+</div>
+
+<div class="finding high" id="db-007">
+  <h4>DB-007 — Three concurrent sources of truth for co-purchaser data <span class="chip high">High</span></h4>
+  <div class="row"><b>Affected:</b> <code>leads.co_persons jsonb</code>, <code>leads.parent_lead_id</code> (self-FK), <code>deal_co_purchasers</code> table.</div>
+  <div class="row"><b>Description.</b> Co-purchaser/co-seller relationships are encoded in three places. The application code primarily uses <code>parent_lead_id</code>, but <code>co_persons</code> JSON and the <code>deal_co_purchasers</code> table also exist. Drift between them is inevitable and silent.</div>
+  <div class="row"><b>Recommendation.</b> Pick the canonical model (<code>parent_lead_id</code> + lead rows). Migrate data out of the other two, then drop. Document the choice in <code>CLAUDE.md</code>.</div>
+</div>
+
+<div class="finding high" id="db-008">
+  <h4>DB-008 — Two tables for documents: <code>deal_documents</code> vs <code>lead_corporate_docs</code> <span class="chip high">High</span></h4>
+  <div class="row"><b>Description.</b> <code>deal_documents</code> stores documents against the deal; <code>lead_corporate_docs</code> stores documents against the lead. The APS / identification flows write to <code>lead_corporate_docs</code>. The purpose of <code>deal_documents</code> is unclear from the schema — if unused, it's dead; if used, the two tables are partial duplicates with different CHECK constraints and different status enums.</div>
+  <div class="row"><b>Recommendation.</b> Audit usage; drop or merge.</div>
+</div>
+
+<div class="finding high" id="db-009">
+  <h4>DB-009 — <code>leads.lead_type</code> has no CHECK while <code>task_templates.lead_type</code> and <code>stage_templates.lead_type</code> do <span class="chip high">High</span></h4>
+  <div class="row"><b>Description.</b> Templates restrict <code>lead_type ∈ {'Purchase','Sale','Refinance'}</code>. The <code>leads</code> table itself allows any string. A lead with <code>lead_type='Closing'</code> (matching the <code>service</code> enum but not the template enum) will silently fail to match templates during conversion.</div>
+  <div class="row"><b>Recommendation.</b> Add the same CHECK to <code>leads.lead_type</code>, or refactor to a single Postgres enum type (<code>CREATE TYPE lead_type_enum AS ENUM ('Purchase','Sale','Refinance')</code>) referenced from all three tables.</div>
+</div>
+
+<h3>7.3 Medium</h3>
+
+<div class="finding med" id="db-010">
+  <h4>DB-010 — <code>leads.price</code> declared as <code>text</code>, not <code>numeric</code> <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Description.</b> Prices stored as strings (likely because the intake form sends formatted values like <code>"$450,000"</code>). All arithmetic, ordering, and range filters require explicit casting. Compare with <code>leads.selling_price numeric</code>, <code>deals.price numeric</code> — the type inconsistency makes cross-table aggregation brittle.</div>
+  <div class="row"><b>Recommendation.</b> Add a <code>price_numeric numeric</code> column, backfill via regex parse, switch reads to it, drop the text column.</div>
+</div>
+
+<div class="finding med" id="db-011">
+  <h4>DB-011 — <code>lead_corporate_docs.doc_type</code> CHECK has grown organically and is internally inconsistent <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Allowed values:</b> <code>'Article of Incorporation'</code>, <code>'Corporation Profile'</code>, <code>'Special Shareholder Agreement'</code>, <code>'Directors Resolution'</code>, <code>'Other'</code>, <code>'aps'</code>, <code>'identification'</code>, <code>'home_insurance'</code>, <code>'mortgage'</code>, <code>'document'</code>, <code>'aps_purchase'</code>, <code>'aps_sale'</code>, <code>'retainer_agreement'</code>.</div>
+  <div class="row"><b>Description.</b> Mixed casing (Title Case vs snake_case), overlapping semantics (<code>aps</code> vs <code>aps_purchase</code> vs <code>aps_sale</code>), and a catch-all <code>document</code> bucket. Drives the auto-detection edge case in <a href="#gap-019">GAP-019</a>.</div>
+  <div class="row"><b>Recommendation.</b> Normalise to snake_case enum + the existing separate <code>side</code> column. Migrate data via a one-shot mapping. Replace CHECK with an enum type.</div>
+</div>
+
+<div class="finding med" id="db-012">
+  <h4>DB-012 — Six denormalised APS flags on <code>leads</code> <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Columns:</b> <code>aps_signed</code>, <code>aps_signed_purchase</code>, <code>aps_signed_sale</code>, <code>aps_uploaded</code>, <code>aps_uploaded_purchase</code>, <code>aps_uploaded_sale</code>.</div>
+  <div class="row"><b>Description.</b> Six booleans must be kept in sync with each other and with the underlying <code>lead_corporate_docs</code> rows. Update consistency is brittle and not enforced. Confirms application-side risk in <a href="#gap-019">GAP-019</a>.</div>
+  <div class="row"><b>Recommendation.</b> Derive these from <code>lead_corporate_docs</code> via a view or generated column. If they must remain materialised, add a trigger.</div>
+</div>
+
+<div class="finding med" id="db-013">
+  <h4>DB-013 — <code>leads.parent_lead_id</code> self-reference has no cycle prevention <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Description.</b> A → B → A cycles are possible. Recursive code (family-deal traversal in <code>familyDeals.ts</code>, <code>findFamilySharedTaskPeers</code>) can stack-overflow or loop.</div>
+  <div class="row"><b>Recommendation.</b> Add a trigger that walks <code>parent_lead_id</code> on INSERT/UPDATE and rejects cycles, or constrain to a 2-level hierarchy (apparently the business intent).</div>
+</div>
+
+<div class="finding med" id="db-014">
+  <h4>DB-014 — <code>tasks.deal_id</code> is nullable <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Description.</b> A task with no deal is meaningless in this domain. The nullable FK admits orphans through any code path that forgets to set the column.</div>
+  <div class="row"><b>Recommendation.</b> <code>ALTER COLUMN deal_id SET NOT NULL</code> after backfilling existing nulls.</div>
+</div>
+
+<div class="finding med" id="db-015">
+  <h4>DB-015 — Critical tables lack <code>updated_at</code> <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Affected:</b> <code>leads</code>, <code>clients</code>, <code>milestones</code>, <code>lead_corporate_docs</code>, <code>lead_identification_docs</code>, <code>retainer_signatures</code>, <code>deal_co_purchasers</code>, <code>deal_documents</code>.</div>
+  <div class="row"><b>Description.</b> Without <code>updated_at</code>, optimistic concurrency (<a href="#gap-001">GAP-001</a>) cannot be implemented, audit reports cannot show "rows changed in the last 24 h," and debugging is harder.</div>
+  <div class="row"><b>Recommendation.</b> Add <code>updated_at timestamptz NOT NULL DEFAULT now()</code> on every mutable table; maintain via a shared <code>BEFORE UPDATE</code> trigger.</div>
+</div>
+
+<div class="finding med" id="db-016">
+  <h4>DB-016 — No <code>created_by</code> / <code>updated_by</code> columns anywhere <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Description.</b> Only <code>deal_notes.created_by</code> records an actor; no other table records who created or last touched a row. This compounds the audit-log gap in <a href="#cmp-004">CMP-004</a>: even with an <code>audit_logs</code> table, reconciling against per-row state is harder without these fields.</div>
+  <div class="row"><b>Recommendation.</b> Add <code>created_by uuid</code> and <code>updated_by uuid</code> referencing <code>auth.users(id)</code> on every mutable table; populate from the request context once SEC-001 verifies the JWT.</div>
+</div>
+
+<div class="finding med" id="db-017">
+  <h4>DB-017 — <code>task_responses.value</code> has no type-check against <code>field_type</code> <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Description.</b> A field declared <code>field_type='number'</code> can still store <code>value='banana'</code>. Type safety is purely advisory.</div>
+  <div class="row"><b>Recommendation.</b> Either enforce at the application layer (Zod schema per <code>field_type</code> at write time) or add a CHECK using regex (<code>(field_type &lt;&gt; 'number') OR (value ~ '^-?[0-9]+(\.[0-9]+)?$')</code> with equivalent rules per type).</div>
+</div>
+
+<div class="finding med" id="db-018">
+  <h4>DB-018 — <code>partners.agent_email</code> not unique <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Description.</b> Duplicate (brokerage, agent) entries are unconstrained.</div>
+  <div class="row"><b>Recommendation.</b> Add <code>UNIQUE (lower(brokerage_name), lower(agent_email))</code> via an expression index.</div>
+</div>
+
+<div class="finding med" id="db-019">
+  <h4>DB-019 — <code>public.users</code> (staff) has no <code>auth_user_id</code> link <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Description.</b> <code>clients.auth_user_id</code> links to <code>auth.users</code>, but <code>public.users</code> (staff: Admin / Clerk / Lawyer) has no such link. <code>deal_notes.created_by</code> references <code>public.users.id</code>, not the auth user — so attributing notes to a signed-in admin requires a side lookup that may or may not exist. The staff auth model is unclear from the schema alone.</div>
+  <div class="row"><b>Recommendation.</b> Add <code>public.users.auth_user_id uuid UNIQUE REFERENCES auth.users(id)</code>; backfill from email match; make all <code>created_by</code> / <code>updated_by</code> columns reference <code>auth.users(id)</code> directly.</div>
+</div>
+
+<div class="finding med" id="db-020">
+  <h4>DB-020 — <code>deals.status</code> CHECK and application allow-list disagree <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Schema:</b> <code>CHECK (status IN ('Pending','Active','Inactive','Closed'))</code>. <b>Application:</b> <code>ALLOWED_STATUSES = ['Active','Inactive','Closed']</code> (<code>src/app/api/admin/deals/[id]/route.ts:313-317</code>). <b><code>deals_duplicate</code>:</b> accepts <code>'Cancelled'</code>, <code>'Urgent'</code> too.</div>
+  <div class="row"><b>Description.</b> Three drifting enums for the same concept. The DB accepts <code>'Pending'</code>, but the API rejects it — any row inserted with that status (e.g. via direct SQL or migration) becomes uneditable through the admin UI.</div>
+  <div class="row"><b>Recommendation.</b> Define one Postgres enum type, reference it everywhere, generate TypeScript types from it.</div>
+</div>
+
+<h3>7.4 Low / Info</h3>
+<table>
+  <thead><tr><th>ID</th><th>Title</th><th>Location</th></tr></thead>
+  <tbody>
+    <tr><td>DB-021</td><td><code>leads.address_province</code> defaults to empty string instead of <code>NULL</code></td><td><code>leads</code></td></tr>
+    <tr><td>DB-022</td><td><code>milestones.description</code> stored as <code>jsonb</code> — overkill for what is likely prose</td><td><code>milestones</code></td></tr>
+    <tr><td>DB-023</td><td><code>invitation_tokens.used_at</code> not enforced as single-use at DB level — intentional, cross-references <a href="#sec-008">SEC-008</a></td><td><code>invitation_tokens</code></td></tr>
+  </tbody>
+</table>
+
+<div class="callout"><b>Pending verification (requires live Supabase access).</b> RLS policies on every table, actual index list, presence of triggers, row counts in <code>_duplicate</code> tables, and Supabase region/data-residency configuration. v1.1 of this document will mark each DB finding as <i>confirmed</i> / <i>refuted</i> / <i>still unverified</i> once dashboard access is granted.</div>
+
+<!-- 8. COMPLIANCE -->
+<h2 id="sec8">8. Compliance &amp; Data Protection</h2>
+<p>The platform operates in a Canadian real-estate context and handles PII including government identification documents. The applicable regimes are <b>PIPEDA</b> (personal information protection), <b>CASL</b> (commercial electronic messages), and provincial real-estate record-retention rules.</p>
+
+<div class="finding high" id="cmp-001">
+  <h4>CMP-001 — Government-issued IDs stored on public-readable storage <span class="chip high">High</span></h4>
+  <div class="row"><b>Location:</b> <code>src/app/api/admin/uploadblobstorage/route.ts:31-38</code> — also tracked as <a href="#sec-003">SEC-003</a>.</div>
+  <div class="row"><b>PIPEDA Principle:</b> Safeguards (Principle 7).</div>
+  <div class="row"><b>Recommendation.</b> See SEC-003. Until a fix ships, <b>stop uploading new ID documents to public Blob</b>; route ID intake to an interim private path.</div>
+</div>
+
+<div class="finding high" id="cmp-002">
+  <h4>CMP-002 — Intake collects PII without explicit consent capture <span class="chip high">High</span></h4>
+  <div class="row"><b>Location:</b> <code>src/components/Intake.tsx</code></div>
+  <div class="row"><b>PIPEDA Principle:</b> Consent (Principle 3).</div>
+  <div class="row"><b>Recommendation.</b> Add a final consent step before submission: a privacy-policy link, an affirmatively-ticked checkbox, and stored <code>privacy_consent_at</code> + <code>privacy_consent_version</code> per lead. The version field enables re-prompting when the policy changes.</div>
+</div>
+
+<div class="finding high" id="cmp-003">
+  <h4>CMP-003 — Identification documents forwarded to Google Gemini (US sub-processor) <span class="chip high">High</span></h4>
+  <div class="row"><b>Location:</b> <code>src/app/api/admin/identify-document/route.ts:261-272</code></div>
+  <div class="row"><b>PIPEDA Principles:</b> Identifying Purposes (2), Limiting Use/Disclosure (5), Openness (8).</div>
+  <div class="row"><b>Description.</b> The full ID image is sent to Google Gemini for classification. Google is a US-based processor; without a documented DPA and explicit consumer disclosure, this is a PIPEDA gap.</div>
+  <div class="row"><b>Recommendation.</b> (1) Disclose Gemini as a sub-processor in the public privacy policy. (2) Sign an enterprise DPA with Google Cloud, or migrate to Vertex AI in <code>northamerica-northeast1</code> for Canadian data residency. (3) Crop documents to the boundary and strip EXIF before transmission.</div>
+</div>
+
+<div class="finding high" id="cmp-004">
+  <h4>CMP-004 — No audit log of sensitive access <span class="chip high">High</span></h4>
+  <div class="row"><b>Description.</b> PIPEDA's Accountability principle expects a demonstrable record of who accessed PII. The platform has no <code>audit_logs</code> table; impersonations, document accesses, ID classifications, and lead deletions are not recorded.</div>
+  <div class="row"><b>Recommendation.</b> Introduce <code>audit_logs(id, actor_user_id, action, resource_type, resource_id, before, after, ip, user_agent, created_at)</code> and a <code>recordAudit()</code> helper invoked by impersonate, document download, lead/deal delete, ID classification, and bulk import.</div>
+</div>
+
+<div class="finding med" id="cmp-005">
+  <h4>CMP-005 — No data retention or right-to-be-forgotten flow <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Location:</b> <code>src/app/api/admin/leads/route.ts:40-45</code></div>
+  <div class="row"><b>Recommendation.</b> Publish a retention schedule (e.g. closed deals + 7 years). Provide <code>POST /api/admin/leads/[id]/erase</code> that hard-deletes the lead, co-leads, documents, task responses, and Blob objects; record in <code>audit_logs</code> with a reason code.</div>
+</div>
+
+<div class="finding med" id="cmp-006">
+  <h4>CMP-006 — Transactional emails lack CASL-compliant unsubscribe <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Location:</b> <code>src/lib/sendWelcomeEmail.ts</code></div>
+  <div class="row"><b>Recommendation.</b> Add <code>{{ unsubscribe_link }}</code> and the sender's physical address to every template. Implement <code>/api/email/unsubscribe?token=…</code> and a <code>lead.email_opt_out</code> flag; honour the flag in <code>sendWelcomeEmail</code> / <code>sendAuthEmail</code>.</div>
+</div>
+
+<div class="finding med" id="cmp-007">
+  <h4>CMP-007 — No HSTS / CSP / security headers <span class="chip med">Medium</span></h4>
+  <div class="row">Duplicates <a href="#sec-010">SEC-010</a>; tracked here for compliance completeness.</div>
+</div>
+
+<div class="finding med" id="cmp-008">
+  <h4>CMP-008 — PII leakage via error responses and server logs <span class="chip med">Medium</span></h4>
+  <div class="row"><b>Location:</b> <code>src/lib/sendWelcomeEmail.ts:346</code>, <code>src/lib/sendAuthEmail.ts</code>, <code>task-responses/route.ts:350-388</code></div>
+  <div class="row"><b>Recommendation.</b> Return generic error codes/messages to the client; log full detail server-side only, with PII redaction in the logger.</div>
+</div>
+
+<!-- 9. ROADMAP -->
+<h2 id="sec9">9. Prioritised Remediation Roadmap</h2>
+<table>
+  <thead>
+    <tr><th>Phase</th><th>Timeframe</th><th>Items</th><th>Outcome</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><b>P0 — Block before broad rollout</b></td>
+      <td>Now → 2 weeks</td>
+      <td>SEC-001 (auth middleware), SEC-002 (webhook HMAC), SEC-003 / CMP-001 (private Blob + download proxy), CMP-002 (consent), CMP-003 (DPA + disclosure), <b>DB-001</b> (audit + drop <code>_duplicate</code> tables), <b>DB-002</b> (fix <code>email_templates.updated_at</code> type)</td>
+      <td>Auth, data-protection &amp; schema-integrity baseline</td>
+    </tr>
+    <tr>
+      <td><b>P1 — Stabilise within 30 days</b></td>
+      <td>2 → 6 weeks</td>
+      <td>All remaining High items (SEC-004 → SEC-011, <b>DB-003</b> → <b>DB-009</b>), GAP-001 (optimistic lock), GAP-008 (orphan blob), GAP-010 (APS scoping), CMP-004 (audit log), CMP-006 (CASL unsubscribe), CMP-007 (security headers), ARC-001 (pagination), ARC-002 (auth lookup cache)</td>
+      <td>Operational resilience and compliance posture</td>
+    </tr>
+    <tr>
+      <td><b>P2 — Hardening &amp; long-term quality</b></td>
+      <td>6 → 12 weeks</td>
+      <td>All Medium SEC + remaining GAP + ARC items, <b>DB-010</b> → <b>DB-023</b> (schema normalisation, enum unification, derived APS flags), full test scaffolding (GAP-022), <code>CLAUDE.md</code> (ARC-010), Tailwind alignment, structured logging</td>
+      <td>Maintainability, audit-readiness, low regression risk</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- 10. CHECKLIST -->
+<h2 id="sec10">10. Recommendations Checklist</h2>
+
+<h3>Authentication &amp; API hardening</h3>
+<ul class="check">
+  <li>Add <code>src/middleware.ts</code> enforcing auth + role gate on <code>/admin/**</code> and <code>/api/admin/**</code></li>
+  <li>Create <code>requireAdmin(req)</code> and apply to every admin route handler</li>
+  <li>HMAC signature verification helper for <code>/api/webhooks/*</code></li>
+  <li>Per-actor rate limits on password-reset, identify-document, and impersonate routes</li>
+  <li>Step-up authentication / mandatory audit row on impersonate</li>
+</ul>
+
+<h3>File &amp; document protection</h3>
+<ul class="check">
+  <li>Migrate Vercel Blob from <code>access: "public"</code> to private + signed-URL proxy route</li>
+  <li>Add file size, MIME, and per-deal upload-count limits</li>
+  <li>Compensating delete on DB-insert failure; nightly orphan-blob reconciliation</li>
+  <li>Scope APS replacement deletes to <code>(deal_id, side)</code></li>
+</ul>
+
+<h3>Data integrity</h3>
+<ul class="check">
+  <li>Optimistic locking on deal PATCH (<code>expected_updated_at</code>)</li>
+  <li>Partial unique index on <code>convertLead</code> family-deal lookup</li>
+  <li>Cascade deletes for <code>tasks</code>, <code>milestones</code>, <code>task_responses</code>, <code>lead_corporate_docs</code></li>
+  <li>State-machine validation for deal status transitions</li>
+  <li>Central milestone-recalculation helper invoked on every task-mutating route</li>
+  <li>UPSERT on shared-task mirror with unique constraint</li>
+</ul>
+
+<h3>Email &amp; notifications</h3>
+<ul class="check">
+  <li>Add <code>email_outbox</code> retry queue; exponential backoff on Resend</li>
+  <li>Idempotency keys for transactional sends; flip <code>welcome_email_sent</code> before send</li>
+  <li>Replace <code>replaceAll</code> template substitution with sandboxed templating + HTML escape</li>
+  <li>CASL <code>{{ unsubscribe_link }}</code> + sender postal address in all templates</li>
+</ul>
+
+<h3>Database schema</h3>
+<ul class="check">
+  <li>Audit + drop (or archive) <code>deals_duplicate</code>, <code>milestones_duplicate</code>, <code>tasks_duplicate</code></li>
+  <li>Fix <code>email_templates.updated_at</code> column type to <code>timestamptz</code></li>
+  <li>Declare explicit <code>ON DELETE</code> behaviour on every FK</li>
+  <li>Add B-tree indexes on every FK column and on <code>leads.email</code>, <code>clients.auth_user_id</code></li>
+  <li>Collapse duplicate state: <code>email_templates.is_deleted</code> / <code>deleted</code>; <code>tasks.completed</code> / <code>status</code></li>
+  <li>Single Postgres enum for <code>lead_type</code> shared across <code>leads</code>, <code>task_templates</code>, <code>stage_templates</code></li>
+  <li>Pick canonical co-purchaser model; drop the other two</li>
+  <li>Normalise <code>lead_corporate_docs.doc_type</code> values into a clean enum + <code>side</code></li>
+  <li>Derive the six APS flags on <code>leads</code> from <code>lead_corporate_docs</code> via view or generated column</li>
+  <li>Add <code>updated_at</code>, <code>created_by</code>, <code>updated_by</code> on every mutable table</li>
+  <li>Link <code>public.users</code> to <code>auth.users</code> via <code>auth_user_id</code></li>
+  <li>Add cycle-prevention trigger on <code>leads.parent_lead_id</code></li>
+</ul>
+
+<h3>Compliance &amp; privacy</h3>
+<ul class="check">
+  <li>Privacy-consent capture + <code>privacy_consent_at</code> / <code>privacy_consent_version</code> on leads</li>
+  <li><code>audit_logs</code> table + <code>recordAudit()</code> helper</li>
+  <li>Right-to-be-forgotten endpoint with cascade purge</li>
+  <li>Documented retention schedule + scheduled purge job</li>
+  <li>Public privacy policy + Google DPA for Gemini sub-processing; consider Vertex AI in <code>northamerica-northeast1</code></li>
+</ul>
+
+<h3>Architecture &amp; quality</h3>
+<ul class="check">
+  <li>Pagination + virtualization on deal list; cache auth-user lookups</li>
+  <li>Replace <code>any</code> types with generated Supabase types</li>
+  <li>Central deal mapper in <code>src/lib/dealMapper.ts</code></li>
+  <li>Remove duplicate <code>/app/deals</code> etc. stubs (or document them)</li>
+  <li>Standardise API error response schema</li>
+  <li>Tailwind major-version alignment</li>
+  <li>Global error boundary + Next.js <code>error.tsx</code> files</li>
+  <li>Structured logger gated by <code>LOG_LEVEL</code></li>
+</ul>
+
+<h3>Process &amp; documentation</h3>
+<ul class="check">
+  <li><code>CLAUDE.md</code> covering architecture, flows, integrations, compliance</li>
+  <li>Jest/Vitest unit tests for the six core lib helpers</li>
+  <li>Playwright smoke for intake → conversion → first-task happy path</li>
+  <li>CI: lint, type-check, npm-audit, test, build on every PR</li>
+  <li>Dependabot / Renovate for dependency hygiene</li>
+  <li>Secret scanning + pre-commit hook to prevent <code>.env.local</code> commits</li>
+</ul>
+
+<!-- 11. APPENDIX -->
+<h2 id="sec11">11. Appendix</h2>
+
+<h3>A. Severity definitions</h3>
+<p>See §2.</p>
+
+<h3>B. File index</h3>
+<table>
+  <thead><tr><th>File</th><th>Finding IDs</th></tr></thead>
+  <tbody>
+    <tr><td><code>src/app/api/admin/leads/route.ts</code></td><td>SEC-001, GAP-016</td></tr>
+    <tr><td><code>src/app/api/admin/deals/route.ts</code></td><td>SEC-001, ARC-001, ARC-002, ARC-006</td></tr>
+    <tr><td><code>src/app/api/admin/deals/[id]/route.ts</code></td><td>SEC-001, SEC-004, SEC-013, GAP-001, GAP-005, GAP-006</td></tr>
+    <tr><td><code>src/app/api/admin/deals/[id]/uploadblobstorage/route.ts</code></td><td>SEC-005, GAP-010</td></tr>
+    <tr><td><code>src/app/api/admin/deals/[id]/uploadblobstorage/token/route.ts</code></td><td>SEC-024</td></tr>
+    <tr><td><code>src/app/api/admin/uploadblobstorage/route.ts</code></td><td>SEC-003 / CMP-001, GAP-008, GAP-009, SEC-021</td></tr>
+    <tr><td><code>src/app/api/admin/identify-document/route.ts</code></td><td>SEC-011, CMP-003</td></tr>
+    <tr><td><code>src/app/api/admin/impersonate/route.ts</code></td><td>SEC-006</td></tr>
+    <tr><td><code>src/app/api/admin/reset-password/route.ts</code></td><td>SEC-007, SEC-017</td></tr>
+    <tr><td><code>src/app/api/admin/convert-lead/route.ts</code></td><td>SEC-001</td></tr>
+    <tr><td><code>src/app/api/admin/backfill-shared-tasks/route.ts</code></td><td>SEC-025, GAP-003</td></tr>
+    <tr><td><code>src/app/api/admin/task-responses/route.ts</code></td><td>SEC-014, GAP-004, GAP-007, GAP-018, CMP-008</td></tr>
+    <tr><td><code>src/app/api/webhooks/new-lead/route.ts</code></td><td>SEC-002, SEC-022</td></tr>
+    <tr><td><code>src/app/api/webhooks/activate-deal/route.ts</code></td><td>SEC-002</td></tr>
+    <tr><td><code>src/app/api/auth/activate/route.ts</code></td><td>SEC-023</td></tr>
+    <tr><td><code>src/app/api/admin/bulk-import-deals/route.ts</code></td><td>GAP-015</td></tr>
+    <tr><td><code>src/lib/invitationToken.ts</code></td><td>SEC-008</td></tr>
+    <tr><td><code>src/lib/sendWelcomeEmail.ts</code></td><td>SEC-012, GAP-011, GAP-012, GAP-013, CMP-006, CMP-008</td></tr>
+    <tr><td><code>src/lib/sendAuthEmail.ts</code></td><td>SEC-009, SEC-012, CMP-008</td></tr>
+    <tr><td><code>src/lib/recalcMilestones.ts</code></td><td>GAP-014, GAP-021</td></tr>
+    <tr><td><code>src/lib/convertLead.ts</code></td><td>GAP-002</td></tr>
+    <tr><td><code>src/lib/completeApsTask.ts</code></td><td>GAP-019</td></tr>
+    <tr><td><code>src/lib/activateClientDeals.ts</code></td><td>GAP-020</td></tr>
+    <tr><td><code>src/lib/bulkImportValidation.ts</code></td><td>GAP-017</td></tr>
+    <tr><td><code>src/lib/supabaseAdmin.ts</code></td><td>SEC-020</td></tr>
+    <tr><td><code>src/components/Intake.tsx</code></td><td>CMP-002</td></tr>
+    <tr><td><code>src/components/DealList.tsx</code></td><td>ARC-003, ARC-005</td></tr>
+    <tr><td><code>src/app/ClientLayout.tsx</code></td><td>ARC-008</td></tr>
+    <tr><td><code>src/services/geminiService.ts</code></td><td>SEC-011</td></tr>
+    <tr><td><code>package.json</code></td><td>SEC-015, SEC-018, ARC-007</td></tr>
+    <tr><td>repo root</td><td>SEC-010 / CMP-007, SEC-016, SEC-019, SEC-026, ARC-010, ARC-012, GAP-022</td></tr>
+    <tr><td>Database schema (<code>public.*</code>)</td><td>DB-001 → DB-023 (see §7)</td></tr>
+  </tbody>
+</table>
+
+<h3>C. Glossary</h3>
+<table>
+  <thead><tr><th>Term</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><b>APS</b></td><td>Agreement of Purchase and Sale — the core real-estate transaction document.</td></tr>
+    <tr><td><b>PIPEDA</b></td><td>Personal Information Protection and Electronic Documents Act (Canadian federal privacy law).</td></tr>
+    <tr><td><b>CASL</b></td><td>Canada's Anti-Spam Legislation — governs commercial electronic messages.</td></tr>
+    <tr><td><b>RLS</b></td><td>Row-Level Security — Postgres / Supabase policy mechanism enforced at the database layer.</td></tr>
+    <tr><td><b>IDOR</b></td><td>Insecure Direct Object Reference — accessing or modifying resources by guessing identifiers.</td></tr>
+    <tr><td><b>HMAC</b></td><td>Hash-based Message Authentication Code — cryptographic signature with a shared secret.</td></tr>
+    <tr><td><b>RTBF</b></td><td>Right To Be Forgotten — a data subject's right to erasure of their personal information.</td></tr>
+    <tr><td><b>DPA</b></td><td>Data Processing Addendum — contractual addendum governing a sub-processor's handling of personal data.</td></tr>
+  </tbody>
+</table>
+
+<h3>D. References</h3>
+<ul>
+  <li>Database schema: <a href="./schema.mmd">docs/schema.mmd</a> (Mermaid), <a href="./schema.svg">docs/schema.svg</a>, <a href="./schema.png">docs/schema.png</a></li>
+</ul>
+
+<hr>
+<p style="text-align:center; color:var(--soft); font-size:12.5px;">End of document &nbsp;•&nbsp; Total findings: 70 (Critical 5, High 15, Medium 25, Low/Info 25) &nbsp;•&nbsp; v1.1 (DB schema review added) &nbsp;•&nbsp; 2026-05-29</p>
+
+</div>
+</body>
+</html>
