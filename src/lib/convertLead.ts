@@ -422,7 +422,7 @@ export async function convertSingleLead(
 
                       await resend.emails.send({
                         from: fromEmail,
-                        replyTo: "iclosed@navawilson.law",
+                        replyTo: "testing@iclosed.ca",
                         to: [clientData.email],
                         subject: processedSubject,
                         html: htmlBody,
