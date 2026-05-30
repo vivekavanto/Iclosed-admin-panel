@@ -10,7 +10,6 @@ interface AuthContextType {
   loading: boolean;
   signOut: () => Promise<void>;
 }
-
 const AuthContext = createContext<AuthContextType>({
   user: null,
   loading: true,
