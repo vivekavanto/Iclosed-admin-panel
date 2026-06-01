@@ -522,6 +522,15 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     return t.includes("home insurance") || t.includes("insurance policy");
   };
 
+  // Mortgage / "Status of Mortgage" task. Its fields (agent name, company,
+  // phone, email) describe the client's mortgage broker — NOT the client —
+  // so they must never be auto-filled from the lead record. Mirrors the
+  // customer portal, where these fields start blank for the client to fill.
+  const isMortgageTask = (task: DisplayTask) => {
+    if (task.isTemplate) return false;
+    return (task.title ?? "").toLowerCase().includes("mortgage");
+  };
+
   type IdDocRow = {
     id: string;
     file_name: string | null;
@@ -621,7 +630,12 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           );
           const leadValues = getLeadValuesFromRawDeal();
           const prefillRows: EditableResponse[] = [];
+          // Mortgage task fields refer to the client's mortgage broker, not
+          // the client, so we never auto-populate them from the lead — they
+          // stay blank just like in the customer portal.
+          const allowLeadPrefill = !isMortgageTask(task);
           for (const field of fields) {
+            if (!allowLeadPrefill) break;
             const alreadyAnswered =
               respByFieldId.has(field.id) || respByLabel.has(field.label);
             if (alreadyAnswered) continue;
