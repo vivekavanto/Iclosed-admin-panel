@@ -19,6 +19,12 @@ export default function RootLayout({
           name="description"
           content="iClosed Admin Portal - Legal File Management"
         />
+        {/* Square favicons generated from logo.png (scripts/gen-favicon.cjs)
+            so the wide wordmark sits centered on a white square instead of
+            being letterboxed in the browser tab. */}
+        <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+        <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+        <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
       </head>
       <body className="antialiased">
         <AuthProvider>
