@@ -11,8 +11,9 @@ export const dynamic = "force-dynamic";
 // land them on the admin panel — they're customers, not staff.
 function expiredRedirect(reason: string) {
   const customerPortalUrl = (
-    process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ?? "https://iclosed.ca"
+    process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ?? "https://dev.iclosed.ca"
   ).replace(/\/+$/, "");
+  console.log(customerPortalUrl,"customerPortalUrl");
   const url = new URL(`${customerPortalUrl}/login`);
   url.searchParams.set("reason", "link_expired");
   url.searchParams.set("detail", reason);
