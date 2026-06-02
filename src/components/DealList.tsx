@@ -7,6 +7,7 @@ import {
   NON_CITIZEN_FLAG_TOOLTIP,
 } from '@/lib/isNonCitizenFlagged';
 import { formatLocalDate, parseLocalDate } from '@/lib/formatDate';
+import { computeDealDisplayStatus } from '@/lib/dealDisplayStatus';
 import EditDealModal from './EditDealModal';
 
 interface DealListProps {
@@ -630,22 +631,35 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                     </div>
                   </td>
                   <td className="px-4 py-3">
-                    {deal.status === DealStatus.CLOSED ? (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 text-green-700 border border-green-200 shadow-sm">
-                        <span className="mr-1">✓</span> Closed
-                      </span>
-                    ) : (deal as any).accountCreatedAt ? (
-                      // "Active" = the linked client has signed in to the
-                      // portal at least once. The DB also gets flipped to
-                      // Active on first sign-in via a trigger.
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-white text-green-600 border border-green-400">
-                        Active
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200">
-                        Inactive
-                      </span>
-                    )}
+                    {/* Active/Inactive is derived (not the raw DB status) —
+                        "Active" = the linked client has signed into the portal
+                        at least once. Shared with the Edit Deal modal via
+                        computeDealDisplayStatus so the two never drift. */}
+                    {(() => {
+                      const displayStatus = computeDealDisplayStatus({
+                        status: deal.status,
+                        account_created_at: (deal as any).accountCreatedAt,
+                      });
+                      if (displayStatus === DealStatus.CLOSED) {
+                        return (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 text-green-700 border border-green-200 shadow-sm">
+                            <span className="mr-1">✓</span> Closed
+                          </span>
+                        );
+                      }
+                      if (displayStatus === DealStatus.ACTIVE) {
+                        return (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-white text-green-600 border border-green-400">
+                            Active
+                          </span>
+                        );
+                      }
+                      return (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200">
+                          Inactive
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td className="px-4 py-3 text-center">
                     <div className="inline-flex items-center justify-center gap-1">
