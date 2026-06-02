@@ -1008,6 +1008,25 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           : null;
       }
 
+      // Personal Information has no file/upload step — filling and saving the
+      // form IS completing it. The required-field validation above guarantees
+      // every required field has a value here, so auto-mark the task Completed
+      // (mirrors the customer portal's own auto-complete on submit). This makes
+      // the portal show the task as done on the side the admin filled. Scoped
+      // to editingTask.id only, so the other side's PPI task is untouched.
+      // Skipped when the admin explicitly chose a status from the dropdown so
+      // an intentional "Pending"/"In Progress" is still respected.
+      const statusUnchanged = editTaskStatus === (editingTask.status ?? "Pending");
+      if (
+        isPersonalInfoTask(editingTask) &&
+        statusUnchanged &&
+        editTaskStatus !== "Completed"
+      ) {
+        payload.status = "Completed";
+        payload.completed = true;
+        payload.completed_at = payload.completed_at ?? new Date().toISOString();
+      }
+
       if (Object.keys(payload).length > 1) {
         const res = await fetch("/api/admin/tasks", {
           method: "PATCH",
