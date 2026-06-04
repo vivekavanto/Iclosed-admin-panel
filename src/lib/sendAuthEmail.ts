@@ -439,7 +439,7 @@ export async function sendAuthEmailViaResend(opts: {
 
   const { error: sendError } = await resend.emails.send({
     from: fromEmail,
-    replyTo: "iclosed@navawilson.law",
+    replyTo: "testing@iclosed.ca",
     to: [email],
     subject,
     html: bodyHtml,

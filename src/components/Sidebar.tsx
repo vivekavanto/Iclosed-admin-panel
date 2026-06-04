@@ -20,6 +20,7 @@ import {
   ClipboardCheck,
   ListTodo,
   KeyRound,
+  UserCog,
   Menu,
   X,
 } from "lucide-react";
@@ -41,6 +42,7 @@ const ROUTE_MAP: Record<string, string> = {
   "task-templates": "/admin/templates/tasks",
   "email-templates": "/admin/templates/emails",
   leads: "/admin/leads",
+  staff: "/admin/users",
   settings: "/admin/settings",
   "default-tasks": "/admin/settings/default-tasks",
   "account-settings": "/admin/account-settings",
@@ -54,6 +56,7 @@ const iconMap: Record<string, React.ReactNode> = {
   Files: <Files size={20} />,
   FileStack: <FileStack size={20} />,
   Users: <Users size={20} />,
+  UserCog: <UserCog size={20} />,
   Settings: <Settings size={20} />,
   Briefcase: <Briefcase size={20} />,
   FileText: <FileText size={20} />,

@@ -79,10 +79,16 @@ export async function convertSingleLead(
     // ── Create or find client record ─────────────────────────────────────────
     let clientId: string;
 
+    // Match case-insensitively so a customer whose email differs only in case
+    // is REUSED, not duplicated. Escape ILIKE wildcards (_ % \) so an email
+    // containing them (e.g. john_doe@x.com) still matches exactly, not as a
+    // pattern. Backstopped by the unique index on lower(email) in
+    // migrations/2026-06-03-customers-registry.sql.
+    const emailPattern = (lead.email ?? "").replace(/[\\%_]/g, "\\$&");
     const { data: existingClient } = await supabaseAdmin
       .from("clients")
       .select("id, auth_user_id")
-      .eq("email", lead.email)
+      .ilike("email", emailPattern)
       .maybeSingle();
 
     if (existingClient) {
@@ -423,7 +429,7 @@ export async function convertSingleLead(
 
                       await resend.emails.send({
                         from: fromEmail,
-                        replyTo: "iclosed@navawilson.law",
+                        replyTo: "testing@iclosed.ca",
                         to: [clientData.email],
                         subject: processedSubject,
                         html: htmlBody,

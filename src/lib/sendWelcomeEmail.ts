@@ -336,7 +336,7 @@ export async function sendWelcomeEmail(
 
   const { data: sendResult, error: sendError } = await resend.emails.send({
     from: fromEmail,
-    replyTo: "iclosed@navawilson.law",
+    replyTo: "testing@iclosed.ca",
     to: [lead.email],
     subject,
     html: htmlBody,

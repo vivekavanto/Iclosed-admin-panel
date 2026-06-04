@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { X, Loader2, ExternalLink } from "lucide-react";
 import Link from "next/link";
+import { computeDealDisplayStatus } from "@/lib/dealDisplayStatus";
 
 type DealRow = {
   id: string;
@@ -84,7 +85,14 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
             file_number: deal.file_number ?? "",
             file_name: deal.file_name ?? "",
             type: deal.type ?? "",
-            status: deal.status ?? "Active",
+            // Show the same derived status as the deal list: "Active" once the
+            // client has signed in (account_created_at), else "Inactive";
+            // "Closed" is taken from the raw DB value. Prevents the stale-DB
+            // mismatch where the list showed Active but this showed Inactive.
+            status: computeDealDisplayStatus({
+              status: deal.status,
+              account_created_at: deal.account_created_at,
+            }),
             lawyer_name: deal.lawyer_name ?? "",
             clerk_name: deal.clerk_name ?? "",
             property_address: deal.property_address ?? "",

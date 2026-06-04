@@ -1,15 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import supabaseAdmin from '@/lib/supabaseAdmin';
 
-// camelCase payload key → DB column (whitelist; anything not listed is dropped)
+// camelCase payload key → DB column for the LEADS table (transaction fields).
 const LEAD_FIELD_MAP: Record<string, string> = {
   firstName: 'first_name',
   lastName: 'last_name',
   email: 'email',
   phone: 'phone',
-  isCorporate: 'is_corporate',
-  corporateName: 'corporate_name',
-  incNumber: 'inc_number',
   addressStreet: 'address_street',
   addressUnit: 'address_unit',
   addressCity: 'address_city',
@@ -17,10 +14,6 @@ const LEAD_FIELD_MAP: Record<string, string> = {
   addressProvince: 'address_province',
   propertyType: 'property_type',
   ownershipHistory: 'ownership_history',
-  maritalStatus: 'marital_status',
-  citizenshipStatus: 'citizenship_status',
-  occupation: 'occupation',
-  employerPhone: 'employer_phone',
   status: 'status',
   leadType: 'lead_type',
   price: 'price',
@@ -34,13 +27,32 @@ const LEAD_FIELD_MAP: Record<string, string> = {
   sellingAddressProvince: 'selling_address_province',
 };
 
+// camelCase payload key → DB column for the CLIENTS table (the person's
+// personal/corporate fields). These now live on clients (source of truth),
+// not on leads.
+const CLIENT_FIELD_MAP: Record<string, string> = {
+  isCorporate: 'is_corporate',
+  corporateName: 'corporate_name',
+  incNumber: 'inc_number',
+  maritalStatus: 'marital_status',
+  citizenshipStatus: 'citizenship_status',
+  occupation: 'occupation',
+  employerPhone: 'employer_phone',
+};
+
 // GET /api/admin/leads — soft-deleted leads are hidden. They still exist
 // in the DB (along with their deals, signatures, and signed PDFs) so an
 // admin SQL toggle of is_deleted back to false fully restores them.
 export async function GET() {
+  // Personal/corporate fields are sourced from the linked customer record
+  // (public.clients) — the source of truth — and overlaid onto each lead under
+  // the same keys, so the Leads UI is unchanged. Falls back to the lead's own
+  // value during the transition (before those lead columns are dropped).
   const { data, error } = await supabaseAdmin
     .from('leads')
-    .select('*')
+    .select(
+      '*, clients:client_id(marital_status, citizenship_status, occupation, employer_phone, is_corporate, corporate_name, inc_number, corporate_email)',
+    )
     .eq('is_deleted', false)
     .order('created_at', { ascending: false });
 
@@ -48,7 +60,26 @@ export async function GET() {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ success: true, leads: data ?? [] });
+  const leads = (data ?? []).map((row: any) => {
+    const c = row.clients ?? null;
+    const { clients: _c, ...lead } = row;
+    if (c) {
+      // The 4 personal fields now live only on clients.
+      lead.marital_status = c.marital_status ?? null;
+      lead.citizenship_status = c.citizenship_status ?? null;
+      lead.occupation = c.occupation ?? null;
+      lead.employer_phone = c.employer_phone ?? null;
+      // Corporate columns still exist on leads (written at intake) — prefer the
+      // client's value, fall back to the lead's.
+      lead.is_corporate = c.is_corporate ?? lead.is_corporate;
+      lead.corporate_name = c.corporate_name ?? lead.corporate_name;
+      lead.inc_number = c.inc_number ?? lead.inc_number;
+      lead.corporate_email = c.corporate_email ?? lead.corporate_email;
+    }
+    return lead;
+  });
+
+  return NextResponse.json({ success: true, leads });
 }
 
 // PUT /api/admin/leads — update a lead's editable fields
@@ -64,37 +95,74 @@ export async function PUT(req: NextRequest) {
       );
     }
 
+    const norm = (value: unknown) =>
+      typeof value === 'string' && value.trim() === '' ? null : value;
+
+    // Split incoming fields: transaction fields → leads, personal/corporate
+    // fields → clients (the source of truth for those).
     const updateData: Record<string, any> = {};
     for (const [key, column] of Object.entries(LEAD_FIELD_MAP)) {
-      if (rest[key] !== undefined) {
-        const value = rest[key];
-        updateData[column] = typeof value === 'string' && value.trim() === '' ? null : value;
-      }
+      if (rest[key] !== undefined) updateData[column] = norm(rest[key]);
+    }
+    const clientData: Record<string, any> = {};
+    for (const [key, column] of Object.entries(CLIENT_FIELD_MAP)) {
+      if (rest[key] !== undefined) clientData[column] = norm(rest[key]);
     }
 
-    if (Object.keys(updateData).length === 0) {
+    if (Object.keys(updateData).length === 0 && Object.keys(clientData).length === 0) {
       return NextResponse.json(
         { success: false, error: 'No editable fields provided' },
         { status: 400 },
       );
     }
 
-    const { data, error } = await supabaseAdmin
-      .from('leads')
-      .update(updateData)
-      .eq('id', id)
-      .select()
-      .single();
-
-    if (error) {
-      console.error('PUT /api/admin/leads error:', error);
-      return NextResponse.json(
-        { success: false, error: error.message },
-        { status: 500 },
-      );
+    // Update the lead's own (transaction) fields.
+    let lead: any = null;
+    if (Object.keys(updateData).length > 0) {
+      const { data, error } = await supabaseAdmin
+        .from('leads')
+        .update(updateData)
+        .eq('id', id)
+        .select()
+        .single();
+      if (error) {
+        console.error('PUT /api/admin/leads error:', error);
+        return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+      }
+      lead = data;
+    } else {
+      const { data } = await supabaseAdmin.from('leads').select('*').eq('id', id).single();
+      lead = data;
     }
 
-    return NextResponse.json({ success: true, lead: data });
+    // Write personal/corporate fields to the linked customer record.
+    if (Object.keys(clientData).length > 0 && lead) {
+      let clientId: string | null = lead.client_id ?? null;
+      if (!clientId && lead.email) {
+        const emailPattern = String(lead.email).replace(/[\\%_]/g, '\\$&');
+        const { data: c } = await supabaseAdmin
+          .from('clients')
+          .select('id')
+          .ilike('email', emailPattern)
+          .maybeSingle();
+        clientId = c?.id ?? null;
+      }
+      if (clientId) {
+        const { error: clientErr } = await supabaseAdmin
+          .from('clients')
+          .update(clientData)
+          .eq('id', clientId);
+        if (clientErr) {
+          console.error('PUT /api/admin/leads client update error:', clientErr);
+          return NextResponse.json({ success: false, error: clientErr.message }, { status: 500 });
+        }
+        // Reflect the saved personal fields back onto the returned lead object
+        // so the UI (which reads lead.*) shows the new values immediately.
+        Object.assign(lead, clientData);
+      }
+    }
+
+    return NextResponse.json({ success: true, lead });
   } catch (err: any) {
     console.error('PUT /api/admin/leads exception:', err);
     return NextResponse.json(

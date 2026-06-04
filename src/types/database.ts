@@ -17,11 +17,27 @@ export interface Database {
       clients: {
         Row: {
           id: string;
+          customer_code: string;
+          converted: boolean;
           first_name: string;
           last_name: string;
           email: string;
           phone: string | null;
+          marital_status: string | null;
+          citizenship_status: string | null;
+          occupation: string | null;
+          employer_phone: string | null;
+          is_corporate: boolean | null;
+          corporate_name: string | null;
+          inc_number: string | null;
+          corporate_email: string | null;
+          address_street: string | null;
+          address_unit: string | null;
+          address_city: string | null;
+          address_province: string | null;
+          address_postal_code: string | null;
           created_at: string | null;
+          updated_at: string | null;
           auth_user_id: string | null;
           name_history: Json;
           name_aliases: Json;
@@ -29,11 +45,27 @@ export interface Database {
         };
         Insert: {
           id?: string;
+          customer_code?: string;
+          converted?: boolean;
           first_name: string;
           last_name: string;
           email: string;
           phone?: string | null;
+          marital_status?: string | null;
+          citizenship_status?: string | null;
+          occupation?: string | null;
+          employer_phone?: string | null;
+          is_corporate?: boolean | null;
+          corporate_name?: string | null;
+          inc_number?: string | null;
+          corporate_email?: string | null;
+          address_street?: string | null;
+          address_unit?: string | null;
+          address_city?: string | null;
+          address_province?: string | null;
+          address_postal_code?: string | null;
           created_at?: string | null;
+          updated_at?: string | null;
           auth_user_id?: string | null;
           name_history?: Json;
           name_aliases?: Json;
@@ -41,11 +73,27 @@ export interface Database {
         };
         Update: {
           id?: string;
+          customer_code?: string;
+          converted?: boolean;
           first_name?: string;
           last_name?: string;
           email?: string;
           phone?: string | null;
+          marital_status?: string | null;
+          citizenship_status?: string | null;
+          occupation?: string | null;
+          employer_phone?: string | null;
+          is_corporate?: boolean | null;
+          corporate_name?: string | null;
+          inc_number?: string | null;
+          corporate_email?: string | null;
+          address_street?: string | null;
+          address_unit?: string | null;
+          address_city?: string | null;
+          address_province?: string | null;
+          address_postal_code?: string | null;
           created_at?: string | null;
+          updated_at?: string | null;
           auth_user_id?: string | null;
           name_history?: Json;
           name_aliases?: Json;
@@ -598,22 +646,6 @@ export interface Database {
             | "Yes (previous owner)"
             | "Current owner"
             | null;
-          marital_status:
-            | "Single"
-            | "Married"
-            | "Common Law"
-            | "Divorced"
-            | "Widowed"
-            | null;
-          citizenship_status:
-            | "canadian_citizen"
-            | "permanent_resident"
-            | "visa"
-            | "refugee_status"
-            | "non_citizen_unsure"
-            | null;
-          occupation: string | null;
-          employer_phone: string | null;
           created_at: string | null;
           service: "closing" | "refinance" | "condo" | null;
           sub_service: "buying" | "selling" | "both" | null;
@@ -661,22 +693,6 @@ export interface Database {
             | "Yes (previous owner)"
             | "Current owner"
             | null;
-          marital_status?:
-            | "Single"
-            | "Married"
-            | "Common Law"
-            | "Divorced"
-            | "Widowed"
-            | null;
-          citizenship_status?:
-            | "canadian_citizen"
-            | "permanent_resident"
-            | "visa"
-            | "refugee_status"
-            | "non_citizen_unsure"
-            | null;
-          occupation?: string | null;
-          employer_phone?: string | null;
           created_at?: string | null;
           service?: "closing" | "refinance" | "condo" | null;
           sub_service?: "buying" | "selling" | "both" | null;
@@ -724,22 +740,6 @@ export interface Database {
             | "Yes (previous owner)"
             | "Current owner"
             | null;
-          marital_status?:
-            | "Single"
-            | "Married"
-            | "Common Law"
-            | "Divorced"
-            | "Widowed"
-            | null;
-          citizenship_status?:
-            | "canadian_citizen"
-            | "permanent_resident"
-            | "visa"
-            | "refugee_status"
-            | "non_citizen_unsure"
-            | null;
-          occupation?: string | null;
-          employer_phone?: string | null;
           created_at?: string | null;
           service?: "closing" | "refinance" | "condo" | null;
           sub_service?: "buying" | "selling" | "both" | null;
@@ -1353,27 +1353,54 @@ export interface Database {
         ];
       };
 
-      users: {
+      admin_users: {
         Row: {
           id: string;
+          staff_code: string;
           name: string;
           role: "Admin" | "Clerk" | "Lawyer";
+          email: string | null;
+          phone: string | null;
+          title: string | null;
+          is_active: boolean;
+          last_login_at: string | null;
+          created_by: string | null;
+          deactivated_at: string | null;
           avatar_url: string | null;
           created_at: string | null;
+          updated_at: string | null;
         };
         Insert: {
           id?: string;
+          staff_code?: string;
           name: string;
           role: "Admin" | "Clerk" | "Lawyer";
+          email?: string | null;
+          phone?: string | null;
+          title?: string | null;
+          is_active?: boolean;
+          last_login_at?: string | null;
+          created_by?: string | null;
+          deactivated_at?: string | null;
           avatar_url?: string | null;
           created_at?: string | null;
+          updated_at?: string | null;
         };
         Update: {
           id?: string;
+          staff_code?: string;
           name?: string;
           role?: "Admin" | "Clerk" | "Lawyer";
+          email?: string | null;
+          phone?: string | null;
+          title?: string | null;
+          is_active?: boolean;
+          last_login_at?: string | null;
+          created_by?: string | null;
+          deactivated_at?: string | null;
           avatar_url?: string | null;
           created_at?: string | null;
+          updated_at?: string | null;
         };
         Relationships: [];
       };
