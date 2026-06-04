@@ -34,12 +34,47 @@ export async function GET(
       // Step 1: Get the lead to find parent_lead_id and selling-side address
       const { data: lead } = await supabase
         .from("leads")
-        .select("id, parent_lead_id, first_name, last_name, email, phone, employer_phone, occupation, marital_status, property_type, ownership_history, citizenship_status, corporate_name, inc_number, lead_type, co_person_role, address_street, address_unit, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code")
+        .select("id, parent_lead_id, client_id, first_name, last_name, email, phone, property_type, ownership_history, corporate_name, inc_number, lead_type, co_person_role, address_street, address_unit, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code")
         .eq("id", data.lead_id)
         .single();
 
       if (lead) {
-        data.lead_citizenship_status = lead.citizenship_status ?? null;
+        // Source the person's personal/corporate fields from the CUSTOMER
+        // record (public.clients), which is the source of truth for these.
+        // Resolve the client by client_id, else by email. Fall back to the
+        // lead's own value during the transition (before the lead columns are
+        // dropped). Address/property fields stay on the lead.
+        let person:
+          | {
+              marital_status: string | null;
+              citizenship_status: string | null;
+              occupation: string | null;
+              employer_phone: string | null;
+              corporate_name: string | null;
+              inc_number: string | null;
+            }
+          | null = null;
+        const personCols =
+          "marital_status, citizenship_status, occupation, employer_phone, corporate_name, inc_number";
+        if (lead.client_id) {
+          const { data: c } = await supabase
+            .from("clients")
+            .select(personCols)
+            .eq("id", lead.client_id)
+            .maybeSingle();
+          person = c ?? null;
+        }
+        if (!person && lead.email) {
+          const emailPattern = lead.email.replace(/[\\%_]/g, "\\$&");
+          const { data: c } = await supabase
+            .from("clients")
+            .select(personCols)
+            .ilike("email", emailPattern)
+            .maybeSingle();
+          person = c ?? null;
+        }
+
+        data.lead_citizenship_status = person?.citizenship_status ?? null;
         // Personal / contact details surfaced so the Edit Task modal can
         // pre-fill template fields (e.g. "Personal Information" task) from
         // the lead's existing record instead of leaving them blank.
@@ -47,13 +82,13 @@ export async function GET(
         data.lead_last_name = lead.last_name ?? null;
         data.lead_email = lead.email ?? null;
         data.lead_phone = lead.phone ?? null;
-        data.lead_employer_phone = lead.employer_phone ?? null;
-        data.lead_occupation = lead.occupation ?? null;
-        data.lead_marital_status = lead.marital_status ?? null;
+        data.lead_employer_phone = person?.employer_phone ?? null;
+        data.lead_occupation = person?.occupation ?? null;
+        data.lead_marital_status = person?.marital_status ?? null;
         data.lead_property_type = lead.property_type ?? null;
         data.lead_ownership_history = lead.ownership_history ?? null;
-        data.lead_corporate_name = lead.corporate_name ?? null;
-        data.lead_inc_number = lead.inc_number ?? null;
+        data.lead_corporate_name = person?.corporate_name ?? lead.corporate_name ?? null;
+        data.lead_inc_number = person?.inc_number ?? lead.inc_number ?? null;
         // Purchase-side address parts surfaced for the deal-detail UI, which
         // shows city/province/postal under the property heading. The deal's
         // own `property_address` is a single string, so the structured parts

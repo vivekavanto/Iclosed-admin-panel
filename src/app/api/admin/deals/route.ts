@@ -6,7 +6,7 @@ const supabase = supabaseAdmin;
 export async function GET() {
   const { data, error } = await supabase
     .from("deals")
-    .select("*, tasks(id, status), leads(id, parent_lead_id, first_name, last_name, citizenship_status, co_person_role, address_street, address_unit, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code, clients(id, auth_user_id))")
+    .select("*, tasks(id, status), leads(id, parent_lead_id, first_name, last_name, co_person_role, address_street, address_unit, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code, clients(id, auth_user_id, citizenship_status))")
     .or("source.is.null,source.neq.bulk_import")
     .order("created_at", { ascending: false });
 
@@ -141,7 +141,9 @@ export async function GET() {
       co_party_names: coPartyNames,
       account_created_at: accountCreatedAt,
       lead_name: lead ? `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim() : null,
-      lead_citizenship_status: lead?.citizenship_status ?? null,
+      // Citizenship sourced from the customer record (clients) — source of
+      // truth for the non-citizen flag — falling back to the lead in transition.
+      lead_citizenship_status: lead?.clients?.citizenship_status ?? null,
       selling_property_address: sellingPropertyAddress,
       purchase_property_address: purchasePropertyAddress,
       lead_address_city: lead?.address_city ?? null,

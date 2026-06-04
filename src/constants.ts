@@ -253,6 +253,7 @@ export const NAV_ITEMS = [
     ]
   },
   { label: 'Leads', id: 'leads', icon: 'Users' },
+  { label: 'Staff', id: 'staff', icon: 'UserCog' },
   {
     label: 'Settings',
     id: 'settings',

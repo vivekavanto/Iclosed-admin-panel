@@ -634,6 +634,13 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           // the client, so we never auto-populate them from the lead — they
           // stay blank just like in the customer portal.
           const allowLeadPrefill = !isMortgageTask(task);
+          // The Personal Information task must only auto-fill the person's name
+          // and phone. In particular the lead's address_* is the PROPERTY
+          // address (also used as deal.property_address), so pre-filling a
+          // personal address field with it is wrong — keep it (and everything
+          // else) blank here. Admin can still type+save these manually.
+          const personalInfoStrict = isPersonalInfoTask(task);
+          const PERSONAL_INFO_PREFILL_KEYS = new Set(["firstName", "lastName", "phone"]);
           for (const field of fields) {
             if (!allowLeadPrefill) break;
             const alreadyAnswered =
@@ -642,6 +649,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
             if (field.field_type === "file" || field.field_type === "checkbox") continue;
             const leadKey = getLeadFieldKeyForLabel(field.label);
             if (!leadKey) continue;
+            if (personalInfoStrict && !PERSONAL_INFO_PREFILL_KEYS.has(leadKey)) continue;
             const v = leadValues[leadKey];
             if (!v) continue;
             // Normalize phone / postal pre-fills through the same formatter
