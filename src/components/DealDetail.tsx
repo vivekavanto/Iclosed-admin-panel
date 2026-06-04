@@ -23,6 +23,7 @@ import {
   Upload,
   Check,
   X,
+  UserPlus,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
@@ -35,6 +36,7 @@ import UploadIdentificationDrawer from "./UploadIdentificationDrawer";
 import UploadHomeInsuranceDrawer from "./UploadHomeInsuranceDrawer";
 import ClonePreviousDealDrawer from "./ClonePreviousDealDrawer";
 import EditDealModal from "./EditDealModal";
+import AddCoClientModal from "./AddCoClientModal";
 
 interface DealDetailProps {
   deal: Deal;
@@ -178,6 +180,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   // Edit deal modal — opens the existing EditDealModal so closing/opening/
   // requisition dates and lawyer/clerk names can be updated from the header.
   const [showEditDeal, setShowEditDeal] = useState(false);
+
+  // Add co-purchaser / co-seller modal — admins use this to attach a co-client
+  // to an already-created deal (the customer portal does the same at intake).
+  const [showAddCoClient, setShowAddCoClient] = useState(false);
 
   // APS upload modal state
   const [showApsUpload, setShowApsUpload] = useState(false);
@@ -2483,6 +2489,22 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         />
       )}
 
+      {showAddCoClient && (
+        <AddCoClientModal
+          dealId={deal.id}
+          dealType={deal.type}
+          propertyAddress={deal.propertyAddress || ""}
+          sellingPropertyAddress={((deal as any).sellingPropertyAddress as string | undefined) || ""}
+          onClose={() => setShowAddCoClient(false)}
+          onAdded={() => {
+            // Full reload so the new co-client appears in "People involved",
+            // the Identification Documents card, and the family role numbering
+            // — all of which are derived from the server's linked_deals.
+            window.location.reload();
+          }}
+        />
+      )}
+
       {/* Citizenship flag banner */}
       {isNonCitizenFlagged({ citizenship_status: rawDeal?.lead_citizenship_status }) && (
         <div
@@ -2731,9 +2753,30 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                 Click any person to switch to their view
               </span>
             </div>
-            {/* Identification upload lives in its own "Identification
-                Documents" card below, where each family member's ID status
-                and upload action are listed clearly. */}
+            {/* Add Co-Purchaser / Co-Seller — only on the primary's view, and
+                only for deals that have a purchase or sale side. Co-clients on
+                a refinance aren't a concept here. Clicking opens a modal that
+                creates the child lead and runs the same conversion the customer
+                portal does (invite + welcome email, shared-task sync, ID task).
+                Identification upload itself lives in the dedicated card below. */}
+            {(() => {
+              const currentRole = ((rawDeal?.current_deal_role as string | undefined) ?? "").toLowerCase();
+              const isCoLeadView = currentRole.startsWith("co-");
+              const dt = (deal.type ?? "").toLowerCase();
+              const dealSupportsCoClient = dt.includes("purchase") || dt.includes("sale");
+              if (isCoLeadView || !dealSupportsCoClient) return null;
+              return (
+                <button
+                  type="button"
+                  onClick={() => setShowAddCoClient(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-[#C10007] text-white hover:bg-[#a30006] transition-colors shadow-sm flex-shrink-0"
+                  title="Add a co-purchaser or co-seller to this file"
+                >
+                  <UserPlus size={13} />
+                  Add Co-Purchaser / Co-Seller
+                </button>
+              );
+            })()}
           </div>
           <div className="space-y-2">
             {(() => {

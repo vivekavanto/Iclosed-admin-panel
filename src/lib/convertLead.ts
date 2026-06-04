@@ -5,6 +5,7 @@ import { getFamilyDealIds } from "./familyDeals";
 import { recalcMilestonesForFamily } from "./recalcMilestones";
 import { sendWelcomeEmail } from "./sendWelcomeEmail";
 import { formatLeadTypeLabel, buildLeadAddressForEmail } from "./leadEmailAddress";
+import { prefillPersonalInfoFromPriorDeal } from "./prefillPersonalInfo";
 
 export type ConvertOneResult = {
   success: boolean;
@@ -605,6 +606,28 @@ export async function convertSingleLead(
       }
     } catch (err) {
       console.error("[Convert] Failed to sync shared tasks (non-blocking):", err);
+    }
+
+    // ── Auto-populate Personal Information from the client's prior deal ──────
+    // For a RETURNING client (same client_id had an earlier deal), copy their
+    // person-level personal info + ID docs onto this new deal so the customer
+    // doesn't re-enter their identity. Person-level only (deal-specific answers
+    // are skipped); idempotent; never overwrites an answer already on this deal.
+    // Non-blocking: a failure here must never fail the conversion.
+    try {
+      const prefill = await prefillPersonalInfoFromPriorDeal({
+        newDealId: dealId,
+        newLeadId: leadId,
+        clientId,
+      });
+      if (prefill.copiedResponses > 0 || prefill.copiedDocs > 0) {
+        console.log(
+          `[Convert] Pre-filled personal info from prior deal ${prefill.sourceDealId}: ` +
+            `${prefill.copiedResponses} field(s), ${prefill.copiedDocs} ID doc(s). deal=${dealId}`,
+        );
+      }
+    } catch (err) {
+      console.error("[Convert] Personal-info pre-fill failed (non-blocking):", err);
     }
 
     // ── Auto-complete APS task if aps_uploaded is already true ─────────────
