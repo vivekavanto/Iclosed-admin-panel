@@ -452,7 +452,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
             </select>
           </div>
           <div>
-            <label className="block text-xs text-slate-500 mb-1">File status</label>
+            <label className="block text-xs text-slate-500 mb-1">Account status</label>
             <select
               value={filterStatus}
               onChange={e => setFilterStatus(e.target.value)}
@@ -472,17 +472,18 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           <thead>
             <tr className="bg-white text-slate-800 text-xs font-bold border-b border-slate-200">
               <th className="px-4 py-3 w-12">No.</th>
+              <th className="px-4 py-3 w-32">Account status</th>
               <th className="px-4 py-3 w-24">File No.</th>
-              <th className="px-4 py-3">File name</th>
               <th className="px-4 py-3 w-48">Client Name</th>
-              <th className="px-4 py-3 w-32">Account created</th>
-              <th className="px-4 py-3 w-20">Lawyer</th>
-              <th className="px-4 py-3 w-20">Clerk</th>
               <th className="px-4 py-3 w-64">Address</th>
               <th className="px-4 py-3 w-32">Closing date</th>
               <th className="px-4 py-3 w-32">Requisition date</th>
+              <th className="px-4 py-3 w-32">Account created</th>
+              <th className="px-4 py-3 w-20">Lawyer</th>
+              <th className="px-4 py-3 w-20">Clerk</th>
               <th className="px-4 py-3 w-40">Steps</th>
-              <th className="px-4 py-3 w-32">File status</th>
+              {/* File name column hidden per request — kept (not deleted) to avoid breaking anything. */}
+              <th className="px-4 py-3 hidden">File name</th>
               <th className="px-4 py-3 w-24 text-center">Actions</th>
             </tr>
           </thead>
@@ -497,61 +498,38 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                   onSelectDeal(deal.id);
                 }} className={`${rowClass} hover:bg-brand-light/20 cursor-pointer transition-colors border-b border-slate-100 text-xs text-slate-700 whitespace-nowrap`}>
                   <td className="px-4 py-3">{index + 1}</td>
-                  <td className="px-4 py-3 font-medium">{deal.fileNumber}</td>
                   <td className="px-4 py-3">
-                    <div>
-                      {(deal as any).fileName || deal.propertyAddress}
-                      {(deal as any).isCoPurchaser && (() => {
-                        // Prefer the explicit co_person_role recorded at
-                        // intake. Fall back to the deal type only when
-                        // no role is set (legacy data) — that fallback
-                        // can't distinguish on Purchase & Sale parents.
-                        const explicit = (deal as any).coPersonRole as "purchaser" | "seller" | null | undefined;
-                        const t = (deal.type ?? "").toLowerCase();
-                        const tooltip = explicit === "seller"
-                          ? "Co-Seller"
-                          : explicit === "purchaser"
-                          ? "Co-Purchaser"
-                          : t === "sale"
-                          ? "Co-Seller"
-                          : t === "purchase"
-                          ? "Co-Purchaser"
-                          : "Co-Client";
-                        const color = tooltip === "Co-Seller"
-                          ? "text-orange-600"
-                          : tooltip === "Co-Purchaser"
-                          ? "text-blue-600"
-                          : "text-purple-600";
+                    {/* Active/Inactive is derived (not the raw DB status) —
+                        "Active" = the linked client has signed into the portal
+                        at least once. Shared with the Edit Deal modal via
+                        computeDealDisplayStatus so the two never drift. */}
+                    {(() => {
+                      const displayStatus = computeDealDisplayStatus({
+                        status: deal.status,
+                        account_created_at: (deal as any).accountCreatedAt,
+                      });
+                      if (displayStatus === DealStatus.CLOSED) {
                         return (
-                          <span className={`ml-2 inline-flex items-center ${color}`} title={tooltip}>
-                            <Users size={14} />
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 text-green-700 border border-green-200 shadow-sm">
+                            <span className="mr-1">✓</span> Closed
                           </span>
                         );
-                      })()}
-                      {(deal as any).hasCoPurchasers && (() => {
-                        const t = (deal.type ?? "").toLowerCase();
-                        const tooltip =
-                          t.includes("purchase") && t.includes("sale")
-                            ? "Has Co-Client(s)"
-                            : t === "sale"
-                            ? "Has Co-Seller(s)"
-                            : "Has Co-Purchaser(s)";
+                      }
+                      if (displayStatus === DealStatus.ACTIVE) {
                         return (
-                          <span className="ml-2 inline-flex items-center text-green-600" title={tooltip}>
-                            <Users size={14} />
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-white text-green-600 border border-green-400">
+                            Active
                           </span>
                         );
-                      })()}
-                      {isNonCitizenFlagged({ citizenship_status: (deal as any).leadCitizenshipStatus }) && (
-                        <span
-                          className="ml-2 inline-flex items-center text-red-600"
-                          title={NON_CITIZEN_FLAG_TOOLTIP}
-                        >
-                          <AlertTriangle size={12} />
+                      }
+                      return (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200">
+                          Inactive
                         </span>
-                      )}
-                    </div>
+                      );
+                    })()}
                   </td>
+                  <td className="px-4 py-3 font-medium">{deal.fileNumber}</td>
                   <td className="px-4 py-3">
                     {(deal as any).leadName ? (
                       <span
@@ -563,7 +541,77 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                     ) : (
                       <span className="text-slate-300">—</span>
                     )}
+                    {/* Co-purchaser / co-seller / non-citizen flag badges — moved
+                        here from the now-hidden File name column. */}
+                    {(deal as any).isCoPurchaser && (() => {
+                      // Prefer the explicit co_person_role recorded at
+                      // intake. Fall back to the deal type only when
+                      // no role is set (legacy data) — that fallback
+                      // can't distinguish on Purchase & Sale parents.
+                      const explicit = (deal as any).coPersonRole as "purchaser" | "seller" | null | undefined;
+                      const t = (deal.type ?? "").toLowerCase();
+                      const tooltip = explicit === "seller"
+                        ? "Co-Seller"
+                        : explicit === "purchaser"
+                        ? "Co-Purchaser"
+                        : t === "sale"
+                        ? "Co-Seller"
+                        : t === "purchase"
+                        ? "Co-Purchaser"
+                        : "Co-Client";
+                      const color = tooltip === "Co-Seller"
+                        ? "text-orange-600"
+                        : tooltip === "Co-Purchaser"
+                        ? "text-blue-600"
+                        : "text-purple-600";
+                      return (
+                        <span className={`ml-2 inline-flex items-center ${color}`} title={tooltip}>
+                          <Users size={14} />
+                        </span>
+                      );
+                    })()}
+                    {(deal as any).hasCoPurchasers && (() => {
+                      const t = (deal.type ?? "").toLowerCase();
+                      const tooltip =
+                        t.includes("purchase") && t.includes("sale")
+                          ? "Has Co-Client(s)"
+                          : t === "sale"
+                          ? "Has Co-Seller(s)"
+                          : "Has Co-Purchaser(s)";
+                      return (
+                        <span className="ml-2 inline-flex items-center text-green-600" title={tooltip}>
+                          <Users size={14} />
+                        </span>
+                      );
+                    })()}
+                    {isNonCitizenFlagged({ citizenship_status: (deal as any).leadCitizenshipStatus }) && (
+                      <span
+                        className="ml-2 inline-flex items-center text-red-600"
+                        title={NON_CITIZEN_FLAG_TOOLTIP}
+                      >
+                        <AlertTriangle size={12} />
+                      </span>
+                    )}
                   </td>
+                  <td className="px-4 py-3 max-w-xs" title={isCombined ? `Purchase: ${deal.propertyAddress || "—"}\nSale: ${deal.sellingPropertyAddress || "—"}` : deal.propertyAddress}>
+                    {isCombined ? (
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-[9px] font-black text-blue-600 uppercase tracking-widest w-14 flex-shrink-0">Purchase</span>
+                          <span className="truncate text-slate-700">{deal.propertyAddress || "—"}</span>
+                        </div>
+                        <div className="h-px bg-slate-100" />
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-[9px] font-black text-orange-600 uppercase tracking-widest w-14 flex-shrink-0">Sale</span>
+                          <span className="truncate text-slate-700">{deal.sellingPropertyAddress || "—"}</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <span className="truncate block">{deal.propertyAddress}</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">{formatDate(deal.closingDate)}</td>
+                  <td className="px-4 py-3">{formatDate(deal.requisitionDate)}</td>
                   <td className="px-4 py-3">
                     {(deal as any).accountCreatedAt ? (
                       <span
@@ -600,25 +648,6 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       <span className="text-slate-300">—</span>
                     )}
                   </td>
-                  <td className="px-4 py-3 max-w-xs" title={isCombined ? `Purchase: ${deal.propertyAddress || "—"}\nSale: ${deal.sellingPropertyAddress || "—"}` : deal.propertyAddress}>
-                    {isCombined ? (
-                      <div className="flex flex-col gap-1">
-                        <div className="flex items-baseline gap-2">
-                          <span className="text-[9px] font-black text-blue-600 uppercase tracking-widest w-14 flex-shrink-0">Purchase</span>
-                          <span className="truncate text-slate-700">{deal.propertyAddress || "—"}</span>
-                        </div>
-                        <div className="h-px bg-slate-100" />
-                        <div className="flex items-baseline gap-2">
-                          <span className="text-[9px] font-black text-orange-600 uppercase tracking-widest w-14 flex-shrink-0">Sale</span>
-                          <span className="truncate text-slate-700">{deal.sellingPropertyAddress || "—"}</span>
-                        </div>
-                      </div>
-                    ) : (
-                      <span className="truncate block">{deal.propertyAddress}</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">{formatDate(deal.closingDate)}</td>
-                  <td className="px-4 py-3">{formatDate(deal.requisitionDate)}</td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
                       <div className="w-16 h-1.5 bg-slate-200 rounded-full overflow-hidden">
@@ -630,36 +659,9 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       <span className="text-[11px] text-slate-500 font-medium">{deal.completedTasks ?? 0}/{deal.totalTasks ?? 0}</span>
                     </div>
                   </td>
-                  <td className="px-4 py-3">
-                    {/* Active/Inactive is derived (not the raw DB status) —
-                        "Active" = the linked client has signed into the portal
-                        at least once. Shared with the Edit Deal modal via
-                        computeDealDisplayStatus so the two never drift. */}
-                    {(() => {
-                      const displayStatus = computeDealDisplayStatus({
-                        status: deal.status,
-                        account_created_at: (deal as any).accountCreatedAt,
-                      });
-                      if (displayStatus === DealStatus.CLOSED) {
-                        return (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 text-green-700 border border-green-200 shadow-sm">
-                            <span className="mr-1">✓</span> Closed
-                          </span>
-                        );
-                      }
-                      if (displayStatus === DealStatus.ACTIVE) {
-                        return (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-white text-green-600 border border-green-400">
-                            Active
-                          </span>
-                        );
-                      }
-                      return (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200">
-                          Inactive
-                        </span>
-                      );
-                    })()}
+                  {/* File name column hidden per request — kept (not deleted). */}
+                  <td className="px-4 py-3 hidden">
+                    {(deal as any).fileName || deal.propertyAddress}
                   </td>
                   <td className="px-4 py-3 text-center">
                     <div className="inline-flex items-center justify-center gap-1">

@@ -2137,6 +2137,91 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const taskTemplateLeadTypeMap = new Map<string, string>(
     (taskTemplates as any[]).map(t => [t.id, t.lead_type])
   );
+
+  // Match uploaded file docs to a task row, in priority order:
+  //   1. exact task_id (personal tasks / primary view of shared)
+  //   2. shared_task_key === taskTemplateId (cross-family shared docs)
+  //   3. fallback: doc's task_title matches task.title (legacy bridged docs)
+  // Side-aware: a Purchase-side doc never surfaces under the Sale-side row
+  // (and vice-versa) even when the two share a template-derived title.
+  // Shared by the Doc column and the Actions download button so they always
+  // agree on which files belong to a task.
+  const getTaskFileDocs = (task: DisplayTask): any[] => {
+    return taskFileDocs.filter((d: any) => {
+      if (d.task_id === task.id) return true;
+      const docLeadType = d.shared_task_key
+        ? taskTemplateLeadTypeMap.get(d.shared_task_key) ?? null
+        : null;
+      if (
+        docLeadType &&
+        task.leadType &&
+        docLeadType.toLowerCase() !== task.leadType.toLowerCase()
+      ) {
+        return false;
+      }
+      if (
+        task.taskTemplateId &&
+        d.shared_task_key &&
+        d.shared_task_key === task.taskTemplateId
+      ) {
+        return true;
+      }
+      if (
+        d.field_type === "file" &&
+        d.task_title &&
+        task.title &&
+        d.task_title.trim().toLowerCase() === task.title.trim().toLowerCase()
+      ) {
+        return true;
+      }
+      return false;
+    });
+  };
+
+  // Download a single stored file. Fetch-then-blob so cross-origin storage
+  // URLs (Vercel Blob, S3) actually download instead of navigating away;
+  // falls back to a plain anchor click if fetch is blocked by CORS.
+  const downloadDocFile = async (doc: any): Promise<void> => {
+    if (!doc?.file_url) return;
+    try {
+      const res = await fetch(doc.file_url, { credentials: "omit" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = doc.file_name || "download";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+    } catch {
+      const a = document.createElement("a");
+      a.href = doc.file_url;
+      a.download = doc.file_name || "download";
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+  };
+
+  // Download every file attached to a task (e.g. all ID uploads at once).
+  // Sequential with a small gap so browsers don't suppress the later
+  // downloads as a "multiple files" popup race.
+  const handleDownloadTaskDocs = async (task: DisplayTask): Promise<void> => {
+    const docs = getTaskFileDocs(task).filter((d: any) => d.file_url);
+    if (docs.length === 0) {
+      showToast("No files to download for this task", "error");
+      return;
+    }
+    for (let i = 0; i < docs.length; i++) {
+      await downloadDocFile(docs[i]);
+      if (i < docs.length - 1) await new Promise((r) => setTimeout(r, 400));
+    }
+  };
+
   // Resolve which lead type (Purchase / Sale) a document belongs to, from the
   // owning task's source template. Used in the View Documents modal so every
   // uploaded document — not just APS — is tagged with its side. Tasks whose
@@ -2938,55 +3023,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                         {task.isTemplate ? (
                           <span className="text-slate-300 text-xs">-</span>
                         ) : (() => {
-                          // Match docs to this row in priority order:
-                          //   1. exact task_id (personal tasks / primary view of shared)
-                          //   2. shared_task_key === taskTemplateId (cross-family shared docs)
-                          //   3. fallback: doc's task_title matches task.title
-                          //      (legacy bridged docs with task_id we don't
-                          //      know about — surfaces them anyway so the
-                          //      Doc count never lies)
-                          const matched = taskFileDocs.filter((d: any) => {
-                            // 1. Exact task_id always wins (personal tasks /
-                            //    primary view of shared docs).
-                            if (d.task_id === task.id) return true;
-
-                            // Never cross sides on the looser matches below: a
-                            // Purchase-side doc must not surface under the
-                            // Sale-side row (and vice-versa) just because the
-                            // two APS tasks share a template-derived title
-                            // ("Upload Complete Agreement of Purchase and Sale
-                            // and Amendments"). Resolve the doc's side from its
-                            // shared template and bail if it conflicts with
-                            // this row's lead type.
-                            const docLeadType = d.shared_task_key
-                              ? taskTemplateLeadTypeMap.get(d.shared_task_key) ?? null
-                              : null;
-                            if (
-                              docLeadType &&
-                              task.leadType &&
-                              docLeadType.toLowerCase() !== task.leadType.toLowerCase()
-                            ) {
-                              return false;
-                            }
-                            if (
-                              task.taskTemplateId &&
-                              d.shared_task_key &&
-                              d.shared_task_key === task.taskTemplateId
-                            ) {
-                              return true;
-                            }
-                            // Title fallback (loose match): same task name
-                            // across family + same field_type=file.
-                            if (
-                              d.field_type === "file" &&
-                              d.task_title &&
-                              task.title &&
-                              d.task_title.trim().toLowerCase() === task.title.trim().toLowerCase()
-                            ) {
-                              return true;
-                            }
-                            return false;
-                          });
+                          const matched = getTaskFileDocs(task);
                           // Diagnostic: print one-time per render if a task
                           // has a template_id but found zero matches even
                           // though docs exist with shared_task_key set.
@@ -3080,6 +3117,18 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                           <button onClick={() => openTaskView(task)} className="text-slate-400 hover:text-brand-primary p-1 transition-colors" title="View details">
                             <Eye size={16} />
                           </button>
+                          {/* Download all files attached to this task in one
+                              click — e.g. every ID upload — without opening the
+                              file. Only shown when the task actually has files. */}
+                          {!task.isTemplate && getTaskFileDocs(task).length > 0 && (
+                            <button
+                              onClick={() => handleDownloadTaskDocs(task)}
+                              className="text-slate-400 hover:text-brand-primary p-1 transition-colors"
+                              title="Download all files for this task"
+                            >
+                              <Download size={16} />
+                            </button>
+                          )}
                           {!task.isTemplate && (
                             <button onClick={() => handleDeleteTask(task.id)} className="text-slate-300 hover:text-red-600 p-1 transition-colors">
                               <Trash2 size={16} />
@@ -4100,35 +4149,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                         </a>
                         <button
                           type="button"
-                          onClick={async (e) => {
+                          onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
-                            // Fetch-then-blob so cross-origin storage URLs
-                            // (Vercel Blob, S3) actually download instead of
-                            // navigating away. Falls back to a plain anchor
-                            // click if fetch is blocked by CORS.
-                            try {
-                              const res = await fetch(doc.file_url, { credentials: "omit" });
-                              if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                              const blob = await res.blob();
-                              const blobUrl = URL.createObjectURL(blob);
-                              const a = document.createElement("a");
-                              a.href = blobUrl;
-                              a.download = doc.file_name || "download";
-                              document.body.appendChild(a);
-                              a.click();
-                              a.remove();
-                              setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
-                            } catch {
-                              const a = document.createElement("a");
-                              a.href = doc.file_url;
-                              a.download = doc.file_name || "download";
-                              a.target = "_blank";
-                              a.rel = "noopener noreferrer";
-                              document.body.appendChild(a);
-                              a.click();
-                              a.remove();
-                            }
+                            downloadDocFile(doc);
                           }}
                           className="inline-flex items-center justify-center w-8 h-8 rounded-md text-slate-500 hover:text-[#C10007] hover:bg-white transition-colors"
                           title="Download"

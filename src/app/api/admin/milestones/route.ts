@@ -89,11 +89,17 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "deal_id is required" }, { status: 400 });
   }
 
+  // Order by order_index — the canonical mortgage-stage sequence copied from
+  // stage_templates.order_index at creation (see convertLead.ts). This is the
+  // same order the client portal shows; created_at is only a stable tiebreaker
+  // for rows that share (or lack) an order_index. Previously this ordered by
+  // created_at alone, which let the admin list drift out of stage order.
   const { data, error } = await supabase
     .from("milestones")
     .select("*, stage_templates(lead_type)")
     .eq("deal_id", dealId)
     .eq("is_deleted", false)
+    .order("order_index", { ascending: true, nullsFirst: false })
     .order("created_at", { ascending: true });
 
   if (error) {
