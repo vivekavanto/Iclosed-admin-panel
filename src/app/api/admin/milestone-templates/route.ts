@@ -7,6 +7,7 @@ export async function GET() {
   const { data, error } = await supabase
     .from("stage_templates")
     .select("*, email_templates(id, name)")
+    .eq("is_deleted", false)
     .order("order_index", { ascending: true });
 
   if (error) {
@@ -92,7 +93,8 @@ export async function DELETE(req: NextRequest) {
     const { data: msRows, error: msErr } = await supabase
       .from("milestones")
       .select("id")
-      .eq("stage_template_id", id);
+      .eq("stage_template_id", id)
+      .eq("is_deleted", false);
     if (msErr) return NextResponse.json({ error: msErr.message }, { status: 500 });
     const msIds = (msRows ?? []).map((m) => m.id);
 
@@ -102,7 +104,8 @@ export async function DELETE(req: NextRequest) {
       const { count: tc } = await supabase
         .from("tasks")
         .select("id", { count: "exact", head: true })
-        .in("milestone_id", msIds);
+        .in("milestone_id", msIds)
+        .eq("is_deleted", false);
       taskCount = tc ?? 0;
 
       const { data: taskRows } = await supabase
@@ -127,48 +130,40 @@ export async function DELETE(req: NextRequest) {
     });
   }
 
-  // Hard cascade: wipe every deal-side row that points at this stage
-  // template before deleting the template itself. Order matters because of
-  // foreign keys — drill down to the leaves first.
+  // Soft cascade: flag every deal-side row that points at this stage template
+  // as is_deleted, then flag the template itself. We KEEP task_responses and
+  // leave the task_templates back-link intact, so the whole cascade is
+  // reversible by flipping is_deleted back to false on the template + its rows.
 
-  // 1. Find every milestone that uses this template (across all deals).
+  // 1. Find every (still-active) milestone that uses this template.
   const { data: milestoneRows, error: msFetchErr } = await supabase
     .from("milestones")
     .select("id")
-    .eq("stage_template_id", id);
+    .eq("stage_template_id", id)
+    .eq("is_deleted", false);
   if (msFetchErr) {
     return NextResponse.json({ error: msFetchErr.message }, { status: 500 });
   }
   const milestoneIds = (milestoneRows ?? []).map((m) => m.id);
 
   let deletedTasks = 0;
-  let deletedResponses = 0;
   if (milestoneIds.length > 0) {
-    // 2. Find every task attached to those milestones.
+    // 2. Find every active task attached to those milestones.
     const { data: taskRows, error: taskFetchErr } = await supabase
       .from("tasks")
       .select("id")
-      .in("milestone_id", milestoneIds);
+      .in("milestone_id", milestoneIds)
+      .eq("is_deleted", false);
     if (taskFetchErr) {
       return NextResponse.json({ error: taskFetchErr.message }, { status: 500 });
     }
     const taskIds = (taskRows ?? []).map((t) => t.id);
 
-    // 3. Delete task_responses for those tasks.
+    // 3. Soft-delete the tasks (task_responses are intentionally kept intact).
     if (taskIds.length > 0) {
-      const { error: respErr, count: respCount } = await supabase
-        .from("task_responses")
-        .delete({ count: "exact" })
-        .in("task_id", taskIds);
-      if (respErr) {
-        return NextResponse.json({ error: respErr.message }, { status: 500 });
-      }
-      deletedResponses = respCount ?? 0;
-
-      // 4. Delete the tasks themselves.
       const { error: tasksErr, count: tasksCount } = await supabase
         .from("tasks")
-        .delete({ count: "exact" })
+        .update({ is_deleted: true }, { count: "exact" })
         .in("id", taskIds);
       if (tasksErr) {
         return NextResponse.json({ error: tasksErr.message }, { status: 500 });
@@ -176,32 +171,21 @@ export async function DELETE(req: NextRequest) {
       deletedTasks = tasksCount ?? 0;
     }
 
-    // 5. Delete the milestones.
+    // 4. Soft-delete the milestones.
     const { error: msDelErr } = await supabase
       .from("milestones")
-      .delete()
+      .update({ is_deleted: true })
       .in("id", milestoneIds);
     if (msDelErr) {
       return NextResponse.json({ error: msDelErr.message }, { status: 500 });
     }
   }
 
-  // 6. Detach any task_templates that pointed at this stage template so the
-  //    stage template FK no longer blocks the delete. Task templates are
-  //    admin-level config (not deal data) — keep them around, just null out
-  //    the back-link.
-  const { error: ttDetachErr } = await supabase
-    .from("task_templates")
-    .update({ stage_template_id: null })
-    .eq("stage_template_id", id);
-  if (ttDetachErr) {
-    return NextResponse.json({ error: ttDetachErr.message }, { status: 500 });
-  }
-
-  // 7. Finally, delete the stage template.
+  // 5. Soft-delete the stage template itself. The task_templates back-link is
+  //    left intact (the template row still exists), so a restore is clean.
   const { error } = await supabase
     .from("stage_templates")
-    .delete()
+    .update({ is_deleted: true })
     .eq("id", id);
 
   if (error) {
@@ -212,6 +196,5 @@ export async function DELETE(req: NextRequest) {
     success: true,
     deleted_milestones: milestoneIds.length,
     deleted_tasks: deletedTasks,
-    deleted_task_responses: deletedResponses,
   });
 }

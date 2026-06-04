@@ -52,12 +52,14 @@ export async function GET(req: Request) {
       .select("*, task_templates(lead_type)")
       .eq("deal_id", primaryDealId)
       .eq("is_shared", true)
+      .eq("is_deleted", false)
       .order("created_at", { ascending: true }),
     supabase
       .from("tasks")
       .select("*, task_templates(lead_type)")
       .eq("deal_id", dealId)
       .or("is_shared.is.null,is_shared.eq.false")
+      .eq("is_deleted", false)
       .order("created_at", { ascending: true }),
   ]);
 
@@ -101,17 +103,15 @@ export async function GET(req: Request) {
 /**
  * DELETE /api/admin/tasks?id=...
  *
- * Cascades through the task's filled-in details so the deal returns to a
- * clean slate (no orphaned responses, no stale APS doc that would warn
- * "already exists" on the next upload).
+ * SOFT delete: marks the task row(s) `is_deleted=true` so they disappear from
+ * both the admin panel and the customer portal, but the underlying
+ * task_responses and APS docs (lead_corporate_docs) are left INTACT. This makes
+ * the delete fully reversible — restore with `UPDATE tasks SET is_deleted=false`.
  *
- * For shared (synced) tasks, the deletion mirrors across the entire
- * co-purchaser/co-seller family — matching how PATCH already mirrors
- * updates. For APS tasks (template flagged `is_aps_task=true`), the
- * family-wide APS rows in `lead_corporate_docs` are also wiped.
- *
- * Blob bytes in Vercel Blob are intentionally left in place — same
- * orphan policy as the rest of this codebase.
+ * For shared/template-backed tasks, the soft delete mirrors across the entire
+ * co-purchaser/co-seller family — matching how PATCH already mirrors updates —
+ * so a shared task disappears for everyone at once. Free-form tasks (no
+ * template_id) stay scoped to the single deal.
  */
 export async function DELETE(req: Request) {
   const { searchParams } = new URL(req.url);
@@ -121,8 +121,7 @@ export async function DELETE(req: Request) {
     return NextResponse.json({ error: "id is required" }, { status: 400 });
   }
 
-  // 1. Load the task we're deleting so we know its shared/APS status and
-  //    can resolve the family scope.
+  // 1. Load the task we're deleting so we can resolve the family scope.
   const { data: task, error: taskError } = await supabase
     .from("tasks")
     .select("id, deal_id, is_shared, task_template_id")
@@ -136,23 +135,11 @@ export async function DELETE(req: Request) {
     );
   }
 
-  // 2. Determine APS-ness via the template (so we can wipe lead_corporate_docs).
-  let isAps = false;
-  if (task.task_template_id) {
-    const { data: tmpl } = await supabase
-      .from("task_templates")
-      .select("is_aps_task")
-      .eq("id", task.task_template_id)
-      .single();
-    isAps = Boolean(tmpl?.is_aps_task);
-  }
-
-  // 3. Collect the set of task IDs to delete + the set of deal IDs touched.
-  //    For template-backed tasks we ALWAYS scan the entire family — the
-  //    unique constraint `tasks_deal_task_template_unique` covers
-  //    (deal_id, task_template_id) regardless of is_shared, so a leftover
-  //    sibling on a co-purchaser/co-seller deal would block recreation.
-  //    Free-form tasks (no template_id) stay scoped to the single deal.
+  // 2. Collect the set of task IDs to soft-delete + the set of deal IDs touched.
+  //    For template-backed tasks we ALWAYS scan the entire family so a shared
+  //    task disappears across every co-purchaser/co-seller deal at once.
+  //    Free-form tasks (no template_id) stay scoped to the single deal. Only
+  //    active rows are considered — already-deleted siblings are skipped.
   let affectedDealIds: string[] = task.task_template_id
     ? await getFamilyDealIds(task.deal_id)
     : [task.deal_id];
@@ -164,7 +151,8 @@ export async function DELETE(req: Request) {
       .from("tasks")
       .select("id, deal_id")
       .eq("task_template_id", task.task_template_id)
-      .in("deal_id", affectedDealIds);
+      .in("deal_id", affectedDealIds)
+      .eq("is_deleted", false);
 
     for (const t of matchingTasks ?? []) {
       taskIdSet.add(t.id);
@@ -176,50 +164,11 @@ export async function DELETE(req: Request) {
 
   const taskIdsToDelete = [...taskIdSet];
 
-  // 4. Wipe filled-in details for every task in scope.
-  const { error: respError } = await supabase
-    .from("task_responses")
-    .delete()
-    .in("task_id", taskIdsToDelete);
-  if (respError) {
-    return NextResponse.json(
-      { success: false, error: `Failed to clear task responses: ${respError.message}` },
-      { status: 500 },
-    );
-  }
-
-  // 5. For APS tasks, also wipe the family-wide APS rows in
-  //    lead_corporate_docs so a fresh upload starts from a clean slate.
-  if (isAps) {
-    const { data: familyDeals } = await supabase
-      .from("deals")
-      .select("lead_id")
-      .in("id", affectedDealIds);
-    const familyLeadIds = [
-      ...new Set((familyDeals ?? []).map((d) => d.lead_id).filter(Boolean)),
-    ];
-
-    if (familyLeadIds.length > 0) {
-      const { error: docError } = await supabase
-        .from("lead_corporate_docs")
-        .delete()
-        .in("lead_id", familyLeadIds)
-        .or(
-          "doc_type.eq.aps,doc_type.eq.aps_purchase,doc_type.eq.aps_sale,custom_type.ilike.%APS%",
-        );
-      if (docError) {
-        return NextResponse.json(
-          { success: false, error: `Failed to clear APS docs: ${docError.message}` },
-          { status: 500 },
-        );
-      }
-    }
-  }
-
-  // 6. Delete the task row(s) themselves.
+  // 3. Soft delete: flag the task row(s). We intentionally KEEP task_responses
+  //    and lead_corporate_docs (APS) so the delete stays reversible.
   const { error: deleteError } = await supabase
     .from("tasks")
-    .delete()
+    .update({ is_deleted: true })
     .in("id", taskIdsToDelete);
   if (deleteError) {
     return NextResponse.json(
@@ -228,7 +177,7 @@ export async function DELETE(req: Request) {
     );
   }
 
-  // 7. Milestone status depends on task completion — recalc for any deal
+  // 4. Milestone status depends on task completion — recalc for any deal
   //    that lost a task. Non-blocking; a stale milestone is recoverable.
   try {
     const primaryDealId = task.deal_id;
@@ -240,7 +189,6 @@ export async function DELETE(req: Request) {
   return NextResponse.json({
     success: true,
     deleted_tasks: taskIdsToDelete.length,
-    cleared_aps_docs: isAps,
   });
 }
 

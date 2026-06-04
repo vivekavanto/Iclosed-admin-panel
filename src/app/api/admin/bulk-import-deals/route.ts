@@ -8,6 +8,7 @@ export async function GET() {
       "id, file_number, type, status, property_address, file_name, clerk_name, lawyer_name, requisition_date, outstanding_undertakings, outstanding_requisitions, closing_date, opening_date, created_at",
     )
     .eq("source", "bulk_import")
+    .eq("is_deleted", false)
     .order("created_at", { ascending: false })
     .limit(100);
 

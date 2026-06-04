@@ -37,7 +37,8 @@ export async function getFamilyDealIds(dealId: string): Promise<string[]> {
     const { data: familyDeals } = await supabaseAdmin
       .from("deals")
       .select("id")
-      .in("lead_id", familyLeads.map((l) => l.id));
+      .in("lead_id", familyLeads.map((l) => l.id))
+      .eq("is_deleted", false);
 
     if (!familyDeals) return [dealId];
     return familyDeals.map((d) => d.id);

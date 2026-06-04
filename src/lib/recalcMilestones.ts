@@ -20,7 +20,8 @@ export async function recalcMilestonesForFamily(
   const { data: familyMilestones } = await supabaseAdmin
     .from("milestones")
     .select("id, deal_id, stage_template_id, status, email_template_id, email_sent")
-    .in("deal_id", familyDealIds);
+    .in("deal_id", familyDealIds)
+    .eq("is_deleted", false);
 
   const primaryMsMap = new Map<string, string>(); // milestone_id -> stage_template_id
   const dealMsMap = new Map<string, Map<string, string>>(); // deal_id -> Map(stage_template_id -> milestone_id)
@@ -49,6 +50,7 @@ export async function recalcMilestonesForFamily(
     .select("milestone_id, status")
     .eq("deal_id", primaryDealId)
     .eq("is_shared", true)
+    .eq("is_deleted", false)
     .not("milestone_id", "is", null);
 
   for (const famDealId of familyDealIds) {
@@ -58,6 +60,7 @@ export async function recalcMilestonesForFamily(
         .select("milestone_id, status")
         .eq("deal_id", famDealId)
         .or("is_shared.is.null,is_shared.eq.false")
+        .eq("is_deleted", false)
         .not("milestone_id", "is", null);
 
       const localMsMap = dealMsMap.get(famDealId) || new Map();

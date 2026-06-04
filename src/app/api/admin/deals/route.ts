@@ -8,6 +8,7 @@ export async function GET() {
     .from("deals")
     .select("*, tasks(id, status), leads(id, parent_lead_id, first_name, last_name, citizenship_status, co_person_role, address_street, address_unit, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code, clients(id, auth_user_id))")
     .or("source.is.null,source.neq.bulk_import")
+    .eq("is_deleted", false)
     .order("created_at", { ascending: false });
 
   if (error) {
