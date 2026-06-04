@@ -247,6 +247,7 @@ export async function convertSingleLead(
         .from("stage_templates")
         .select("*")
         .in("lead_type", leadTypeParts)
+        .eq("is_deleted", false)
         .order("order_index", { ascending: true });
 
       // Group by lead_type in the order specified by leadTypeParts so combined

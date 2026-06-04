@@ -93,6 +93,7 @@ export async function GET(req: Request) {
     .from("milestones")
     .select("*, stage_templates(lead_type)")
     .eq("deal_id", dealId)
+    .eq("is_deleted", false)
     .order("created_at", { ascending: true });
 
   if (error) {
@@ -162,6 +163,13 @@ export async function PATCH(req: Request) {
   }
 }
 
+/**
+ * DELETE /api/admin/milestones?id=...
+ *
+ * SOFT delete: marks the milestone `is_deleted=true` so it disappears from both
+ * the admin panel and the customer portal, but the row (and any tasks under it)
+ * stay intact. Reversible with `UPDATE milestones SET is_deleted=false`.
+ */
 export async function DELETE(req: Request) {
   const { searchParams } = new URL(req.url);
   const id = searchParams.get("id");
@@ -172,7 +180,7 @@ export async function DELETE(req: Request) {
 
   const { error } = await supabase
     .from("milestones")
-    .delete()
+    .update({ is_deleted: true })
     .eq("id", id);
 
   if (error) {

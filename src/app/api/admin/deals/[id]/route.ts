@@ -221,7 +221,8 @@ export async function GET(
             const { data: otherDeals } = await supabase
               .from("deals")
               .select("id, file_number, property_address, lead_id, status")
-              .in("lead_id", otherLeadIds);
+              .in("lead_id", otherLeadIds)
+              .eq("is_deleted", false);
 
             if (otherDeals) {
               // Build a map of lead_id → lead info
@@ -509,9 +510,13 @@ export async function DELETE(
 ) {
   const { id } = await params;
 
+  // Soft delete: flag the deal as is_deleted so it disappears from the admin
+  // lists and every customer access gate, but the row (and all its tasks,
+  // milestones, responses, signatures) stay intact. Reversible with
+  // `UPDATE deals SET is_deleted=false`.
   const { error } = await supabase
     .from("deals")
-    .delete()
+    .update({ is_deleted: true })
     .eq("id", id);
 
   if (error) {
