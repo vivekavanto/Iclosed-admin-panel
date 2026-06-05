@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
         stage_template_id: stageTemplateId || null,
       },
     ])
-    .select()
+    .select('*, stage_templates(id, name)')
     .single();
 
   if (error) {
@@ -65,6 +65,16 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: 'ID required' }, { status: 400 });
     }
 
+    // Capture the previous name BEFORE updating so we can propagate a rename to
+    // the snapshot copies already created on deals (tasks.title is copied from
+    // the template at lead-conversion time and never re-synced on its own).
+    const { data: prevTemplate } = await supabase
+      .from('task_templates')
+      .select('name')
+      .eq('id', id)
+      .maybeSingle();
+    const previousName: string | null = prevTemplate?.name ?? null;
+
     const { data, error } = await supabase
       .from('task_templates')
       .update({
@@ -79,11 +89,30 @@ export async function PUT(req: NextRequest) {
         stage_template_id: stageTemplateId || null,
       })
       .eq('id', id)
-      .select()
+      .select('*, stage_templates(id, name)')
       .single();
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    // Propagate a rename to every already-created task that still carries the
+    // old template name. We only touch rows whose title still equals the old
+    // name so per-deal manual title edits (done via the tasks PATCH route) are
+    // preserved. This is what makes the rename reflect in the customer portal,
+    // which reads tasks.title directly. Non-blocking: a failed propagation
+    // shouldn't fail the template update itself.
+    if (name && previousName && name !== previousName) {
+      try {
+        await supabase
+          .from('tasks')
+          .update({ title: name })
+          .eq('task_template_id', id)
+          .eq('title', previousName)
+          .eq('is_deleted', false);
+      } catch (propErr) {
+        console.error('[TaskTemplate PUT] Title propagation failed (non-blocking):', propErr);
+      }
     }
 
     return NextResponse.json(data);

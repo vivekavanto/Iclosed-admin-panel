@@ -55,6 +55,18 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ error: "ID is required" }, { status: 400 });
   }
 
+  // Capture the previous name BEFORE updating so we can propagate a rename to
+  // the snapshot copies already created on deals. milestones.title (and its
+  // description / email_template_id) are copied from the stage_template at
+  // lead-conversion time (see convertLead.ts) and are never re-synced on their
+  // own — the customer portal reads milestones.title directly.
+  const { data: prevTemplate } = await supabase
+    .from("stage_templates")
+    .select("name")
+    .eq("id", id)
+    .maybeSingle();
+  const previousName: string | null = prevTemplate?.name ?? null;
+
   const { data, error } = await supabase
     .from("stage_templates")
     .update({
@@ -73,6 +85,29 @@ export async function PUT(req: NextRequest) {
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  // Propagate the edit to every already-created milestone that still carries
+  // the OLD template name. Guarding by `title = previousName` preserves any
+  // per-deal manual milestone-title edits while keeping standard milestones in
+  // sync (name, description, and email template). This is what makes a stage
+  // rename reflect in the customer portal. Non-blocking: a failed propagation
+  // must not fail the template update itself.
+  if (name && previousName) {
+    try {
+      await supabase
+        .from("milestones")
+        .update({
+          title: name,
+          description: description ?? null,
+          email_template_id: email_template_id || null,
+        })
+        .eq("stage_template_id", id)
+        .eq("title", previousName)
+        .eq("is_deleted", false);
+    } catch (propErr) {
+      console.error("[StageTemplate PUT] Milestone propagation failed (non-blocking):", propErr);
+    }
   }
 
   return NextResponse.json(data);

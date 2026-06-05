@@ -2290,9 +2290,16 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const displayTasks: DisplayTask[] = (() => {
     const dedupedTasks = dedupeTasksByTemplate(tasks);
     const userTitles = new Set(dedupedTasks.map(t => t.title.toLowerCase()));
+    // Template ids already instantiated as a real task on this deal. Matching
+    // by id (not just title) means a renamed template still resolves to its
+    // existing task instead of resurfacing as a phantom "Pending" ghost row.
+    const userTemplateIds = new Set(
+      dedupedTasks.map(t => t.taskTemplateId).filter(Boolean) as string[],
+    );
     const templateRows: DisplayTask[] = (taskTemplates as any[])
       .filter(t => t.is_default)
       .filter(t => matchesDealType(t.lead_type))
+      .filter(t => !userTemplateIds.has(t.id))
       .filter(t => !userTitles.has(t.name.toLowerCase()))
       .filter(t => !suppressedTemplateIds.has(t.id))
       .map((t): DisplayTask => ({
@@ -2324,8 +2331,16 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const displayMilestones: DisplayMilestone[] = (() => {
     const dedupedMilestones = dedupeMilestonesByTemplate(milestones);
     const userTitles = new Set(dedupedMilestones.map(m => m.title.toLowerCase()));
+    // Stage-template ids already instantiated as a real milestone on this deal.
+    // Matching by id (not just title) means a renamed stage template still
+    // resolves to its existing milestone instead of resurfacing as a phantom
+    // "Pending" ghost row.
+    const userStageTemplateIds = new Set(
+      dedupedMilestones.map(m => m.stageTemplateId).filter(Boolean) as string[],
+    );
     const templateRows: DisplayMilestone[] = (stageTemplates as any[])
       .filter(t => matchesDealType(t.lead_type))
+      .filter(t => !userStageTemplateIds.has(t.id))
       .filter(t => !userTitles.has(t.name.toLowerCase()))
       .map((t): DisplayMilestone => ({
         id: `tpl-${t.id}`,
