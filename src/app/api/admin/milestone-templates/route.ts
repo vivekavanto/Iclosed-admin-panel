@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
+import { backfillMilestoneForStage } from "@/lib/reconcileDealMilestoneLinks";
 
 const supabase = supabaseAdmin;
 
@@ -44,7 +45,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json(data, { status: 201 });
+  // Seed this brand-new milestone onto every existing deal of its lead_type so
+  // it shows up on already-active customer dashboards, not just future deals.
+  // Non-blocking — the template was created successfully regardless.
+  let backfilledMilestones = 0;
+  try {
+    const res = await backfillMilestoneForStage(data.id);
+    backfilledMilestones = res.created;
+  } catch (backfillErr) {
+    console.error("[StageTemplate POST] Milestone backfill failed (non-blocking):", backfillErr);
+  }
+
+  return NextResponse.json({ ...data, backfilledMilestones }, { status: 201 });
 }
 
 export async function PUT(req: NextRequest) {
@@ -101,6 +113,7 @@ export async function PUT(req: NextRequest) {
           title: name,
           description: description ?? null,
           email_template_id: email_template_id || null,
+          order_index: order_index ?? 0,
         })
         .eq("stage_template_id", id)
         .eq("title", previousName)
@@ -110,7 +123,18 @@ export async function PUT(req: NextRequest) {
     }
   }
 
-  return NextResponse.json(data);
+  // Backfill any deals of this lead_type that are missing the milestone
+  // entirely (e.g. deals converted before this stage existed, or whose
+  // lead_type just changed to match). Non-blocking.
+  let backfilledMilestones = 0;
+  try {
+    const res = await backfillMilestoneForStage(id);
+    backfilledMilestones = res.created;
+  } catch (backfillErr) {
+    console.error("[StageTemplate PUT] Milestone backfill failed (non-blocking):", backfillErr);
+  }
+
+  return NextResponse.json({ ...data, backfilledMilestones });
 }
 
 export async function DELETE(req: NextRequest) {

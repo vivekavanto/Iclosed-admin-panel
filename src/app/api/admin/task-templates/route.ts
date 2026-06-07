@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import supabaseAdmin from '@/lib/supabaseAdmin';
+import { repointTasksForTemplate } from '@/lib/reconcileDealMilestoneLinks';
 
 const supabase = supabaseAdmin;
 
@@ -65,15 +66,17 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: 'ID required' }, { status: 400 });
     }
 
-    // Capture the previous name BEFORE updating so we can propagate a rename to
-    // the snapshot copies already created on deals (tasks.title is copied from
-    // the template at lead-conversion time and never re-synced on its own).
+    // Capture the previous name + stage BEFORE updating: name drives the rename
+    // propagation below (tasks.title is a per-deal snapshot), and stage drives
+    // the milestone-link cascade (tasks.milestone_id is also a snapshot).
     const { data: prevTemplate } = await supabase
       .from('task_templates')
-      .select('name')
+      .select('name, stage_template_id')
       .eq('id', id)
       .maybeSingle();
     const previousName: string | null = prevTemplate?.name ?? null;
+    const oldStageTemplateId: string | null = prevTemplate?.stage_template_id ?? null;
+    const newStageTemplateId: string | null = stageTemplateId || null;
 
     const { data, error } = await supabase
       .from('task_templates')
@@ -86,7 +89,7 @@ export async function PUT(req: NextRequest) {
         is_aps_task: isApsTask,
         is_default: is_default ?? false,
         is_shared: is_shared ?? false,
-        stage_template_id: stageTemplateId || null,
+        stage_template_id: newStageTemplateId,
       })
       .eq('id', id)
       .select('*, stage_templates(id, name)')
@@ -115,7 +118,24 @@ export async function PUT(req: NextRequest) {
       }
     }
 
-    return NextResponse.json(data);
+    // Cascade a stage change onto existing deals: repoint every live task
+    // cloned from this template to the milestone matching the new stage
+    // (creating that milestone where a deal lacks it). Without this, only NEW
+    // deals would pick up the new mapping and existing deals would keep driving
+    // the old milestone. Non-blocking — the template save already succeeded.
+    let repointedTasks = 0;
+    let createdMilestones = 0;
+    if (oldStageTemplateId !== newStageTemplateId) {
+      try {
+        const res = await repointTasksForTemplate(id, newStageTemplateId);
+        repointedTasks = res.repointed;
+        createdMilestones = res.created;
+      } catch (cascadeErr) {
+        console.error('[TaskTemplate PUT] Milestone link cascade failed (non-blocking):', cascadeErr);
+      }
+    }
+
+    return NextResponse.json({ ...data, repointedTasks, createdMilestones });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
