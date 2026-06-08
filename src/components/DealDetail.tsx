@@ -10,6 +10,7 @@ import {
   Trash2,
   Plus,
   Mail,
+  Phone,
   CheckCircle,
   GripVertical,
   FileText,
@@ -24,6 +25,7 @@ import {
   Check,
   X,
   UserPlus,
+  LogIn,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
@@ -184,6 +186,15 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   // Add co-purchaser / co-seller modal — admins use this to attach a co-client
   // to an already-created deal (the customer portal does the same at intake).
   const [showAddCoClient, setShowAddCoClient] = useState(false);
+
+  // Inline phone editing in "People involved". Each person's phone lives on
+  // their lead row; edits PUT to /api/admin/leads. `phoneOverrides` (keyed by
+  // lead_id) holds successfully-saved values so the displayed number updates
+  // without refetching the whole deal — it's read inside familyPeople below.
+  const [phoneOverrides, setPhoneOverrides] = useState<Record<string, string>>({});
+  const [editingPhoneLeadId, setEditingPhoneLeadId] = useState<string | null>(null);
+  const [phoneDraft, setPhoneDraft] = useState<string>("");
+  const [savingPhoneId, setSavingPhoneId] = useState<string | null>(null);
 
   // APS upload modal state
   const [showApsUpload, setShowApsUpload] = useState(false);
@@ -2069,6 +2080,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     lead_id: string | null;
     lead_name: string;
     lead_email: string;
+    lead_phone: string;
     role: string;
     file_number: string;
     property_address: string;
@@ -2089,6 +2101,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       lead_id: primaryLeadId,
       lead_name: currentName || "Current viewer",
       lead_email: (rawDeal?.lead_email as string | null) || "",
+      lead_phone:
+        (primaryLeadId ? phoneOverrides[primaryLeadId] : undefined) ??
+        ((rawDeal?.lead_phone as string | null) || ""),
       role: numberedRoles.byDealId.get(deal.id) || rawDeal?.current_deal_role || "Primary",
       file_number: deal.fileNumber,
       property_address: deal.propertyAddress || "",
@@ -2104,6 +2119,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       lead_id: (ld.lead_id as string | null) ?? null,
       lead_name: ld.lead_name || "Unknown",
       lead_email: ld.lead_email || "",
+      lead_phone:
+        (ld.lead_id ? phoneOverrides[ld.lead_id as string] : undefined) ??
+        (ld.lead_phone || ""),
       role: numberedRoles.byDealId.get(ld.id) || ld.role || "Co-Client",
       file_number: ld.file_number || "",
       property_address: ld.property_address || "",
@@ -2129,6 +2147,86 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     if (r.startsWith("primary")) return "bg-green-100 text-green-700 border-green-200";
     if (r.includes("co-seller")) return "bg-orange-100 text-orange-700 border-orange-200";
     return "bg-blue-100 text-blue-700 border-blue-200";
+  };
+
+  // Impersonate any person in the family (primary, co-purchaser, co-seller)
+  // by their email. Reuses the existing /api/admin/impersonate endpoint, which
+  // resolves the email to a Supabase magic link and never emails the client.
+  // Gated on accountCreated at the call site — generateLink only works once the
+  // person has an auth account.
+  const [impersonatingId, setImpersonatingId] = useState<string | null>(null);
+  const handleImpersonate = async (person: FamilyPerson) => {
+    if (!person.accountCreated || !person.lead_email) {
+      showToast("This client has not signed in yet — cannot impersonate.", "error");
+      return;
+    }
+    setImpersonatingId(person.id);
+    try {
+      const res = await fetch("/api/admin/impersonate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: person.lead_email }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.url) {
+        throw new Error(json.error || "Failed to generate link");
+      }
+      window.open(json.url, "_blank", "noopener,noreferrer");
+    } catch (err: any) {
+      console.error("Impersonate error:", err);
+      showToast(`Failed to impersonate: ${err?.message ?? "unknown error"}`, "error");
+    } finally {
+      setImpersonatingId(null);
+    }
+  };
+
+  // Begin inline phone edit for a person. Pre-fills the draft with the current
+  // (formatted) number. Only available when the person has a lead_id to write to.
+  const beginEditPhone = (person: FamilyPerson) => {
+    if (!person.lead_id) return;
+    setEditingPhoneLeadId(person.lead_id);
+    setPhoneDraft(person.lead_phone || "");
+  };
+
+  const cancelEditPhone = () => {
+    setEditingPhoneLeadId(null);
+    setPhoneDraft("");
+  };
+
+  // Persist a person's phone to their lead row via the existing leads PUT.
+  // An empty value clears the number; a non-empty one must have ≥10 digits
+  // (matching the task-form phone validation). On success we stash the saved
+  // value in phoneOverrides so the row updates without a full refetch.
+  const handleSavePhone = async (person: FamilyPerson) => {
+    if (!person.lead_id) {
+      showToast("Cannot edit phone: missing lead reference.", "error");
+      return;
+    }
+    const formatted = formatPhoneAsTyped(phoneDraft);
+    const digits = formatted.replace(/\D/g, "");
+    if (formatted && digits.length < 10) {
+      showToast("Phone number must have at least 10 digits.", "error");
+      return;
+    }
+    setSavingPhoneId(person.id);
+    try {
+      const res = await fetch("/api/admin/leads", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: person.lead_id, phone: formatted }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        throw new Error(json.error || "Failed to update phone");
+      }
+      setPhoneOverrides((prev) => ({ ...prev, [person.lead_id as string]: formatted }));
+      cancelEditPhone();
+      showToast("Phone number updated");
+    } catch (err: any) {
+      showToast(err?.message ?? "Failed to update phone", "error");
+    } finally {
+      setSavingPhoneId(null);
+    }
   };
 
   // True when the task currently open in the Edit Task modal is an APS task.
@@ -2860,9 +2958,88 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                           </a>
                         </p>
                       )}
+                      {/* Phone — displayed alongside email, editable inline.
+                          Saves to the person's lead row via /api/admin/leads. */}
+                      {editingPhoneLeadId && editingPhoneLeadId === p.lead_id ? (
+                        <div
+                          className="flex items-center gap-1 mt-0.5"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <Phone size={11} className="text-slate-400" />
+                          <input
+                            type="tel"
+                            value={phoneDraft}
+                            autoFocus
+                            placeholder="(416) 555-1234"
+                            onChange={(e) => setPhoneDraft(formatPhoneAsTyped(e.target.value))}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") handleSavePhone(p);
+                              if (e.key === "Escape") cancelEditPhone();
+                            }}
+                            className="text-[11px] border border-slate-300 rounded px-1.5 py-0.5 w-36 focus:outline-none focus:ring-1 focus:ring-brand-primary"
+                          />
+                          <button
+                            onClick={() => handleSavePhone(p)}
+                            disabled={savingPhoneId === p.id}
+                            title="Save phone number"
+                            className="text-green-600 hover:text-green-700 disabled:opacity-40 p-0.5 cursor-pointer"
+                          >
+                            <Check size={13} />
+                          </button>
+                          <button
+                            onClick={cancelEditPhone}
+                            title="Cancel"
+                            className="text-slate-400 hover:text-red-500 p-0.5 cursor-pointer"
+                          >
+                            <X size={13} />
+                          </button>
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5">
+                          <Phone size={11} className="text-slate-400" />
+                          {p.lead_phone ? (
+                            <a
+                              href={`tel:${p.lead_phone}`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="hover:text-brand-primary hover:underline"
+                            >
+                              {p.lead_phone}
+                            </a>
+                          ) : (
+                            <span className="text-slate-400 italic">No phone number</span>
+                          )}
+                          {p.lead_id && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                beginEditPhone(p);
+                              }}
+                              title="Edit phone number"
+                              className="text-slate-300 hover:text-brand-primary transition-colors p-0.5 cursor-pointer"
+                            >
+                              <Pencil size={10} />
+                            </button>
+                          )}
+                        </p>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleImpersonate(p);
+                      }}
+                      disabled={!p.accountCreated || !p.lead_email || impersonatingId === p.id}
+                      className="text-slate-400 hover:text-brand-primary transition-colors p-1 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                      title={
+                        p.accountCreated
+                          ? `Login as this client (${p.role})`
+                          : "Client has not signed in to the portal yet"
+                      }
+                    >
+                      <LogIn size={14} />
+                    </button>
                     {p.isCurrent && (
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-brand-primary text-white">
                         Currently viewing

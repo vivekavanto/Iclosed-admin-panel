@@ -117,9 +117,13 @@ export async function POST(req: Request) {
   }
 
   const fileNumbers = rows.map((r) => r.fileNumber).filter(Boolean);
+  // A file number can now belong to several deals (a co-client family shares
+  // the primary's number), so match only the PRIMARY deal — keeps the
+  // file_number → deal map 1:1 and routes updates to the primary.
   const { data: existing, error: existingErr } = await supabaseAdmin
     .from("deals")
     .select("id, file_number")
+    .eq("is_primary_file", true)
     .in("file_number", fileNumbers);
 
   if (existingErr) {

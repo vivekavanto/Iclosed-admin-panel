@@ -116,7 +116,7 @@ export async function GET(
         const { data: familyLeads } = await supabase
           .from("leads")
           .select(
-            "id, parent_lead_id, first_name, last_name, email, lead_type, co_person_role, address_street, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code, client_id",
+            "id, parent_lead_id, first_name, last_name, email, phone, lead_type, co_person_role, address_street, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code, client_id",
           )
           .or(`id.eq.${rootLeadId},parent_lead_id.eq.${rootLeadId}`);
 
@@ -288,6 +288,7 @@ export async function GET(
                     ? `${dLead.first_name ?? ""} ${dLead.last_name ?? ""}`.trim()
                     : null,
                   lead_email: dLead?.email ?? null,
+                  lead_phone: dLead?.phone ?? null,
                   role,
                   identification_task_id: idTask?.id ?? null,
                   identification_status: idTask?.status ?? null,
@@ -353,11 +354,14 @@ const ALLOWED_STATUSES = new Set([
 ]);
 
 // Columns that should mirror across every deal in the same co-purchaser/
-// co-seller family. Excludes:
-//   - file_number: UNIQUE-indexed and each co-* deal has its own number
+// co-seller family. Notes:
+//   - file_number: all parties to one file share ONE number, so renaming the
+//     file cascades to every family deal (the partial unique index only
+//     constrains primaries, so co-clients duplicating the number is allowed).
 //   - type: a Purchase & Sale family has Purchase on one row, Sale on another
 //   - property_address: same reason — purchase address vs selling address
 const MIRROR_DEAL_COLUMNS = new Set([
+  "file_number",
   "file_name",
   "status",
   "lawyer_name",

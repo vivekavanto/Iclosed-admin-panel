@@ -219,10 +219,15 @@ const Leads: React.FC = () => {
   async function saveEdit() {
     if (!selectedLead) return;
 
-    if (!editForm.firstName.trim() || !editForm.lastName.trim()) {
+    // A last name isn't mandatory — many records carry only a first name (and
+    // corporate entities are identified by company name, not a personal name),
+    // so requiring both wrongly blocked edits to unrelated fields like phone.
+    // Individuals still need at least some name to identify them.
+    const hasName = editForm.firstName.trim() || editForm.lastName.trim();
+    if (!selectedLead.isCorporate && !hasName) {
       setEditResult({
         success: false,
-        message: "First name and last name are required.",
+        message: "A first or last name is required.",
       });
       return;
     }
@@ -473,7 +478,12 @@ const Leads: React.FC = () => {
             .map((r) => getLeadDisplayName(r.lead_id));
           const failedLeads = results
             .filter((r) => !r.success)
-            .map((r) => getLeadDisplayName(r.lead_id));
+            .map((r) => {
+              const name = getLeadDisplayName(r.lead_id);
+              // Include the reason (e.g. "File number ... already exists") so a
+              // bad manual file number is explained, not just flagged.
+              return (r as any).error ? `${name} — ${(r as any).error}` : name;
+            });
           const failedCount = failedLeads.length;
           const hadErrors = data.had_errors ?? failedCount > 0;
           const details: string[] = [];
@@ -1543,6 +1553,11 @@ const Leads: React.FC = () => {
                     disabled={converting}
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
                   />
+                  <p className="text-xs text-slate-400 mt-1.5">
+                    Leave blank to auto-generate. All parties in this file
+                    (co-purchasers/co-sellers) share this number. If it's already
+                    used by another file, conversion is blocked with an error.
+                  </p>
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { Deal, DealType, DealStatus } from '../types';
-import { Search, Trash2, Users, AlertTriangle, Upload, Pencil, LogIn } from 'lucide-react';
+import { Search, Trash2, Users, AlertTriangle, Upload, Pencil } from 'lucide-react';
 import {
   isNonCitizenFlagged,
   NON_CITIZEN_FLAG_TOOLTIP,
@@ -288,28 +288,6 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
 
   const formatDate = (dateString?: string) => formatLocalDate(dateString);
 
-
-  const handleImpersonate = async (authUserId: string | null) => {
-    if (!authUserId) {
-      alert("This client has not signed up yet — cannot impersonate.");
-      return;
-    }
-    try {
-      const res = await fetch("/api/admin/impersonate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ authUserId }),
-      });
-      const json = await res.json();
-      if (!res.ok || !json.url) {
-        throw new Error(json.error || "Failed to generate link");
-      }
-      window.open(json.url, "_blank", "noopener,noreferrer");
-    } catch (err: any) {
-      console.error("Impersonate error:", err);
-      alert(`Failed to impersonate: ${err?.message ?? "unknown error"}`);
-    }
-  };
 
   const handleDelete = async (dealId: string) => {
     const confirmDelete = window.confirm("Are you sure you want to delete this deal?");
@@ -709,17 +687,6 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                         title="Edit deal"
                       >
                         <Pencil size={14} />
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleImpersonate((deal as any).authUserId ?? null);
-                        }}
-                        disabled={!(deal as any).authUserId}
-                        className="text-slate-400 hover:text-brand-primary transition-colors p-1 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                        title={(deal as any).authUserId ? "Login as this client" : "Client has not signed up yet"}
-                      >
-                        <LogIn size={14} />
                       </button>
                       <button
                         onClick={(e) => {

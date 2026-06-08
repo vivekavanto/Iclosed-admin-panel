@@ -33,6 +33,26 @@ export async function convertSingleLead(
   const leadId: string = lead.id;
 
   try {
+    // Co-clients (co-purchasers/co-sellers) are all parties to ONE transaction
+    // and must carry the PRIMARY's file number. A co-client lead has
+    // parent_lead_id pointing at the family's root lead; resolve the root's
+    // deal file_number up front so both the create path and the reconcile-on-
+    // skip path can reuse it. Null if the primary hasn't been converted yet —
+    // the family-convert path converts the root first to avoid that.
+    const parentLeadId: string | null = lead.parent_lead_id ?? null;
+    const isCoClient = parentLeadId != null;
+    let primaryFileNumber: string | null = null;
+    if (isCoClient) {
+      const { data: primaryDeal } = await supabaseAdmin
+        .from("deals")
+        .select("file_number")
+        .eq("lead_id", parentLeadId)
+        .order("created_at", { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      primaryFileNumber = primaryDeal?.file_number ?? null;
+    }
+
     // Check if this lead has already been converted. We use a list query so
     // multiple rows (an unintended state) don't silently make .maybeSingle()
     // return null — which would let the function continue and create yet
@@ -64,13 +84,30 @@ export async function convertSingleLead(
         await supabaseAdmin.from("leads").update({ status: "Converted" }).eq("id", leadId);
       }
 
+      // Reconcile a co-client's existing deal to the family's shared number.
+      // This corrects deals first created by the portal's link-leads placeholder
+      // path (which assigns a temporary, non-shared number): at admin conversion
+      // we rewrite it to the primary's file number.
+      let reconciledFileNumber = existingDeal.file_number;
+      if (
+        isCoClient &&
+        primaryFileNumber &&
+        existingDeal.file_number !== primaryFileNumber
+      ) {
+        await supabaseAdmin
+          .from("deals")
+          .update({ file_number: primaryFileNumber, is_primary_file: false })
+          .eq("id", existingDeal.id);
+        reconciledFileNumber = primaryFileNumber;
+      }
+
       return {
         success: true,
         created: false,
         lead_id: leadId,
         already_converted: true,
         deal_id: existingDeal.id,
-        file_number: existingDeal.file_number,
+        file_number: reconciledFileNumber,
         client_id: existingDeal.client_id,
         invite_sent: false,
         auth_error: null,
@@ -128,7 +165,12 @@ export async function convertSingleLead(
     const year = new Date().getFullYear().toString().slice(-2);
     const prefix = `${year}${leadTypePrefix}-`;
 
-    let generatedFileNumber = opts.file_number;
+    // Co-clients always inherit the primary's file number, overriding the
+    // per-deal counter. Falls through to generation only if the primary deal
+    // wasn't found (shouldn't happen — see root-first ordering at convert-lead).
+    let generatedFileNumber = isCoClient && primaryFileNumber
+      ? primaryFileNumber
+      : opts.file_number;
     if (!generatedFileNumber) {
       const { data: allDeals } = await supabaseAdmin
         .from("deals")
@@ -164,11 +206,15 @@ export async function convertSingleLead(
       }
     }
 
-    if (opts.file_number) {
+    // Manual override (primary only) must be unique among PRIMARY files —
+    // co-clients legitimately share a primary's number, so we only conflict
+    // against other primaries (matching the partial unique index).
+    if (opts.file_number && !isCoClient) {
       const { data: exists } = await supabaseAdmin
         .from("deals")
         .select("id")
         .eq("file_number", opts.file_number)
+        .eq("is_primary_file", true)
         .maybeSingle();
 
       if (exists) {
@@ -193,6 +239,9 @@ export async function convertSingleLead(
         lead_id: leadId,
         client_id: clientId,
         file_number: generatedFileNumber,
+        // Primaries are globally unique (partial unique index); co-clients
+        // share the primary's number, so they're flagged non-primary.
+        is_primary_file: !isCoClient,
         type: lead.lead_type ?? "Purchase",
         // New deals start as "Inactive" — a Postgres trigger
         // (activate_deals_on_first_signin) flips this to "Active" the first

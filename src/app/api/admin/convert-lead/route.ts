@@ -120,7 +120,15 @@ export async function POST(req: Request) {
     const results: ConvertOneResult[] = [];
     let failedCount = 0;
 
-    for (const lead of familyLeads) {
+    // Convert the ROOT (primary) lead first so its deal — and therefore its
+    // file_number — exists before each co-client converts and inherits it.
+    const orderedFamilyLeads = [...familyLeads].sort((a, b) => {
+      if (a.id === rootLeadId) return -1;
+      if (b.id === rootLeadId) return 1;
+      return 0;
+    });
+
+    for (const lead of orderedFamilyLeads) {
       const fileOverride = lead.id === rootLeadId ? file_number : undefined;
       const res = await convertSingleLead(lead, {
         file_number: fileOverride,
@@ -129,6 +137,19 @@ export async function POST(req: Request) {
       });
       results.push(res);
       if (!res.success) failedCount++;
+
+      // If the PRIMARY itself fails — e.g. the admin typed a file number that's
+      // already used by another file — abort before converting any co-clients.
+      // Otherwise they'd be given freshly-generated numbers that don't match the
+      // intended one, leaving the family split. Surface the reason directly so
+      // the admin sees "File number ... already exists" instead of a vague
+      // "Failed: <name>".
+      if (lead.id === rootLeadId && !res.success) {
+        return NextResponse.json(
+          { success: false, error: res.error ?? "Could not convert the primary client." },
+          { status: res.statusCode ?? 500 },
+        );
+      }
     }
 
     const created_count = results.filter((r) => r.created).length;

@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import supabaseAdmin from '@/lib/supabaseAdmin';
 
+// Admin data must always be live — never serve a cached leads list, otherwise
+// an edited phone/name/etc. can keep showing the old value after a refresh.
+export const dynamic = 'force-dynamic';
+
 // camelCase payload key → DB column for the LEADS table (transaction fields).
 const LEAD_FIELD_MAP: Record<string, string> = {
   firstName: 'first_name',
@@ -100,14 +104,32 @@ export async function PUT(req: NextRequest) {
 
     // Split incoming fields: transaction fields → leads, personal/corporate
     // fields → clients (the source of truth for those).
+    // first_name / last_name are NOT NULL in the DB and legitimately empty for
+    // some records (e.g. a person with only a first name). Never null these —
+    // coerce a blank to '' so the update satisfies the constraint instead of
+    // failing with "null value in column ... violates not-null constraint".
+    const NOT_NULL_TEXT_COLUMNS = new Set(['first_name', 'last_name']);
     const updateData: Record<string, any> = {};
     for (const [key, column] of Object.entries(LEAD_FIELD_MAP)) {
-      if (rest[key] !== undefined) updateData[column] = norm(rest[key]);
+      if (rest[key] === undefined) continue;
+      if (NOT_NULL_TEXT_COLUMNS.has(column)) {
+        const raw = rest[key];
+        updateData[column] =
+          typeof raw === 'string' && raw.trim() === '' ? '' : raw;
+      } else {
+        updateData[column] = norm(rest[key]);
+      }
     }
     const clientData: Record<string, any> = {};
     for (const [key, column] of Object.entries(CLIENT_FIELD_MAP)) {
       if (rest[key] !== undefined) clientData[column] = norm(rest[key]);
     }
+    // Phone is a transaction field on leads, but the customer record (clients)
+    // keeps its own copy that the customer portal reads. Mirror it so an admin
+    // phone edit doesn't leave clients.phone stale — the leads→clients trigger
+    // syncs the other personal fields but skips phone. (The Personal
+    // Information task already keeps both in sync via its own trigger.)
+    if (rest.phone !== undefined) clientData.phone = norm(rest.phone);
 
     if (Object.keys(updateData).length === 0 && Object.keys(clientData).length === 0) {
       return NextResponse.json(
@@ -159,6 +181,26 @@ export async function PUT(req: NextRequest) {
         // Reflect the saved personal fields back onto the returned lead object
         // so the UI (which reads lead.*) shows the new values immediately.
         Object.assign(lead, clientData);
+      }
+    }
+
+    // Phone is a personal attribute of the PERSON, not of one deal. A client
+    // can have several deals — each is its own leads row, but they all share
+    // the same email — so a phone edit must update every one of that person's
+    // leads (keyed by email), not just the deal being viewed. Co-purchasers /
+    // co-sellers have their OWN distinct emails, so matching by email touches
+    // only this person's rows. The single customer record (clients.phone) was
+    // already updated above. Non-fatal: this lead + clients are saved even if
+    // the cross-deal cascade fails.
+    if (rest.phone !== undefined && lead?.email) {
+      const phoneValue = norm(rest.phone);
+      const emailPattern = String(lead.email).replace(/[\\%_]/g, '\\$&');
+      const { error: cascadeErr } = await supabaseAdmin
+        .from('leads')
+        .update({ phone: phoneValue })
+        .ilike('email', emailPattern);
+      if (cascadeErr) {
+        console.error('PUT /api/admin/leads phone cascade error:', cascadeErr);
       }
     }
 

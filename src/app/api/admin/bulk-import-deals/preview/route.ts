@@ -50,11 +50,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ success: true, existing: {} });
   }
 
+  // A file number can belong to several deals (a co-client family shares the
+  // primary's number), so preview only the PRIMARY deal to keep the
+  // file_number → snapshot map unambiguous.
   const { data, error } = await supabaseAdmin
     .from("deals")
     .select(
       "file_number, type, status, property_address, file_name, clerk_name, lawyer_name, requisition_date, outstanding_undertakings, outstanding_requisitions, closing_date, opening_date",
     )
+    .eq("is_primary_file", true)
     .in("file_number", fileNumbers);
 
   if (error) {
