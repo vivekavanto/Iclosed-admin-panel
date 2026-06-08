@@ -1541,38 +1541,45 @@ const Leads: React.FC = () => {
 
               {/* Form */}
               <div className="px-6 py-4 space-y-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">
-                    File Number <span className="text-slate-400 font-normal">(optional)</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={convertFileNumber}
-                    onChange={(e) => setConvertFileNumber(e.target.value)}
-                    placeholder="e.g. 26P-0059"
-                    disabled={converting}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
-                  />
-                  <p className="text-xs text-slate-400 mt-1.5">
-                    Leave blank to auto-generate. All parties in this file
-                    (co-purchasers/co-sellers) share this number. If it's already
-                    used by another file, conversion is blocked with an error.
-                  </p>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">
-                    Closing Date <span className="text-slate-400 font-normal">(optional)</span>
-                  </label>
-                  <input
-                    type="date"
-                    value={convertClosingDate}
-                    onChange={(e) => setConvertClosingDate(e.target.value)}
-                    disabled={converting}
-                    min={todayLocalStr}
-                    max="2100-12-31"
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
-                  />
-                </div>
+                {/* Inputs are hidden once the conversion succeeds — only the
+                    result message + Close remain. Kept on failure so the admin
+                    can fix the file number and retry. */}
+                {!convertResult?.success && (
+                  <>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">
+                        File Number <span className="text-slate-400 font-normal">(optional)</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={convertFileNumber}
+                        onChange={(e) => setConvertFileNumber(e.target.value)}
+                        placeholder="e.g. 26P-0059"
+                        disabled={converting}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
+                      />
+                      <p className="text-xs text-slate-400 mt-1.5">
+                        Leave blank to auto-generate. All parties in this file
+                        (co-purchasers/co-sellers) share this number. If it's already
+                        used by another file, conversion is blocked with an error.
+                      </p>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">
+                        Closing Date <span className="text-slate-400 font-normal">(optional)</span>
+                      </label>
+                      <input
+                        type="date"
+                        value={convertClosingDate}
+                        onChange={(e) => setConvertClosingDate(e.target.value)}
+                        disabled={converting}
+                        min={todayLocalStr}
+                        max="2100-12-31"
+                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
+                      />
+                    </div>
+                  </>
+                )}
 
                 {convertResult && (
                   <div className={`flex items-start gap-2 px-3 py-2.5 rounded-lg border text-sm font-medium ${
