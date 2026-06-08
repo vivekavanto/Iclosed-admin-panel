@@ -220,6 +220,25 @@ export async function repointTasksForTemplate(
   return { repointed: touchedDealIds.size, created };
 }
 
+type TaskTemplate = {
+  id: string;
+  name: string;
+  lead_type: string;
+  role_type: string | null;
+  is_shared: boolean | null;
+  is_default: boolean | null;
+  stage_template_id: string | null;
+};
+
+async function loadTaskTemplate(taskTemplateId: string): Promise<TaskTemplate | null> {
+  const { data } = await supabaseAdmin
+    .from("task_templates")
+    .select("id, name, lead_type, role_type, is_shared, is_default, stage_template_id")
+    .eq("id", taskTemplateId)
+    .maybeSingle();
+  return (data as TaskTemplate) ?? null;
+}
+
 /** Active, non-deleted deals whose `type` includes the stage's lead_type. */
 async function dealsForLeadType(leadType: string): Promise<string[]> {
   const out: string[] = [];
@@ -284,5 +303,118 @@ export async function backfillMilestoneForStage(
       .select("id");
     created += data?.length ?? 0;
   }
+  return { created };
+}
+
+/**
+ * Seed a (newly created) task template onto every existing deal of its
+ * lead_type that doesn't already have it, mirroring how `convertLead` clones
+ * task_templates → tasks at conversion time. Without this, a new task template
+ * would only ever appear on FUTURE deals, not already-active dashboards — the
+ * mirror image of the delete cascade.
+ *
+ * Matches conversion semantics:
+ *   - Only `is_default` templates are auto-seeded (non-default ones are opt-in,
+ *     never added on conversion either).
+ *   - A `is_shared` task is skipped on co-purchaser deals (parent_lead_id set),
+ *     exactly as conversion does.
+ *   - Each new task is linked to the deal's live milestone for the template's
+ *     stage (if any), so it rolls up into the right milestone.
+ *   - Idempotent: deals that already carry this task_template_id are skipped.
+ *
+ * Recalcs touched families since a fresh Pending task can flip a previously
+ * "Completed" milestone back to "In Progress"/"Pending".
+ */
+export async function backfillTaskForTemplate(
+  taskTemplateId: string,
+): Promise<{ created: number }> {
+  const tpl = await loadTaskTemplate(taskTemplateId);
+  if (!tpl) return { created: 0 };
+  // Non-default templates are opt-in and never auto-seeded on conversion, so
+  // we don't push them onto existing deals either.
+  if (!tpl.is_default) return { created: 0 };
+
+  const dealIds = await dealsForLeadType(tpl.lead_type);
+  if (dealIds.length === 0) return { created: 0 };
+
+  // Deals that already carry this task → skip (idempotent).
+  const existingTasks = await fetchAllByDealIds<{ deal_id: string }>(
+    "tasks",
+    "deal_id",
+    dealIds,
+    (q) => q.eq("task_template_id", taskTemplateId),
+  );
+  const haveTask = new Set(existingTasks.map((t) => t.deal_id));
+
+  // Live milestone per deal for this template's stage, so the new task links to
+  // the right milestone (matching conversion's stageToMilestone behavior).
+  const liveMsByDeal = new Map<string, string>();
+  if (tpl.stage_template_id) {
+    const milestones = await fetchAllByDealIds<{ id: string; deal_id: string }>(
+      "milestones",
+      "id, deal_id",
+      dealIds,
+      (q) => q.eq("stage_template_id", tpl.stage_template_id).eq("is_deleted", false),
+    );
+    for (const m of milestones) liveMsByDeal.set(m.deal_id, m.id);
+  }
+
+  // Co-purchaser deals: a shared task is skipped for them, just like conversion.
+  // Resolve each deal's lead → parent_lead_id to know which are co-purchasers.
+  const coPurchaserDeals = new Set<string>();
+  if (tpl.is_shared) {
+    const dealLeads = await fetchAllByDealIds<{ id: string; lead_id: string | null }>(
+      "deals",
+      "id, lead_id",
+      dealIds,
+      (q) => q,
+    );
+    const leadIds = [...new Set(dealLeads.map((d) => d.lead_id).filter(Boolean) as string[])];
+    const parentByLead = new Map<string, string | null>();
+    for (let i = 0; i < leadIds.length; i += 200) {
+      const { data } = await supabaseAdmin
+        .from("leads")
+        .select("id, parent_lead_id")
+        .in("id", leadIds.slice(i, i + 200));
+      for (const l of data ?? []) parentByLead.set(l.id, l.parent_lead_id ?? null);
+    }
+    for (const d of dealLeads) {
+      if (d.lead_id && parentByLead.get(d.lead_id)) coPurchaserDeals.add(d.id);
+    }
+  }
+
+  const targetDeals = dealIds.filter(
+    (d) => !haveTask.has(d) && !(tpl.is_shared && coPurchaserDeals.has(d)),
+  );
+  if (targetDeals.length === 0) return { created: 0 };
+
+  const rows = targetDeals.map((deal_id) => ({
+    deal_id,
+    title: tpl.name,
+    status: "Pending" as const,
+    role_type: tpl.role_type ?? "Client",
+    task_template_id: tpl.id,
+    is_shared: tpl.is_shared ?? false,
+    milestone_id: tpl.stage_template_id ? (liveMsByDeal.get(deal_id) ?? null) : null,
+  }));
+
+  let created = 0;
+  const touchedDealIds: string[] = [];
+  for (let i = 0; i < rows.length; i += 200) {
+    const slice = rows.slice(i, i + 200);
+    const { data } = await supabaseAdmin.from("tasks").insert(slice).select("deal_id");
+    created += data?.length ?? 0;
+    for (const r of data ?? []) touchedDealIds.push(r.deal_id);
+  }
+
+  // A new Pending task can change a milestone's rollup, so recalc the families
+  // of deals that actually got a milestone-linked task.
+  const dealsToRecalc = [
+    ...new Set(
+      rows.filter((r) => r.milestone_id).map((r) => r.deal_id),
+    ),
+  ];
+  if (dealsToRecalc.length > 0) await recalcFamiliesForDeals(dealsToRecalc);
+
   return { created };
 }

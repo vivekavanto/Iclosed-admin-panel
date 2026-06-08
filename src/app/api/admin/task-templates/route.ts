@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import supabaseAdmin from '@/lib/supabaseAdmin';
-import { repointTasksForTemplate } from '@/lib/reconcileDealMilestoneLinks';
+import { repointTasksForTemplate, backfillTaskForTemplate } from '@/lib/reconcileDealMilestoneLinks';
 
 const supabase = supabaseAdmin;
 
@@ -52,7 +52,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json(data, { status: 201 });
+  // Seed this brand-new task onto every existing deal of its lead_type so it
+  // shows up on already-active customer dashboards, not just future deals —
+  // mirroring the milestone-template POST backfill. Only default templates are
+  // seeded (matching conversion). Non-blocking: the template was created fine
+  // regardless.
+  let backfilledTasks = 0;
+  try {
+    const res = await backfillTaskForTemplate(data.id);
+    backfilledTasks = res.created;
+  } catch (backfillErr) {
+    console.error('[TaskTemplate POST] Task backfill failed (non-blocking):', backfillErr);
+  }
+
+  return NextResponse.json({ ...data, backfilledTasks }, { status: 201 });
 }
 
 // PUT /api/admin/task-templates
@@ -151,6 +164,24 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: 'ID required' }, { status: 400 });
     }
 
+    // Soft cascade: tasks are per-deal SNAPSHOTS cloned from this template at
+    // lead-conversion time (see convertLead.ts), not live references. Deleting
+    // only the template row would hide the task from FUTURE deals while leaving
+    // it on every EXISTING deal's dashboard. So we also soft-delete the cloned
+    // tasks here. task_responses are intentionally kept intact so the whole
+    // cascade stays reversible (flip is_deleted back to false to restore).
+    let deletedTasks = 0;
+    const { data: clonedTasks, error: taskFetchErr } = await supabase
+      .from('tasks')
+      .update({ is_deleted: true }, { count: 'exact' })
+      .eq('task_template_id', id)
+      .eq('is_deleted', false)
+      .select('id');
+    if (taskFetchErr) {
+      return NextResponse.json({ error: taskFetchErr.message }, { status: 500 });
+    }
+    deletedTasks = clonedTasks?.length ?? 0;
+
     const { error } = await supabase
       .from('task_templates')
       .update({ is_deleted: true })
@@ -160,7 +191,7 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, deleted_tasks: deletedTasks });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
