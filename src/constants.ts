@@ -247,7 +247,7 @@ export const NAV_ITEMS = [
     id: 'templates', 
     icon: 'FileStack',
     children: [
-      { label: 'Stage Templates', id: 'stage-templates' },
+      { label: 'Milestone Templates', id: 'stage-templates' },
       { label: 'Task Templates', id: 'task-templates' },
       { label: 'Email Templates', id: 'email-templates' },
     ]

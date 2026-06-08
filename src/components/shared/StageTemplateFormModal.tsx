@@ -121,7 +121,7 @@ export default function StageTemplateFormModal({
       onCreated(result);
       onClose();
     } catch (err: any) {
-      alert(err.message || `Failed to ${isEditMode ? "update" : "create"} stage template`);
+      alert(err.message || `Failed to ${isEditMode ? "update" : "create"} milestone template`);
     } finally {
       setSubmitting(false);
     }
@@ -131,7 +131,7 @@ export default function StageTemplateFormModal({
     <div
       role="dialog"
       aria-modal="true"
-      aria-label={isEditMode ? "Edit Stage Template" : "Add Stage Template"}
+      aria-label={isEditMode ? "Edit Milestone Template" : "Add Milestone Template"}
       className="fixed inset-0 md:left-[var(--sidebar-w,256px)] z-50 flex justify-end items-stretch lg:justify-center lg:items-center bg-black/30 lg:bg-black/40 lg:backdrop-blur-sm lg:p-4 xl:p-12 2xl:p-20 transition-[left] duration-300"
       onClick={onClose}
     >
@@ -142,10 +142,10 @@ export default function StageTemplateFormModal({
         <div className="flex items-start justify-between px-6 py-5 border-b border-gray-100">
           <div className="min-w-0">
             <h3 className="text-base font-bold text-gray-900">
-              {isEditMode ? "Edit Stage Template" : "Add Stage Template"}
+              {isEditMode ? "Edit Milestone Template" : "Add Milestone Template"}
             </h3>
             <p className="text-xs text-gray-400 mt-1">
-              {isEditMode ? "Update this milestone stage template." : "Define a milestone stage for your workflow."}
+              {isEditMode ? "Update this milestone template." : "Define a milestone for your workflow."}
             </p>
           </div>
           <button
@@ -159,7 +159,7 @@ export default function StageTemplateFormModal({
         <form onSubmit={handleSubmit} className="flex flex-col flex-1 overflow-hidden">
           <div className="px-6 py-6 space-y-5 overflow-y-auto flex-1">
           <div>
-            <label className="block text-sm font-semibold text-gray-800 mb-2">Stage Name <span className="text-[#C10007]">*</span></label>
+            <label className="block text-sm font-semibold text-gray-800 mb-2">Milestone Name <span className="text-[#C10007]">*</span></label>
             <input
               type="text"
               value={form.name}

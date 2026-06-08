@@ -15,7 +15,13 @@ import supabaseAdmin from "./supabaseAdmin";
 export async function recalcMilestonesForFamily(
   familyDealIds: string[],
   primaryDealId: string,
+  options: { sendEmails?: boolean } = {},
 ) {
+  // Template-edit cascades (repointing task→milestone links, backfilling a new
+  // milestone onto existing deals) should NOT fire client emails just because a
+  // pre-completed task landed on a fresh milestone — only genuine task
+  // completion flows should. Such callers opt out via { sendEmails: false }.
+  const sendEmails = options.sendEmails ?? true;
   // Pre-fetch all family milestones to do the mapping
   const { data: familyMilestones } = await supabaseAdmin
     .from("milestones")
@@ -123,7 +129,7 @@ export async function recalcMilestonesForFamily(
           .eq("id", msId);
 
         // Auto-send email when milestone transitions to Completed
-        if (allDone) {
+        if (allDone && sendEmails) {
           const meta = msMetaMap.get(msId);
           if (
             meta &&

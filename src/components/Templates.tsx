@@ -102,7 +102,7 @@ const Templates: React.FC = () => {
   }));
 
   const handleStageCreated = () => {
-    showToast('Stage template created successfully');
+    showToast('Milestone template created successfully');
     fetchData();
   };
 
@@ -121,7 +121,7 @@ const Templates: React.FC = () => {
         const t = Number(preview.tasks) || 0;
         const r = Number(preview.task_responses) || 0;
         if (m === 0 && t === 0) {
-          previewMsg = "No deals currently use this stage template.";
+          previewMsg = "No deals currently use this milestone template.";
         } else {
           previewMsg =
             `Deleting this will also remove:\n` +
@@ -138,7 +138,7 @@ const Templates: React.FC = () => {
         "uses this template across all deals. This cannot be undone.";
     }
 
-    if (!confirm(`Delete stage template "${name}"?\n\n${previewMsg}`)) return;
+    if (!confirm(`Delete milestone template "${name}"?\n\n${previewMsg}`)) return;
 
     try {
       const res = await fetch(`/api/admin/milestone-templates?id=${id}`, { method: 'DELETE' });
@@ -150,8 +150,8 @@ const Templates: React.FC = () => {
       const t = Number(result.deleted_tasks) || 0;
       showToast(
         m > 0
-          ? `Stage template deleted (also removed ${m} milestone${m === 1 ? '' : 's'} and ${t} task${t === 1 ? '' : 's'})`
-          : 'Stage template deleted',
+          ? `Milestone template deleted (also removed ${m} milestone${m === 1 ? '' : 's'} and ${t} task${t === 1 ? '' : 's'})`
+          : 'Milestone template deleted',
       );
       fetchData();
     } catch (err: any) {
@@ -172,7 +172,7 @@ const Templates: React.FC = () => {
         <div>
           <h1 className="text-2xl font-bold text-slate-900 flex items-center">
             <FileStack className="mr-3 text-brand-primary" size={28} />
-            Stage Templates
+            Milestone Templates
           </h1>
           <p className="text-sm text-slate-500 mt-1">
             Configure standardized milestones, email triggers, and client sharing for Nava Wilson files.
@@ -193,7 +193,7 @@ const Templates: React.FC = () => {
             onClick={() => setShowAddForm(true)}
             className="flex items-center gap-2 bg-brand-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-brand-primary/90 transition-colors shadow-sm whitespace-nowrap"
           >
-            <Plus size={16} /> Add Stage
+            <Plus size={16} /> Add Milestone
           </button>
         </div>
       </div>
@@ -212,7 +212,7 @@ const Templates: React.FC = () => {
           open={true}
           onClose={() => setEditingStage(null)}
           onCreated={() => {
-            showToast("Stage template updated successfully");
+            showToast("Milestone template updated successfully");
             setEditingStage(null);
             fetchData();
           }}
@@ -256,7 +256,7 @@ const Templates: React.FC = () => {
                     </div>
                     <span className="font-bold text-lg tracking-tight">{section.title}</span>
                     <span className={`text-xs font-medium ${isExpanded ? 'text-white/70' : 'text-slate-400'}`}>
-                      ({section.items.length} stages)
+                      ({section.items.length} milestones)
                     </span>
                   </div>
                   <ChevronDown size={24} className={`transition-transform duration-300 ${isExpanded ? 'rotate-180' : ''}`} />
@@ -265,13 +265,13 @@ const Templates: React.FC = () => {
                 <div className={`transition-all duration-300 ease-in-out ${isExpanded ? 'max-h-[2500px] opacity-100' : 'max-h-0 opacity-0 overflow-hidden'}`}>
                   <div className="overflow-x-auto">
                     {section.items.length === 0 ? (
-                      <p className="text-sm text-slate-400 text-center py-8">No stage templates for this type.</p>
+                      <p className="text-sm text-slate-400 text-center py-8">No milestone templates for this type.</p>
                     ) : (
                       <table className="w-full text-left text-sm">
                         <thead>
                           <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
                             <th className="px-6 py-3 w-16 text-center">Order</th>
-                            <th className="px-6 py-3">Stage Name</th>
+                            <th className="px-6 py-3">Milestone Name</th>
                             <th className="px-6 py-3">Role</th>
                             <th className="px-6 py-3">Email Template</th>
                             <th className="px-6 py-3 text-center">Shared</th>
@@ -308,14 +308,14 @@ const Templates: React.FC = () => {
                                   <button
                                     onClick={() => setEditingStage(item)}
                                     className="text-slate-400 hover:text-brand-primary transition-colors p-1"
-                                    title="Edit stage template"
+                                    title="Edit milestone template"
                                   >
                                     <Pencil size={14} />
                                   </button>
                                   <button
                                     onClick={() => handleDelete(item.id, item.name)}
                                     className="text-slate-300 hover:text-red-500 transition-colors p-1"
-                                    title="Delete stage template"
+                                    title="Delete milestone template"
                                   >
                                     <Trash2 size={14} />
                                   </button>
