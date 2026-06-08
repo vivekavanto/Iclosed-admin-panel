@@ -37,6 +37,9 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   const [showOnlyFlagged, setShowOnlyFlagged] = useState(false);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [editingDealId, setEditingDealId] = useState<string | null>(null);
+  // Closing-date column sort. null = no sort (API order), 'asc' = earliest
+  // first, 'desc' = latest first. Clicking the header cycles asc → desc.
+  const [closingSort, setClosingSort] = useState<'asc' | 'desc' | null>(null);
 
   const fetchDeals = useCallback(() => {
     fetch('/api/admin/deals')
@@ -241,6 +244,26 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
     }
     return true;
   });
+
+  // Apply the closing-date sort on top of the filtered list. Rows without a
+  // valid closing date always sink to the bottom (regardless of direction) so
+  // the dated rows stay grouped and ordered. When no sort is active the
+  // original API order is preserved.
+  const sortedDeals = closingSort
+    ? [...filteredDeals].sort((a, b) => {
+        const da = parseLocalDate(a.closingDate)?.getTime() ?? NaN;
+        const db = parseLocalDate(b.closingDate)?.getTime() ?? NaN;
+        const aMissing = Number.isNaN(da);
+        const bMissing = Number.isNaN(db);
+        if (aMissing && bMissing) return 0;
+        if (aMissing) return 1;
+        if (bMissing) return -1;
+        return closingSort === 'asc' ? da - db : db - da;
+      })
+    : filteredDeals;
+
+  const toggleClosingSort = () =>
+    setClosingSort((prev) => (prev === 'asc' ? 'desc' : 'asc'));
 
   const applyPreset = (preset: 'today' | 'week' | 'month') => {
     const now = new Date();
@@ -476,7 +499,19 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
               <th className="px-4 py-3 w-24">File No.</th>
               <th className="px-4 py-3 w-48">Client Name</th>
               <th className="px-4 py-3 w-64">Address</th>
-              <th className="px-4 py-3 w-32">Closing date</th>
+              <th className="px-4 py-3 w-32">
+                <button
+                  type="button"
+                  onClick={toggleClosingSort}
+                  className="flex items-center gap-1 font-bold hover:text-brand-primary transition-colors"
+                  title="Sort by closing date"
+                >
+                  Closing date
+                  <span className="text-[10px] leading-none text-slate-400">
+                    {closingSort === 'asc' ? '▲' : closingSort === 'desc' ? '▼' : '↕'}
+                  </span>
+                </button>
+              </th>
               <th className="px-4 py-3 w-32">Requisition date</th>
               <th className="px-4 py-3 w-32">Account created</th>
               <th className="px-4 py-3 w-20">Lawyer</th>
@@ -488,7 +523,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
             </tr>
           </thead>
           <tbody>
-            {filteredDeals.length > 0 ? filteredDeals.map((deal, index) => {
+            {sortedDeals.length > 0 ? sortedDeals.map((deal, index) => {
               const isEven = index % 2 === 0;
               const rowClass = isEven ? 'bg-white' : 'bg-slate-50/80';
               const isCombined = deal.type === DealType.PURCHASE_AND_SALE;
