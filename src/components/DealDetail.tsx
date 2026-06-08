@@ -2774,6 +2774,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                 creates the child lead and runs the same conversion the customer
                 portal does (invite + welcome email, shared-task sync, ID task).
                 Identification upload itself lives in the dedicated card below. */}
+            {/* Temporarily hidden — Add Co-Purchaser / Co-Seller button commented out for now.
             {(() => {
               const currentRole = ((rawDeal?.current_deal_role as string | undefined) ?? "").toLowerCase();
               const isCoLeadView = currentRole.startsWith("co-");
@@ -2792,6 +2793,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                 </button>
               );
             })()}
+            */}
           </div>
           <div className="space-y-2">
             {(() => {
