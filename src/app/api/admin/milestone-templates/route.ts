@@ -137,6 +137,54 @@ export async function PUT(req: NextRequest) {
   return NextResponse.json({ ...data, backfilledMilestones });
 }
 
+// PATCH /api/admin/milestone-templates — batch reorder.
+// Accepts { items: [{ id, order_index }, ...] } and only touches order_index.
+// Deliberately skips the rename propagation / backfill that PUT runs (those are
+// no-ops for an order-only change and would be wasteful to fire per dragged row);
+// it does still mirror the new order onto already-created deal milestones so the
+// customer portal ordering stays in sync.
+export async function PATCH(req: NextRequest) {
+  const body = await req.json();
+  const items = body?.items;
+
+  if (!Array.isArray(items) || items.length === 0) {
+    return NextResponse.json({ error: "items array is required" }, { status: 400 });
+  }
+  for (const it of items) {
+    if (!it?.id || typeof it.order_index !== "number") {
+      return NextResponse.json(
+        { error: "Each item needs an id and a numeric order_index" },
+        { status: 400 },
+      );
+    }
+  }
+
+  for (const it of items) {
+    const { error } = await supabase
+      .from("stage_templates")
+      .update({ order_index: it.order_index })
+      .eq("id", it.id);
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    // Mirror the new order onto deal-side milestones (the portal reads
+    // milestones.order_index directly). Non-blocking — the template reorder has
+    // already succeeded.
+    try {
+      await supabase
+        .from("milestones")
+        .update({ order_index: it.order_index })
+        .eq("stage_template_id", it.id)
+        .eq("is_deleted", false);
+    } catch (propErr) {
+      console.error("[StageTemplate PATCH] order propagation failed (non-blocking):", propErr);
+    }
+  }
+
+  return NextResponse.json({ success: true, updated: items.length });
+}
+
 export async function DELETE(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const id = searchParams.get("id");

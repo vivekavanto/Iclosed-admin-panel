@@ -46,6 +46,11 @@ export async function GET(req: Request) {
     // Non-blocking: fallback to dealId
   }
 
+  // Order by order_index — the task sequence snapshotted from
+  // task_templates.order_index at conversion (see convertLead.ts) and kept in
+  // sync by the task-templates reorder PATCH. This mirrors the milestones GET
+  // route and is the same order the customer portal shows; created_at is only a
+  // stable tiebreaker for rows that share (or lack) an order_index.
   const [{ data: sharedTasks, error: sharedErr }, { data: personalTasks, error: personalErr }] = await Promise.all([
     supabase
       .from("tasks")
@@ -53,6 +58,7 @@ export async function GET(req: Request) {
       .eq("deal_id", primaryDealId)
       .eq("is_shared", true)
       .eq("is_deleted", false)
+      .order("order_index", { ascending: true, nullsFirst: false })
       .order("created_at", { ascending: true }),
     supabase
       .from("tasks")
@@ -60,6 +66,7 @@ export async function GET(req: Request) {
       .eq("deal_id", dealId)
       .or("is_shared.is.null,is_shared.eq.false")
       .eq("is_deleted", false)
+      .order("order_index", { ascending: true, nullsFirst: false })
       .order("created_at", { ascending: true }),
   ]);
 
@@ -195,6 +202,25 @@ export async function DELETE(req: Request) {
 export async function PATCH(req: Request) {
   try {
     const body = await req.json();
+
+    // Batch reorder: { items: [{ id, order_index }] }. Persists a per-deal task
+    // order set by the deal-detail drag handles — only touches order_index, and
+    // skips the shared-task mirroring below (shared rows live on the primary
+    // deal, so updating them by id already reflects across the family).
+    if (Array.isArray(body.items)) {
+      for (const it of body.items) {
+        if (!it?.id || typeof it.order_index !== "number") continue;
+        const { error } = await supabase
+          .from("tasks")
+          .update({ order_index: it.order_index })
+          .eq("id", it.id);
+        if (error) {
+          return NextResponse.json({ success: false, error: error.message }, { status: 400 });
+        }
+      }
+      return NextResponse.json({ success: true, reordered: body.items.length });
+    }
+
     const { id, assignee, status, completed, document_url } = body;
 
     if (!id) {

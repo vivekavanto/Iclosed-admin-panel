@@ -154,6 +154,59 @@ export async function PUT(req: NextRequest) {
   }
 }
 
+// PATCH /api/admin/task-templates — batch reorder.
+// Accepts { items: [{ id, order_index }, ...] } and only touches order_index.
+// Mirrors the milestone reorder endpoint and skips PUT's rename/stage cascades,
+// which are no-ops for an order-only change. It also mirrors the new order onto
+// every existing deal's cloned tasks (tasks.order_index) so the deal view and
+// customer portal re-sort to match — order_index is identical across all deals'
+// copies of a template, so a single update per template covers the whole family.
+export async function PATCH(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const items = body?.items;
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return NextResponse.json({ error: 'items array is required' }, { status: 400 });
+    }
+    for (const it of items) {
+      if (!it?.id || typeof it.order_index !== 'number') {
+        return NextResponse.json(
+          { error: 'Each item needs an id and a numeric order_index' },
+          { status: 400 },
+        );
+      }
+    }
+
+    for (const it of items) {
+      const { error } = await supabase
+        .from('task_templates')
+        .update({ order_index: it.order_index })
+        .eq('id', it.id);
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 });
+      }
+
+      // Propagate the new order onto already-created deal tasks (the portal
+      // reads tasks.order_index directly). Non-blocking — the template reorder
+      // has already succeeded.
+      try {
+        await supabase
+          .from('tasks')
+          .update({ order_index: it.order_index })
+          .eq('task_template_id', it.id)
+          .eq('is_deleted', false);
+      } catch (propErr) {
+        console.error('[TaskTemplate PATCH] order propagation failed (non-blocking):', propErr);
+      }
+    }
+
+    return NextResponse.json({ success: true, updated: items.length });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message }, { status: 500 });
+  }
+}
+
 // DELETE /api/admin/task-templates
 export async function DELETE(req: NextRequest) {
   try {

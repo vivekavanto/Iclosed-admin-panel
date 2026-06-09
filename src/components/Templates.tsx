@@ -11,7 +11,8 @@ import {
   Plus,
   Loader2,
   Trash2,
-  Pencil
+  Pencil,
+  GripVertical
 } from 'lucide-react';
 import StageTemplateFormModal from "@/components/shared/StageTemplateFormModal";
 
@@ -57,6 +58,10 @@ const Templates: React.FC = () => {
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingStage, setEditingStage] = useState<StageTemplate | null>(null);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+  // Drag-and-drop reorder state. dragId = row being dragged, dragOverId = row it
+  // is currently hovering over (drives the drop-indicator line).
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
 
   const showToast = (message: string, type: "success" | "error" = "success") => {
     setToast({ message, type });
@@ -104,6 +109,53 @@ const Templates: React.FC = () => {
   const handleStageCreated = () => {
     showToast('Milestone template created successfully');
     fetchData();
+  };
+
+  // Reorder a milestone within its section by dropping the dragged row onto a
+  // target row. Renumbers order_index sequentially (0-based), updates the UI
+  // optimistically, then persists the whole section via the batch PATCH. Reorder
+  // is only valid within a single lead_type, so drops onto another section's row
+  // (or onto itself) are ignored.
+  const handleMilestoneReorder = async (sectionType: LeadType, targetId: string) => {
+    const sourceId = dragId;
+    setDragId(null);
+    setDragOverId(null);
+    if (!sourceId || sourceId === targetId) return;
+
+    const items = stageTemplates
+      .filter((t) => t.lead_type === sectionType)
+      .sort((a, b) => a.order_index - b.order_index);
+    const from = items.findIndex((i) => i.id === sourceId);
+    const to = items.findIndex((i) => i.id === targetId);
+    if (from === -1 || to === -1) return; // dragged row belongs to another section
+
+    const reordered = [...items];
+    const [moved] = reordered.splice(from, 1);
+    reordered.splice(to, 0, moved);
+
+    const updates = reordered.map((it, idx) => ({ id: it.id, order_index: idx }));
+    const previous = stageTemplates;
+
+    // Optimistic update.
+    setStageTemplates((cur) =>
+      cur.map((t) => {
+        const u = updates.find((x) => x.id === t.id);
+        return u ? { ...t, order_index: u.order_index } : t;
+      }),
+    );
+
+    try {
+      const res = await fetch('/api/admin/milestone-templates', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: updates }),
+      });
+      if (!res.ok) throw new Error('Failed to save order');
+      showToast('Milestone order updated');
+    } catch {
+      setStageTemplates(previous); // revert on failure
+      showToast('Failed to update order', 'error');
+    }
   };
 
   const handleDelete = async (id: string, name: string) => {
@@ -280,9 +332,47 @@ const Templates: React.FC = () => {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                          {section.items.map((item) => (
-                            <tr key={item.id} className="hover:bg-slate-50/80 transition-colors group">
-                              <td className="px-6 py-4 text-center font-mono text-xs text-slate-400">{item.order_index}</td>
+                          {section.items.map((item) => {
+                            const canReorder = !searchTerm.trim();
+                            return (
+                            <tr
+                              key={item.id}
+                              draggable={canReorder}
+                              onDragStart={(e) => {
+                                setDragId(item.id);
+                                e.dataTransfer.effectAllowed = 'move';
+                                e.dataTransfer.setData('text/plain', item.id);
+                              }}
+                              onDragOver={(e) => {
+                                if (!canReorder || !dragId) return;
+                                e.preventDefault();
+                                e.dataTransfer.dropEffect = 'move';
+                                if (dragOverId !== item.id) setDragOverId(item.id);
+                              }}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                handleMilestoneReorder(section.type, item.id);
+                              }}
+                              onDragEnd={() => { setDragId(null); setDragOverId(null); }}
+                              className={`transition-colors group ${
+                                dragId === item.id ? 'opacity-40' : 'hover:bg-slate-50/80'
+                              } ${
+                                dragOverId === item.id && dragId !== item.id
+                                  ? 'border-t-2 border-brand-primary'
+                                  : ''
+                              }`}
+                            >
+                              <td className="px-6 py-4">
+                                <div className="flex items-center justify-center gap-2 text-slate-400">
+                                  {canReorder && (
+                                    <GripVertical
+                                      size={14}
+                                      className="text-slate-300 cursor-grab active:cursor-grabbing"
+                                    />
+                                  )}
+                                  <span className="font-mono text-xs">{item.order_index}</span>
+                                </div>
+                              </td>
                               <td className="px-6 py-4 font-bold text-slate-800">{item.name}</td>
                               <td className="px-6 py-4">
                                 <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-tight ${item.role === 'Lender' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500'}`}>
@@ -322,7 +412,8 @@ const Templates: React.FC = () => {
                                 </div>
                               </td>
                             </tr>
-                          ))}
+                            );
+                          })}
                         </tbody>
                       </table>
                     )}

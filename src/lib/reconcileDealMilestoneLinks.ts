@@ -228,12 +228,13 @@ type TaskTemplate = {
   is_shared: boolean | null;
   is_default: boolean | null;
   stage_template_id: string | null;
+  order_index: number | null;
 };
 
 async function loadTaskTemplate(taskTemplateId: string): Promise<TaskTemplate | null> {
   const { data } = await supabaseAdmin
     .from("task_templates")
-    .select("id, name, lead_type, role_type, is_shared, is_default, stage_template_id")
+    .select("id, name, lead_type, role_type, is_shared, is_default, stage_template_id, order_index")
     .eq("id", taskTemplateId)
     .maybeSingle();
   return (data as TaskTemplate) ?? null;
@@ -396,6 +397,9 @@ export async function backfillTaskForTemplate(
     task_template_id: tpl.id,
     is_shared: tpl.is_shared ?? false,
     milestone_id: tpl.stage_template_id ? (liveMsByDeal.get(deal_id) ?? null) : null,
+    // Snapshot the template order so a newly-seeded task sorts correctly on
+    // existing deals (parity with convertLead's task clone).
+    order_index: tpl.order_index ?? null,
   }));
 
   let created = 0;

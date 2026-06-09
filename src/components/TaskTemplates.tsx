@@ -10,6 +10,7 @@ import {
   ArrowUpDown,
   Edit,
   Trash2,
+  GripVertical,
 } from "lucide-react";
 import TaskTemplateFormModal from "@/components/shared/TaskTemplateFormModal";
 
@@ -34,12 +35,19 @@ const TaskTemplates: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<TaskTemplate | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  // Drag-and-drop reorder state (desktop table only).
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
 
-  const filteredTasks = tasks.filter(
-    (task) =>
-      task.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      task.leadType.toLowerCase().includes(searchTerm.toLowerCase()),
-  );
+  const filteredTasks = tasks
+    .filter(
+      (task) =>
+        task.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        task.leadType.toLowerCase().includes(searchTerm.toLowerCase()),
+    )
+    // Match the server ordering (lead_type, then order) so drag-reordering is
+    // visually consistent regardless of how rows landed in state after edits.
+    .sort((a, b) => a.leadType.localeCompare(b.leadType) || a.order - b.order);
 
   useEffect(() => {
     const fetchTasks = async () => {
@@ -96,6 +104,55 @@ const TaskTemplates: React.FC = () => {
       setTasks((prev) => prev.filter((t) => t.id !== id));
     } else {
       alert("Failed to delete.");
+    }
+  };
+
+  // Reorder a task within its lead-type group by dropping the dragged row onto a
+  // target row. Renumbers order (1-based, matching the form's min=1) within that
+  // group, updates the UI optimistically, then persists via the batch PATCH.
+  // Cross-lead-type drops are ignored since order is scoped per lead_type.
+  const handleTaskReorder = async (targetId: string) => {
+    const sourceId = dragId;
+    setDragId(null);
+    setDragOverId(null);
+    if (!sourceId || sourceId === targetId) return;
+
+    const source = tasks.find((t) => t.id === sourceId);
+    const target = tasks.find((t) => t.id === targetId);
+    if (!source || !target || source.leadType !== target.leadType) return;
+
+    const group = tasks
+      .filter((t) => t.leadType === source.leadType)
+      .sort((a, b) => a.order - b.order);
+    const from = group.findIndex((t) => t.id === sourceId);
+    const to = group.findIndex((t) => t.id === targetId);
+    if (from === -1 || to === -1) return;
+
+    const reordered = [...group];
+    const [moved] = reordered.splice(from, 1);
+    reordered.splice(to, 0, moved);
+
+    const updates = reordered.map((t, idx) => ({ id: t.id, order_index: idx + 1 }));
+    const previous = tasks;
+
+    // Optimistic update.
+    setTasks((cur) =>
+      cur.map((t) => {
+        const u = updates.find((x) => x.id === t.id);
+        return u ? { ...t, order: u.order_index } : t;
+      }),
+    );
+
+    try {
+      const res = await fetch("/api/admin/task-templates", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: updates }),
+      });
+      if (!res.ok) throw new Error("Failed to save order");
+    } catch {
+      setTasks(previous); // revert on failure
+      setFetchError("Failed to update task order");
     }
   };
 
@@ -200,10 +257,35 @@ const TaskTemplates: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {filteredTasks.map((task) => (
+              {filteredTasks.map((task) => {
+                const canReorder = !searchTerm.trim();
+                return (
                 <tr
                   key={task.id}
-                  className="hover:bg-slate-50/50 transition-colors"
+                  draggable={canReorder}
+                  onDragStart={(e) => {
+                    setDragId(task.id);
+                    e.dataTransfer.effectAllowed = "move";
+                    e.dataTransfer.setData("text/plain", task.id);
+                  }}
+                  onDragOver={(e) => {
+                    if (!canReorder || !dragId) return;
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                    if (dragOverId !== task.id) setDragOverId(task.id);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    handleTaskReorder(task.id);
+                  }}
+                  onDragEnd={() => { setDragId(null); setDragOverId(null); }}
+                  className={`transition-colors ${
+                    dragId === task.id ? "opacity-40" : "hover:bg-slate-50/50"
+                  } ${
+                    dragOverId === task.id && dragId !== task.id
+                      ? "border-t-2 border-brand-primary"
+                      : ""
+                  }`}
                 >
                   <td className="px-6 py-5 font-bold text-brand-primary">
                     {task.leadType}
@@ -217,7 +299,15 @@ const TaskTemplates: React.FC = () => {
                     </span>
                   </td>
                   <td className="px-6 py-5 text-slate-600 font-medium">
-                    {task.order}
+                    <div className="flex items-center gap-2">
+                      {canReorder && (
+                        <GripVertical
+                          size={14}
+                          className="text-slate-300 cursor-grab active:cursor-grabbing"
+                        />
+                      )}
+                      <span>{task.order}</span>
+                    </div>
                   </td>
                   <td className="px-6 py-5 italic text-slate-500 font-medium">
                     {task.deadlineRule || "—"}
@@ -261,7 +351,8 @@ const TaskTemplates: React.FC = () => {
                     </div>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
               {filteredTasks.length === 0 && (
                 <tr>
                   <td

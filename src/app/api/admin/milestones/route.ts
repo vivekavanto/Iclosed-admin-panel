@@ -132,6 +132,24 @@ export async function POST(req: Request) {
 export async function PATCH(req: Request) {
   try {
     const body = await req.json();
+
+    // Batch reorder: { items: [{ id, order_index }] }. Persists a per-deal
+    // milestone order set by the deal-detail drag handles — only touches
+    // order_index and skips the linked-deal status sync below.
+    if (Array.isArray(body.items)) {
+      for (const it of body.items) {
+        if (!it?.id || typeof it.order_index !== "number") continue;
+        const { error } = await supabase
+          .from("milestones")
+          .update({ order_index: it.order_index })
+          .eq("id", it.id);
+        if (error) {
+          return NextResponse.json({ success: false, error: error.message }, { status: 400 });
+        }
+      }
+      return NextResponse.json({ success: true, reordered: body.items.length });
+    }
+
     const { id, ...updates } = body;
 
     if (!id) {

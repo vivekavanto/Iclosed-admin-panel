@@ -102,6 +102,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     isShared: t.is_shared ?? false,
     taskTemplateId: t.task_template_id ?? null,
     leadType: t.task_templates?.lead_type ?? null,
+    orderIndex: t.order_index ?? null,
   });
 
   // Use state to allow modification simulation
@@ -1337,6 +1338,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           emailTemplateId: m.email_template_id ?? null,
           stageTemplateId: m.stage_template_id ?? null,
           leadType: m.stage_templates?.lead_type ?? null,
+          orderIndex: m.order_index ?? null,
         })));
       }
     } catch { }
@@ -1615,19 +1617,44 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     }
   };
 
-  const handleSortMilestones = () => {
-    if (
-      dragMilestoneItem.current === null ||
-      dragMilestoneOverItem.current === null
-    )
-      return;
-    const _milestones = [...milestones];
-    const draggedItemContent = _milestones[dragMilestoneItem.current];
-    _milestones.splice(dragMilestoneItem.current, 1);
-    _milestones.splice(dragMilestoneOverItem.current, 0, draggedItemContent);
-    dragMilestoneItem.current = dragMilestoneOverItem.current;
+  // Persist a per-deal milestone reorder. Operates on the displayed rows (which
+  // are sorted by order_index), renumbers the real milestones sequentially, and
+  // saves each new order_index. The drag indices are positions in
+  // displayMilestones. NOTE: a later milestone-template reorder will overwrite
+  // these per-deal values (it propagates order_index to all deals).
+  const handleSortMilestones = async () => {
+    const from = dragMilestoneItem.current;
+    const to = dragMilestoneOverItem.current;
+    dragMilestoneItem.current = null;
     dragMilestoneOverItem.current = null;
-    setMilestones(_milestones);
+    if (from === null || to === null || from === to) return;
+
+    const reordered = [...displayMilestones];
+    const [moved] = reordered.splice(from, 1);
+    reordered.splice(to, 0, moved);
+
+    // Only real (non-ghost) milestones have a DB row to persist.
+    const items = reordered
+      .filter((m) => !m.isTemplate)
+      .map((m, i) => ({ id: m.id, order_index: i }));
+    const orderById = new Map(items.map((it) => [it.id, it.order_index]));
+
+    // Optimistic: write the new order back so displayMilestones re-sorts now.
+    setMilestones((prev) =>
+      prev.map((m) =>
+        orderById.has(m.id) ? { ...m, orderIndex: orderById.get(m.id)! } : m,
+      ),
+    );
+
+    try {
+      await fetch("/api/admin/milestones", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      });
+    } catch {
+      // Non-blocking; a refetch would restore server order.
+    }
   };
 
   // Tasks
@@ -1733,16 +1760,43 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     await refetchData();
   };
 
-  const handleSortTasks = () => {
-    if (dragTaskItem.current === null || dragTaskOverItem.current === null)
-      return;
-    const _tasks = [...tasks];
-    const draggedItemContent = _tasks[dragTaskItem.current];
-    _tasks.splice(dragTaskItem.current, 1);
-    _tasks.splice(dragTaskOverItem.current, 0, draggedItemContent);
-    dragTaskItem.current = dragTaskOverItem.current;
+  // Persist a per-deal task reorder. Mirrors handleSortMilestones: operates on
+  // the displayed (order_index-sorted) rows, renumbers the real tasks, and saves
+  // each new order_index via the batch PATCH. For a co-purchaser deal the shared
+  // task rows belong to the primary deal, so saving by id keeps the family in
+  // sync automatically. NOTE: a later task-template reorder overwrites these.
+  const handleSortTasks = async () => {
+    const from = dragTaskItem.current;
+    const to = dragTaskOverItem.current;
+    dragTaskItem.current = null;
     dragTaskOverItem.current = null;
-    setTasks(_tasks);
+    if (from === null || to === null || from === to) return;
+
+    const reordered = [...displayTasks];
+    const [moved] = reordered.splice(from, 1);
+    reordered.splice(to, 0, moved);
+
+    const items = reordered
+      .filter((t) => !t.isTemplate)
+      .map((t, i) => ({ id: t.id, order_index: i }));
+    const orderById = new Map(items.map((it) => [it.id, it.order_index]));
+
+    // Optimistic: write the new order back so displayTasks re-sorts now.
+    setTasks((prev) =>
+      prev.map((t) =>
+        orderById.has(t.id) ? { ...t, orderIndex: orderById.get(t.id)! } : t,
+      ),
+    );
+
+    try {
+      await fetch("/api/admin/tasks", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      });
+    } catch {
+      // Non-blocking; a refetch would restore server order.
+    }
   };
 
   const getStatusColor = (status: string | undefined) => {
@@ -2408,6 +2462,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         isTemplate: true,
         taskTemplateId: t.id,
         leadType: t.lead_type ?? null,
+        orderIndex: t.order_index ?? null,
       }));
     const userRows: DisplayTask[] = dedupedTasks.map(t => ({
       ...t,
@@ -2416,7 +2471,12 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         t.leadType
         ?? (t.taskTemplateId ? taskTemplateLeadTypeMap.get(t.taskTemplateId) ?? null : null),
     }));
-    const all = [...templateRows, ...userRows];
+    // Sort by order_index (the per-deal task sequence, kept in sync with the
+    // template order and editable via the drag handles). Rows without an order
+    // fall to the end; stable sort keeps ghost-before-real for equal indexes.
+    const all = [...templateRows, ...userRows].sort(
+      (a, b) => (a.orderIndex ?? Number.MAX_SAFE_INTEGER) - (b.orderIndex ?? Number.MAX_SAFE_INTEGER),
+    );
     if (isCombinedDealType) {
       return all.filter(t => matchesActiveTab(t.leadType, activeTaskTab));
     }
@@ -2448,6 +2508,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         emailTemplateId: t.email_template_id ?? null,
         stageTemplateId: t.id,
         leadType: t.lead_type ?? null,
+        orderIndex: t.order_index ?? null,
       }));
     const userRows: DisplayMilestone[] = dedupedMilestones.map(m => ({
       ...m,
@@ -2456,7 +2517,11 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         m.leadType
         ?? (m.stageTemplateId ? stageTemplateLeadTypeMap.get(m.stageTemplateId) ?? null : null),
     }));
-    const all = [...templateRows, ...userRows];
+    // Sort by order_index (the canonical stage sequence; drag handles persist a
+    // per-deal override). Rows without an order fall to the end.
+    const all = [...templateRows, ...userRows].sort(
+      (a, b) => (a.orderIndex ?? Number.MAX_SAFE_INTEGER) - (b.orderIndex ?? Number.MAX_SAFE_INTEGER),
+    );
     if (isCombinedDealType) {
       return all.filter(m => matchesActiveTab(m.leadType, activeMilestoneTab));
     }

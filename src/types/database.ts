@@ -1220,6 +1220,7 @@ export interface Database {
           role_type: string | null;
           is_shared: boolean | null;
           side: "purchase" | "sale" | null;
+          order_index: number | null;
         };
         Insert: {
           id?: string;
@@ -1238,6 +1239,7 @@ export interface Database {
           role_type?: string | null;
           is_shared?: boolean | null;
           side?: "purchase" | "sale" | null;
+          order_index?: number | null;
         };
         Update: {
           id?: string;
@@ -1256,6 +1258,7 @@ export interface Database {
           role_type?: string | null;
           is_shared?: boolean | null;
           side?: "purchase" | "sale" | null;
+          order_index?: number | null;
         };
         Relationships: [
           {

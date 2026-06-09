@@ -552,6 +552,11 @@ export async function convertSingleLead(
           task_template_id: tt.id,
           is_shared: tt.is_shared ?? false,
           milestone_id: tt.stage_template_id ? (stageToMilestone[tt.stage_template_id] ?? null) : null,
+          // Snapshot the template's order so the deal view / customer portal can
+          // sort tasks the same way milestones are sorted (see the tasks GET
+          // route). A later template reorder is propagated to existing deals by
+          // the task-templates PATCH endpoint.
+          order_index: tt.order_index ?? null,
         }));
 
         // Idempotent guard: skip rows whose task_template_id is already on the

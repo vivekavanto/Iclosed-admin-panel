@@ -35,6 +35,7 @@ export interface Task {
   isShared?: boolean;
   taskTemplateId?: string | null;
   leadType?: string | null;
+  orderIndex?: number | null;
 }
 
 export interface Milestone {
@@ -47,6 +48,7 @@ export interface Milestone {
   emailTemplateId?: string | null;
   stageTemplateId?: string | null;
   leadType?: string | null;
+  orderIndex?: number | null;
 }
 
 export interface DealDocument { id: string; name: string; type: string; uploadDate: string; status: 'Draft' | 'Review' | 'Signed' | 'Registered'; }
