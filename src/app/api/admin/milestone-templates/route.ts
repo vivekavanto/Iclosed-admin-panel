@@ -74,10 +74,11 @@ export async function PUT(req: NextRequest) {
   // own — the customer portal reads milestones.title directly.
   const { data: prevTemplate } = await supabase
     .from("stage_templates")
-    .select("name")
+    .select("name, auto_complete")
     .eq("id", id)
     .maybeSingle();
   const previousName: string | null = prevTemplate?.name ?? null;
+  const previousAutoComplete: boolean = prevTemplate?.auto_complete ?? false;
 
   const { data, error } = await supabase
     .from("stage_templates")
@@ -134,7 +135,57 @@ export async function PUT(req: NextRequest) {
     console.error("[StageTemplate PUT] Milestone backfill failed (non-blocking):", backfillErr);
   }
 
-  return NextResponse.json({ ...data, backfilledMilestones });
+  // Auto-complete cascade: when an admin turns ON `auto_complete` for a stage
+  // that wasn't auto-completing before, retroactively complete that milestone
+  // on every existing deal — matching what fresh deals get at creation time.
+  // milestone.status is DERIVED from its tasks by the recalc rollup (see
+  // recalcMilestones.ts: a milestone is "Completed" only when ALL its tasks
+  // are), so completing the milestone alone wouldn't stick — the next recalc
+  // (triggered by any task edit / template cascade) would flip it back. So we
+  // complete the underlying deal-side tasks too, then mark the milestones
+  // Completed; that leaves a consistent state the rollup keeps Completed.
+  // Only fires on the OFF→ON transition so re-saving an already-auto-complete
+  // template never re-stamps progress. Non-blocking.
+  let autoCompletedMilestones = 0;
+  if (auto_complete === true && !previousAutoComplete) {
+    try {
+      const now = new Date().toISOString();
+
+      // Every live deal-side milestone cloned from this stage template.
+      const { data: dealMilestones } = await supabase
+        .from("milestones")
+        .select("id")
+        .eq("stage_template_id", id)
+        .eq("is_deleted", false);
+      const milestoneIds = (dealMilestones ?? []).map((m) => m.id);
+
+      if (milestoneIds.length > 0) {
+        // 1. Complete every still-open task under those milestones. Guarding by
+        //    status keeps already-Completed tasks' original completed_at intact.
+        await supabase
+          .from("tasks")
+          .update({ status: "Completed", completed_at: now })
+          .in("milestone_id", milestoneIds)
+          .neq("status", "Completed")
+          .eq("is_deleted", false);
+
+        // 2. Mark the milestones themselves Completed. With all their tasks now
+        //    done, this is exactly what the recalc rollup would compute, so the
+        //    status is stable.
+        const { data: completed } = await supabase
+          .from("milestones")
+          .update({ status: "Completed", completed_at: now })
+          .in("id", milestoneIds)
+          .neq("status", "Completed")
+          .select("id");
+        autoCompletedMilestones = completed?.length ?? 0;
+      }
+    } catch (acErr) {
+      console.error("[StageTemplate PUT] Auto-complete cascade failed (non-blocking):", acErr);
+    }
+  }
+
+  return NextResponse.json({ ...data, backfilledMilestones, autoCompletedMilestones });
 }
 
 // PATCH /api/admin/milestone-templates — batch reorder.

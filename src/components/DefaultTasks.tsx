@@ -99,7 +99,11 @@ const DefaultTasks: React.FC = () => {
     .filter((s) => s.lead_type === activeLeadType)
     .sort((a, b) => a.order_index - b.order_index);
 
-  const filteredTasks = tasks.filter((t) => t.lead_type === activeLeadType);
+  // This page manages DEFAULT tasks only — a task whose `is_default` is turned
+  // off drops out of here (it's still editable on the general Task Templates
+  // page). Without this filter, non-default tasks lingered with no badge, so
+  // un-defaulting a task looked like it did nothing.
+  const filteredTasks = tasks.filter((t) => t.lead_type === activeLeadType && t.is_default);
 
   const search = searchTerm.toLowerCase();
   const taskMatchesSearch = (t: TaskTemplate) =>
@@ -671,6 +675,7 @@ const DefaultTasks: React.FC = () => {
         defaultLeadType={activeLeadType}
         defaultStageTemplateId={taskFormStageId}
         hideLeadType
+        defaultIsDefault
         editData={editingTask ? {
           id: editingTask.id,
           leadType: editingTask.lead_type,

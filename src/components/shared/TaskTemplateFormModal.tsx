@@ -48,6 +48,8 @@ interface TaskTemplateFormModalProps {
   defaultStageTemplateId?: string | null;
   /** Hide lead type selector when it's implied by context */
   hideLeadType?: boolean;
+  /** Pre-check "Default" for new tasks (the Default Tasks page only lists default tasks) */
+  defaultIsDefault?: boolean;
 }
 
 const EMPTY_FORM: TaskFormData = {
@@ -72,6 +74,7 @@ export default function TaskTemplateFormModal({
   defaultLeadType,
   defaultStageTemplateId,
   hideLeadType = false,
+  defaultIsDefault = false,
 }: TaskTemplateFormModalProps) {
   const buildInitialForm = React.useCallback((): TaskFormData => {
     if (editData) {
@@ -92,8 +95,9 @@ export default function TaskTemplateFormModal({
       ...EMPTY_FORM,
       leadType: defaultLeadType ?? "Purchase",
       stageTemplateId: defaultStageTemplateId ?? "",
+      is_default: defaultIsDefault,
     };
-  }, [editData, defaultLeadType, defaultStageTemplateId]);
+  }, [editData, defaultLeadType, defaultStageTemplateId, defaultIsDefault]);
 
   const [form, setForm] = useState<TaskFormData>(buildInitialForm);
   const [submitting, setSubmitting] = useState(false);
@@ -121,13 +125,16 @@ export default function TaskTemplateFormModal({
         body: JSON.stringify(form),
       });
 
-      if (!res.ok) throw new Error("Failed to save");
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Failed to ${isEdit ? "update" : "create"} task template`);
+      }
 
       const result = await res.json();
       onSaved(result, isEdit);
       onClose();
-    } catch {
-      alert("Error saving task template.");
+    } catch (err: any) {
+      alert(err?.message || "Error saving task template.");
     } finally {
       setSubmitting(false);
     }

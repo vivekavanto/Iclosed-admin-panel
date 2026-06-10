@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
 import supabaseAdmin from '@/lib/supabaseAdmin';
 import { repointTasksForTemplate, backfillTaskForTemplate } from '@/lib/reconcileDealMilestoneLinks';
 
@@ -84,12 +84,13 @@ export async function PUT(req: NextRequest) {
     // the milestone-link cascade (tasks.milestone_id is also a snapshot).
     const { data: prevTemplate } = await supabase
       .from('task_templates')
-      .select('name, stage_template_id')
+      .select('name, stage_template_id, is_default')
       .eq('id', id)
       .maybeSingle();
     const previousName: string | null = prevTemplate?.name ?? null;
     const oldStageTemplateId: string | null = prevTemplate?.stage_template_id ?? null;
     const newStageTemplateId: string | null = stageTemplateId || null;
+    const previousIsDefault: boolean = prevTemplate?.is_default ?? false;
 
     const { data, error } = await supabase
       .from('task_templates')
@@ -112,43 +113,103 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // Propagate a rename to every already-created task that still carries the
-    // old template name. We only touch rows whose title still equals the old
-    // name so per-deal manual title edits (done via the tasks PATCH route) are
-    // preserved. This is what makes the rename reflect in the customer portal,
-    // which reads tasks.title directly. Non-blocking: a failed propagation
-    // shouldn't fail the template update itself.
-    if (name && previousName && name !== previousName) {
-      try {
-        await supabase
-          .from('tasks')
-          .update({ title: name })
-          .eq('task_template_id', id)
-          .eq('title', previousName)
-          .eq('is_deleted', false);
-      } catch (propErr) {
-        console.error('[TaskTemplate PUT] Title propagation failed (non-blocking):', propErr);
+    // The template row itself is now saved — that's the admin's "save". The
+    // deal-side reconciliation below (rename propagation, stage repoint,
+    // backfill) pages through every deal of this lead type and recalcs each
+    // family, which is slow enough that awaiting it inline made the modal hang
+    // on "Saving..." and could exceed the request timeout. None of it feeds the
+    // form's view, so we run it AFTER the response is flushed via `after()`.
+    // Each step stays individually guarded so one failure can't abort the rest.
+    after(async () => {
+      // Propagate a rename to every already-created task that still carries the
+      // old template name. We only touch rows whose title still equals the old
+      // name so per-deal manual title edits (done via the tasks PATCH route) are
+      // preserved. This is what makes the rename reflect in the customer portal,
+      // which reads tasks.title directly.
+      if (name && previousName && name !== previousName) {
+        try {
+          await supabase
+            .from('tasks')
+            .update({ title: name })
+            .eq('task_template_id', id)
+            .eq('title', previousName)
+            .eq('is_deleted', false);
+        } catch (propErr) {
+          console.error('[TaskTemplate PUT] Title propagation failed (non-blocking):', propErr);
+        }
       }
-    }
 
-    // Cascade a stage change onto existing deals: repoint every live task
-    // cloned from this template to the milestone matching the new stage
-    // (creating that milestone where a deal lacks it). Without this, only NEW
-    // deals would pick up the new mapping and existing deals would keep driving
-    // the old milestone. Non-blocking — the template save already succeeded.
-    let repointedTasks = 0;
-    let createdMilestones = 0;
-    if (oldStageTemplateId !== newStageTemplateId) {
-      try {
-        const res = await repointTasksForTemplate(id, newStageTemplateId);
-        repointedTasks = res.repointed;
-        createdMilestones = res.created;
-      } catch (cascadeErr) {
-        console.error('[TaskTemplate PUT] Milestone link cascade failed (non-blocking):', cascadeErr);
+      // Cascade a stage change onto existing deals: repoint every live task
+      // cloned from this template to the milestone matching the new stage
+      // (creating that milestone where a deal lacks it). Without this, only NEW
+      // deals would pick up the new mapping and existing deals would keep driving
+      // the old milestone.
+      if (oldStageTemplateId !== newStageTemplateId) {
+        try {
+          await repointTasksForTemplate(id, newStageTemplateId);
+        } catch (cascadeErr) {
+          console.error('[TaskTemplate PUT] Milestone link cascade failed (non-blocking):', cascadeErr);
+        }
       }
-    }
 
-    return NextResponse.json({ ...data, repointedTasks, createdMilestones });
+      // Turning `is_default` OFF (true→false) un-seeds the task from existing
+      // deals: a default task was auto-cloned onto every deal, so making it
+      // non-default should pull it back off active dashboards, not just stop it
+      // appearing on future conversions. Mirrors the DELETE cascade — soft-delete
+      // the cloned tasks and KEEP task_responses, so re-enabling default (which
+      // re-runs the backfill below) cleanly restores them. Skip the backfill on
+      // this same edit since is_default is now false (it would early-return
+      // anyway). Only fires on the true→false transition.
+      const newIsDefault = is_default ?? false;
+      if (previousIsDefault && !newIsDefault) {
+        try {
+          await supabase
+            .from('tasks')
+            .update({ is_deleted: true })
+            .eq('task_template_id', id)
+            .eq('is_deleted', false);
+        } catch (unseedErr) {
+          console.error('[TaskTemplate PUT] Un-seed cascade failed (non-blocking):', unseedErr);
+        }
+      } else {
+        // Re-enabling default (OFF→ON) must first RESTORE the deal-side tasks our
+        // un-seed soft-deleted, then backfill the rest. The restore is essential:
+        // backfillTaskForTemplate's idempotency check counts soft-deleted rows as
+        // "already present" (it doesn't filter is_deleted), so without un-deleting
+        // them first it would skip exactly the deals we just un-seeded and the
+        // task would never come back. Restoring (vs. inserting fresh) also keeps
+        // each task's existing task_responses attached — the symmetric inverse of
+        // the soft-delete above.
+        if (!previousIsDefault && newIsDefault) {
+          try {
+            await supabase
+              .from('tasks')
+              .update({ is_deleted: false })
+              .eq('task_template_id', id)
+              .eq('is_deleted', true);
+          } catch (restoreErr) {
+            console.error('[TaskTemplate PUT] Re-seed restore failed (non-blocking):', restoreErr);
+          }
+        }
+
+        // Seed this task onto existing deals that are missing it — mirroring the
+        // POST backfill. Without this, a template that becomes eligible only via
+        // an edit (e.g. `is_default` flipped on, or a non-default task created
+        // earlier and now marked default) would never reach already-active deals;
+        // it'd only show on FUTURE conversions. backfillTaskForTemplate is
+        // idempotent (deals already carrying this task_template_id are skipped)
+        // and self-gates on is_default / is_shared, so it's safe to call on every
+        // edit. The repoint above handles deals that HAVE the task; the restore
+        // above handles deals we un-seeded; this handles deals that NEVER had it.
+        try {
+          await backfillTaskForTemplate(id);
+        } catch (backfillErr) {
+          console.error('[TaskTemplate PUT] Task backfill failed (non-blocking):', backfillErr);
+        }
+      }
+    });
+
+    return NextResponse.json({ ...data });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
