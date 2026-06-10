@@ -704,9 +704,28 @@ export async function convertSingleLead(
       const alreadyOnboarded = !!(existingClient?.auth_user_id);
 
       if (alreadyOnboarded) {
-        // User already has portal login — just link, no email
+        // User already has portal login — link the account and send a
+        // "Log into iClosed" email so the returning customer knows their new
+        // file is live and how to get back in (login link + reset fallback).
+        // No "invite/activate" email — their account already exists.
         authUserId = existingClient.auth_user_id;
         alreadyHasLogin = true;
+
+        const customerPortalUrl = (process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ?? "https://www.iclosed.ca/").replace(/\/+$/, "");
+        const redirectTo = `${customerPortalUrl}/api/auth/callback?next=/set-password`;
+
+        const loginResult = await sendAuthEmailViaResend({
+          type: "login",
+          email: lead.email,
+          redirectTo,
+          leadId: lead.id,
+        });
+
+        // Non-blocking: the account is already linked. If the "Log into iClosed"
+        // template is missing/inactive, sendAuthEmail skips the send (no error).
+        if (!loginResult.success && loginResult.error) {
+          authError = loginResult.error;
+        }
       } else {
         // New user — send invite email via Resend
         const customerPortalUrl = (process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ?? "https://www.iclosed.ca/").replace(/\/+$/, "");

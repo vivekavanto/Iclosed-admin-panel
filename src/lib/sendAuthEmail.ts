@@ -16,9 +16,20 @@ import {
  * "Invite User" w
  * orks without requiring an exact rename in the DB.
  */
-const TEMPLATE_NAME_CANDIDATES: Record<"invite" | "recovery", string[]> = {
+type AuthEmailType = "invite" | "recovery" | "login";
+
+const TEMPLATE_NAME_CANDIDATES: Record<AuthEmailType, string[]> = {
   invite: ["Invite User", "Activate", "Activate Account", "Welcome Invite"],
   recovery: ["Reset Password", "Password Reset", "Forgot Password"],
+  // "login" is for returning customers who already have a portal account: a
+  // "Log into iClosed" email with a login link + a password-reset fallback.
+  login: ["Log into iClosed", "Log In", "Login"],
+};
+
+const TEMPLATE_KEYWORDS: Record<AuthEmailType, string[]> = {
+  invite: ["invite", "activate"],
+  recovery: ["reset", "recovery"],
+  login: ["log into", "log in", "login"],
 };
 
 type TemplateLookupResult =
@@ -26,8 +37,8 @@ type TemplateLookupResult =
   | { kind: "inactive"; name: string }
   | { kind: "missing" };
 
-async function findTemplate(type: "invite" | "recovery"): Promise<TemplateLookupResult> {
-  const keywords = type === "invite" ? ["invite", "activate"] : ["reset", "recovery"];
+async function findTemplate(type: AuthEmailType): Promise<TemplateLookupResult> {
+  const keywords = TEMPLATE_KEYWORDS[type];
 
   // 1. Try exact-name matches (active only) in priority order.
   for (const name of TEMPLATE_NAME_CANDIDATES[type]) {
@@ -96,7 +107,7 @@ async function findTemplate(type: "invite" | "recovery"): Promise<TemplateLookup
  * plus Supabase-style {{ .ConfirmationURL }} / {{ .UserMetadata.* }}.
  */
 export async function sendAuthEmailViaResend(opts: {
-  type: "invite" | "recovery";
+  type: AuthEmailType;
   email: string;
   redirectTo: string;
   userData?: Record<string, string>;
@@ -125,6 +136,21 @@ export async function sendAuthEmailViaResend(opts: {
 }> {
   const { type, email, redirectTo, userData, templateId, leadId } = opts;
 
+  // A "login" email is for an existing portal user: its primary CTA is the
+  // plain /login page, but it also carries a password-reset link. Supabase has
+  // no "login" link type, so we mint a RECOVERY link/token for the reset fallback
+  // ({{ reset_url }}). `type` itself stays "login" for template selection.
+  const authLinkType: "invite" | "recovery" = type === "login" ? "recovery" : type;
+
+  // The plain customer-portal /login page (the "Log Into iClosed" button in the
+  // login email). Derived from redirectTo's origin so we don't re-read the env.
+  let loginUrl = "";
+  try {
+    loginUrl = `${new URL(redirectTo).origin}/login`;
+  } catch {
+    loginUrl = "";
+  }
+
   // 1. Generate the Supabase auth link. We DISCARD its action_link — the
   //    URL we send the user is minted by createInvitationToken() below so
   //    we own the 7-day expiry rather than inheriting Supabase's 24h
@@ -133,7 +159,7 @@ export async function sendAuthEmailViaResend(opts: {
   //    record (recovery) and attaching user_metadata.
   const { data: linkData, error: linkError } =
     await supabaseAdmin.auth.admin.generateLink({
-      type,
+      type: authLinkType,
       email,
       options: {
         redirectTo,
@@ -154,7 +180,7 @@ export async function sendAuthEmailViaResend(opts: {
   let actionLink: string;
   try {
     const issued = await createInvitationToken({
-      type,
+      type: authLinkType,
       email,
       redirectTo,
       userData,
@@ -322,6 +348,11 @@ export async function sendAuthEmailViaResend(opts: {
       "{{reset_url}}": actionLink,
       "{{ reset_link }}": actionLink,
       "{{reset_link}}": actionLink,
+      // Login page (NOT an auth link) — the "Log Into iClosed" button.
+      "{{ login_url }}": loginUrl,
+      "{{login_url}}": loginUrl,
+      "{{ login_link }}": loginUrl,
+      "{{login_link}}": loginUrl,
       // Supabase-style placeholders
       "{{ .ConfirmationURL }}": actionLink,
       "{{.ConfirmationURL}}": actionLink,
@@ -365,6 +396,10 @@ export async function sendAuthEmailViaResend(opts: {
     processedBody = processedBody.replace(/\{\{\s*lead\.file_number\s*\}\}/gi, fileNumber);
     processedBody = processedBody.replace(/\{\{\s*lead_type\s*\}\}/gi, leadType);
     processedBody = processedBody.replace(/\{\{\s*confirmation_url\s*\}\}/gi, actionLink);
+    // Login-page link (resolved before the auth-link catch-all + leftover check
+    // below, which don't recognise "login" and would otherwise flag it).
+    processedBody = processedBody.replace(/\{\{\s*login_url\s*\}\}/gi, loginUrl);
+    processedBody = processedBody.replace(/\{\{\s*login_link\s*\}\}/gi, loginUrl);
     // Supabase-style whitespace-tolerant fallbacks
     processedBody = processedBody.replace(/\{\{\s*\.ConfirmationURL\s*\}\}/g, actionLink);
     processedBody = processedBody.replace(/\{\{\s*\.UserMetadata\.first_name\s*\}\}/g, firstName);
