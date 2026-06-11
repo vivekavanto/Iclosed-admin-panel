@@ -239,6 +239,11 @@ export async function sendAuthEmailViaResend(opts: {
   const fileNumber = dealFileNumber ?? lead?.file_number ?? "";
   const leadType = formatLeadTypeLabel(lead?.lead_type);
   const transactionPhrase = renderTransactionPhrase(addressParts, leadType);
+  const sideSuffix = addressParts.treatAsCombined
+    ? " (Purchase & Sale)"
+    : addressParts.recipientSide === "sale"
+      ? " (Sale)"
+      : "";
 
   // 4. Resolve template
   let subject: string;
@@ -303,6 +308,8 @@ export async function sendAuthEmailViaResend(opts: {
       // Lead placeholders
       "{{ lead_address }}": leadAddress,
       "{{lead_address}}": leadAddress,
+      "{{ property_address }}": leadAddress,
+      "{{property_address}}": leadAddress,
       "{{ lead.address_line1 }}": lead?.address_street ?? "",
       "{{lead.address_line1}}": lead?.address_street ?? "",
       "{{ lead.address_city }}": lead?.address_city ?? "",
@@ -311,8 +318,12 @@ export async function sendAuthEmailViaResend(opts: {
       "{{lead.address_province}}": lead?.address_province ?? "",
       "{{ lead.file_number }}": fileNumber,
       "{{lead.file_number}}": fileNumber,
+      "{{ file_number }}": fileNumber,
+      "{{file_number}}": fileNumber,
       "{{ lead_type }}": leadType,
       "{{lead_type}}": leadType,
+      "{{ side_suffix }}": sideSuffix,
+      "{{side_suffix}}": sideSuffix,
       // Stage placeholders (kept as empty for auth-flow emails)
       "{{ stage_name }}": "",
       "{{stage_name}}": "",
@@ -368,9 +379,10 @@ export async function sendAuthEmailViaResend(opts: {
 
     // Pair-up pattern: "{{ lead_type }} of {{ lead_address }}" must render as
     // "Purchase of <P> and Sale of <S>" for combined files, not
-    // "Purchase & Sale of <P> and <S>" which collapses the two sides.
+    // "Purchase & Sale of <P> and <S>" which collapses the two sides. Support
+    // the short property_address alias too.
     const transactionPhrasePattern =
-      /\{\{\s*lead_type\s*\}\}\s+of\s+\{\{\s*lead_address\s*\}\}/gi;
+      /\{\{\s*lead_type\s*\}\}\s+of\s+\{\{\s*(?:lead_address|property_address)\s*\}\}/gi;
 
     let processedBody = template.body
       .replace(transactionPhrasePattern, transactionPhrase)
@@ -390,11 +402,14 @@ export async function sendAuthEmailViaResend(opts: {
     processedBody = processedBody.replace(/\{\{\s*user\.get_full_name\s*\}\}/gi, fullName);
     processedBody = processedBody.replace(/\{\{\s*user\.email\s*\}\}/gi, email);
     processedBody = processedBody.replace(/\{\{\s*lead_address\s*\}\}/gi, leadAddress);
+    processedBody = processedBody.replace(/\{\{\s*property_address\s*\}\}/gi, leadAddress);
     processedBody = processedBody.replace(/\{\{\s*lead\.address_line1\s*\}\}/gi, lead?.address_street ?? "");
     processedBody = processedBody.replace(/\{\{\s*lead\.address_city\s*\}\}/gi, lead?.address_city ?? "");
     processedBody = processedBody.replace(/\{\{\s*lead\.address_province\s*\}\}/gi, lead?.address_province ?? "");
     processedBody = processedBody.replace(/\{\{\s*lead\.file_number\s*\}\}/gi, fileNumber);
+    processedBody = processedBody.replace(/\{\{\s*file_number\s*\}\}/gi, fileNumber);
     processedBody = processedBody.replace(/\{\{\s*lead_type\s*\}\}/gi, leadType);
+    processedBody = processedBody.replace(/\{\{\s*side_suffix\s*\}\}/gi, sideSuffix);
     processedBody = processedBody.replace(/\{\{\s*confirmation_url\s*\}\}/gi, actionLink);
     // Login-page link (resolved before the auth-link catch-all + leftover check
     // below, which don't recognise "login" and would otherwise flag it).
@@ -441,7 +456,10 @@ export async function sendAuthEmailViaResend(opts: {
     rawSubject = rawSubject.replace(/\{\{\s*user\.full_name\s*\}\}/gi, fullName);
     rawSubject = rawSubject.replace(/\{\{\s*user\.get_full_name\s*\}\}/gi, fullName);
     rawSubject = rawSubject.replace(/\{\{\s*lead_address\s*\}\}/gi, leadAddress);
+    rawSubject = rawSubject.replace(/\{\{\s*property_address\s*\}\}/gi, leadAddress);
     rawSubject = rawSubject.replace(/\{\{\s*lead\.file_number\s*\}\}/gi, fileNumber);
+    rawSubject = rawSubject.replace(/\{\{\s*file_number\s*\}\}/gi, fileNumber);
+    rawSubject = rawSubject.replace(/\{\{\s*side_suffix\s*\}\}/gi, sideSuffix);
 
     subject = rawSubject;
     // No HTML wrapper / logo injection — the DB template owns its layout.

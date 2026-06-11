@@ -2,7 +2,6 @@ import { Resend } from "resend";
 import supabaseAdmin from "./supabaseAdmin";
 import {
   formatLeadTypeLabel,
-  buildLeadAddressForEmail,
   buildLeadAddressPartsForEmail,
   renderTransactionPhrase,
 } from "./leadEmailAddress";
@@ -83,14 +82,14 @@ async function interpolate(text: string, lead: any, fileNumber: string | null = 
   const transactionPhrase = renderTransactionPhrase(addressParts, leadType);
   const resolvedFileNumber = fileNumber ?? lead.file_number ?? "";
 
-  // Side suffix for subject lines on combined / sale-only leads. Empty for
-  // pure-purchase leads (the common case) so the subject stays clean.
-  // leadType is now properly capitalized ("Purchase & Sale"), so compare
-  // against a lowercased copy.
-  const leadTypeLower = leadType.toLowerCase();
-  const sideSuffix = leadTypeLower.includes("purchase") && leadTypeLower.includes("sale")
+  // Side suffix for subject lines, scoped to the side THIS recipient sees:
+  // combined primary → " (Purchase & Sale)", any seller (incl. co-seller) →
+  // " (Sale)", purchaser / co-purchaser → "" so the subject stays clean.
+  // Driven by recipientSide (which honors co_person_role) rather than the raw
+  // lead_type, so a co-lead on a Purchase & Sale family gets only their side.
+  const sideSuffix = addressParts.recipientSide === "combined"
     ? " (Purchase & Sale)"
-    : leadTypeLower === "sale" || (leadTypeLower.includes("sale") && !leadTypeLower.includes("purchase"))
+    : addressParts.recipientSide === "sale"
       ? " (Sale)"
       : "";
 

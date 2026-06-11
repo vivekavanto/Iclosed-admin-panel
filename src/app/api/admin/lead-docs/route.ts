@@ -15,7 +15,8 @@ export async function GET(req: Request) {
       const { data: familyDeals } = await supabaseAdmin
         .from("deals")
         .select("lead_id")
-        .in("id", familyDealIds);
+        .in("id", familyDealIds)
+        .eq("is_deleted", false);
 
       const familyLeadIds = [...new Set((familyDeals ?? []).map((d) => d.lead_id).filter(Boolean))];
 
@@ -23,10 +24,26 @@ export async function GET(req: Request) {
         return NextResponse.json([]);
       }
 
+      const { data: activeFamilyLeads, error: activeLeadErr } = await supabaseAdmin
+        .from("leads")
+        .select("id")
+        .in("id", familyLeadIds)
+        .eq("is_deleted", false);
+
+      if (activeLeadErr) {
+        return NextResponse.json({ error: activeLeadErr.message }, { status: 500 });
+      }
+
+      const activeFamilyLeadIds = (activeFamilyLeads ?? []).map((l) => l.id);
+
+      if (activeFamilyLeadIds.length === 0) {
+        return NextResponse.json([]);
+      }
+
       const { data, error } = await supabaseAdmin
         .from("lead_corporate_docs")
         .select("*")
-        .in("lead_id", familyLeadIds);
+        .in("lead_id", activeFamilyLeadIds);
 
       if (error) {
         return NextResponse.json({ error: error.message }, { status: 500 });
@@ -49,6 +66,21 @@ export async function GET(req: Request) {
 
   if (!leadId) {
     return NextResponse.json({ error: "lead_id or deal_id is required" }, { status: 400 });
+  }
+
+  const { data: activeLead, error: activeLeadErr } = await supabaseAdmin
+    .from("leads")
+    .select("id")
+    .eq("id", leadId)
+    .eq("is_deleted", false)
+    .maybeSingle();
+
+  if (activeLeadErr) {
+    return NextResponse.json({ error: activeLeadErr.message }, { status: 500 });
+  }
+
+  if (!activeLead) {
+    return NextResponse.json([]);
   }
 
   const { data, error } = await supabaseAdmin

@@ -45,17 +45,61 @@ export async function GET(req: Request) {
     return NextResponse.json({ success: true, status: {} });
   }
 
+  const { data: activeLeads, error: activeLeadsErr } = await supabaseAdmin
+    .from("leads")
+    .select("id")
+    .in("id", leadIds)
+    .eq("is_deleted", false);
+
+  if (activeLeadsErr) {
+    return NextResponse.json(
+      { success: false, error: activeLeadsErr.message },
+      { status: 500 },
+    );
+  }
+
+  const activeLeadIds = (activeLeads ?? []).map((lead) => lead.id);
+
+  const { data: activeDeals, error: activeDealsErr } = activeLeadIds.length > 0
+    ? await supabaseAdmin
+        .from("deals")
+        .select("lead_id")
+        .in("lead_id", activeLeadIds)
+        .eq("is_deleted", false)
+    : { data: [], error: null };
+
+  if (activeDealsErr) {
+    return NextResponse.json(
+      { success: false, error: activeDealsErr.message },
+      { status: 500 },
+    );
+  }
+
+  const activeDealLeadIds = [
+    ...new Set((activeDeals ?? []).map((deal) => deal.lead_id).filter(Boolean)),
+  ];
+
+  if (activeDealLeadIds.length === 0) {
+    const status = Object.fromEntries(
+      leadIds.map((id) => [
+        id,
+        { signed: false, has_pdf: false, pdf_count: 0, signature_count: 0 },
+      ]),
+    );
+    return NextResponse.json({ success: true, status });
+  }
+
   const [{ data: docs, error: docsErr }, { data: sigs, error: sigsErr }] =
     await Promise.all([
       supabaseAdmin
         .from("lead_corporate_docs")
         .select("lead_id, file_url")
-        .in("lead_id", leadIds)
+        .in("lead_id", activeDealLeadIds)
         .eq("doc_type", "retainer_agreement"),
       supabaseAdmin
         .from("retainer_signatures")
         .select("lead_id")
-        .in("lead_id", leadIds),
+        .in("lead_id", activeDealLeadIds),
     ]);
 
   if (docsErr || sigsErr) {

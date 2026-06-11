@@ -13,6 +13,7 @@ export async function getFamilyDealIds(dealId: string): Promise<string[]> {
       .from("deals")
       .select("lead_id")
       .eq("id", dealId)
+      .eq("is_deleted", false)
       .single();
 
     if (!deal?.lead_id) return [dealId];
@@ -21,6 +22,7 @@ export async function getFamilyDealIds(dealId: string): Promise<string[]> {
       .from("leads")
       .select("id, parent_lead_id")
       .eq("id", deal.lead_id)
+      .eq("is_deleted", false)
       .single();
 
     if (!lead) return [dealId];
@@ -30,7 +32,8 @@ export async function getFamilyDealIds(dealId: string): Promise<string[]> {
     const { data: familyLeads } = await supabaseAdmin
       .from("leads")
       .select("id")
-      .or(`id.eq.${rootLeadId},parent_lead_id.eq.${rootLeadId}`);
+      .or(`id.eq.${rootLeadId},parent_lead_id.eq.${rootLeadId}`)
+      .eq("is_deleted", false);
 
     if (!familyLeads || familyLeads.length <= 1) return [dealId];
 

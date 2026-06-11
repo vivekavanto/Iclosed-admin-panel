@@ -32,6 +32,13 @@ type LeadAddressFields = {
   id?: string | null;
   parent_lead_id?: string | null;
   lead_type?: string | null;
+  /**
+   * Authoritative co-client side recorded at intake ("purchaser" | "seller").
+   * Preferred over the lead_type / address heuristic because that heuristic
+   * can't tell purchaser from seller on a Purchase & Sale parent where both
+   * co-leads share both addresses (see getCoRole in components/Leads.tsx).
+   */
+  co_person_role?: string | null;
   address_street?: string | null;
   address_city?: string | null;
   address_province?: string | null;
@@ -51,7 +58,32 @@ export type LeadAddressParts = {
   treatAsCombined: boolean;
   /** True if the lead is sale-only (not combined). */
   typeIsSaleOnly: boolean;
+  /** The address side this recipient should see. Primaries can see both. */
+  recipientSide: "purchase" | "sale" | "combined";
 };
+
+function inferCoLeadSide(
+  lead: LeadAddressFields,
+  rawType: string,
+  purchase: string,
+  selling: string,
+): "purchase" | "sale" {
+  // Authoritative side recorded at intake wins over every heuristic below.
+  const coPersonRole = (lead.co_person_role ?? "").toLowerCase().trim();
+  if (coPersonRole === "purchaser") return "purchase";
+  if (coPersonRole === "seller") return "sale";
+
+  const typeIsCombined = rawType.includes("purchase") && rawType.includes("sale");
+  const typeIsSaleOnly = !typeIsCombined && rawType.includes("sale");
+
+  if (typeIsSaleOnly) return "sale";
+  if (rawType.includes("purchase") && !rawType.includes("sale")) return "purchase";
+  if (typeIsCombined && selling && !purchase) return "sale";
+  if (typeIsCombined && purchase && !selling) return "purchase";
+  if (lead.selling_address_street && !lead.address_street) return "sale";
+  if (selling && !purchase) return "sale";
+  return "purchase";
+}
 
 /**
  * Returns the underlying purchase / selling address pieces used to render
@@ -63,7 +95,13 @@ export async function buildLeadAddressPartsForEmail(
   lead: LeadAddressFields | null | undefined,
 ): Promise<LeadAddressParts> {
   if (!lead) {
-    return { purchase: "", selling: "", treatAsCombined: false, typeIsSaleOnly: false };
+    return {
+      purchase: "",
+      selling: "",
+      treatAsCombined: false,
+      typeIsSaleOnly: false,
+      recipientSide: "purchase",
+    };
   }
 
   const rawType = (lead.lead_type ?? "").toLowerCase().trim();
@@ -82,6 +120,55 @@ export async function buildLeadAddressPartsForEmail(
     lead.selling_address_province,
     lead.selling_address_postal_code,
   ]);
+
+  if (lead.parent_lead_id) {
+    const recipientSide = inferCoLeadSide(lead, rawType, purchase, selling);
+
+    if ((!purchase && recipientSide === "purchase") || (!selling && recipientSide === "sale")) {
+      const rootLeadId = lead.parent_lead_id;
+      const { data: family } = await supabaseAdmin
+        .from("leads")
+        .select(
+          "id, parent_lead_id, lead_type, address_street, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code",
+        )
+        .or(`id.eq.${rootLeadId},parent_lead_id.eq.${rootLeadId}`);
+
+      for (const sib of family ?? []) {
+        if (!purchase && recipientSide === "purchase") {
+          const candidate = joinAddress([
+            sib.address_street,
+            sib.address_city,
+            sib.address_province,
+            sib.address_postal_code,
+          ]);
+          if (candidate) purchase = candidate;
+        }
+        if (!selling && recipientSide === "sale") {
+          const candidate = joinAddress([
+            sib.selling_address_street,
+            sib.selling_address_city,
+            sib.selling_address_province,
+            sib.selling_address_postal_code,
+          ]);
+          if (candidate) selling = candidate;
+        }
+        if (
+          (recipientSide === "purchase" && purchase) ||
+          (recipientSide === "sale" && selling)
+        ) {
+          break;
+        }
+      }
+    }
+
+    return {
+      purchase: recipientSide === "purchase" ? purchase : "",
+      selling: recipientSide === "sale" ? selling : "",
+      treatAsCombined: false,
+      typeIsSaleOnly: recipientSide === "sale",
+      recipientSide,
+    };
+  }
 
   let treatAsCombined = typeIsCombined || (!!purchase && !!selling);
 
@@ -155,7 +242,13 @@ export async function buildLeadAddressPartsForEmail(
     }
   }
 
-  return { purchase, selling, treatAsCombined, typeIsSaleOnly };
+  return {
+    purchase,
+    selling,
+    treatAsCombined,
+    typeIsSaleOnly,
+    recipientSide: treatAsCombined ? "combined" : typeIsSaleOnly ? "sale" : "purchase",
+  };
 }
 
 /**
@@ -188,6 +281,9 @@ export function renderTransactionPhrase(
   }
   const addr = purchase || selling;
   if (!addr) return "";
+  if (leadTypeLabel.toLowerCase().includes("purchase") && leadTypeLabel.toLowerCase().includes("sale")) {
+    return `Purchase of ${addr}`;
+  }
   return leadTypeLabel ? `${leadTypeLabel} of ${addr}` : addr;
 }
 

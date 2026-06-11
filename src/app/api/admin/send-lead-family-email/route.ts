@@ -3,7 +3,7 @@ import { Resend } from "resend";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { sendWelcomeEmail } from "@/lib/sendWelcomeEmail";
 import { sendAuthEmailViaResend } from "@/lib/sendAuthEmail";
-import { formatLeadTypeLabel, buildLeadAddressForEmail } from "@/lib/leadEmailAddress";
+import { formatLeadTypeLabel, buildLeadAddressPartsForEmail } from "@/lib/leadEmailAddress";
 
 /**
  * POST /api/admin/send-lead-family-email
@@ -79,6 +79,7 @@ async function sendRetainerEmail(
     selling_address_province: string | null;
     selling_address_postal_code: string | null;
     parent_lead_id: string | null;
+    co_person_role: string | null;
   },
   template: { name: string | null; subject: string | null; body: string },
   resend: Resend,
@@ -89,10 +90,10 @@ async function sendRetainerEmail(
   }
 
   // 1. Fetch every signed retainer PDF for this lead. For Purchase & Sale leads
-  //    there can be two (one per side); we attach all of them.
+  //    there can be two (one per side, tagged via `side`).
   const { data: retainerDocs, error: docsErr } = await supabaseAdmin
     .from("lead_corporate_docs")
-    .select("file_name, file_url")
+    .select("file_name, file_url, side")
     .eq("lead_id", lead.id)
     .eq("doc_type", "retainer_agreement");
 
@@ -100,7 +101,23 @@ async function sendRetainerEmail(
     return { success: false, error: `Failed to look up retainer PDF: ${docsErr.message}` };
   }
 
-  const validDocs = (retainerDocs ?? []).filter((d) => !!d.file_url);
+  // Scope the attachments to the side THIS recipient is party to (recipientSide
+  // honors the authoritative co_person_role): a co-purchaser gets the
+  // purchase-side retainer, a co-seller the sale-side, and a primary/combined
+  // client gets both. NULL-side PDFs are legacy and treated as applying to any
+  // side. If side-filtering would leave nothing (mis-tagged data), we fall back
+  // to all signed PDFs rather than silently sending none.
+  const parts = await buildLeadAddressPartsForEmail(lead);
+  const recipientSide = parts.recipientSide;
+
+  let validDocs = (retainerDocs ?? []).filter((d) => !!d.file_url);
+  if (recipientSide !== "combined") {
+    const scoped = validDocs.filter((d) => {
+      const s = (d.side ?? "").toLowerCase().trim();
+      return s === recipientSide || s === "";
+    });
+    if (scoped.length > 0) validDocs = scoped;
+  }
   if (validDocs.length === 0) {
     return {
       success: false,
@@ -140,31 +157,32 @@ async function sendRetainerEmail(
   const firstName = (lead.first_name ?? "").trim();
   const fullName = `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim();
   const leadType = formatLeadTypeLabel(lead.lead_type);
-  const lt = leadType.toLowerCase();
-  const isCombined = lt.includes("purchase") && lt.includes("sale");
-  const isSaleOnly = lt === "sale" || (lt.includes("sale") && !lt.includes("purchase"));
 
-  // Combined "Purchase & Sale" leads surface BOTH the purchase and the
-  // selling address. Falls back to family-sibling leads if either side is
-  // missing on this row.
-  const propertyAddress = await buildLeadAddressForEmail(lead);
+  // Address, role and subject suffix scoped to the side this recipient sees
+  // (recipientSide already honors co_person_role and backfills the missing
+  // side from family siblings). Same parts used to filter the PDFs above:
+  //   combined primary → both addresses, "Purchaser & Seller", " (Purchase & Sale)"
+  //   co-purchaser / purchaser → purchase only, "" suffix
+  //   co-seller / seller → sale only, " (Sale)" suffix
+  const propertyAddress = parts.treatAsCombined
+    ? [parts.purchase, parts.selling].filter(Boolean).join(" and ")
+    : parts.typeIsSaleOnly
+      ? (parts.selling || parts.purchase)
+      : parts.purchase;
 
-  // Co-leads inherit role from the parent's lead_type; standalones use their own.
   const role = lead.parent_lead_id
-    ? isSaleOnly
+    ? recipientSide === "sale"
       ? "Co-Seller"
-      : isCombined && lead.selling_address_street
-        ? "Co-Seller"
-        : "Co-Purchaser"
-    : isCombined
+      : "Co-Purchaser"
+    : recipientSide === "combined"
       ? "Purchaser & Seller"
-      : isSaleOnly
+      : recipientSide === "sale"
         ? "Seller"
         : "Purchaser";
 
-  const sideSuffix = isCombined
+  const sideSuffix = recipientSide === "combined"
     ? " (Purchase & Sale)"
-    : isSaleOnly
+    : recipientSide === "sale"
       ? " (Sale)"
       : "";
 
@@ -356,6 +374,7 @@ export async function POST(req: NextRequest) {
       .from("leads")
       .select("id, first_name, last_name, email, parent_lead_id")
       .eq("id", lead_id)
+      .eq("is_deleted", false)
       .single();
 
     if (clickedError || !clicked) {
@@ -373,6 +392,7 @@ export async function POST(req: NextRequest) {
         .from("leads")
         .select("id, first_name, last_name, email, parent_lead_id")
         .eq("id", clicked.parent_lead_id)
+        .eq("is_deleted", false)
         .single();
       if (parent) primary = parent;
     }
@@ -381,7 +401,8 @@ export async function POST(req: NextRequest) {
     const { data: coLeads } = await supabaseAdmin
       .from("leads")
       .select("id, first_name, last_name, email, parent_lead_id")
-      .eq("parent_lead_id", primary.id);
+      .eq("parent_lead_id", primary.id)
+      .eq("is_deleted", false);
 
     const family: Array<{
       id: string;
@@ -559,9 +580,10 @@ export async function POST(req: NextRequest) {
         const { data: fullLead } = await supabaseAdmin
           .from("leads")
           .select(
-            "id, first_name, last_name, email, lead_type, address_street, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code, parent_lead_id",
+            "id, first_name, last_name, email, lead_type, address_street, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code, parent_lead_id, co_person_role",
           )
           .eq("id", r.id)
+          .eq("is_deleted", false)
           .single();
 
         if (!fullLead) {
