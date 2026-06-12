@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { Deal, DealType, DealStatus } from '../types';
-import { Search, Trash2, Users, AlertTriangle, Upload, Pencil } from 'lucide-react';
+import { Search, Trash2, Users, AlertTriangle, Upload, Pencil, ChevronDown } from 'lucide-react';
 import {
   isNonCitizenFlagged,
   NON_CITIZEN_FLAG_TOOLTIP,
@@ -40,6 +40,44 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   // Closing-date column sort. null = no sort (API order), 'asc' = earliest
   // first, 'desc' = latest first. Clicking the header cycles asc → desc.
   const [closingSort, setClosingSort] = useState<'asc' | 'desc' | null>(null);
+  // Which file row has its pending-tasks panel expanded (one at a time). The
+  // list API only returns the Steps count, not the task titles, so we lazy-fetch
+  // the deal's tasks from /api/admin/tasks the first time a row is expanded and
+  // cache them in pendingTasks keyed by deal id.
+  const [expandedDealId, setExpandedDealId] = useState<string | null>(null);
+  const [pendingTasks, setPendingTasks] = useState<
+    Record<string, { loading: boolean; error: boolean; tasks: { id: string; title: string; status: string }[] }>
+  >({});
+
+  const togglePendingTasks = useCallback((dealId: string) => {
+    setExpandedDealId((prev) => (prev === dealId ? null : dealId));
+    // Fetch once per deal, then serve from cache on subsequent expands.
+    setPendingTasks((prev) => {
+      if (prev[dealId]) return prev;
+      // Kick off the fetch (outside the state update is impossible here without
+      // a ref, so we mark loading and fire the request in a microtask).
+      fetch(`/api/admin/tasks?deal_id=${dealId}`)
+        .then((res) => {
+          if (!res.ok) throw new Error('Failed to load tasks');
+          return res.json();
+        })
+        .then((data: any[]) => {
+          // "Pending" = not Completed (matches the Steps count's open remainder).
+          const pending = (data || [])
+            .filter((t) => t?.status !== 'Completed')
+            .map((t) => ({
+              id: String(t.id),
+              title: t.title?.trim() || 'Untitled task',
+              status: t.status || 'Pending',
+            }));
+          setPendingTasks((p) => ({ ...p, [dealId]: { loading: false, error: false, tasks: pending } }));
+        })
+        .catch(() => {
+          setPendingTasks((p) => ({ ...p, [dealId]: { loading: false, error: true, tasks: [] } }));
+        });
+      return { ...prev, [dealId]: { loading: true, error: false, tasks: [] } };
+    });
+  }, []);
 
   const fetchDeals = useCallback(() => {
     fetch('/api/admin/deals')
@@ -265,7 +303,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   const toggleClosingSort = () =>
     setClosingSort((prev) => (prev === 'asc' ? 'desc' : 'asc'));
 
-  const applyPreset = (preset: 'today' | 'week' | 'month') => {
+  const applyPreset = (preset: 'today' | 'week' | 'nextWeek' | 'month') => {
     const now = new Date();
     const toISO = (d: Date) => d.toISOString().split('T')[0];
     if (preset === 'today') {
@@ -274,6 +312,13 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
     } else if (preset === 'week') {
       const start = new Date(now);
       start.setDate(now.getDate() - now.getDay());
+      const end = new Date(start);
+      end.setDate(start.getDate() + 6);
+      setDateFrom(toISO(start));
+      setDateTo(toISO(end));
+    } else if (preset === 'nextWeek') {
+      const start = new Date(now);
+      start.setDate(now.getDate() - now.getDay() + 7);
       const end = new Date(start);
       end.setDate(start.getDate() + 6);
       setDateFrom(toISO(start));
@@ -398,6 +443,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           <div className="h-8 flex items-center gap-4 ml-auto">
             <button onClick={() => applyPreset('today')} className="text-xs font-medium text-brand-primary hover:underline cursor-pointer">Today</button>
             <button onClick={() => applyPreset('week')} className="text-xs font-medium text-brand-primary hover:underline cursor-pointer">This week</button>
+            <button onClick={() => applyPreset('nextWeek')} className="text-xs font-medium text-brand-primary hover:underline cursor-pointer">Next week</button>
             <button onClick={() => applyPreset('month')} className="text-xs font-medium text-brand-primary hover:underline cursor-pointer">This month</button>
           </div>
         </div>
@@ -506,7 +552,8 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
               const rowClass = isEven ? 'bg-white' : 'bg-slate-50/80';
               const isCombined = deal.type === DealType.PURCHASE_AND_SALE;
               return (
-                <tr key={deal.id} onClick={() => {
+                <React.Fragment key={deal.id}>
+                <tr onClick={() => {
                   console.log("Clicked deal id:", deal.id);
                   onSelectDeal(deal.id);
                 }} className={`${rowClass} hover:bg-brand-light/20 cursor-pointer transition-colors border-b border-slate-100 text-xs text-slate-700 whitespace-nowrap`}>
@@ -662,15 +709,27 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                     )}
                   </td>
                   <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        togglePendingTasks(deal.id);
+                      }}
+                      className="group/steps flex items-center gap-2 cursor-pointer"
+                      title="Show pending tasks for this file"
+                    >
                       <div className="w-16 h-1.5 bg-slate-200 rounded-full overflow-hidden">
                         <div
                           className="h-full bg-red-500 rounded-full transition-all"
                           style={{ width: `${deal.totalTasks ? (deal.completedTasks! / deal.totalTasks) * 100 : 0}%` }}
                         />
                       </div>
-                      <span className="text-[11px] text-slate-500 font-medium">{deal.completedTasks ?? 0}/{deal.totalTasks ?? 0}</span>
-                    </div>
+                      <span className="text-[11px] text-slate-500 font-medium group-hover/steps:text-brand-primary transition-colors">{deal.completedTasks ?? 0}/{deal.totalTasks ?? 0}</span>
+                      <ChevronDown
+                        size={12}
+                        className={`text-slate-400 group-hover/steps:text-brand-primary transition-all ${expandedDealId === deal.id ? 'rotate-180' : ''}`}
+                      />
+                    </button>
                   </td>
                   {/* File name column hidden per request — kept (not deleted). */}
                   <td className="px-4 py-3 hidden">
@@ -701,6 +760,44 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                     </div>
                   </td>
                 </tr>
+                {expandedDealId === deal.id && (
+                  <tr className="bg-brand-light/10 border-b border-slate-100">
+                    <td colSpan={13} className="px-4 py-3">
+                      {(() => {
+                        const entry = pendingTasks[deal.id];
+                        if (!entry || entry.loading) {
+                          return <span className="text-xs text-slate-400">Loading pending tasks…</span>;
+                        }
+                        if (entry.error) {
+                          return <span className="text-xs text-red-500">Failed to load pending tasks.</span>;
+                        }
+                        if (entry.tasks.length === 0) {
+                          return <span className="text-xs text-green-600 font-medium">✓ No pending tasks — all steps completed.</span>;
+                        }
+                        return (
+                          <div className="flex flex-col gap-2">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                              {entry.tasks.length} pending task{entry.tasks.length > 1 ? 's' : ''} for {deal.fileNumber || 'this file'}
+                            </span>
+                            <div className="flex flex-wrap gap-1.5">
+                              {entry.tasks.map((t) => (
+                                <span
+                                  key={t.id}
+                                  className="inline-flex items-center gap-1.5 bg-white border border-slate-200 rounded-full px-2.5 py-1 text-[11px] text-slate-700"
+                                  title={t.status}
+                                >
+                                  <span className={`w-1.5 h-1.5 rounded-full ${t.status === 'In Progress' ? 'bg-amber-400' : 'bg-slate-300'}`} />
+                                  {t.title}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </td>
+                  </tr>
+                )}
+                </React.Fragment>
               );
             }) : (
               <tr><td colSpan={12} className="px-6 py-12 text-center text-slate-500"><p>No files found.</p></td></tr>

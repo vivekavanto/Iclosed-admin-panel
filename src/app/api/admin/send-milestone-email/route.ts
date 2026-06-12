@@ -78,6 +78,21 @@ async function sendEmailForDeal(
         const role = computeRole(lead)
         const propertyRoleRow = role ? `Your Role: ${role}` : ""
 
+        // Per-recipient transaction label: a co-person on a Purchase & Sale deal
+        // retains us for only one side, so the email shows just that side —
+        // Co-Seller → "Sale", Co-Purchaser → "Purchase". The primary client keeps
+        // the full "Purchase & Sale" label. Mirrors formatLeadTypeLabelForRecipient
+        // in iclosed_web.
+        const isPSDeal = leadTypeLower.includes("purchase") && leadTypeLower.includes("sale")
+        const displayLeadType =
+            isPSDeal && lead?.parent_lead_id
+                ? role === "Co-Seller"
+                    ? "Sale"
+                    : role === "Co-Purchaser"
+                        ? "Purchase"
+                        : leadType
+                : leadType
+
         const placeholders: Record<string, string> = {
             // User placeholders
             "{{ user.first_name }}": client.first_name ?? "",
@@ -101,8 +116,8 @@ async function sendEmailForDeal(
             "{{lead.address_province}}": lead?.address_province ?? "",
             "{{ lead.file_number }}": fileNumber,
             "{{lead.file_number}}": fileNumber,
-            "{{ lead_type }}": leadType,
-            "{{lead_type}}": leadType,
+            "{{ lead_type }}": displayLeadType,
+            "{{lead_type}}": displayLeadType,
             // Milestone placeholders
             "{{ stage_name }}": milestone?.title ?? "",
             "{{stage_name}}": milestone?.title ?? "",
@@ -147,7 +162,7 @@ async function sendEmailForDeal(
         processedBody = processedBody.replace(/\{\{\s*lead\.address_city\s*\}\}/gi, lead?.address_city ?? "");
         processedBody = processedBody.replace(/\{\{\s*lead\.address_province\s*\}\}/gi, lead?.address_province ?? "");
         processedBody = processedBody.replace(/\{\{\s*lead\.file_number\s*\}\}/gi, deal.file_number ?? "");
-        processedBody = processedBody.replace(/\{\{\s*lead_type\s*\}\}/gi, leadType);
+        processedBody = processedBody.replace(/\{\{\s*lead_type\s*\}\}/gi, displayLeadType);
         processedBody = processedBody.replace(/\{\{\s*stage_name\s*\}\}/gi, milestone?.title ?? "");
         processedBody = processedBody.replace(/\{\{\s*stage_status\s*\}\}/gi, milestone?.status ?? "Completed");
         // Short-form alias fallbacks

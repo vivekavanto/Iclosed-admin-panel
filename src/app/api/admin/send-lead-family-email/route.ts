@@ -156,7 +156,23 @@ async function sendRetainerEmail(
   //    template's signature-block table layout doesn't break.
   const firstName = (lead.first_name ?? "").trim();
   const fullName = `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim();
-  const leadType = formatLeadTypeLabel(lead.lead_type);
+
+  // Transaction label scoped to the side THIS recipient is party to. A co-person
+  // on a Purchase & Sale deal retains us for only one side, so a co-purchaser
+  // sees "Purchase" and a co-seller "Sale" — not the combined "Purchase & Sale".
+  // The primary/combined client keeps the full "Purchase & Sale" label. Mirrors
+  // formatLeadTypeLabelForRecipient() in iclosed_web. recipientSide is the
+  // authoritative side (honors co_person_role) computed above.
+  const baseLeadType = formatLeadTypeLabel(lead.lead_type);
+  const isCoPerson = Boolean(lead.parent_lead_id);
+  const leadType =
+    baseLeadType === "Purchase & Sale" && isCoPerson
+      ? recipientSide === "sale"
+        ? "Sale"
+        : recipientSide === "purchase"
+          ? "Purchase"
+          : baseLeadType
+      : baseLeadType;
 
   // Address, role and subject suffix scoped to the side this recipient sees
   // (recipientSide already honors co_person_role and backfills the missing
