@@ -21,6 +21,7 @@ import {
   Copy,
   ExternalLink,
   AlertTriangle,
+  Info,
   Upload,
   Check,
   X,
@@ -197,18 +198,19 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const [phoneDraft, setPhoneDraft] = useState<string>("");
   const [savingPhoneId, setSavingPhoneId] = useState<string | null>(null);
 
-  // APS upload modal state
+  // APS upload modal state — multiple files can be uploaded at once and they
+  // APPEND to any existing APS docs (agreement + amendments/waivers).
   const [showApsUpload, setShowApsUpload] = useState(false);
-  const [apsFile, setApsFile] = useState<File | null>(null);
+  const [apsFiles, setApsFiles] = useState<File[]>([]);
   const [uploadingAps, setUploadingAps] = useState(false);
   // Which side this APS upload targets. Set explicitly when the modal is
   // opened from the header (so a Purchase & Sale deal can upload a Purchase
   // APS and a Sale APS separately). Left null when opened from an APS task's
   // Edit modal — there the side is derived from the task's template lead_type.
   const [apsUploadSide, setApsUploadSide] = useState<"purchase" | "sale" | null>(null);
-  // Preflight: is an APS already uploaded for this deal's family? Used to
-  // warn the admin that submitting will replace the existing doc.
-  const [existingApsFileName, setExistingApsFileName] = useState<string | null>(null);
+  // Preflight: how many APS docs already exist for this deal's family. Used to
+  // show an informational "N already uploaded — new files will be added" note.
+  const [existingApsCount, setExistingApsCount] = useState<number>(0);
   const [apsStatusLoading, setApsStatusLoading] = useState(false);
 
   // Full task edit modal — Pencil button on a task row opens this, mirroring
@@ -756,6 +758,17 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       editTaskResponses.find((r) => r.field_id === field.id) ??
       editTaskResponses.find((r) => !r.field_id && r.field_label === field.label) ??
       null
+    );
+  };
+
+  // All (non-deleted) responses backing a field. A file field can hold more
+  // than one file (e.g. APS = agreement + amendments), so the Edit Task modal
+  // must list every matching response, not just the first.
+  const findResponsesForField = (field: TaskFormField): EditableResponse[] => {
+    return editTaskResponses.filter(
+      (r) =>
+        !r.deleted &&
+        (r.field_id === field.id || (!r.field_id && r.field_label === field.label)),
     );
   };
 
@@ -1362,13 +1375,13 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   // submitting will replace the existing file.
   useEffect(() => {
     if (!showApsUpload) {
-      setExistingApsFileName(null);
+      setExistingApsCount(0);
       setApsStatusLoading(false);
       return;
     }
     let cancelled = false;
     setApsStatusLoading(true);
-    setExistingApsFileName(null);
+    setExistingApsCount(0);
     (async () => {
       try {
         const sideQs = apsUploadSide ? `?side=${apsUploadSide}` : "";
@@ -1376,7 +1389,11 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         const json = await res.json();
         if (cancelled) return;
         if (json?.uploaded) {
-          setExistingApsFileName(json.file_name ?? "");
+          setExistingApsCount(
+            typeof json.count === "number"
+              ? json.count
+              : (json.file_names?.length ?? 1),
+          );
         }
       } catch {
         // Non-blocking — finalize endpoint will still replace if needed.
@@ -1390,22 +1407,26 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   }, [showApsUpload, deal.id, apsUploadSide]);
 
   const handleApsUploadSubmit = async () => {
-    if (!apsFile) return;
+    if (apsFiles.length === 0) return;
     setUploadingAps(true);
     try {
-      // Step 1: direct browser → Vercel Blob upload (bypasses 4.5MB
-      // serverless body limit). Token issued by /uploadblobstorage/token
-      // also re-runs the already-uploaded guard so we never burn storage
-      // on a deal that already has an APS.
+      // Step 1: direct browser → Vercel Blob upload for each file (bypasses
+      // the 4.5MB serverless body limit). Token issued by
+      // /uploadblobstorage/token. Uploads run sequentially — lowest risk and
+      // each file gets its own blob URL.
       const leadId = (rawDeal?.lead_id as string | undefined) ?? deal.id;
-      const pathname = `corporate-docs/${leadId}/${Date.now()}-${apsFile.name}`;
-      const blob = await upload(pathname, apsFile, {
-        access: "public",
-        handleUploadUrl: `/api/admin/deals/${deal.id}/uploadblobstorage/token`,
-        contentType: apsFile.type,
-      });
+      const uploaded: { file_url: string; file_name: string }[] = [];
+      for (const file of apsFiles) {
+        const pathname = `corporate-docs/${leadId}/${Date.now()}-${file.name}`;
+        const blob = await upload(pathname, file, {
+          access: "public",
+          handleUploadUrl: `/api/admin/deals/${deal.id}/uploadblobstorage/token`,
+          contentType: file.type,
+        });
+        uploaded.push({ file_url: blob.url, file_name: file.name });
+      }
 
-      // Step 2: finalize — record the doc and complete the APS task
+      // Step 2: finalize — record the doc(s) and complete the APS task
       // (with family sync + milestone recalc). When the upload is being
       // submitted from the Edit Task modal on a specific side's APS
       // task, pass `side` so the server only touches that side — a
@@ -1422,8 +1443,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          file_url: blob.url,
-          file_name: apsFile.name,
+          files: uploaded,
           ...(side ? { side } : {}),
         }),
       });
@@ -1432,14 +1452,15 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         throw new Error(json.error || "Upload failed");
       }
 
+      const n = uploaded.length;
       showToast(
         json.already_completed
-          ? "APS document uploaded. Task was already completed."
-          : "APS document uploaded. Task completed and synced.",
+          ? `${n} APS document${n === 1 ? "" : "s"} uploaded. Task was already completed.`
+          : `${n} APS document${n === 1 ? "" : "s"} uploaded. Task completed and synced.`,
         "success",
       );
       setShowApsUpload(false);
-      setApsFile(null);
+      setApsFiles([]);
       // Refresh every doc-backed surface so the new file shows up in the
       // task table's Doc column and in the View Documents modal — both on
       // this open render and on next open.
@@ -1457,6 +1478,45 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       showToast(err?.message ?? "Upload failed", "error");
     } finally {
       setUploadingAps(false);
+    }
+  };
+
+  // Delete a single APS file (by its blob URL) from the family. Removes both
+  // the lead_corporate_docs row and the bridged task_response so the bridge
+  // can't resurrect it, then refreshes every doc-backed surface.
+  const handleApsDocFileDelete = async (fileUrl: string | null | undefined) => {
+    if (!fileUrl) return;
+    setDeletingApsDocUrl(fileUrl);
+    try {
+      const res = await fetch(
+        `/api/admin/deals/${deal.id}/aps-document?file_url=${encodeURIComponent(fileUrl)}`,
+        { method: "DELETE" },
+      );
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json?.success === false) {
+        throw new Error(json?.error || "Failed to delete file");
+      }
+      // Drop it from the open popup immediately; close if it was the last one.
+      setTaskDocsPopup((prev) =>
+        prev
+          ? (() => {
+              const remaining = prev.docs.filter((d: any) => d.file_url !== fileUrl);
+              return remaining.length > 0 ? { ...prev, docs: remaining } : null;
+            })()
+          : prev,
+      );
+      showToast("APS file removed.", "success");
+      await Promise.all([
+        refetchData(),
+        fetchTaskFileDocs(),
+        fetchLeadCorporateDocs(),
+        fetchDealDocuments(),
+        refreshEditTaskResponses(),
+      ]);
+    } catch (err: any) {
+      showToast(err?.message ?? "Failed to delete file", "error");
+    } finally {
+      setDeletingApsDocUrl(null);
     }
   };
 
@@ -1945,7 +2005,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   // restores the placeholder, which matches how default tasks normally seed.
   const [suppressedTemplateIds, setSuppressedTemplateIds] = useState<Set<string>>(new Set());
   const [taskFileDocs, setTaskFileDocs] = useState<any[]>([]);
-  const [taskDocsPopup, setTaskDocsPopup] = useState<{ taskTitle: string; docs: any[] } | null>(null);
+  const [taskDocsPopup, setTaskDocsPopup] = useState<{ taskTitle: string; docs: any[]; isAps?: boolean } | null>(null);
+  // file_url currently being deleted from the APS docs popup (drives the
+  // per-row spinner / disabled state).
+  const [deletingApsDocUrl, setDeletingApsDocUrl] = useState<string | null>(null);
 
   // Stage form state
   const [showStageForm, setShowStageForm] = useState(false);
@@ -2622,13 +2685,13 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
             // without affecting the other.
             <>
               <button
-                onClick={() => { setApsFile(null); setApsUploadSide("purchase"); setShowApsUpload(true); }}
+                onClick={() => { setApsFiles([]); setApsUploadSide("purchase"); setShowApsUpload(true); }}
                 className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2"
               >
                 <Upload size={16} /> Upload APS (Purchase)
               </button>
               <button
-                onClick={() => { setApsFile(null); setApsUploadSide("sale"); setShowApsUpload(true); }}
+                onClick={() => { setApsFiles([]); setApsUploadSide("sale"); setShowApsUpload(true); }}
                 className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2"
               >
                 <Upload size={16} /> Upload APS (Sale)
@@ -2637,7 +2700,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           ) : (
             <button
               onClick={() => {
-                setApsFile(null);
+                setApsFiles([]);
                 const sole = (dealTypeParts[0] ?? "").toLowerCase();
                 setApsUploadSide(sole === "purchase" ? "purchase" : sole === "sale" ? "sale" : null);
                 setShowApsUpload(true);
@@ -3279,7 +3342,14 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                               onClick={(e) => {
                                 e.preventDefault();
                                 e.stopPropagation();
-                                setTaskDocsPopup({ taskTitle: task.title, docs: matched });
+                                setTaskDocsPopup({
+                                  taskTitle: task.title,
+                                  docs: matched,
+                                  isAps: !!(
+                                    task.taskTemplateId &&
+                                    (taskTemplates as any[]).find((t) => t.id === task.taskTemplateId)?.is_aps_task
+                                  ),
+                                });
                               }}
                               className="flex items-center gap-1.5 text-xs text-brand-primary hover:text-brand-primaryHover cursor-pointer relative z-10 bg-transparent border-none p-0 transition-colors"
                               title={`${matched.length} document${matched.length !== 1 ? "s" : ""}`}
@@ -4065,7 +4135,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           aria-modal="true"
           aria-label="Upload Complete Agreement of Purchase and Sale and Amendments"
           className="fixed inset-0 z-[60] flex justify-end items-stretch lg:justify-center lg:items-center bg-black/30 lg:bg-black/40 lg:backdrop-blur-sm lg:p-4 xl:p-12 2xl:p-20"
-          onClick={() => { if (!uploadingAps) { setShowApsUpload(false); setApsFile(null); } }}
+          onClick={() => { if (!uploadingAps) { setShowApsUpload(false); setApsFiles([]); } }}
         >
           <div
             className="bg-white shadow-2xl flex flex-col w-full h-full max-w-[520px] slide-in-from-right lg:h-auto lg:max-h-[90vh] lg:max-w-5xl lg:rounded-2xl lg:zoom-in lg:duration-200"
@@ -4096,7 +4166,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                 </p>
               </div>
               <button
-                onClick={() => { if (!uploadingAps) { setShowApsUpload(false); setApsFile(null); } }}
+                onClick={() => { if (!uploadingAps) { setShowApsUpload(false); setApsFiles([]); } }}
                 className="text-gray-400 hover:text-gray-700 shrink-0 ml-4"
                 disabled={uploadingAps}
                 aria-label="Close"
@@ -4106,18 +4176,15 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
             </div>
 
             <div className="px-6 py-6 space-y-5 overflow-y-auto">
-              {existingApsFileName !== null && (
-                <div className="flex items-start gap-3 px-4 py-3 rounded-lg border bg-[#FEF2F2] border-[#C10007]/20 text-[#C10007]">
-                  <AlertTriangle size={18} className="mt-0.5 shrink-0" />
+              {existingApsCount > 0 && (
+                <div className="flex items-start gap-3 px-4 py-3 rounded-lg border bg-blue-50 border-blue-200 text-blue-800">
+                  <Info size={18} className="mt-0.5 shrink-0" />
                   <div className="text-sm leading-snug">
-                    <p className="font-semibold">An APS document is already uploaded for this deal.</p>
-                    {existingApsFileName && (
-                      <p className="mt-0.5 text-xs break-all">
-                        Current file: <span className="font-medium">{existingApsFileName}</span>
-                      </p>
-                    )}
+                    <p className="font-semibold">
+                      {existingApsCount} APS document{existingApsCount === 1 ? "" : "s"} already uploaded for this deal.
+                    </p>
                     <p className="mt-1 text-xs">
-                      Submitting a new file will <span className="font-semibold">replace</span> the existing one.
+                      New files will be <span className="font-semibold">added</span>, not replaced.
                     </p>
                   </div>
                 </div>
@@ -4127,68 +4194,79 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                   Upload Agreement of Purchase and Sale <span className="text-[#C10007]">*</span>
                 </label>
 
+                {/* Selected files list — each removable before upload */}
+                {apsFiles.length > 0 && (
+                  <div className="space-y-2 mb-3">
+                    {apsFiles.map((f, idx) => (
+                      <div
+                        key={`${f.name}-${idx}`}
+                        className="flex items-center gap-3 px-4 py-3 rounded-lg border bg-green-50 border-green-200"
+                      >
+                        <CheckCircle size={18} className="text-green-600 shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-bold text-slate-900 truncate">{f.name}</p>
+                          <p className="text-xs text-slate-500">
+                            {(f.size / (1024 * 1024)).toFixed(2)} MB · Ready to upload
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setApsFiles((prev) => prev.filter((_, i) => i !== idx))}
+                          disabled={uploadingAps}
+                          className="text-gray-400 hover:text-[#C10007] shrink-0 disabled:opacity-50"
+                          aria-label={`Remove ${f.name}`}
+                        >
+                          <X size={18} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 <div className="relative group">
                 <input
                   type="file"
+                  multiple
                   accept=".pdf,.jpg,.jpeg,.png"
                   className="absolute inset-0 opacity-0 cursor-pointer z-10"
                   disabled={uploadingAps}
                   onChange={(e) => {
-                    const f = e.target.files?.[0] || null;
-                    if (!f) {
-                      setApsFile(null);
-                      return;
+                    const picked = Array.from(e.target.files ?? []);
+                    if (picked.length === 0) return;
+                    const valid: File[] = [];
+                    for (const f of picked) {
+                      const ok =
+                        f.type === "application/pdf" ||
+                        f.type === "image/jpeg" ||
+                        f.type === "image/jpg" ||
+                        f.type === "image/png";
+                      if (!ok) {
+                        showToast(`"${f.name}" skipped — only PDF, JPG, JPEG or PNG files are accepted.`, "error");
+                        continue;
+                      }
+                      if (f.size > 10 * 1024 * 1024) {
+                        showToast(`"${f.name}" skipped — exceeds the 10MB maximum size.`, "error");
+                        continue;
+                      }
+                      valid.push(f);
                     }
-                    const ok =
-                      f.type === "application/pdf" ||
-                      f.type === "image/jpeg" ||
-                      f.type === "image/jpg" ||
-                      f.type === "image/png";
-                    if (!ok) {
-                      showToast("Only PDF, JPG, JPEG or PNG files are accepted.", "error");
-                      e.target.value = "";
-                      return;
-                    }
-                    if (f.size > 10 * 1024 * 1024) {
-                      showToast("File exceeds the 10MB maximum size.", "error");
-                      e.target.value = "";
-                      return;
-                    }
-                    setApsFile(f);
+                    // Append, so picking files in multiple passes accumulates.
+                    if (valid.length > 0) setApsFiles((prev) => [...prev, ...valid]);
+                    e.target.value = "";
                   }}
                 />
                 <div
-                  className={`px-6 py-10 border-2 border-dashed rounded-xl flex flex-col items-center justify-center transition-all ${
-                    apsFile
-                      ? "bg-green-50 border-green-200"
-                      : "bg-gray-50 border-gray-200 group-hover:border-[#C10007] group-hover:bg-[#FEF2F2]"
-                  }`}
+                  className="px-6 py-10 border-2 border-dashed rounded-xl flex flex-col items-center justify-center transition-all bg-gray-50 border-gray-200 group-hover:border-[#C10007] group-hover:bg-[#FEF2F2]"
                 >
-                  {apsFile ? (
-                    <>
-                      <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center text-green-600 mb-3">
-                        <CheckCircle size={22} />
-                      </div>
-                      <p className="text-sm font-bold text-slate-900 truncate max-w-full px-4 text-center">
-                        {apsFile.name}
-                      </p>
-                      <p className="text-xs text-slate-500 mt-1">
-                        {(apsFile.size / (1024 * 1024)).toFixed(2)} MB · Ready to upload
-                      </p>
-                    </>
-                  ) : (
-                    <>
-                      <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 mb-3">
-                        <Upload size={22} />
-                      </div>
-                      <p className="text-sm font-bold text-slate-900">
-                        Upload Agreement of Purchase and Sale
-                      </p>
-                      <p className="text-xs text-slate-500 mt-1">
-                        Click or drag &middot; .pdf,.jpg,.jpeg,.png &middot; Max 10MB
-                      </p>
-                    </>
-                  )}
+                  <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 mb-3">
+                    <Upload size={22} />
+                  </div>
+                  <p className="text-sm font-bold text-slate-900">
+                    {apsFiles.length > 0 ? "Add more files" : "Upload Agreement of Purchase and Sale"}
+                  </p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Click or drag &middot; multiple files &middot; .pdf,.jpg,.jpeg,.png &middot; Max 10MB each
+                  </p>
                 </div>
                 </div>
               </div>
@@ -4196,7 +4274,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
             <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-3 px-6 py-4 border-t border-gray-100">
               <button
-                onClick={() => { setShowApsUpload(false); setApsFile(null); }}
+                onClick={() => { setShowApsUpload(false); setApsFiles([]); }}
                 className="flex-1 py-3 border border-[#C10007] bg-white text-[#C10007] rounded-lg text-sm font-semibold hover:bg-[#FEF2F2] disabled:opacity-50 disabled:cursor-not-allowed"
                 disabled={uploadingAps}
               >
@@ -4204,13 +4282,13 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
               </button>
               <button
                 onClick={handleApsUploadSubmit}
-                disabled={!apsFile || uploadingAps || apsStatusLoading}
+                disabled={apsFiles.length === 0 || uploadingAps || apsStatusLoading}
                 className="flex-1 py-3 bg-[#C10007] text-white rounded-lg text-sm font-semibold hover:bg-[#a30006] disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {uploadingAps
                   ? "Uploading..."
-                  : existingApsFileName !== null
-                    ? "Replace & Submit"
+                  : apsFiles.length > 1
+                    ? `Upload ${apsFiles.length} & Submit`
                     : "Upload & Submit"}
               </button>
             </div>
@@ -4389,6 +4467,22 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                         >
                           <Download size={16} />
                         </button>
+                        {taskDocsPopup.isAps && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              handleApsDocFileDelete(doc.file_url);
+                            }}
+                            disabled={deletingApsDocUrl === doc.file_url}
+                            className="inline-flex items-center justify-center w-8 h-8 rounded-md text-slate-500 hover:text-[#C10007] hover:bg-white transition-colors disabled:opacity-50"
+                            title="Delete"
+                            aria-label={`Delete ${doc.file_name ?? "file"}`}
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        )}
                       </div>
                     ) : (
                       <span className="text-xs text-gray-400 shrink-0 ml-3">No file</span>
@@ -4625,6 +4719,8 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                       const resp = findResponseForField(field);
                       const currentValue = resp?.value ?? "";
                       const isFile = field.field_type === "file";
+                      // A file field can have multiple files (e.g. APS).
+                      const fieldResponses = isFile ? findResponsesForField(field) : [];
                       const respId = resp?.id ?? null;
                       const isTempResp = respId?.startsWith("tmp-") ?? false;
                       const isPersistedDeleted = Boolean(resp?.deleted);
@@ -4638,78 +4734,85 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                               {field.label}
                               {field.required ? <span className="text-[#C10007] ml-1">*</span> : null}
                             </p>
-                            {/* Per-row Replace button. For APS tasks it
-                                routes through the dedicated APS upload
-                                modal so the family-wide replace flow
-                                runs; for non-APS it uses the generic
-                                file-PATCH path. */}
-                            {isFile && resp && !isPersistedDeleted && !(editingTask && isHomeInsuranceTask(editingTask)) && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (isEditingApsTask) {
-                                    setApsFile(null);
+                            {/* Per-field file action. For APS tasks it opens
+                                the APS upload modal, which APPENDS more files
+                                (agreement + amendments) — so it always reads
+                                "Add"; for non-APS it replaces/uploads via the
+                                generic file-PATCH path. */}
+                            {isFile && !(editingTask && isHomeInsuranceTask(editingTask)) && (
+                              isEditingApsTask ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setApsFiles([]);
                                     setApsUploadSide(null);
                                     setShowApsUpload(true);
-                                  } else {
-                                    triggerReplaceFile(resp.id);
-                                  }
-                                }}
-                                disabled={replacingFileBusy === resp.id}
-                                className="inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold text-[#C10007] border border-[#C10007] rounded hover:bg-[#FEF2F2] disabled:opacity-50"
-                                title="Replace file"
-                              >
-                                <Upload size={12} />
-                                {replacingFileBusy === resp.id ? "Uploading…" : "Replace"}
-                              </button>
-                            )}
-                            {/* Upload button for file fields with no
-                                response yet. APS routes through the
-                                dedicated APS upload modal (family-wide
-                                bridging + task completion); other file
-                                tasks (ID, Home Insurance, etc.) use the
-                                generic task-responses path, which
-                                auto-completes the task once every
-                                required file field is filled. */}
-                            {isFile && !resp && !(editingTask && isHomeInsuranceTask(editingTask)) && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (isEditingApsTask) {
-                                    setApsFile(null);
-                                    setApsUploadSide(null);
-                                    setShowApsUpload(true);
-                                  } else {
-                                    triggerUploadFile(field);
-                                  }
-                                }}
-                                disabled={replacingFileBusy === `field-${field.id}`}
-                                className="inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold text-white bg-[#C10007] rounded hover:bg-[#a30006] disabled:opacity-50"
-                                title="Upload file"
-                              >
-                                <Upload size={12} />
-                                {replacingFileBusy === `field-${field.id}` ? "Uploading…" : "Upload"}
-                              </button>
+                                  }}
+                                  className="inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold text-[#C10007] border border-[#C10007] rounded hover:bg-[#FEF2F2] disabled:opacity-50"
+                                  title="Add more files"
+                                >
+                                  <Upload size={12} /> Add
+                                </button>
+                              ) : fieldResponses.length > 0 ? (
+                                <button
+                                  type="button"
+                                  onClick={() => triggerReplaceFile(fieldResponses[0].id)}
+                                  disabled={replacingFileBusy === fieldResponses[0].id}
+                                  className="inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold text-[#C10007] border border-[#C10007] rounded hover:bg-[#FEF2F2] disabled:opacity-50"
+                                  title="Replace file"
+                                >
+                                  <Upload size={12} />
+                                  {replacingFileBusy === fieldResponses[0].id ? "Uploading…" : "Replace"}
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => triggerUploadFile(field)}
+                                  disabled={replacingFileBusy === `field-${field.id}`}
+                                  className="inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold text-white bg-[#C10007] rounded hover:bg-[#a30006] disabled:opacity-50"
+                                  title="Upload file"
+                                >
+                                  <Upload size={12} />
+                                  {replacingFileBusy === `field-${field.id}` ? "Uploading…" : "Upload"}
+                                </button>
+                              )
                             )}
                           </div>
                           {/* Field input by type */}
                           {isFile ? (
-                            resp && resp.file_url ? (
-                              <div className="flex items-center gap-2 mt-1">
-                                <FileText size={14} className="text-[#C10007] shrink-0" />
-                                <a
-                                  href={resp.file_url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-sm text-[#C10007] hover:underline truncate"
-                                >
-                                  {resp.file_name || "View file"}
-                                </a>
-                              </div>
-                            ) : resp && resp.file_name ? (
-                              <div className="flex items-center gap-2 mt-1">
-                                <FileText size={14} className="text-[#C10007] shrink-0" />
-                                <span className="text-sm text-gray-500">{resp.file_name}</span>
+                            fieldResponses.length > 0 ? (
+                              <div className="mt-1 space-y-2">
+                                {fieldResponses.map((r) => (
+                                  <div key={r.id} className="flex items-center gap-2">
+                                    <FileText size={14} className="text-[#C10007] shrink-0" />
+                                    {r.file_url ? (
+                                      <a
+                                        href={r.file_url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-sm text-[#C10007] hover:underline truncate"
+                                      >
+                                        {r.file_name || "View file"}
+                                      </a>
+                                    ) : (
+                                      <span className="text-sm text-gray-500 truncate">{r.file_name}</span>
+                                    )}
+                                    {/* Per-file delete for APS — removes just
+                                        this file from lead_corporate_docs +
+                                        task_responses. */}
+                                    {isEditingApsTask && r.file_url && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleApsDocFileDelete(r.file_url)}
+                                        disabled={deletingApsDocUrl === r.file_url}
+                                        className="text-gray-400 hover:text-[#C10007] disabled:opacity-50 shrink-0 ml-auto"
+                                        title="Delete this file"
+                                      >
+                                        <Trash2 size={14} />
+                                      </button>
+                                    )}
+                                  </div>
+                                ))}
                               </div>
                             ) : (
                               <p className="text-xs text-gray-400 italic mt-2">
@@ -4855,24 +4958,43 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                           </p>
                           {!resp.deleted && (
                             resp.field_type === "file" ? (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (isEditingApsTask) {
-                                    setApsFile(null);
-                                    setApsUploadSide(null);
-                                    setShowApsUpload(true);
-                                  } else {
-                                    triggerReplaceFile(resp.id);
-                                  }
-                                }}
-                                disabled={replacingFileBusy === resp.id}
-                                className="inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold text-[#C10007] border border-[#C10007] rounded hover:bg-[#FEF2F2] disabled:opacity-50"
-                                title="Replace file"
-                              >
-                                <Upload size={12} />
-                                {replacingFileBusy === resp.id ? "Uploading…" : "Replace"}
-                              </button>
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (isEditingApsTask) {
+                                      setApsFiles([]);
+                                      setApsUploadSide(null);
+                                      setShowApsUpload(true);
+                                    } else {
+                                      triggerReplaceFile(resp.id);
+                                    }
+                                  }}
+                                  disabled={replacingFileBusy === resp.id}
+                                  className="inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold text-[#C10007] border border-[#C10007] rounded hover:bg-[#FEF2F2] disabled:opacity-50"
+                                  title={isEditingApsTask ? "Add more files" : "Replace file"}
+                                >
+                                  <Upload size={12} />
+                                  {replacingFileBusy === resp.id
+                                    ? "Uploading…"
+                                    : isEditingApsTask
+                                      ? "Add"
+                                      : "Replace"}
+                                </button>
+                                {/* Per-file delete for APS — removes just this
+                                    file from lead_corporate_docs + task_responses. */}
+                                {isEditingApsTask && resp.file_url && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleApsDocFileDelete(resp.file_url)}
+                                    disabled={deletingApsDocUrl === resp.file_url}
+                                    className="text-gray-400 hover:text-[#C10007] disabled:opacity-50"
+                                    title="Delete this file"
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                )}
+                              </div>
                             ) : (
                               <button
                                 type="button"

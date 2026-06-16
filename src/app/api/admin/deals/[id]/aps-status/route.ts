@@ -5,12 +5,13 @@ import { getFamilyDealIds } from "@/lib/familyDeals";
 /**
  * GET /api/admin/deals/[id]/aps-status
  *
- * Preflight for the admin APS upload modal. Returns whether an APS document
- * already exists anywhere in the deal's co-purchaser/co-seller family, plus
- * the existing file name (if any) so the modal can show a "this will
- * replace …" warning before the admin submits.
+ * Preflight for the admin APS upload modal. Returns whether APS documents
+ * already exist anywhere in the deal's co-purchaser/co-seller family, plus
+ * how many and their file names, so the modal can show an informational
+ * "N file(s) already uploaded — new files will be added" notice before the
+ * admin submits. (Uploads append; they do not replace.)
  *
- * Response: { uploaded: boolean, file_name?: string }
+ * Response: { uploaded: boolean, count: number, file_names: string[] }
  */
 export async function GET(
   _req: Request,
@@ -49,12 +50,12 @@ export async function GET(
         .from("lead_corporate_docs")
         .select("file_name")
         .in("lead_id", familyLeadIds)
-        .or(orPredicate)
-        .limit(1);
+        .or(orPredicate);
       if (existingDocs && existingDocs.length > 0) {
         return NextResponse.json({
           uploaded: true,
-          file_name: existingDocs[0].file_name ?? undefined,
+          count: existingDocs.length,
+          file_names: existingDocs.map((d) => d.file_name).filter(Boolean),
         });
       }
     }
@@ -86,22 +87,22 @@ export async function GET(
           .select("file_name")
           .in("task_id", apsTaskIds)
           .eq("field_type", "file")
-          .not("file_url", "is", null)
-          .limit(1);
+          .not("file_url", "is", null);
         if (existingResponses && existingResponses.length > 0) {
           return NextResponse.json({
             uploaded: true,
-            file_name: existingResponses[0].file_name ?? undefined,
+            count: existingResponses.length,
+            file_names: existingResponses.map((r) => r.file_name).filter(Boolean),
           });
         }
       }
     }
 
-    return NextResponse.json({ uploaded: false });
+    return NextResponse.json({ uploaded: false, count: 0, file_names: [] });
   } catch (err: any) {
     console.error("GET /api/admin/deals/[id]/aps-status error:", err);
     return NextResponse.json(
-      { uploaded: false, error: err?.message ?? "Server error" },
+      { uploaded: false, count: 0, file_names: [], error: err?.message ?? "Server error" },
       { status: 500 },
     );
   }

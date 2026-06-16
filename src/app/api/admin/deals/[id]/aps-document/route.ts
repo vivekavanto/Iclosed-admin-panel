@@ -5,21 +5,30 @@ import { getFamilyDealIds } from "@/lib/familyDeals";
 /**
  * DELETE /api/admin/deals/[id]/aps-document
  *
- * Family-wide tear-down of the APS document. Removes the APS row(s) from
- * lead_corporate_docs and the bridged file rows from task_responses on every
- * APS task in the deal's co-purchaser/co-seller family.
+ * Tear-down of APS document(s) across the deal's co-purchaser/co-seller
+ * family. Removes the APS row(s) from lead_corporate_docs AND the bridged
+ * file rows from task_responses on every APS task in the family.
  *
- * This is the inverse of POST /uploadblobstorage and is what the Edit Task
- * modal calls when the admin trashes the APS file — without it, the doc
- * survives in lead_corporate_docs and the next upload's preflight still
- * warns that an APS already exists.
+ * Two modes:
+ *   - No `file_url` query param → "remove all": wipes every APS file.
+ *   - `?file_url=…`             → "remove one": wipes only the file with that
+ *                                  exact blob URL (used by the per-file trash
+ *                                  button now that uploads append).
+ *
+ * Deleting BOTH the lead_corporate_docs row and the task_responses row is
+ * mandatory: completeApsTask re-bridges task_responses from
+ * lead_corporate_docs, so leaving the source row would resurrect the file.
  */
 export async function DELETE(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
     const { id: dealId } = await params;
+
+    // Optional single-file scope. When present, only the file with this exact
+    // blob URL is removed; otherwise every APS file in the family is removed.
+    const fileUrl = new URL(req.url).searchParams.get("file_url")?.trim() || null;
 
     const familyDealIds = await getFamilyDealIds(dealId);
 
@@ -40,11 +49,13 @@ export async function DELETE(
       const apsTaskIds = (apsTasks ?? []).map((t) => t.id);
 
       if (apsTaskIds.length > 0) {
-        await supabaseAdmin
+        let respDelete = supabaseAdmin
           .from("task_responses")
           .delete()
           .in("task_id", apsTaskIds)
           .eq("field_type", "file");
+        if (fileUrl) respDelete = respDelete.eq("file_url", fileUrl);
+        await respDelete;
       }
     }
 
@@ -58,13 +69,15 @@ export async function DELETE(
     ];
 
     if (familyLeadIds.length > 0) {
-      await supabaseAdmin
+      let docDelete = supabaseAdmin
         .from("lead_corporate_docs")
         .delete()
         .in("lead_id", familyLeadIds)
         .or(
           "doc_type.eq.aps,doc_type.eq.aps_purchase,doc_type.eq.aps_sale,custom_type.ilike.%APS%",
         );
+      if (fileUrl) docDelete = docDelete.eq("file_url", fileUrl);
+      await docDelete;
     }
 
     return NextResponse.json({ success: true });

@@ -136,11 +136,15 @@ const Intake: React.FC = () => {
           fileName = doc.file.name;
         }
 
+        // APS rows (marked by customType "APS Document") are stored as
+        // doc_type "aps" so completeApsTask recognizes and bridges them into
+        // the APS task on conversion. Other corporate docs keep their type.
+        const isApsDoc = (doc.customType || '').trim().toLowerCase() === 'aps document';
         const { error: docError } = await supabase
           .from('lead_corporate_docs')
           .insert({
             lead_id: lead.id,
-            doc_type: doc.type,
+            doc_type: isApsDoc ? 'aps' : doc.type,
             custom_type: doc.customType || null,
             file_url: fileUrl,
             file_name: fileName,
@@ -281,6 +285,25 @@ const Intake: React.FC = () => {
         {
           id: Math.random().toString(36).substr(2, 9),
           type: "Article of Incorporation",
+          file: null,
+        },
+      ],
+    });
+  };
+
+  // Append another APS document row in the APS-signed flow, so a client can
+  // upload the agreement plus its amendments/waivers. APS rows are marked by
+  // customType "APS Document"; submitIntake stores them as doc_type "aps" so
+  // they bridge into the APS task on conversion.
+  const addApsDocField = () => {
+    setData({
+      ...data,
+      corporateDocs: [
+        ...data.corporateDocs,
+        {
+          id: Math.random().toString(36).substr(2, 9),
+          type: "Other",
+          customType: "APS Document",
           file: null,
         },
       ],
@@ -829,10 +852,11 @@ const Intake: React.FC = () => {
                     Required Documents
                   </h3>
                   <button
-                    onClick={addDocField}
+                    onClick={data.apsSigned === "yes" ? addApsDocField : addDocField}
                     className="flex items-center gap-2 text-brand-primary font-bold text-xs hover:underline"
                   >
-                    <Plus size={14} /> Add new corporate file
+                    <Plus size={14} />
+                    {data.apsSigned === "yes" ? "Add another APS file" : "Add new corporate file"}
                   </button>
                 </div>
 
@@ -851,49 +875,64 @@ const Intake: React.FC = () => {
                       >
                         <div className="flex justify-between items-start gap-4 mb-4">
                           <div className="flex-1 space-y-3">
-                            <div>
-                              <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">
-                                File Type
-                              </label>
-                              <div className="relative">
-                                <select
-                                  className="w-full pl-4 pr-10 py-2.5 border border-slate-200 rounded-lg text-sm font-bold text-slate-800 appearance-none bg-white focus:border-brand-primary outline-none"
-                                  value={doc.type}
-                                  onChange={(e) =>
-                                    updateDoc(doc.id, {
-                                      type: e.target.value as any,
-                                    })
-                                  }
-                                >
-                                  <option>Article of Incorporation</option>
-                                  <option>Corporation Profile</option>
-                                  <option>Special Shareholder Agreement</option>
-                                  <option>Directors Resolution</option>
-                                  <option>Other</option>
-                                </select>
-                                <ChevronDown
-                                  size={14}
-                                  className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"
-                                />
-                              </div>
-                            </div>
-                            {doc.type === "Other" && (
-                              <div className="animate-in fade-in slide-in-from-top-2">
+                            {data.apsSigned === "yes" ? (
+                              // APS-signed flow: every row is an APS document, so
+                              // skip the file-type picker and just label it.
+                              <div>
                                 <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">
-                                  Specify File Type
+                                  File Type
                                 </label>
-                                <input
-                                  type="text"
-                                  placeholder="e.g. Partnership Agreement"
-                                  className="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm font-bold text-slate-800 focus:border-brand-primary outline-none"
-                                  value={doc.customType || ""}
-                                  onChange={(e) =>
-                                    updateDoc(doc.id, {
-                                      customType: e.target.value,
-                                    })
-                                  }
-                                />
+                                <p className="text-sm font-bold text-slate-800">
+                                  Agreement of Purchase and Sale
+                                </p>
                               </div>
+                            ) : (
+                              <>
+                                <div>
+                                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">
+                                    File Type
+                                  </label>
+                                  <div className="relative">
+                                    <select
+                                      className="w-full pl-4 pr-10 py-2.5 border border-slate-200 rounded-lg text-sm font-bold text-slate-800 appearance-none bg-white focus:border-brand-primary outline-none"
+                                      value={doc.type}
+                                      onChange={(e) =>
+                                        updateDoc(doc.id, {
+                                          type: e.target.value as any,
+                                        })
+                                      }
+                                    >
+                                      <option>Article of Incorporation</option>
+                                      <option>Corporation Profile</option>
+                                      <option>Special Shareholder Agreement</option>
+                                      <option>Directors Resolution</option>
+                                      <option>Other</option>
+                                    </select>
+                                    <ChevronDown
+                                      size={14}
+                                      className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"
+                                    />
+                                  </div>
+                                </div>
+                                {doc.type === "Other" && (
+                                  <div className="animate-in fade-in slide-in-from-top-2">
+                                    <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">
+                                      Specify File Type
+                                    </label>
+                                    <input
+                                      type="text"
+                                      placeholder="e.g. Partnership Agreement"
+                                      className="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm font-bold text-slate-800 focus:border-brand-primary outline-none"
+                                      value={doc.customType || ""}
+                                      onChange={(e) =>
+                                        updateDoc(doc.id, {
+                                          customType: e.target.value,
+                                        })
+                                      }
+                                    />
+                                  </div>
+                                )}
+                              </>
                             )}
                           </div>
                           <button
