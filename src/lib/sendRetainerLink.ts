@@ -1,7 +1,11 @@
 import { Resend } from "resend";
 import supabaseAdmin from "./supabaseAdmin";
 import { createRetainerSignToken, type RetainerSide } from "./retainerSignToken";
-import { formatLeadTypeLabel, buildLeadAddressForEmail } from "./leadEmailAddress";
+import {
+  formatLeadTypeLabel,
+  buildLeadAddressPartsForEmail,
+  renderTransactionPhrase,
+} from "./leadEmailAddress";
 
 /**
  * Sends the "review and sign your retainer" email — the DocuSign-style link a
@@ -68,6 +72,7 @@ function renderTemplate(
     fileNumber: string;
     leadType: string;
     sideSuffix: string;
+    transactionPhrase: string;
     url: string;
   },
 ): { subject: string; html: string } {
@@ -99,8 +104,19 @@ function renderTemplate(
     button_url: vars.url,
   };
 
+  // Pair-up pattern: "{{ lead_type }} of {{ lead_address }}" must render as the
+  // role-correct transaction phrase ("Purchase of <P> and Sale of <S>" for a
+  // combined file, "Purchase of <P>" for a co-purchaser, "Sale of <S>" for a
+  // co-seller) instead of each placeholder being replaced independently (which
+  // would collapse a P&S file to "Purchase & Sale of X and Y").
+  const transactionPhrasePattern =
+    /\{\{\s*lead_type\s*\}\}\s+of\s+\{\{\s*(?:lead_address|property_address)\s*\}\}/gi;
+
   const apply = (input: string): string => {
-    let out = input.replace(/&#123;/g, "{").replace(/&#125;/g, "}");
+    let out = input
+      .replace(/&#123;/g, "{")
+      .replace(/&#125;/g, "}")
+      .replace(transactionPhrasePattern, vars.transactionPhrase);
     for (const [key, value] of Object.entries(map)) {
       // Whitespace-tolerant: {{ key }} / {{key}}, optional leading dot.
       const re = new RegExp(
@@ -158,10 +174,45 @@ export async function sendRetainerLinkEmail(opts: {
   const firstName = lead?.first_name ?? "";
   const lastName = lead?.last_name ?? "";
   const fullName = `${firstName} ${lastName}`.trim();
-  const leadAddress = await buildLeadAddressForEmail(lead);
-  const leadType = formatLeadTypeLabel(lead?.lead_type);
-  const sideSuffix =
-    side === "purchase" ? " (Purchase)" : side === "sale" ? " (Sale)" : "";
+
+  // Role-aware address + type. buildLeadAddressPartsForEmail reads the lead's
+  // own row (parent_lead_id + co_person_role) so each recipient sees only THEIR
+  // side of the transaction:
+  //   • Primary Purchase & Sale → both sides (recipientSide "combined")
+  //   • Co-purchaser            → purchase address only (recipientSide "purchase")
+  //   • Co-seller               → sale address only (recipientSide "sale")
+  const addressParts = await buildLeadAddressPartsForEmail(lead);
+  const leadAddress = addressParts.treatAsCombined
+    ? [addressParts.purchase, addressParts.selling].filter(Boolean).join(" and ")
+    : addressParts.typeIsSaleOnly
+      ? addressParts.selling || addressParts.purchase
+      : addressParts.purchase;
+
+  // {{ lead_type }} reflects the recipient's role, not the raw stored lead_type
+  // (a co-purchaser of a P&S file should read "Purchase", a co-seller "Sale",
+  // the primary "Purchase & Sale"). Fall back to the formatted raw type for
+  // non purchase/sale types (e.g. Refinance).
+  const baseLeadTypeLabel = formatLeadTypeLabel(lead?.lead_type);
+  const leadType =
+    addressParts.recipientSide === "combined"
+      ? "Purchase & Sale"
+      : addressParts.recipientSide === "sale"
+        ? "Sale"
+        : addressParts.recipientSide === "purchase" &&
+            baseLeadTypeLabel.toLowerCase().includes("purchase")
+          ? "Purchase"
+          : baseLeadTypeLabel;
+
+  // "Purchase of <P> and Sale of <S>" / "Purchase of <P>" / "Sale of <S>" —
+  // replaces the paired "{{ lead_type }} of {{ lead_address }}" pattern so the
+  // two sides never collapse into "Purchase & Sale of X and Y".
+  const transactionPhrase = renderTransactionPhrase(addressParts, leadType);
+
+  const sideSuffix = addressParts.treatAsCombined
+    ? " (Purchase & Sale)"
+    : addressParts.recipientSide === "sale"
+      ? " (Sale)"
+      : "";
 
   let fileNumber = "";
   try {
@@ -197,6 +248,7 @@ export async function sendRetainerLinkEmail(opts: {
     fileNumber,
     leadType,
     sideSuffix,
+    transactionPhrase,
     url,
   });
 
