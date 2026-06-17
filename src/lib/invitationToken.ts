@@ -4,7 +4,7 @@ import supabaseAdmin from "./supabaseAdmin";
 const TOKEN_TTL_DAYS = 7;
 const TOKEN_BYTES = 48;
 
-export type InvitationType = "invite" | "recovery";
+export type InvitationType = "invite" | "recovery" | "retainer_sign";
 
 export type ConsumedInvitation = {
   type: InvitationType;
@@ -35,11 +35,25 @@ export async function createInvitationToken(opts: {
   email: string;
   redirectTo: string;
   userData?: Record<string, string>;
+  /**
+   * Admin-app path that consumes the token on click. Defaults to the auth
+   * activation handler (/api/auth/activate). Callers can override it when a
+   * token type should resolve to a different handler.
+   */
+  activatePath?: string;
+  /**
+   * Token lifetime in days. Defaults to 7 (invite/recovery links). The retainer
+   * "sign without an account" flow passes a very long value because a client
+   * may take weeks to sign — the link should stay valid until they do.
+   */
+  ttlDays?: number;
 }): Promise<{ token: string; url: string }> {
-  const { type, email, redirectTo, userData } = opts;
+  const { type, email, redirectTo, userData, activatePath, ttlDays } = opts;
 
   const token = randomBytes(TOKEN_BYTES).toString("base64url");
-  const expiresAt = new Date(Date.now() + TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
+  const expiresAt = new Date(
+    Date.now() + (ttlDays ?? TOKEN_TTL_DAYS) * 24 * 60 * 60 * 1000,
+  );
 
   const { error } = await supabaseAdmin.from("invitation_tokens").insert({
     token,
@@ -54,7 +68,8 @@ export async function createInvitationToken(opts: {
     throw new Error(`Failed to persist invitation token: ${error.message}`);
   }
 
-  const url = `${resolveBaseUrl()}/api/auth/activate?token=${encodeURIComponent(token)}`;
+  const path = activatePath ?? "/api/auth/activate";
+  const url = `${resolveBaseUrl()}${path}?token=${encodeURIComponent(token)}`;
   return { token, url };
 }
 

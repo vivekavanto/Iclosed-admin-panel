@@ -6,6 +6,10 @@ import { recalcMilestonesForFamily } from "./recalcMilestones";
 import { sendWelcomeEmail } from "./sendWelcomeEmail";
 import { formatLeadTypeLabel, buildLeadAddressForEmail } from "./leadEmailAddress";
 import { prefillPersonalInfoFromPriorDeal } from "./prefillPersonalInfo";
+import {
+  sendRetainerLinkEmail,
+  retainerSidesForLeadType,
+} from "./sendRetainerLink";
 
 export type ConvertOneResult = {
   success: boolean;
@@ -16,6 +20,7 @@ export type ConvertOneResult = {
   file_number?: string;
   client_id?: string;
   invite_sent?: boolean;
+  retainer_link_sent?: boolean;
   already_has_login?: boolean;
   auth_error?: string | null;
   error?: string;
@@ -28,6 +33,16 @@ export async function convertSingleLead(
     file_number?: string;
     closing_date?: string;
     existingDealBehavior: "error" | "skip";
+    /**
+     * Which onboarding email to send on a fresh conversion.
+     *   "invite"   (default) — create the Supabase Auth user + send the
+     *               invite/login email immediately. Used by bulk import and the
+     *               existing NW-client migration paths; behavior unchanged.
+     *   "retainer" — the retainer-first flow: send the account-free "sign your
+     *               retainer" link instead and DEFER account creation until the
+     *               party activates after signing.
+     */
+    authEmailMode?: "invite" | "retainer";
   },
 ): Promise<ConvertOneResult> {
   const leadId: string = lead.id;
@@ -693,71 +708,95 @@ export async function convertSingleLead(
       console.error("[Convert] Failed to auto-complete APS task (non-blocking):", err);
     }
 
-    // ── Create Supabase Auth user + send invite email via Resend ─────────
+    // ── Onboarding email (invite/login OR retainer signing link) ─────────
+    const authEmailMode = opts.authEmailMode ?? "invite";
     let authUserId: string | null = null;
     let inviteSent = false;
+    let retainerLinkSent = false;
     let alreadyHasLogin = false;
     let authError: string | null = null;
 
-    try {
-      // If client already has a Supabase Auth account, skip invite — no recovery email either.
-      const alreadyOnboarded = !!(existingClient?.auth_user_id);
+    // Whether the client already has a portal login is relevant to both modes.
+    const alreadyOnboarded = !!existingClient?.auth_user_id;
+    if (alreadyOnboarded) {
+      authUserId = existingClient?.auth_user_id ?? null;
+      alreadyHasLogin = true;
+    }
 
-      if (alreadyOnboarded) {
-        // User already has portal login — link the account and send a
-        // "Log into iClosed" email so the returning customer knows their new
-        // file is live and how to get back in (login link + reset fallback).
-        // No "invite/activate" email — their account already exists.
-        authUserId = existingClient.auth_user_id;
-        alreadyHasLogin = true;
-
-        const customerPortalUrl = (process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ?? "https://www.iclosed.ca/").replace(/\/+$/, "");
-        const redirectTo = `${customerPortalUrl}/api/auth/callback?next=/set-password`;
-
-        const loginResult = await sendAuthEmailViaResend({
-          type: "login",
-          email: lead.email,
-          redirectTo,
-          leadId: lead.id,
-        });
-
-        // Non-blocking: the account is already linked. If the "Log into iClosed"
-        // template is missing/inactive, sendAuthEmail skips the send (no error).
-        if (!loginResult.success && loginResult.error) {
-          authError = loginResult.error;
+    if (authEmailMode === "retainer") {
+      // Retainer-first flow: send the account-free signing link(s) instead of
+      // the invite/login email. A combined Purchase & Sale primary gets one per
+      // side; everyone else one. Account creation is deferred to activation,
+      // which happens AFTER the party signs — so we don't mint an auth user here.
+      try {
+        const primaryLeadId = lead.parent_lead_id ?? lead.id;
+        for (const side of retainerSidesForLeadType(lead.lead_type)) {
+          const res = await sendRetainerLinkEmail({
+            email: lead.email,
+            leadId: lead.id,
+            side,
+            primaryLeadId,
+          });
+          if (res.success) retainerLinkSent = true;
+          else if (res.error) authError = res.error;
         }
-      } else {
-        // New user — send invite email via Resend
-        const customerPortalUrl = (process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ?? "https://www.iclosed.ca/").replace(/\/+$/, "");
-        const redirectTo = `${customerPortalUrl}/api/auth/callback?next=/set-password`;
-
-        const userData = {
-          first_name: lead.first_name ?? "",
-          last_name: lead.last_name ?? "",
-          display_name: `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim(),
-        };
-
-        const inviteResult = await sendAuthEmailViaResend({
-          type: "invite",
-          email: lead.email,
-          redirectTo,
-          userData,
-          leadId: lead.id,
-        });
-
-        if (inviteResult.success && inviteResult.userId) {
-          authUserId = inviteResult.userId;
-          inviteSent = true;
-          await supabaseAdmin
-            .from("clients")
-            .update({ auth_user_id: authUserId })
-            .eq("id", clientId);
-        } else if (inviteResult.error) {
-          authError = inviteResult.error;
-        }
+      } catch (err) {
+        authError = err instanceof Error ? err.message : "Failed to send retainer link";
       }
-    } catch (err: any) {
-      authError = err.message || "Unknown auth error";
+    } else {
+      try {
+        if (alreadyOnboarded) {
+          // User already has portal login — send a "Log into iClosed" email so
+          // the returning customer knows their new file is live (login link +
+          // reset fallback). No "invite/activate" email — account already exists.
+          const customerPortalUrl = (process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ?? "https://www.iclosed.ca/").replace(/\/+$/, "");
+          const redirectTo = `${customerPortalUrl}/api/auth/callback?next=/set-password`;
+
+          const loginResult = await sendAuthEmailViaResend({
+            type: "login",
+            email: lead.email,
+            redirectTo,
+            leadId: lead.id,
+          });
+
+          // Non-blocking: the account is already linked. If the "Log into iClosed"
+          // template is missing/inactive, sendAuthEmail skips the send (no error).
+          if (!loginResult.success && loginResult.error) {
+            authError = loginResult.error;
+          }
+        } else {
+          // New user — send invite email via Resend
+          const customerPortalUrl = (process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ?? "https://www.iclosed.ca/").replace(/\/+$/, "");
+          const redirectTo = `${customerPortalUrl}/api/auth/callback?next=/set-password`;
+
+          const userData = {
+            first_name: lead.first_name ?? "",
+            last_name: lead.last_name ?? "",
+            display_name: `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim(),
+          };
+
+          const inviteResult = await sendAuthEmailViaResend({
+            type: "invite",
+            email: lead.email,
+            redirectTo,
+            userData,
+            leadId: lead.id,
+          });
+
+          if (inviteResult.success && inviteResult.userId) {
+            authUserId = inviteResult.userId;
+            inviteSent = true;
+            await supabaseAdmin
+              .from("clients")
+              .update({ auth_user_id: authUserId })
+              .eq("id", clientId);
+          } else if (inviteResult.error) {
+            authError = inviteResult.error;
+          }
+        }
+      } catch (err) {
+        authError = err instanceof Error ? err.message : "Unknown auth error";
+      }
     }
 
     // ── Send welcome email on conversion ─────────────────────────────────
@@ -780,6 +819,7 @@ export async function convertSingleLead(
       file_number: generatedFileNumber,
       client_id: clientId,
       invite_sent: inviteSent,
+      retainer_link_sent: retainerLinkSent,
       already_has_login: alreadyHasLogin,
       auth_error: authError,
     };

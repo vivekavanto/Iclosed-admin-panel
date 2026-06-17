@@ -18,16 +18,23 @@ import { convertSingleLead, type ConvertOneResult } from "@/lib/convertLead";
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { lead_id, file_number, closing_date, convert_family } = body as {
+    const { lead_id, file_number, closing_date, convert_family, email_mode } = body as {
       lead_id: string;
       file_number?: string;
       closing_date?: string;
       convert_family?: boolean;
+      email_mode?: "invite" | "retainer";
     };
 
     if (!lead_id) {
       return NextResponse.json({ success: false, error: "lead_id is required" }, { status: 400 });
     }
+
+    // New default for the interactive "Convert to Deal" action: lead with the
+    // account-free retainer signing link rather than the invite/activate email.
+    // Callers can pass email_mode:"invite" to keep the legacy behavior.
+    const authEmailMode: "invite" | "retainer" =
+      email_mode === "invite" ? "invite" : "retainer";
 
     // Reject past closing dates. Admin's local date is computed in
     // America/Toronto so a 9pm-Eastern convert isn't wrongly rejected for
@@ -78,6 +85,7 @@ export async function POST(req: Request) {
         file_number,
         closing_date,
         existingDealBehavior: "error",
+        authEmailMode,
       });
 
       if (!one.success) {
@@ -87,19 +95,26 @@ export async function POST(req: Request) {
         );
       }
 
+      const retainerMode = authEmailMode === "retainer";
+
       return NextResponse.json({
         success: true,
         deal_id: one.deal_id,
         file_number: one.file_number,
         client_id: one.client_id,
         invite_sent: one.invite_sent ?? false,
+        retainer_link_sent: one.retainer_link_sent ?? false,
         already_has_login: one.already_has_login ?? false,
         auth_error: one.auth_error ?? null,
-        message: one.invite_sent
-          ? `Deal created and invite email sent to ${selectedLead.email}`
-          : one.already_has_login
-            ? `Deal created. User already has login access - no invite email sent.`
-            : `Deal created, but invite could not be sent: ${one.auth_error || "Create login manually"}`,
+        message: retainerMode
+          ? one.retainer_link_sent
+            ? `Deal created and retainer signing link sent to ${selectedLead.email}`
+            : `Deal created, but the retainer link could not be sent: ${one.auth_error || "send it manually from the deal"}`
+          : one.invite_sent
+            ? `Deal created and invite email sent to ${selectedLead.email}`
+            : one.already_has_login
+              ? `Deal created. User already has login access - no invite email sent.`
+              : `Deal created, but invite could not be sent: ${one.auth_error || "Create login manually"}`,
       });
     }
 
@@ -134,6 +149,7 @@ export async function POST(req: Request) {
         file_number: fileOverride,
         closing_date,
         existingDealBehavior: "skip",
+        authEmailMode,
       });
       results.push(res);
       if (!res.success) failedCount++;
@@ -155,6 +171,7 @@ export async function POST(req: Request) {
     const created_count = results.filter((r) => r.created).length;
     const skipped_count = results.length - created_count;
     const invites_sent_count = results.filter((r) => r.invite_sent).length;
+    const retainer_links_sent_count = results.filter((r) => r.retainer_link_sent).length;
     const already_has_login_count = results.filter((r) => r.already_has_login).length;
     const rootResult = results.find((r) => r.lead_id === rootLeadId);
 
@@ -165,6 +182,7 @@ export async function POST(req: Request) {
       created_count,
       skipped_count,
       invites_sent_count,
+      retainer_links_sent_count,
       already_has_login_count,
       results,
       deal_id: rootResult?.deal_id ?? null,

@@ -133,6 +133,14 @@ export async function sendAuthEmailViaResend(opts: {
   skipped?: boolean;
   skipReason?: string;
   error?: string;
+  /**
+   * The code-owned activation URL minted for this send (backed by
+   * invitation_tokens). Returned so callers like the retainer "activate now"
+   * webhook can redirect the user straight into the flow instead of waiting for
+   * the email to arrive. Present whenever a token was minted (i.e. not on an
+   * early auth/token error).
+   */
+  actionLink?: string;
 }> {
   const { type, email, redirectTo, userData, templateId, leadId } = opts;
 
@@ -286,6 +294,7 @@ export async function sendAuthEmailViaResend(opts: {
       userId: user?.id,
       skipped: true,
       skipReason: `Template "${lookup.name}" is inactive`,
+      actionLink,
     };
   }
 
@@ -479,6 +488,7 @@ export async function sendAuthEmailViaResend(opts: {
       userId: user?.id,
       skipped: true,
       skipReason: `No ${type} template configured`,
+      actionLink,
     };
   }
 
@@ -502,5 +512,5 @@ export async function sendAuthEmailViaResend(opts: {
     return { success: false, error: `Resend send failed: ${sendError.message}` };
   }
 
-  return { success: true, userId: user?.id };
+  return { success: true, userId: user?.id, actionLink };
 }

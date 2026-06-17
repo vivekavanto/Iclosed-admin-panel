@@ -222,6 +222,9 @@ export async function POST(
   // emails — all reused, nothing changed.
   const convert = await convertSingleLead(childLead, {
     existingDealBehavior: "skip",
+    // Co-clients sign the retainer without an account too — send the signing
+    // link rather than the invite/activate email.
+    authEmailMode: "retainer",
   });
 
   if (!convert.success) {
@@ -243,6 +246,7 @@ export async function POST(
     deal_id: convert.deal_id,
     file_number: convert.file_number,
     invite_sent: convert.invite_sent ?? false,
+    retainer_link_sent: convert.retainer_link_sent ?? false,
     already_has_login: convert.already_has_login ?? false,
     role: isPurchaser ? "Co-Purchaser" : "Co-Seller",
   });

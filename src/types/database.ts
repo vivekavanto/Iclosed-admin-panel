@@ -466,7 +466,7 @@ export interface Database {
           id: string;
           token: string;
           email: string;
-          type: "invite" | "recovery";
+          type: "invite" | "recovery" | "retainer_sign";
           redirect_to: string;
           user_data: Json | null;
           expires_at: string;
@@ -477,7 +477,7 @@ export interface Database {
           id?: string;
           token: string;
           email: string;
-          type: "invite" | "recovery";
+          type: "invite" | "recovery" | "retainer_sign";
           redirect_to: string;
           user_data?: Json | null;
           expires_at: string;
@@ -488,7 +488,7 @@ export interface Database {
           id?: string;
           token?: string;
           email?: string;
-          type?: "invite" | "recovery";
+          type?: "invite" | "recovery" | "retainer_sign";
           redirect_to?: string;
           user_data?: Json | null;
           expires_at?: string;
@@ -674,6 +674,7 @@ export interface Database {
           aps_uploaded_sale: boolean | null;
           selling_price: number | null;
           is_deleted: boolean;
+          account_activation_deferred: boolean;
         };
         Insert: {
           id?: string;
@@ -721,6 +722,7 @@ export interface Database {
           aps_uploaded_sale?: boolean | null;
           selling_price?: number | null;
           is_deleted?: boolean;
+          account_activation_deferred?: boolean;
         };
         Update: {
           id?: string;
@@ -768,6 +770,7 @@ export interface Database {
           aps_uploaded_sale?: boolean | null;
           selling_price?: number | null;
           is_deleted?: boolean;
+          account_activation_deferred?: boolean;
         };
         Relationships: [
           {
