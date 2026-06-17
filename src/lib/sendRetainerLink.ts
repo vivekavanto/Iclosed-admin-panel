@@ -57,34 +57,6 @@ async function findRetainerLinkTemplate(): Promise<RetainerTemplate | null> {
   return null;
 }
 
-// Minimal built-in fallback so the flow works even before an admin creates a
-// "Sign Retainer" template in the Email Templates UI.
-function defaultRetainerEmail(opts: {
-  firstName: string;
-  leadAddress: string;
-  leadType: string;
-  sideSuffix: string;
-  url: string;
-}): { subject: string; html: string } {
-  const { firstName, leadAddress, leadType, sideSuffix, url } = opts;
-  const greeting = firstName ? `Hi ${firstName},` : "Hello,";
-  const what = [leadType, leadAddress].filter(Boolean).join(" — ");
-  const subject = `Please review and sign your retainer${sideSuffix}`;
-  const html = `
-    <div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;color:#1f2937;line-height:1.6">
-      <p>${greeting}</p>
-      <p>Your retainer agreement${what ? ` for ${what}` : ""} is ready for your review and signature.
-      You can sign it securely below — no account or password required.</p>
-      <p style="margin:28px 0">
-        <a href="${url}" style="background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:6px;font-weight:600;display:inline-block">Sign your retainer</a>
-      </p>
-      <p style="font-size:13px;color:#6b7280">After signing you'll have the option to activate your account to upload documents — or do that later.</p>
-      <p style="font-size:13px;color:#6b7280">This link expires in 7 days. If it does, just ask us to resend it.</p>
-    </div>
-  `.trim();
-  return { subject, html };
-}
-
 function renderTemplate(
   template: RetainerTemplate,
   vars: {
@@ -203,21 +175,30 @@ export async function sendRetainerLinkEmail(opts: {
     // non-blocking
   }
 
-  // 3. Resolve subject + body (DB template preferred, built-in fallback).
+  // 3. Resolve subject + body from the DB template. There is NO built-in
+  // fallback: the "Sign Retainer" email is admin-owned in Email Templates, so
+  // if no active template exists we fail loudly rather than send a hardcoded
+  // body. convert-lead surfaces this as "retainer link could not be sent", so
+  // the admin knows to create/activate the template.
   const template = await findRetainerLinkTemplate();
-  const { subject, html } = template
-    ? renderTemplate(template, {
-        firstName,
-        lastName,
-        fullName,
-        email,
-        leadAddress,
-        fileNumber,
-        leadType,
-        sideSuffix,
-        url,
-      })
-    : defaultRetainerEmail({ firstName, leadAddress, leadType, sideSuffix, url });
+  if (!template) {
+    return {
+      success: false,
+      error:
+        'No active "Sign Retainer" email template found. Create one in Email Templates (named "Sign Retainer") and mark it active.',
+    };
+  }
+  const { subject, html } = renderTemplate(template, {
+    firstName,
+    lastName,
+    fullName,
+    email,
+    leadAddress,
+    fileNumber,
+    leadType,
+    sideSuffix,
+    url,
+  });
 
   // 4. Send via Resend.
   if (!process.env.RESEND_API_KEY) {
