@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { Deal, DealType, DealStatus } from '../types';
-import { Search, Trash2, Users, AlertTriangle, Upload, Pencil, ChevronDown } from 'lucide-react';
+import { Search, Trash2, Users, AlertTriangle, Upload, Pencil, ChevronDown, LogIn } from 'lucide-react';
 import {
   isNonCitizenFlagged,
   NON_CITIZEN_FLAG_TOOLTIP,
@@ -26,20 +26,41 @@ function getInitials(name: string): string {
     .join('');
 }
 
+// Today as a local "YYYY-MM-DD" string (not UTC, so it doesn't drift a day
+// near midnight). Used to default the dashboard to upcoming closings.
+function localTodayISO(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState('All');
   const [filterStatus, setFilterStatus] = useState('');
   const [filterLawyer, setFilterLawyer] = useState('');
   const [filterClerk, setFilterClerk] = useState('');
-  const [dateFrom, setDateFrom] = useState('');
+  // Default view shows upcoming closings: closing date from today onward
+  // (open-ended end), so files that already closed are hidden until the admin
+  // clears or changes the range.
+  const [dateFrom, setDateFrom] = useState<string>(() => localTodayISO());
   const [dateTo, setDateTo] = useState('');
   const [showOnlyFlagged, setShowOnlyFlagged] = useState(false);
+  // Hide accounts whose client/file name contains "TEST" — toggled by the
+  // "Remove test accounts" checkbox above the table.
+  const [removeTestAccounts, setRemoveTestAccounts] = useState(false);
+  // Deal id currently being logged into (client-view impersonation in flight),
+  // so the row's button can show a disabled/loading state.
+  const [impersonatingId, setImpersonatingId] = useState<string | null>(null);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [editingDealId, setEditingDealId] = useState<string | null>(null);
   // Closing-date column sort. null = no sort (API order), 'asc' = earliest
   // first, 'desc' = latest first. Clicking the header cycles asc → desc.
-  const [closingSort, setClosingSort] = useState<'asc' | 'desc' | null>(null);
+  // Defaults to 'asc' so the upcoming closings (the default filtered view)
+  // surface soonest-first.
+  const [closingSort, setClosingSort] = useState<'asc' | 'desc' | null>('asc');
   // Which file row has its pending-tasks panel expanded (one at a time). The
   // list API only returns the Steps count, not the task titles, so we lazy-fetch
   // the deal's tasks from /api/admin/tasks the first time a row is expanded and
@@ -273,6 +294,20 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
     if (filterLawyer && ((deal as any).lawyerName ?? '').trim() !== filterLawyer) return false;
     if (filterClerk && ((deal as any).clerkName ?? '').trim() !== filterClerk) return false;
     if (showOnlyFlagged && !isNonCitizenFlagged({ citizenship_status: (deal as any).leadCitizenshipStatus })) return false;
+    if (removeTestAccounts) {
+      // Treat a file as a "test account" when "TEST" appears in any of the
+      // name-ish fields (lead/client name or file name). Case-insensitive.
+      const d = deal as any;
+      const nameHay = [
+        d.leadName ?? '',
+        deal.client?.firstName ?? '',
+        deal.client?.lastName ?? '',
+        d.fileName ?? '',
+      ]
+        .join(' ')
+        .toUpperCase();
+      if (nameHay.includes('TEST')) return false;
+    }
     if (dateFrom || dateTo) {
       const closing = parseLocalDate(deal.closingDate);
       if (!closing) return false;
@@ -334,6 +369,35 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   const formatDate = (dateString?: string) => formatLocalDate(dateString);
 
 
+  // Open the client portal as this deal's client (admin impersonation). Reuses
+  // /api/admin/impersonate, which resolves the auth user to a Supabase magic
+  // link and never emails the client. Only works once the client has signed
+  // into the portal (same gate as the derived "Active" status), so it's
+  // gated on accountCreatedAt + authUserId.
+  const handleLoginAsClient = async (deal: Deal) => {
+    const d = deal as any;
+    if (!d.accountCreatedAt || !d.authUserId) {
+      alert("This client has not signed into the portal yet — cannot log into their view.");
+      return;
+    }
+    setImpersonatingId(deal.id);
+    try {
+      const res = await fetch("/api/admin/impersonate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ authUserId: d.authUserId }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.url) throw new Error(json.error || "Failed to generate link");
+      window.open(json.url, "_blank", "noopener,noreferrer");
+    } catch (err: any) {
+      console.error("Login as client error:", err);
+      alert(`Failed to log into client view: ${err?.message ?? "unknown error"}`);
+    } finally {
+      setImpersonatingId(null);
+    }
+  };
+
   const handleDelete = async (dealId: string) => {
     const confirmDelete = window.confirm("Are you sure you want to delete this deal?");
     if (!confirmDelete) return;
@@ -357,8 +421,14 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
     <div className="bg-white rounded-lg shadow-sm border border-slate-200">
       <div className="flex flex-col xl:flex-row items-start xl:items-center justify-between p-4 sm:p-6 pb-2 gap-4">
         <div className="flex flex-wrap items-center gap-3 sm:gap-4">
-          <h1 className="text-lg sm:text-xl font-bold text-slate-900 border-b-2 border-slate-900 pb-0.5">All files</h1>
-          <div className="flex items-center gap-2 text-sm"><span className="font-bold text-slate-700">Total: {totalFiles}</span><span className="bg-orange-100 text-orange-700 border border-orange-200 px-1.5 rounded text-xs font-bold" title="Sales">S {countS}</span><span className="bg-blue-100 text-blue-700 border border-blue-200 px-1.5 rounded text-xs font-bold" title="Purchases">P {countP}</span><span className="bg-purple-100 text-purple-700 border border-purple-200 px-1.5 rounded text-xs font-bold" title="Purchase & Sale">PS {countPS}</span><span className="bg-brand-black text-white px-1.5 rounded text-xs font-bold" title="Refinances">R {countR}</span></div>
+          <h1 className="text-lg sm:text-xl font-bold text-slate-900 border-b-2 border-brand-primary pb-0.5">All files</h1>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+            <span><span className="font-bold text-slate-900">{totalFiles}</span> <span className="text-slate-400">files</span></span>
+            <span className="flex items-center gap-1.5 text-slate-600" title="Sales"><span className="w-2 h-2 rounded-full bg-orange-400" />{countS} Sale</span>
+            <span className="flex items-center gap-1.5 text-slate-600" title="Purchases"><span className="w-2 h-2 rounded-full bg-blue-500" />{countP} Purchase</span>
+            <span className="flex items-center gap-1.5 text-slate-600" title="Purchase &amp; Sale"><span className="w-2 h-2 rounded-full bg-purple-500" />{countPS} Purchase + Sale</span>
+            <span className="flex items-center gap-1.5 text-slate-600" title="Refinances"><span className="w-2 h-2 rounded-full bg-slate-400" />{countR} Refinance</span>
+          </div>
         </div>
 
         <div className="flex flex-1 w-full xl:w-auto items-center gap-2 justify-end">
@@ -383,7 +453,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
             <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
             <input
               type="text"
-              placeholder="Search by file #, client, address, lawyer, clerk, price, date…"
+              placeholder="Search by file #, client, address, lawyer"
               className="w-full h-9 pl-8 pr-3 border border-slate-300 rounded text-sm focus:outline-none focus:border-brand-primary"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
@@ -401,50 +471,42 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
       </div>
 
       <div className="px-4 sm:px-6 pb-4 sm:pb-6 pt-2 space-y-4">
-        <div className="flex flex-wrap items-end gap-x-4 gap-y-3 border-b border-slate-100 pb-4">
+        <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-3 border-b border-slate-100 pb-4">
           <div>
-            <span className="block text-xs text-slate-500 mb-1">Filter by</span>
-            <div className="inline-flex h-8 border border-slate-300 rounded overflow-hidden">
-              <button className="px-3 text-xs font-medium bg-brand-light text-brand-primary cursor-default">
-                Closing date
-              </button>
+            <label className="block text-xs text-slate-500 mb-1">Closing date</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={e => setDateFrom(e.target.value)}
+                min="1900-01-01"
+                max="2100-12-31"
+                className="h-9 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none cursor-pointer"
+              />
+              <span className="text-slate-400">–</span>
+              <input
+                type="date"
+                value={dateTo}
+                onChange={e => setDateTo(e.target.value)}
+                min="1900-01-01"
+                max="2100-12-31"
+                className="h-9 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none cursor-pointer"
+              />
+              {(dateFrom || dateTo) && (
+                <button
+                  onClick={() => { setDateFrom(''); setDateTo(''); }}
+                  className="h-9 px-2 text-xs text-slate-400 hover:text-red-500 transition-colors cursor-pointer"
+                >
+                  ✕ Clear
+                </button>
+              )}
             </div>
           </div>
-          <div>
-            <label className="block text-xs text-slate-500 mb-1">From</label>
-            <input
-              type="date"
-              value={dateFrom}
-              onChange={e => setDateFrom(e.target.value)}
-              min="1900-01-01"
-              max="2100-12-31"
-              className="h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none cursor-pointer"
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-slate-500 mb-1">To</label>
-            <input
-              type="date"
-              value={dateTo}
-              onChange={e => setDateTo(e.target.value)}
-              min="1900-01-01"
-              max="2100-12-31"
-              className="h-8 border border-slate-300 rounded px-2 text-xs text-slate-700 focus:border-brand-primary outline-none cursor-pointer"
-            />
-          </div>
-          {(dateFrom || dateTo) && (
-            <button
-              onClick={() => { setDateFrom(''); setDateTo(''); }}
-              className="h-8 px-2 text-xs text-slate-400 hover:text-red-500 transition-colors cursor-pointer"
-            >
-              ✕ Clear
-            </button>
-          )}
-          <div className="h-8 flex items-center gap-4 ml-auto">
-            <button onClick={() => applyPreset('today')} className="text-xs font-medium text-brand-primary hover:underline cursor-pointer">Today</button>
-            <button onClick={() => applyPreset('week')} className="text-xs font-medium text-brand-primary hover:underline cursor-pointer">This week</button>
-            <button onClick={() => applyPreset('nextWeek')} className="text-xs font-medium text-brand-primary hover:underline cursor-pointer">Next week</button>
-            <button onClick={() => applyPreset('month')} className="text-xs font-medium text-brand-primary hover:underline cursor-pointer">This month</button>
+          <div className="h-9 flex items-center gap-5">
+            <button onClick={() => applyPreset('today')} className="text-sm font-medium text-slate-600 hover:text-brand-primary transition-colors cursor-pointer">Today</button>
+            <button onClick={() => applyPreset('week')} className="text-sm font-medium text-slate-600 hover:text-brand-primary transition-colors cursor-pointer">This week</button>
+            <button onClick={() => applyPreset('nextWeek')} className="text-sm font-medium text-slate-600 hover:text-brand-primary transition-colors cursor-pointer">Next week</button>
+            <button onClick={() => applyPreset('month')} className="text-sm font-medium text-slate-600 hover:text-brand-primary transition-colors cursor-pointer">This month</button>
           </div>
         </div>
 
@@ -514,11 +576,30 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
         </div>
       </div>
 
+      <div className="px-4 sm:px-6 pb-3 flex items-center justify-between gap-4">
+        <span className="text-sm text-slate-600">
+          Showing <span className="font-bold text-slate-900">{sortedDeals.length}</span> of {totalFiles} files
+        </span>
+        {/* "Remove test accounts" toggle hidden for now — kept (not deleted)
+            so it can be re-enabled later. The filter logic still honours
+            removeTestAccounts, which stays false while this is hidden. */}
+        <label className="hidden items-center gap-2 text-sm text-slate-600 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={removeTestAccounts}
+            onChange={(e) => setRemoveTestAccounts(e.target.checked)}
+            className="h-4 w-4 rounded border-slate-300 text-brand-primary focus:ring-brand-primary cursor-pointer"
+          />
+          Remove test accounts
+        </label>
+      </div>
+
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[900px] text-left border-t border-slate-200">
+        <table className="w-full text-left border-t border-slate-200">
           <thead>
             <tr className="bg-white text-slate-800 text-xs font-bold border-b border-slate-200">
-              <th className="px-4 py-3 w-12">No.</th>
+              {/* Row number — no heading text per request. */}
+              <th className="px-4 py-3 w-12" aria-label="Row number"></th>
               <th className="px-4 py-3 w-32">Account status</th>
               <th className="px-4 py-3 w-24">File No.</th>
               <th className="px-4 py-3 w-48">Client Name</th>
@@ -536,11 +617,12 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                   </span>
                 </button>
               </th>
-              <th className="px-4 py-3 w-32">Requisition date</th>
-              <th className="px-4 py-3 w-32">Account created</th>
+              <th className="px-4 py-3 w-40">Progress</th>
               <th className="px-4 py-3 w-20">Lawyer</th>
               <th className="px-4 py-3 w-20">Clerk</th>
-              <th className="px-4 py-3 w-40">Steps</th>
+              <th className="px-4 py-3 w-32">Account created</th>
+              {/* Requisition date column hidden per request — kept (not deleted) to avoid breaking anything. */}
+              <th className="px-4 py-3 hidden">Requisition date</th>
               {/* File name column hidden per request — kept (not deleted) to avoid breaking anything. */}
               <th className="px-4 py-3 hidden">File name</th>
               <th className="px-4 py-3 w-24 text-center">Actions</th>
@@ -671,18 +753,28 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                     )}
                   </td>
                   <td className="px-4 py-3">{formatDate(deal.closingDate)}</td>
-                  <td className="px-4 py-3">{formatDate(deal.requisitionDate)}</td>
                   <td className="px-4 py-3">
-                    {(deal as any).accountCreatedAt ? (
-                      <span
-                        className="text-xs text-slate-700"
-                        title={new Date((deal as any).accountCreatedAt).toLocaleString()}
-                      >
-                        {formatDate((deal as any).accountCreatedAt)}
-                      </span>
-                    ) : (
-                      <span className="text-slate-300" title="Client has not signed up yet">—</span>
-                    )}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        togglePendingTasks(deal.id);
+                      }}
+                      className="group/steps flex items-center gap-2 cursor-pointer"
+                      title="Show pending tasks for this file"
+                    >
+                      <div className="w-16 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-red-500 rounded-full transition-all"
+                          style={{ width: `${deal.totalTasks ? (deal.completedTasks! / deal.totalTasks) * 100 : 0}%` }}
+                        />
+                      </div>
+                      <span className="text-[11px] text-slate-500 font-medium group-hover/steps:text-brand-primary transition-colors">{deal.completedTasks ?? 0}/{deal.totalTasks ?? 0}</span>
+                      <ChevronDown
+                        size={12}
+                        className={`text-slate-400 group-hover/steps:text-brand-primary transition-all ${expandedDealId === deal.id ? 'rotate-180' : ''}`}
+                      />
+                    </button>
                   </td>
                   <td className="px-4 py-3">
                     {(deal as any).lawyerName ? (
@@ -709,34 +801,50 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                     )}
                   </td>
                   <td className="px-4 py-3">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        togglePendingTasks(deal.id);
-                      }}
-                      className="group/steps flex items-center gap-2 cursor-pointer"
-                      title="Show pending tasks for this file"
-                    >
-                      <div className="w-16 h-1.5 bg-slate-200 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-red-500 rounded-full transition-all"
-                          style={{ width: `${deal.totalTasks ? (deal.completedTasks! / deal.totalTasks) * 100 : 0}%` }}
-                        />
-                      </div>
-                      <span className="text-[11px] text-slate-500 font-medium group-hover/steps:text-brand-primary transition-colors">{deal.completedTasks ?? 0}/{deal.totalTasks ?? 0}</span>
-                      <ChevronDown
-                        size={12}
-                        className={`text-slate-400 group-hover/steps:text-brand-primary transition-all ${expandedDealId === deal.id ? 'rotate-180' : ''}`}
-                      />
-                    </button>
+                    {(deal as any).accountCreatedAt ? (
+                      <span
+                        className="text-xs text-slate-700"
+                        title={new Date((deal as any).accountCreatedAt).toLocaleString()}
+                      >
+                        {formatDate((deal as any).accountCreatedAt)}
+                      </span>
+                    ) : (
+                      <span className="text-slate-300" title="Client has not signed up yet">—</span>
+                    )}
                   </td>
+                  {/* Requisition date column hidden per request — kept (not deleted). */}
+                  <td className="px-4 py-3 hidden">{formatDate(deal.requisitionDate)}</td>
                   {/* File name column hidden per request — kept (not deleted). */}
                   <td className="px-4 py-3 hidden">
                     {(deal as any).fileName || deal.propertyAddress}
                   </td>
                   <td className="px-4 py-3 text-center">
                     <div className="inline-flex items-center justify-center gap-1">
+                      {(() => {
+                        const canImpersonate = !!(deal as any).accountCreatedAt && !!(deal as any).authUserId;
+                        const busy = impersonatingId === deal.id;
+                        return (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleLoginAsClient(deal);
+                            }}
+                            disabled={!canImpersonate || busy}
+                            className={`transition-colors p-1 ${
+                              canImpersonate && !busy
+                                ? 'text-slate-400 hover:text-brand-primary cursor-pointer'
+                                : 'text-slate-200 cursor-not-allowed'
+                            }`}
+                            title={
+                              canImpersonate
+                                ? 'Log into client view'
+                                : 'Client has not signed into the portal yet'
+                            }
+                          >
+                            <LogIn size={14} />
+                          </button>
+                        );
+                      })()}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -800,7 +908,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                 </React.Fragment>
               );
             }) : (
-              <tr><td colSpan={12} className="px-6 py-12 text-center text-slate-500"><p>No files found.</p></td></tr>
+              <tr><td colSpan={13} className="px-6 py-12 text-center text-slate-500"><p>No files found.</p></td></tr>
             )}
           </tbody>
         </table>

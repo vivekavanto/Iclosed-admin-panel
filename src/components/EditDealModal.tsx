@@ -1,12 +1,17 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { X, Loader2, ExternalLink } from "lucide-react";
 import Link from "next/link";
 import { computeDealDisplayStatus } from "@/lib/dealDisplayStatus";
 
 type DealRow = {
   id: string;
+  // Client name lives on the linked lead (not the deal), so it saves through
+  // the leads endpoint. lead_id is captured so we know which lead to update.
+  lead_id?: string | null;
+  lead_first_name?: string | null;
+  lead_last_name?: string | null;
   file_number?: string | null;
   file_name?: string | null;
   type?: string | null;
@@ -71,6 +76,10 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
   // deal detail page.
   const [form, setForm] = useState<DealRow>({ id: dealId });
 
+  // The client name loaded from the server, so a save only hits the leads
+  // endpoint when the admin actually changed it.
+  const initialNameRef = useRef<{ first: string; last: string }>({ first: "", last: "" });
+
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
@@ -82,6 +91,9 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
         if (deal && !deal.error) {
           setForm({
             id: deal.id,
+            lead_id: deal.lead_id ?? null,
+            lead_first_name: deal.lead_first_name ?? "",
+            lead_last_name: deal.lead_last_name ?? "",
             file_number: deal.file_number ?? "",
             file_name: deal.file_name ?? "",
             type: deal.type ?? "",
@@ -103,6 +115,10 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
             outstanding_undertakings: deal.outstanding_undertakings ?? 0,
             outstanding_requisitions: deal.outstanding_requisitions ?? 0,
           });
+          initialNameRef.current = {
+            first: deal.lead_first_name ?? "",
+            last: deal.lead_last_name ?? "",
+          };
         }
       } catch (err) {
         console.error("[EditDealModal] load failed", err);
@@ -157,6 +173,30 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
       const data = await res.json();
       if (!res.ok || !data.success) {
         throw new Error(data.error || "Save failed");
+      }
+      // Client name is stored on the deal's lead, not the deal row — persist it
+      // through the leads endpoint, but only when it actually changed.
+      const nameChanged =
+        (form.lead_first_name ?? "") !== initialNameRef.current.first ||
+        (form.lead_last_name ?? "") !== initialNameRef.current.last;
+      if (nameChanged && form.lead_id) {
+        const leadRes = await fetch(`/api/admin/leads`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: form.lead_id,
+            firstName: form.lead_first_name ?? "",
+            lastName: form.lead_last_name ?? "",
+          }),
+        });
+        const leadData = await leadRes.json();
+        if (!leadRes.ok || !leadData.success) {
+          throw new Error(leadData.error || "Client name save failed");
+        }
+        initialNameRef.current = {
+          first: form.lead_first_name ?? "",
+          last: form.lead_last_name ?? "",
+        };
       }
       const mirrored = Number(data.mirrored) || 0;
       showToast(
@@ -229,6 +269,25 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
                   type="text"
                   value={form.file_name ?? ""}
                   onChange={(e) => updateField("file_name", e.target.value)}
+                  className={inputClass}
+                />
+              </Field>
+              {/* Client name lives on this deal's lead (saved via the leads
+                  endpoint), not on the deal row — it's per-deal, so it does not
+                  mirror across the family. */}
+              <Field label="Client first name">
+                <input
+                  type="text"
+                  value={form.lead_first_name ?? ""}
+                  onChange={(e) => updateField("lead_first_name", e.target.value)}
+                  className={inputClass}
+                />
+              </Field>
+              <Field label="Client last name">
+                <input
+                  type="text"
+                  value={form.lead_last_name ?? ""}
+                  onChange={(e) => updateField("lead_last_name", e.target.value)}
                   className={inputClass}
                 />
               </Field>

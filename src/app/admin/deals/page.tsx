@@ -11,7 +11,7 @@ export default function Page() {
   };
 
   return (
-    <div className="p-8">
+    <div className="w-full">
       <DealList onSelectDeal={handleSelectDeal} />
     </div>
   );

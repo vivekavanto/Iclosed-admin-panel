@@ -37,6 +37,11 @@ export default function ClientLayout({
     return null;
   }
 
+  // The All files dashboard has a wide multi-column table, so it renders
+  // edge-to-edge (no max-width cap / centering) to fill the page and avoid
+  // horizontal scrolling. Other admin pages keep the centered max-w-7xl column.
+  const isFullWidth = pathname === "/admin/deals";
+
   return (
     <div
       className="bg-slate-50 min-h-screen font-sans text-slate-900 flex"
@@ -60,7 +65,7 @@ export default function ClientLayout({
       <main
         className={`ml-0 ${sidebarCollapsed ? "md:ml-[72px]" : "md:ml-64"} flex-1 p-4 sm:p-6 md:p-8 pt-16 md:pt-8 h-screen overflow-y-auto transition-all duration-300`}
       >
-        <div className="max-w-7xl mx-auto h-full">{children}</div>
+        <div className={`${isFullWidth ? "w-full" : "max-w-7xl mx-auto"} h-full`}>{children}</div>
       </main>
     </div>
   );
