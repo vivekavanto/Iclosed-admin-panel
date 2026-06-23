@@ -135,6 +135,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           leadName: d.lead_name ?? '',
           coPartyNames: Array.isArray(d.co_party_names) ? d.co_party_names : [],
           accountCreatedAt: d.account_created_at ?? null,
+          createdAt: d.created_at ?? null,
           leadCitizenshipStatus: d.lead_citizenship_status ?? null,
           fileName: d.file_name ?? '',
           lawyerName: d.lawyer_name ?? '',
@@ -154,6 +155,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           leadName: string;
           coPartyNames: string[];
           accountCreatedAt: string | null;
+          createdAt: string | null;
           leadCitizenshipStatus: string | null;
           fileName: string;
           lawyerName: string;
@@ -343,8 +345,23 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
         if (bMissing) return -1;
         return closingSort === 'asc' ? da - db : db - da;
       })
-    : filteredDeals;
+    // No closing-date sort active → order by deal creation, newest first, so a
+    // just-created file always surfaces at the top of the list. Rows without a
+    // creation timestamp sink to the bottom.
+    : [...filteredDeals].sort((a, b) => {
+        const da = Date.parse((a as any).createdAt ?? '');
+        const db = Date.parse((b as any).createdAt ?? '');
+        const aMissing = Number.isNaN(da);
+        const bMissing = Number.isNaN(db);
+        if (aMissing && bMissing) return 0;
+        if (aMissing) return 1;
+        if (bMissing) return -1;
+        return db - da;
+      });
 
+  // Header click always activates a closing-date sort (cycling soonest ↔
+  // latest). The "Recently created" button below clears it (closingSort=null),
+  // which falls back to the newest-created ordering above.
   const toggleClosingSort = () =>
     setClosingSort((prev) => (prev === 'asc' ? 'desc' : 'asc'));
 
@@ -600,10 +617,42 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
         </div>
       </div>
 
-      <div className="px-4 sm:px-6 pb-3 flex items-center justify-between gap-4">
-        <span className="text-sm text-slate-600">
-          Showing <span className="font-bold text-slate-900">{sortedDeals.length}</span> of {totalFiles} files
-        </span>
+      <div className="px-4 sm:px-6 pb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-slate-600">
+            Showing <span className="font-bold text-slate-900">{sortedDeals.length}</span> of {totalFiles} files
+          </span>
+          {/* Quick sort: clears the closing-date sort so the list falls back to
+              newest-created-first, making a just-created file easy to find. */}
+          <span className="hidden sm:inline text-slate-300">|</span>
+          <span className="hidden sm:inline text-xs text-slate-400">Sort:</span>
+          <div className="inline-flex items-center rounded-md border border-slate-200 overflow-hidden text-xs">
+            <button
+              type="button"
+              onClick={() => setClosingSort('asc')}
+              className={`px-2.5 py-1 font-medium transition-colors ${
+                closingSort
+                  ? 'bg-brand-primary text-white'
+                  : 'bg-white text-slate-600 hover:bg-slate-50'
+              }`}
+              title="Sort by closing date"
+            >
+              Closing date
+            </button>
+            <button
+              type="button"
+              onClick={() => setClosingSort(null)}
+              className={`px-2.5 py-1 font-medium border-l border-slate-200 transition-colors ${
+                closingSort
+                  ? 'bg-white text-slate-600 hover:bg-slate-50'
+                  : 'bg-brand-primary text-white'
+              }`}
+              title="Show the most recently created files first"
+            >
+              Recently created
+            </button>
+          </div>
+        </div>
         {/* "Remove test accounts" toggle hidden for now — kept (not deleted)
             so it can be re-enabled later. The filter logic still honours
             removeTestAccounts, which stays false while this is hidden. */}
