@@ -3219,6 +3219,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           )
           .map((p) => ({
             leadId: p.lead_id as string,
+            dealId: p.id,
             name: p.lead_name,
             role: p.role,
             email: p.lead_email,

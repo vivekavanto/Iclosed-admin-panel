@@ -7,9 +7,8 @@ import {
   FileUp,
   UserCog,
   Check,
-  Loader2,
-  X,
 } from "lucide-react";
+import CoPersonPersonalInfoModal from "./CoPersonPersonalInfoModal";
 
 /**
  * "Submit on behalf of co-purchaser(s)/co-seller(s)" section.
@@ -31,6 +30,8 @@ import {
 
 export interface OnBehalfCoPerson {
   leadId: string;
+  /** The co-person's own deal id — used to load their personal-info task. */
+  dealId: string;
   name: string;
   role: string;
   email: string;
@@ -47,12 +48,6 @@ interface Props {
   onChanged: () => void;
 }
 
-function splitName(full: string): { first: string; last: string } {
-  const parts = full.trim().split(/\s+/);
-  if (parts.length <= 1) return { first: parts[0] ?? "", last: "" };
-  return { first: parts[0], last: parts.slice(1).join(" ") };
-}
-
 function CoPersonCard({
   person,
   onUploadId,
@@ -62,50 +57,10 @@ function CoPersonCard({
   onUploadId: (leadId: string, taskId: string) => void;
   onChanged: () => void;
 }) {
-  const [error, setError] = useState<string | null>(null);
-
-  const initial = splitName(person.name);
-  const [editingContact, setEditingContact] = useState(false);
-  const [firstName, setFirstName] = useState(initial.first);
-  const [lastName, setLastName] = useState(initial.last);
-  const [email, setEmail] = useState(person.email);
-  const [phone, setPhone] = useState(person.phone);
-  const [savingContact, setSavingContact] = useState(false);
-  const [contactDone, setContactDone] = useState(false);
+  // Opens the full "Provide Personal Information" task popup for this person.
+  const [personalInfoOpen, setPersonalInfoOpen] = useState(false);
 
   const idCompleted = person.identificationStatus === "Completed";
-
-  async function handleSaveContact() {
-    setError(null);
-    setSavingContact(true);
-    setContactDone(false);
-    try {
-      const res = await fetch("/api/admin/leads", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: person.leadId,
-          firstName,
-          lastName,
-          email,
-          phone,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error ?? "Could not save contact information");
-      }
-      setContactDone(true);
-      setEditingContact(false);
-      onChanged();
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Could not save contact information",
-      );
-    } finally {
-      setSavingContact(false);
-    }
-  }
 
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-4">
@@ -148,113 +103,30 @@ function CoPersonCard({
           Upload verification documents
         </button>
 
-        {/* 3. Submit contact information */}
+        {/* 3. Submit contact information — opens the full personal-information
+            task form for this person. */}
         <button
           type="button"
-          onClick={() => setEditingContact((v) => !v)}
+          onClick={() => setPersonalInfoOpen(true)}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-300 bg-white text-slate-700 hover:border-brand-primary hover:text-brand-primary transition-colors cursor-pointer"
-          title="Edit this person's contact information"
+          title="Provide this person's personal information"
         >
           <UserCog size={13} />
           Submit contact information
-          {contactDone && <Check size={13} className="text-green-600" />}
         </button>
       </div>
 
-      {editingContact && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
-          onClick={() => !savingContact && setEditingContact(false)}
-        >
-          <div
-            className="w-full max-w-md rounded-xl bg-white shadow-xl border border-slate-200"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-start justify-between gap-3 px-5 pt-5 pb-3 border-b border-slate-100">
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-full bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 flex-shrink-0">
-                  <UserCog size={14} />
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900">Contact information</h3>
-                  <p className="text-[11px] text-slate-400">
-                    {person.role} · {person.name}
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setEditingContact(false)}
-                disabled={savingContact}
-                className="text-slate-400 hover:text-slate-600 transition-colors p-1 disabled:opacity-50 cursor-pointer"
-                aria-label="Close"
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 px-5 py-4">
-              <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-500">
-                First name
-                <input
-                  value={firstName}
-                  onChange={(e) => setFirstName(e.target.value)}
-                  className="text-sm border border-slate-300 rounded px-2 py-1.5 font-normal text-slate-800 focus:outline-none focus:ring-1 focus:ring-brand-primary"
-                />
-              </label>
-              <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-500">
-                Last name
-                <input
-                  value={lastName}
-                  onChange={(e) => setLastName(e.target.value)}
-                  className="text-sm border border-slate-300 rounded px-2 py-1.5 font-normal text-slate-800 focus:outline-none focus:ring-1 focus:ring-brand-primary"
-                />
-              </label>
-              <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-500">
-                Email
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="text-sm border border-slate-300 rounded px-2 py-1.5 font-normal text-slate-800 focus:outline-none focus:ring-1 focus:ring-brand-primary"
-                />
-              </label>
-              <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-500">
-                Phone
-                <input
-                  type="tel"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  className="text-sm border border-slate-300 rounded px-2 py-1.5 font-normal text-slate-800 focus:outline-none focus:ring-1 focus:ring-brand-primary"
-                />
-              </label>
-              {error && <p className="sm:col-span-2 text-[11px] text-[#C10007]">{error}</p>}
-            </div>
-
-            <div className="flex justify-end gap-2 px-5 pb-5 pt-1">
-              <button
-                type="button"
-                onClick={() => setEditingContact(false)}
-                disabled={savingContact}
-                className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-300 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-50 cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleSaveContact}
-                disabled={savingContact}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-brand-primary text-white hover:bg-[#a30006] disabled:opacity-50 cursor-pointer"
-              >
-                {savingContact && <Loader2 size={13} className="animate-spin" />}
-                Save contact
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {error && !editingContact && <p className="mt-2 text-[11px] text-[#C10007]">{error}</p>}
+      <CoPersonPersonalInfoModal
+        open={personalInfoOpen}
+        onClose={() => setPersonalInfoOpen(false)}
+        coPerson={{
+          leadId: person.leadId,
+          dealId: person.dealId,
+          name: person.name,
+          role: person.role,
+        }}
+        onSaved={onChanged}
+      />
     </div>
   );
 }
