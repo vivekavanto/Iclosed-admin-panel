@@ -116,9 +116,20 @@ export async function GET(
         const { data: familyLeads } = await supabase
           .from("leads")
           .select(
-            "id, parent_lead_id, first_name, last_name, email, phone, lead_type, co_person_role, address_street, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code, client_id",
+            "id, parent_lead_id, first_name, last_name, email, phone, lead_type, co_person_role, submit_on_behalf, address_street, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code, client_id",
           )
           .or(`id.eq.${rootLeadId},parent_lead_id.eq.${rootLeadId}`);
+
+        // Whether the PRIMARY applicant opted to submit ID + documents on
+        // behalf of their co-purchaser(s)/co-seller(s) (set from the client
+        // portal's post-retainer popup → leads.submit_on_behalf on the root
+        // lead). Drives the "Submit on behalf" section on the primary's deal
+        // view. The flag always lives on the root lead regardless of which
+        // family member's deal is being viewed.
+        const rootLead = (familyLeads ?? []).find(
+          (l) => l.id === rootLeadId,
+        ) as { submit_on_behalf?: boolean | null } | undefined;
+        data.primary_submit_on_behalf = rootLead?.submit_on_behalf === true;
 
         // Determine a co-lead's role. Priority order:
         //   1. Authoritative `co_person_role` recorded at intake — the

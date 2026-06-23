@@ -37,6 +37,7 @@ import { formatLocalDate, formatLocalDateTime } from "@/lib/formatDate";
 import { upload } from "@vercel/blob/client";
 import UploadIdentificationDrawer from "./UploadIdentificationDrawer";
 import UploadHomeInsuranceDrawer from "./UploadHomeInsuranceDrawer";
+import SubmitOnBehalfSection, { OnBehalfCoPerson } from "./SubmitOnBehalfSection";
 import ClonePreviousDealDrawer from "./ClonePreviousDealDrawer";
 import EditDealModal from "./EditDealModal";
 import AddCoClientModal from "./AddCoClientModal";
@@ -3198,6 +3199,44 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           </div>
         </div>
       )}
+
+      {/* Submit-on-behalf section — only on the PRIMARY's view, and only when
+          the primary opted in (leads.submit_on_behalf === true). When the
+          primary did not grant access, nothing renders here. */}
+      {(() => {
+        const isPrimaryView =
+          ((rawDeal?.current_deal_role as string | undefined) ?? "")
+            .toLowerCase()
+            .startsWith("primary") || !rawDeal?.current_deal_role;
+        const hasAccess = rawDeal?.primary_submit_on_behalf === true;
+        if (!isPrimaryView || !hasAccess) return null;
+        const coPersons: OnBehalfCoPerson[] = familyPeople
+          .filter(
+            (p) =>
+              !p.isCurrent &&
+              p.lead_id &&
+              p.role.toLowerCase().includes("co-"),
+          )
+          .map((p) => ({
+            leadId: p.lead_id as string,
+            name: p.lead_name,
+            role: p.role,
+            email: p.lead_email,
+            phone: p.lead_phone,
+            identificationTaskId: p.identificationTaskId,
+            identificationStatus: p.identificationStatus,
+          }));
+        if (coPersons.length === 0) return null;
+        return (
+          <SubmitOnBehalfSection
+            coPersons={coPersons}
+            onUploadId={(leadId, taskId) => openIdDrawerFor(leadId, taskId)}
+            onChanged={() => {
+              if (typeof window !== "undefined") window.location.reload();
+            }}
+          />
+        );
+      })()}
 
       <div className="space-y-8">
         {/* Tasks Section */}
