@@ -412,15 +412,19 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
   if (!open || !coPerson) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
-      onClick={() => !saving && onClose()}
-    >
+    <>
+      {/* Backdrop */}
       <div
-        className="flex w-full max-w-2xl max-h-[90vh] flex-col rounded-2xl border border-gray-100 bg-white shadow-2xl"
+        className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-sm"
+        onClick={() => !saving && onClose()}
+        aria-hidden="true"
+      />
+
+      {/* Modal — same sizing as the Upload Identification popup. */}
+      <div
+        className="fixed z-[70] inset-4 sm:inset-8 md:inset-12 lg:inset-16 xl:inset-20 max-w-5xl max-h-[90vh] mx-auto my-auto flex flex-col rounded-2xl border border-gray-100 bg-white shadow-2xl"
         role="dialog"
         aria-modal="true"
-        onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-start justify-between gap-4 px-6 py-5 border-b border-gray-100">
@@ -618,6 +622,6 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
           </div>
         )}
       </div>
-    </div>
+    </>
   );
 }
