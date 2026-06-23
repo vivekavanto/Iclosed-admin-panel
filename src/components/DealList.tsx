@@ -1,14 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { Deal, DealType, DealStatus } from '../types';
-import { Search, Trash2, Users, AlertTriangle, Upload, Pencil, ChevronDown, LogIn } from 'lucide-react';
+import { Search, Trash2, Users, AlertTriangle, Upload, ChevronDown, LogIn, ChevronLeft, ChevronRight } from 'lucide-react';
 import {
   isNonCitizenFlagged,
   NON_CITIZEN_FLAG_TOOLTIP,
 } from '@/lib/isNonCitizenFlagged';
 import { formatLocalDate, parseLocalDate } from '@/lib/formatDate';
 import { computeDealDisplayStatus } from '@/lib/dealDisplayStatus';
-import EditDealModal from './EditDealModal';
 
 interface DealListProps {
   onSelectDeal?: (dealId: string) => void;
@@ -55,7 +54,10 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   // so the row's button can show a disabled/loading state.
   const [impersonatingId, setImpersonatingId] = useState<string | null>(null);
   const [deals, setDeals] = useState<Deal[]>([]);
-  const [editingDealId, setEditingDealId] = useState<string | null>(null);
+  // Pagination — page is 1-based. PAGE_SIZE rows per page; page resets to 1
+  // whenever the filtered/sorted result set changes (see effect below).
+  const PAGE_SIZE = 10;
+  const [page, setPage] = useState(1);
   // Closing-date column sort. null = no sort (API order), 'asc' = earliest
   // first, 'desc' = latest first. Clicking the header cycles asc → desc.
   // Defaults to 'asc' so the upcoming closings (the default filtered view)
@@ -193,10 +195,8 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
     ),
   ).sort((a, b) => a.localeCompare(b));
 
-  const countS = primaryDeals.filter(d => d.type === DealType.SALE).length;
-  const countP = primaryDeals.filter(d => d.type === DealType.PURCHASE).length;
-  const countR = primaryDeals.filter(d => d.type === DealType.REFINANCE).length;
-  const countPS = primaryDeals.filter(d => d.type === DealType.PURCHASE_AND_SALE).length;
+  // Grand total of every primary file (ignores filters) — used as the "of N"
+  // denominator so the admin can still see the full size of the dataset.
   const totalFiles = primaryDeals.length;
 
   const filteredDeals = primaryDeals.filter(deal => {
@@ -318,6 +318,16 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
     return true;
   });
 
+  // Header summary counts reflect the CURRENTLY FILTERED set (not the whole
+  // dataset) so the pills always agree with the rows actually listed below —
+  // e.g. with the default "from today" closing-date filter the totals show the
+  // upcoming files, not every file ever created.
+  const visibleCount = filteredDeals.length;
+  const countS = filteredDeals.filter(d => d.type === DealType.SALE).length;
+  const countP = filteredDeals.filter(d => d.type === DealType.PURCHASE).length;
+  const countR = filteredDeals.filter(d => d.type === DealType.REFINANCE).length;
+  const countPS = filteredDeals.filter(d => d.type === DealType.PURCHASE_AND_SALE).length;
+
   // Apply the closing-date sort on top of the filtered list. Rows without a
   // valid closing date always sink to the bottom (regardless of direction) so
   // the dated rows stay grouped and ordered. When no sort is active the
@@ -337,6 +347,20 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
 
   const toggleClosingSort = () =>
     setClosingSort((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+
+  // Pagination derived state. Clamp the current page to the available range so
+  // a shrinking result set (e.g. after filtering) never strands the view on an
+  // empty page, then slice out just the rows for the current page.
+  const totalPages = Math.max(1, Math.ceil(sortedDeals.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pageStart = (currentPage - 1) * PAGE_SIZE;
+  const pagedDeals = sortedDeals.slice(pageStart, pageStart + PAGE_SIZE);
+
+  // Reset to the first page whenever the filters/search/sort change so the user
+  // always lands on the top of the new result set instead of a stale page.
+  useEffect(() => {
+    setPage(1);
+  }, [searchTerm, filterType, filterStatus, filterLawyer, filterClerk, dateFrom, dateTo, showOnlyFlagged, removeTestAccounts, closingSort]);
 
   const applyPreset = (preset: 'today' | 'week' | 'nextWeek' | 'month') => {
     const now = new Date();
@@ -423,7 +447,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
         <div className="flex flex-wrap items-center gap-3 sm:gap-4">
           <h1 className="text-lg sm:text-xl font-bold text-slate-900 border-b-2 border-brand-primary pb-0.5">All files</h1>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-            <span><span className="font-bold text-slate-900">{totalFiles}</span> <span className="text-slate-400">files</span></span>
+            <span><span className="font-bold text-slate-900">{visibleCount}</span> <span className="text-slate-400">files</span></span>
             <span className="flex items-center gap-1.5 text-slate-600" title="Sales"><span className="w-2 h-2 rounded-full bg-orange-400" />{countS} Sale</span>
             <span className="flex items-center gap-1.5 text-slate-600" title="Purchases"><span className="w-2 h-2 rounded-full bg-blue-500" />{countP} Purchase</span>
             <span className="flex items-center gap-1.5 text-slate-600" title="Purchase &amp; Sale"><span className="w-2 h-2 rounded-full bg-purple-500" />{countPS} Purchase + Sale</span>
@@ -625,13 +649,20 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
               <th className="px-4 py-3 hidden">Requisition date</th>
               {/* File name column hidden per request — kept (not deleted) to avoid breaking anything. */}
               <th className="px-4 py-3 hidden">File name</th>
-              <th className="px-4 py-3 w-24 text-center">Actions</th>
+              <th className="sticky right-0 z-20 bg-white px-4 py-3 w-24 text-center">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {sortedDeals.length > 0 ? sortedDeals.map((deal, index) => {
+            {pagedDeals.length > 0 ? pagedDeals.map((deal, index) => {
+              // Continuous row number across pages (1-based) so the count keeps
+              // climbing on page 2, 3, … instead of restarting at 1.
+              const rowNumber = pageStart + index + 1;
               const isEven = index % 2 === 0;
               const rowClass = isEven ? 'bg-white' : 'bg-slate-50/80';
+              // Solid background for the sticky Actions cell — the row's
+              // slate-50/80 is semi-transparent, which would let scrolled
+              // content bleed through a sticky cell, so use an opaque match.
+              const stickyBg = isEven ? 'bg-white' : 'bg-slate-50';
               const isCombined = deal.type === DealType.PURCHASE_AND_SALE;
               return (
                 <React.Fragment key={deal.id}>
@@ -639,7 +670,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                   console.log("Clicked deal id:", deal.id);
                   onSelectDeal(deal.id);
                 }} className={`${rowClass} hover:bg-brand-light/20 cursor-pointer transition-colors border-b border-slate-100 text-xs text-slate-700 whitespace-nowrap`}>
-                  <td className="px-4 py-3">{index + 1}</td>
+                  <td className="px-4 py-3">{rowNumber}</td>
                   <td className="px-4 py-3">
                     {/* Active/Inactive is derived (not the raw DB status) —
                         "Active" = the linked client has signed into the portal
@@ -818,7 +849,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                   <td className="px-4 py-3 hidden">
                     {(deal as any).fileName || deal.propertyAddress}
                   </td>
-                  <td className="px-4 py-3 text-center">
+                  <td className={`sticky right-0 z-10 ${stickyBg} px-4 py-3 text-center`}>
                     <div className="inline-flex items-center justify-center gap-1">
                       {(() => {
                         const canImpersonate = !!(deal as any).accountCreatedAt && !!(deal as any).authUserId;
@@ -845,16 +876,6 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                           </button>
                         );
                       })()}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setEditingDealId(deal.id);
-                        }}
-                        className="text-slate-400 hover:text-brand-primary transition-colors p-1 cursor-pointer"
-                        title="Edit deal"
-                      >
-                        <Pencil size={14} />
-                      </button>
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -914,12 +935,41 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
         </table>
       </div>
 
-      {editingDealId && (
-        <EditDealModal
-          dealId={editingDealId}
-          onClose={() => setEditingDealId(null)}
-          onSaved={fetchDeals}
-        />
+      {/* Pagination — only shown when there is more than one page. Prev/Next
+          plus the current range so the admin knows where they are in the list. */}
+      {sortedDeals.length > 0 && (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 sm:px-6 py-4 border-t border-slate-200">
+          <span className="text-xs text-slate-500">
+            Showing{' '}
+            <span className="font-bold text-slate-900">{pageStart + 1}</span>–
+            <span className="font-bold text-slate-900">{Math.min(pageStart + PAGE_SIZE, sortedDeals.length)}</span>{' '}
+            of <span className="font-bold text-slate-900">{sortedDeals.length}</span>
+          </span>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage <= 1}
+              className="inline-flex items-center gap-1 h-8 px-2.5 rounded border border-slate-300 text-xs font-medium text-slate-600 hover:border-brand-primary hover:text-brand-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-slate-300 disabled:hover:text-slate-600"
+            >
+              <ChevronLeft size={14} />
+              Prev
+            </button>
+            <span className="px-3 text-xs text-slate-500">
+              Page <span className="font-bold text-slate-900">{currentPage}</span> of{' '}
+              <span className="font-bold text-slate-900">{totalPages}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage >= totalPages}
+              className="inline-flex items-center gap-1 h-8 px-2.5 rounded border border-slate-300 text-xs font-medium text-slate-600 hover:border-brand-primary hover:text-brand-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-slate-300 disabled:hover:text-slate-600"
+            >
+              Next
+              <ChevronRight size={14} />
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

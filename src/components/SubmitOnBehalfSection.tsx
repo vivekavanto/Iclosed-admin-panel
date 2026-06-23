@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 import {
   ShieldCheck,
   IdCard,
@@ -8,7 +8,7 @@ import {
   UserCog,
   Check,
   Loader2,
-  CheckCircle2,
+  X,
 } from "lucide-react";
 
 /**
@@ -47,9 +47,6 @@ interface Props {
   onChanged: () => void;
 }
 
-const DOC_ACCEPT = ".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp";
-const MAX_SIZE = 10 * 1024 * 1024; // 10 MB
-
 function splitName(full: string): { first: string; last: string } {
   const parts = full.trim().split(/\s+/);
   if (parts.length <= 1) return { first: parts[0] ?? "", last: "" };
@@ -65,9 +62,6 @@ function CoPersonCard({
   onUploadId: (leadId: string, taskId: string) => void;
   onChanged: () => void;
 }) {
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [uploadingDoc, setUploadingDoc] = useState(false);
-  const [docDone, setDocDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const initial = splitName(person.name);
@@ -80,37 +74,6 @@ function CoPersonCard({
   const [contactDone, setContactDone] = useState(false);
 
   const idCompleted = person.identificationStatus === "Completed";
-
-  async function handleDocFile(file: File) {
-    setError(null);
-    if (file.size > MAX_SIZE) {
-      setError("File size must not exceed 10 MB.");
-      return;
-    }
-    setUploadingDoc(true);
-    setDocDone(false);
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-      fd.append("lead_id", person.leadId);
-      fd.append("doc_type", "document");
-      fd.append("custom_type", "Verification Document");
-      const res = await fetch("/api/admin/uploadblobstorage", {
-        method: "POST",
-        body: fd,
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error ?? "Upload failed");
-      }
-      setDocDone(true);
-      onChanged();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Upload failed. Please try again.");
-    } finally {
-      setUploadingDoc(false);
-    }
-  }
 
   async function handleSaveContact() {
     setError(null);
@@ -174,34 +137,16 @@ function CoPersonCard({
           {idCompleted && <Check size={13} className="text-green-600" />}
         </button>
 
-        {/* 2. Upload verification documents */}
+        {/* 2. Upload verification documents — display-only button for now; the
+            upload flow is intentionally not wired up, so clicking does nothing. */}
         <button
           type="button"
-          disabled={uploadingDoc}
-          onClick={() => fileRef.current?.click()}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-300 bg-white text-slate-700 hover:border-brand-primary hover:text-brand-primary transition-colors disabled:opacity-50 cursor-pointer"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-300 bg-white text-slate-700 hover:border-brand-primary hover:text-brand-primary transition-colors cursor-pointer"
           title="Upload a verification document for this person"
         >
-          {uploadingDoc ? (
-            <Loader2 size={13} className="animate-spin" />
-          ) : docDone ? (
-            <CheckCircle2 size={13} className="text-green-600" />
-          ) : (
-            <FileUp size={13} />
-          )}
-          {docDone ? "Document uploaded" : "Upload verification documents"}
+          <FileUp size={13} />
+          Upload verification documents
         </button>
-        <input
-          ref={fileRef}
-          type="file"
-          accept={DOC_ACCEPT}
-          className="hidden"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) void handleDocFile(f);
-            e.target.value = "";
-          }}
-        />
 
         {/* 3. Submit contact information */}
         <button
@@ -217,64 +162,99 @@ function CoPersonCard({
       </div>
 
       {editingContact && (
-        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2.5 rounded-lg border border-slate-200 bg-white p-3">
-          <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-500">
-            First name
-            <input
-              value={firstName}
-              onChange={(e) => setFirstName(e.target.value)}
-              className="text-sm border border-slate-300 rounded px-2 py-1.5 font-normal text-slate-800 focus:outline-none focus:ring-1 focus:ring-brand-primary"
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-500">
-            Last name
-            <input
-              value={lastName}
-              onChange={(e) => setLastName(e.target.value)}
-              className="text-sm border border-slate-300 rounded px-2 py-1.5 font-normal text-slate-800 focus:outline-none focus:ring-1 focus:ring-brand-primary"
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-500">
-            Email
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="text-sm border border-slate-300 rounded px-2 py-1.5 font-normal text-slate-800 focus:outline-none focus:ring-1 focus:ring-brand-primary"
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-500">
-            Phone
-            <input
-              type="tel"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              className="text-sm border border-slate-300 rounded px-2 py-1.5 font-normal text-slate-800 focus:outline-none focus:ring-1 focus:ring-brand-primary"
-            />
-          </label>
-          <div className="sm:col-span-2 flex justify-end gap-2 pt-1">
-            <button
-              type="button"
-              onClick={() => setEditingContact(false)}
-              disabled={savingContact}
-              className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-300 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-50 cursor-pointer"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleSaveContact}
-              disabled={savingContact}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-brand-primary text-white hover:bg-[#a30006] disabled:opacity-50 cursor-pointer"
-            >
-              {savingContact && <Loader2 size={13} className="animate-spin" />}
-              Save contact
-            </button>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+          onClick={() => !savingContact && setEditingContact(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-xl bg-white shadow-xl border border-slate-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3 px-5 pt-5 pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-full bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 flex-shrink-0">
+                  <UserCog size={14} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Contact information</h3>
+                  <p className="text-[11px] text-slate-400">
+                    {person.role} · {person.name}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingContact(false)}
+                disabled={savingContact}
+                className="text-slate-400 hover:text-slate-600 transition-colors p-1 disabled:opacity-50 cursor-pointer"
+                aria-label="Close"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 px-5 py-4">
+              <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-500">
+                First name
+                <input
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                  className="text-sm border border-slate-300 rounded px-2 py-1.5 font-normal text-slate-800 focus:outline-none focus:ring-1 focus:ring-brand-primary"
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-500">
+                Last name
+                <input
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                  className="text-sm border border-slate-300 rounded px-2 py-1.5 font-normal text-slate-800 focus:outline-none focus:ring-1 focus:ring-brand-primary"
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-500">
+                Email
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="text-sm border border-slate-300 rounded px-2 py-1.5 font-normal text-slate-800 focus:outline-none focus:ring-1 focus:ring-brand-primary"
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-500">
+                Phone
+                <input
+                  type="tel"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  className="text-sm border border-slate-300 rounded px-2 py-1.5 font-normal text-slate-800 focus:outline-none focus:ring-1 focus:ring-brand-primary"
+                />
+              </label>
+              {error && <p className="sm:col-span-2 text-[11px] text-[#C10007]">{error}</p>}
+            </div>
+
+            <div className="flex justify-end gap-2 px-5 pb-5 pt-1">
+              <button
+                type="button"
+                onClick={() => setEditingContact(false)}
+                disabled={savingContact}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-300 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-50 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveContact}
+                disabled={savingContact}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-brand-primary text-white hover:bg-[#a30006] disabled:opacity-50 cursor-pointer"
+              >
+                {savingContact && <Loader2 size={13} className="animate-spin" />}
+                Save contact
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      {error && <p className="mt-2 text-[11px] text-[#C10007]">{error}</p>}
+      {error && !editingContact && <p className="mt-2 text-[11px] text-[#C10007]">{error}</p>}
     </div>
   );
 }
