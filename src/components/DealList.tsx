@@ -668,7 +668,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full text-left border-t border-slate-200">
+        <table className="w-full min-w-[1180px] table-fixed text-left border-t border-slate-200">
           <thead>
             <tr className="bg-white text-slate-800 text-xs font-bold border-b border-slate-200">
               {/* Row number — no heading text per request. */}
@@ -753,9 +753,13 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                   </td>
                   <td className="px-4 py-3 font-medium">{deal.fileNumber}</td>
                   <td className="px-4 py-3">
+                    {/* min-w-0 + truncate lets a long name ellipsize instead of
+                        spilling past this fixed-width column, while the badges
+                        stay pinned (flex-shrink-0) and always visible. */}
+                    <div className="flex items-center min-w-0">
                     {(deal as any).leadName ? (
                       <span
-                        className="text-xs font-medium text-slate-700"
+                        className="text-xs font-medium text-slate-700 truncate min-w-0"
                         title={(deal as any).leadName}
                       >
                         {(deal as any).leadName}
@@ -787,7 +791,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                         ? "text-blue-600"
                         : "text-purple-600";
                       return (
-                        <span className={`ml-2 inline-flex items-center ${color}`} title={tooltip}>
+                        <span className={`ml-2 inline-flex items-center flex-shrink-0 ${color}`} title={tooltip}>
                           <Users size={14} />
                         </span>
                       );
@@ -801,19 +805,20 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                           ? "Has Co-Seller(s)"
                           : "Has Co-Purchaser(s)";
                       return (
-                        <span className="ml-2 inline-flex items-center text-green-600" title={tooltip}>
+                        <span className="ml-2 inline-flex items-center flex-shrink-0 text-green-600" title={tooltip}>
                           <Users size={14} />
                         </span>
                       );
                     })()}
                     {isNonCitizenFlagged({ citizenship_status: (deal as any).leadCitizenshipStatus }) && (
                       <span
-                        className="ml-2 inline-flex items-center text-red-600"
+                        className="ml-2 inline-flex items-center flex-shrink-0 text-red-600"
                         title={NON_CITIZEN_FLAG_TOOLTIP}
                       >
                         <AlertTriangle size={12} />
                       </span>
                     )}
+                    </div>
                   </td>
                   <td className="px-4 py-3 max-w-xs" title={isCombined ? `Purchase: ${deal.propertyAddress || "—"}\nSale: ${deal.sellingPropertyAddress || "—"}` : deal.propertyAddress}>
                     {isCombined ? (
