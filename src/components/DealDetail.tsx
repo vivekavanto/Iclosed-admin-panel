@@ -18,6 +18,8 @@ import {
   Pencil,
   Eye,
   Download,
+  FileDown,
+  Loader2,
   Copy,
   ExternalLink,
   AlertTriangle,
@@ -34,6 +36,13 @@ import {
   NON_CITIZEN_FLAG_TOOLTIP,
 } from "@/lib/isNonCitizenFlagged";
 import { formatLocalDate, formatLocalDateTime } from "@/lib/formatDate";
+import {
+  downloadTaskPdf,
+  downloadDealPdf,
+  type PdfDealMeta,
+  type PdfTaskInput,
+  type PdfDealSection,
+} from "@/lib/dealPdf";
 import { upload } from "@vercel/blob/client";
 import UploadIdentificationDrawer from "./UploadIdentificationDrawer";
 import UploadHomeInsuranceDrawer from "./UploadHomeInsuranceDrawer";
@@ -2429,21 +2438,6 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     }
   };
 
-  // Download every file attached to a task (e.g. all ID uploads at once).
-  // Sequential with a small gap so browsers don't suppress the later
-  // downloads as a "multiple files" popup race.
-  const handleDownloadTaskDocs = async (task: DisplayTask): Promise<void> => {
-    const docs = getTaskFileDocs(task).filter((d: any) => d.file_url);
-    if (docs.length === 0) {
-      showToast("No files to download for this task", "error");
-      return;
-    }
-    for (let i = 0; i < docs.length; i++) {
-      await downloadDocFile(docs[i]);
-      if (i < docs.length - 1) await new Promise((r) => setTimeout(r, 400));
-    }
-  };
-
   // Resolve which lead type (Purchase / Sale) a document belongs to, from the
   // owning task's source template. Used in the View Documents modal so every
   // uploaded document — not just APS — is tagged with its side. Tasks whose
@@ -2628,6 +2622,143 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deal.id]);
 
+  // All client responses (text + file) for the deal, grouped by task id. Powers
+  // the PDF export — both the per-task button (so it can show the personal-info
+  // fields, not just files) and the global "Download All" report. `fields=all`
+  // lifts the file-only filter the View Documents modal relies on. Shared-task
+  // rows come back keyed to the primary deal's task id, which is exactly what
+  // displayTasks uses, so the map lines up by task.id.
+  const [responsesByTask, setResponsesByTask] = useState<Map<string, any[]>>(new Map());
+  const [downloadingDealPdf, setDownloadingDealPdf] = useState(false);
+  const [downloadingTaskId, setDownloadingTaskId] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/admin/task-responses?deal_id=${deal.id}&fields=all`);
+        const data = await res.json();
+        if (cancelled || !Array.isArray(data)) return;
+        const grouped = new Map<string, any[]>();
+        for (const r of data) {
+          const key = r.task_id as string;
+          if (!key) continue;
+          const arr = grouped.get(key) ?? [];
+          arr.push(r);
+          grouped.set(key, arr);
+        }
+        setResponsesByTask(grouped);
+      } catch { }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deal.id]);
+
+  // Does this task have any downloadable data (client responses or files)?
+  // Drives whether the per-task PDF button is shown.
+  const taskHasData = (task: DisplayTask): boolean => {
+    if (task.isTemplate) return false;
+    return (responsesByTask.get(task.id)?.length ?? 0) > 0 || getTaskFileDocs(task).length > 0;
+  };
+
+  // Deal-level metadata reused by both PDF entry points.
+  const buildPdfDealMeta = (): PdfDealMeta => ({
+    fileNumber: deal.fileNumber,
+    type: deal.type,
+    status: deal.status,
+    propertyAddress: deal.propertyAddress || "",
+    sellingPropertyAddress: ((deal as any).sellingPropertyAddress as string | undefined) || "",
+    closingDate: deal.closingDate ? formatLocalDate(deal.closingDate) : "",
+    people: familyPeople.map((p) => ({
+      name: p.lead_name,
+      role: p.role,
+      email: p.lead_email,
+      phone: p.lead_phone,
+    })),
+  });
+
+  // Merge responses (text + file) for a task, deduping file rows that also
+  // surface via taskFileDocs (e.g. APS) so a document isn't embedded twice.
+  const buildPdfTaskInput = (task: DisplayTask): PdfTaskInput => {
+    const responses = [...(responsesByTask.get(task.id) ?? [])];
+    const seenFileUrls = new Set(
+      responses.filter((r) => r.field_type === "file" && r.file_url).map((r) => r.file_url),
+    );
+    for (const d of getTaskFileDocs(task)) {
+      if (d.field_type === "file" && d.file_url && !seenFileUrls.has(d.file_url)) {
+        responses.push(d);
+        seenFileUrls.add(d.file_url);
+      }
+    }
+    return {
+      title: task.title,
+      status: task.status ?? "Pending",
+      leadType: task.leadType ?? null,
+      milestoneTitle: task.milestoneId
+        ? milestones.find((m) => m.id === task.milestoneId)?.title ?? null
+        : null,
+      dueDate: task.dueDate ? formatLocalDate(task.dueDate) : null,
+      completedAt: task.completedAt ? formatLocalDateTime(task.completedAt) : null,
+      responses,
+    };
+  };
+
+  const handleDownloadTaskPdf = async (task: DisplayTask) => {
+    setDownloadingTaskId(task.id);
+    try {
+      await downloadTaskPdf(buildPdfDealMeta(), buildPdfTaskInput(task));
+    } catch {
+      showToast("Could not generate the task PDF", "error");
+    } finally {
+      setDownloadingTaskId(null);
+    }
+  };
+
+  // Global export: only tasks that actually have data (client responses or
+  // uploaded documents), grouped by milestone, with all personal info +
+  // uploaded documents embedded. Empty tasks are excluded — same rule as the
+  // per-task download button.
+  const handleDownloadDealPdf = async () => {
+    setDownloadingDealPdf(true);
+    try {
+      const realTasks = dedupeTasksByTemplate(tasks).filter((t) =>
+        taskHasData({ ...t, isTemplate: false }),
+      );
+      const milestoneOrder = (m: Milestone) => m.orderIndex ?? Number.MAX_SAFE_INTEGER;
+      const orderedMilestones = [...milestones].sort((a, b) => milestoneOrder(a) - milestoneOrder(b));
+      const sections: PdfDealSection[] = [];
+      const usedTaskIds = new Set<string>();
+      for (const m of orderedMilestones) {
+        const milestoneTasks = realTasks
+          .filter((t) => t.milestoneId === m.id)
+          .sort((a, b) => (a.orderIndex ?? Number.MAX_SAFE_INTEGER) - (b.orderIndex ?? Number.MAX_SAFE_INTEGER));
+        if (milestoneTasks.length === 0) continue;
+        milestoneTasks.forEach((t) => usedTaskIds.add(t.id));
+        sections.push({
+          milestoneTitle: m.title,
+          leadType: m.leadType ?? null,
+          tasks: milestoneTasks.map((t) => buildPdfTaskInput({ ...t, isTemplate: false })),
+        });
+      }
+      // Tasks not attached to any milestone (manually-added / unlinked).
+      const orphanTasks = realTasks.filter((t) => !usedTaskIds.has(t.id));
+      if (orphanTasks.length > 0) {
+        sections.push({
+          milestoneTitle: "Other Tasks",
+          tasks: orphanTasks.map((t) => buildPdfTaskInput({ ...t, isTemplate: false })),
+        });
+      }
+      if (sections.length === 0) {
+        showToast("No tasks to download for this deal", "error");
+        return;
+      }
+      await downloadDealPdf(buildPdfDealMeta(), sections);
+    } catch {
+      showToast("Could not generate the deal PDF", "error");
+    } finally {
+      setDownloadingDealPdf(false);
+    }
+  };
+
   const [leadCorporateDocs, setLeadCorporateDocs] = useState<any[]>([]);
   const fetchLeadCorporateDocs = async () => {
     try {
@@ -2716,6 +2847,24 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
             className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2"
           >
             <FileText size={16} /> View Documents
+          </button>
+          {/* Global export: a single self-contained PDF with all task info,
+              personal information, and every uploaded document embedded. */}
+          <button
+            onClick={handleDownloadDealPdf}
+            disabled={downloadingDealPdf}
+            className="bg-brand-primary text-white hover:bg-brand-primaryHover px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2 disabled:opacity-60"
+            title="Download all tasks and documents as a single PDF"
+          >
+            {downloadingDealPdf ? (
+              <>
+                <Loader2 size={16} className="animate-spin" /> Preparing PDF…
+              </>
+            ) : (
+              <>
+                <FileDown size={16} /> Download All (PDF)
+              </>
+            )}
           </button>
         </div>
       </div>
@@ -3456,16 +3605,21 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                           <button onClick={() => openTaskView(task)} className="text-slate-400 hover:text-brand-primary p-1 transition-colors" title="View details">
                             <Eye size={16} />
                           </button>
-                          {/* Download all files attached to this task in one
-                              click — e.g. every ID upload — without opening the
-                              file. Only shown when the task actually has files. */}
-                          {!task.isTemplate && getTaskFileDocs(task).length > 0 && (
+                          {/* Download this task as a PDF — task info + personal
+                              info responses + any uploaded files embedded. Shown
+                              only when the task actually has data to download. */}
+                          {taskHasData(task) && (
                             <button
-                              onClick={() => handleDownloadTaskDocs(task)}
-                              className="text-slate-400 hover:text-brand-primary p-1 transition-colors"
-                              title="Download all files for this task"
+                              onClick={() => handleDownloadTaskPdf(task)}
+                              disabled={downloadingTaskId === task.id}
+                              className="text-slate-400 hover:text-brand-primary p-1 transition-colors disabled:opacity-50"
+                              title="Download task as PDF"
                             >
-                              <Download size={16} />
+                              {downloadingTaskId === task.id ? (
+                                <Loader2 size={16} className="animate-spin" />
+                              ) : (
+                                <Download size={16} />
+                              )}
                             </button>
                           )}
                           {!task.isTemplate && (

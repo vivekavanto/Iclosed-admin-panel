@@ -94,6 +94,10 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const dealId = searchParams.get("deal_id");
   const taskId = searchParams.get("task_id");
+  // By default the deal-scoped query returns only file responses (the View
+  // Documents modal / Doc-count column). `fields=all` lifts that filter so the
+  // PDF export can also pull the text (personal-info) responses for every task.
+  const includeAllFields = searchParams.get("fields") === "all";
 
   if (taskId) {
     try {
@@ -299,11 +303,14 @@ export async function GET(req: Request) {
     }
   }
 
-  const { data, error } = await supabaseAdmin
+  let responsesQuery = supabaseAdmin
     .from("task_responses")
     .select("id, task_id, file_name, file_url, field_type, field_label, field_id, value")
-    .in("task_id", allTaskIds)
-    .eq("field_type", "file");
+    .in("task_id", allTaskIds);
+  if (!includeAllFields) {
+    responsesQuery = responsesQuery.eq("field_type", "file");
+  }
+  const { data, error } = await responsesQuery;
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
