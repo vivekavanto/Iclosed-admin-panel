@@ -2848,24 +2848,6 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           >
             <FileText size={16} /> View Documents
           </button>
-          {/* Global export: a single self-contained PDF with all task info,
-              personal information, and every uploaded document embedded. */}
-          <button
-            onClick={handleDownloadDealPdf}
-            disabled={downloadingDealPdf}
-            className="bg-brand-primary text-white hover:bg-brand-primaryHover px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2 disabled:opacity-60"
-            title="Download all tasks and documents as a single PDF"
-          >
-            {downloadingDealPdf ? (
-              <>
-                <Loader2 size={16} className="animate-spin" /> Preparing PDF…
-              </>
-            ) : (
-              <>
-                <FileDown size={16} /> Download All (PDF)
-              </>
-            )}
-          </button>
         </div>
       </div>
 
@@ -3393,13 +3375,35 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         <div className="space-y-4">
           <div className="flex justify-between items-center">
             <h2 className="text-lg font-bold text-slate-900">Tasks</h2>
-            <button
-              onClick={() => setShowTaskForm(true)}
-              className="text-brand-primary text-xs font-bold flex items-center hover:bg-brand-light px-2 py-1 rounded transition-colors"
-            >
-              <Plus size={14} className="mr-1" />
-              Add Task
-            </button>
+            <div className="flex items-center gap-2">
+              {/* "Download All" only makes sense once there's finished work to
+                  export — show it only when at least one task is completed. */}
+              {tasks.some((t) => t.status === "Completed") && (
+              <button
+                onClick={handleDownloadDealPdf}
+                disabled={downloadingDealPdf}
+                className="bg-brand-primary text-white hover:bg-brand-primaryHover px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-colors shadow-sm disabled:opacity-60"
+                title="Download all tasks and documents as a single PDF"
+              >
+                {downloadingDealPdf ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" /> Preparing PDF…
+                  </>
+                ) : (
+                  <>
+                    <FileDown size={16} /> Download All
+                  </>
+                )}
+              </button>
+              )}
+              <button
+                onClick={() => setShowTaskForm(true)}
+                className="text-brand-primary text-xs font-bold flex items-center hover:bg-brand-light px-2 py-1 rounded transition-colors"
+              >
+                <Plus size={14} className="mr-1" />
+                Add Task
+              </button>
+            </div>
           </div>
 
           {isCombinedDealType && (
@@ -3496,9 +3500,21 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                         )}
                       </td>
                       <td className="px-2 py-3">
-                        <span className="text-sm font-semibold text-slate-800 block leading-tight">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (task.isTemplate) {
+                              openTaskView(task);
+                            } else {
+                              openEditTask(task);
+                            }
+                          }}
+                          className="text-sm font-semibold text-slate-800 block leading-tight text-left hover:text-brand-primary transition-colors cursor-pointer bg-transparent border-none p-0"
+                          title={task.isTemplate ? "View details" : "View / edit task"}
+                        >
                           {task.title}
-                        </span>
+                        </button>
                       </td>
                       <td className="px-2 py-3">
                         {task.isTemplate ? (
@@ -3593,22 +3609,11 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                       </td>
                       <td className="px-2 py-3 text-center">
                         <div className="flex items-center justify-center gap-1">
-                          {!task.isTemplate && (
-                            <button
-                              onClick={() => openEditTask(task)}
-                              className="text-slate-400 hover:text-brand-primary p-1 transition-colors"
-                              title="Edit task"
-                            >
-                              <Pencil size={14} />
-                            </button>
-                          )}
-                          <button onClick={() => openTaskView(task)} className="text-slate-400 hover:text-brand-primary p-1 transition-colors" title="View details">
-                            <Eye size={16} />
-                          </button>
                           {/* Download this task as a PDF — task info + personal
                               info responses + any uploaded files embedded. Shown
-                              only when the task actually has data to download. */}
-                          {taskHasData(task) && (
+                              once a task is completed, or whenever it already has
+                              data to download. */}
+                          {!task.isTemplate && (task.status === "Completed" || taskHasData(task)) && (
                             <button
                               onClick={() => handleDownloadTaskPdf(task)}
                               disabled={downloadingTaskId === task.id}
@@ -3763,9 +3768,23 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                               </td>
 
                               <td className="px-2 py-3">
-                                <span className="text-sm text-slate-800 font-semibold">
-                                  {milestone.title}
-                                </span>
+                                {milestone.isTemplate ? (
+                                  <span className="text-sm text-slate-800 font-semibold">
+                                    {milestone.title}
+                                  </span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openEditMilestone(milestone);
+                                    }}
+                                    className="text-sm text-slate-800 font-semibold text-left hover:text-brand-primary transition-colors cursor-pointer bg-transparent border-none p-0"
+                                    title="View / edit milestone"
+                                  >
+                                    {milestone.title}
+                                  </button>
+                                )}
                               </td>
 
                               <td className="px-2 py-3 hidden md:table-cell">
@@ -3802,15 +3821,6 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
                               <td className="px-2 py-3 text-right">
                                 <div className="flex items-center justify-end gap-1">
-                                  {!milestone.isTemplate && (
-                                    <button
-                                      onClick={() => openEditMilestone(milestone)}
-                                      className="text-slate-400 hover:text-brand-primary p-1 rounded transition-colors"
-                                      title="Edit milestone"
-                                    >
-                                      <Pencil size={14} />
-                                    </button>
-                                  )}
                                   {milestone.emailTemplateId && (
                                     <button
                                       title={milestone.emailSent ? "Email already sent" : "Send Email"}
