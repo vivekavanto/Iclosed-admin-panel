@@ -1,16 +1,26 @@
 import supabaseAdmin from "./supabaseAdmin";
 
 /**
- * Recalculates milestone statuses for all deals in a co-purchaser family.
+ * Recalculates milestone statuses for a co-purchaser/co-seller family, treating
+ * each milestone as COMMON across the family: the per-person personal tasks
+ * (ID, Personal Information, ...) plus the primary deal's shared tasks are
+ * POOLED by `stage_template_id`, and the resulting status is written to every
+ * per-deal instance of that stage.
  *
- * For each deal, it gathers shared tasks (from the primary deal) and personal
- * tasks, then derives each milestone's status:
- *   - "Completed" when ALL tasks under it are completed
- *   - "In Progress" when at least one task is in-progress or completed
+ *   - "Completed" only when ALL pooled tasks (every person's) are completed
+ *   - "In Progress" when at least one pooled task is in-progress or completed
  *   - "Pending" otherwise
  *
- * This is the same logic previously inlined in the tasks PATCH handler,
- * extracted so it can be reused by APS automation and any future callers.
+ * We pool by `stage_template_id` (not `milestone_id`) because each deal owns its
+ * own milestone row for the same stage; that template id is the stable
+ * family-wide key already used by the tasks GET route and the email route.
+ *
+ * When a stage transitions to Completed, the milestone email is fired EXACTLY
+ * ONCE for the whole family (off the primary deal's instance, with
+ * sendToLinkedDeals) so every client is notified and `email_sent` is marked
+ * family-wide. Reopening a stage (away from Completed — e.g. a co-person added
+ * after completion) clears `email_sent` so the email can re-fire once everyone
+ * finishes again.
  */
 export async function recalcMilestonesForFamily(
   familyDealIds: string[],
@@ -22,145 +32,129 @@ export async function recalcMilestonesForFamily(
   // pre-completed task landed on a fresh milestone — only genuine task
   // completion flows should. Such callers opt out via { sendEmails: false }.
   const sendEmails = options.sendEmails ?? true;
-  // Pre-fetch all family milestones to do the mapping
+
+  // Fetch all family milestones once and build the stage→instances mapping.
   const { data: familyMilestones } = await supabaseAdmin
     .from("milestones")
     .select("id, deal_id, stage_template_id, status, email_template_id, email_sent")
     .in("deal_id", familyDealIds)
     .eq("is_deleted", false);
 
-  const primaryMsMap = new Map<string, string>(); // milestone_id -> stage_template_id
-  const dealMsMap = new Map<string, Map<string, string>>(); // deal_id -> Map(stage_template_id -> milestone_id)
-  const msMetaMap = new Map<string, { deal_id: string; status: string; email_template_id: string | null; email_sent: boolean }>(); // milestone_id -> metadata
+  type MsInstance = {
+    id: string;
+    deal_id: string;
+    status: string;
+    email_template_id: string | null;
+    email_sent: boolean;
+  };
+  const msToStage = new Map<string, string>(); // milestone_id -> stage_template_id
+  const stageToInstances = new Map<string, MsInstance[]>(); // stage_template_id -> per-deal rows
 
-  if (familyMilestones) {
-    familyMilestones.forEach((m) => {
-      if (m.deal_id === primaryDealId)
-        primaryMsMap.set(m.id, m.stage_template_id);
-
-      if (!dealMsMap.has(m.deal_id)) dealMsMap.set(m.deal_id, new Map());
-      dealMsMap.get(m.deal_id)!.set(m.stage_template_id, m.id);
-
-      msMetaMap.set(m.id, {
-        deal_id: m.deal_id,
-        status: m.status,
-        email_template_id: m.email_template_id,
-        email_sent: m.email_sent ?? false,
-      });
+  (familyMilestones ?? []).forEach((m) => {
+    if (!m.stage_template_id) return; // can't pool a milestone with no stage key
+    msToStage.set(m.id, m.stage_template_id);
+    const arr = stageToInstances.get(m.stage_template_id) ?? [];
+    arr.push({
+      id: m.id,
+      deal_id: m.deal_id,
+      status: m.status,
+      email_template_id: m.email_template_id,
+      email_sent: m.email_sent ?? false,
     });
-  }
+    stageToInstances.set(m.stage_template_id, arr);
+  });
 
-  // Pre-fetch shared tasks from primaryDealId
-  const { data: sharedTasks } = await supabaseAdmin
-    .from("tasks")
-    .select("milestone_id, status")
-    .eq("deal_id", primaryDealId)
-    .eq("is_shared", true)
-    .eq("is_deleted", false)
-    .not("milestone_id", "is", null);
+  // Shared tasks live once on the primary deal; personal tasks live one-per-
+  // person across the family. Pool BOTH by stage.
+  const [{ data: sharedTasks }, { data: personalTasks }] = await Promise.all([
+    supabaseAdmin
+      .from("tasks")
+      .select("milestone_id, status")
+      .eq("deal_id", primaryDealId)
+      .eq("is_shared", true)
+      .eq("is_deleted", false)
+      .not("milestone_id", "is", null),
+    supabaseAdmin
+      .from("tasks")
+      .select("milestone_id, status")
+      .in("deal_id", familyDealIds)
+      .or("is_shared.is.null,is_shared.eq.false")
+      .eq("is_deleted", false)
+      .not("milestone_id", "is", null),
+  ]);
 
-  for (const famDealId of familyDealIds) {
-    try {
-      const { data: personalTasks } = await supabaseAdmin
-        .from("tasks")
-        .select("milestone_id, status")
-        .eq("deal_id", famDealId)
-        .or("is_shared.is.null,is_shared.eq.false")
-        .eq("is_deleted", false)
-        .not("milestone_id", "is", null);
+  // stage_template_id -> pooled task statuses across the whole family
+  const stageStatuses = new Map<string, string[]>();
+  const poolStatus = (milestoneId: string | null, status: string) => {
+    if (!milestoneId) return;
+    const stage = msToStage.get(milestoneId);
+    if (!stage) return;
+    const arr = stageStatuses.get(stage) ?? [];
+    arr.push(status);
+    stageStatuses.set(stage, arr);
+  };
+  (sharedTasks ?? []).forEach((t) => poolStatus(t.milestone_id, t.status));
+  (personalTasks ?? []).forEach((t) => poolStatus(t.milestone_id, t.status));
 
-      const localMsMap = dealMsMap.get(famDealId) || new Map();
-      const milestoneTaskMap = new Map<string, string[]>();
+  // For each stage that actually has tasks, derive ONE status and write it to
+  // every per-deal instance. Stages with no tasks are left untouched so manual
+  // / date-only milestones aren't clobbered (matches the prior per-deal logic,
+  // which only ever updated milestones that had at least one task).
+  for (const [stage, instances] of stageToInstances.entries()) {
+    const statuses = stageStatuses.get(stage) ?? [];
+    if (statuses.length === 0) continue;
 
-      if (sharedTasks) {
-        for (const t of sharedTasks) {
-          let mappedMsId = t.milestone_id;
-          if (famDealId !== primaryDealId) {
-            const templId = primaryMsMap.get(t.milestone_id);
-            if (templId && localMsMap.has(templId)) {
-              mappedMsId = localMsMap.get(templId)!;
-            } else {
-              continue;
-            }
-          }
-          if (!mappedMsId) continue;
-          const arr = milestoneTaskMap.get(mappedMsId) ?? [];
-          arr.push(t.status);
-          milestoneTaskMap.set(mappedMsId, arr);
+    const allDone = statuses.every((s) => s === "Completed");
+    const anyActive = statuses.some(
+      (s) => s === "In Progress" || s === "Completed",
+    );
+    const newStatus = allDone ? "Completed" : anyActive ? "In Progress" : "Pending";
+
+    const msUpdates: Record<string, any> = {
+      status: newStatus,
+      completed_at: allDone ? new Date().toISOString() : null,
+    };
+    if (!allDone) {
+      msUpdates.email_sent = false;
+    }
+
+    await supabaseAdmin
+      .from("milestones")
+      .update(msUpdates)
+      .in(
+        "id",
+        instances.map((m) => m.id),
+      );
+
+    // Fire the completion email once for the whole family, off the primary
+    // deal's instance. Guards on the PRE-UPDATE snapshot so it fires only on a
+    // genuine transition into Completed and never twice.
+    if (allDone && sendEmails) {
+      const primaryInstance =
+        instances.find((m) => m.deal_id === primaryDealId) ?? instances[0];
+      if (
+        primaryInstance &&
+        primaryInstance.status !== "Completed" && // was NOT already completed
+        primaryInstance.email_template_id && // has an email template linked
+        !primaryInstance.email_sent // email not already sent
+      ) {
+        try {
+          const baseUrl = process.env.VERCEL_URL
+            ? `https://${process.env.VERCEL_URL}`
+            : "http://localhost:3000";
+          await fetch(`${baseUrl}/api/admin/send-milestone-email`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              milestoneId: primaryInstance.id,
+              dealId: primaryDealId,
+              sendToLinkedDeals: true,
+            }),
+          });
+        } catch {
+          // Non-blocking — email send failure should not break recalc
         }
       }
-
-      if (personalTasks) {
-        for (const t of personalTasks) {
-          if (!t.milestone_id) continue;
-          const arr = milestoneTaskMap.get(t.milestone_id) ?? [];
-          arr.push(t.status);
-          milestoneTaskMap.set(t.milestone_id, arr);
-        }
-      }
-
-      const validLocalMilestones = new Set(localMsMap.values());
-
-      for (const [msId, statuses] of milestoneTaskMap.entries()) {
-        if (!validLocalMilestones.has(msId)) continue;
-
-        const allDone =
-          statuses.length > 0 && statuses.every((s) => s === "Completed");
-        const anyActive = statuses.some(
-          (s) => s === "In Progress" || s === "Completed",
-        );
-        const newStatus = allDone
-          ? "Completed"
-          : anyActive
-            ? "In Progress"
-            : "Pending";
-
-        const msUpdates: Record<string, any> = {
-          status: newStatus,
-          completed_at: allDone ? new Date().toISOString() : null,
-        };
-        if (!allDone) {
-          msUpdates.email_sent = false;
-        }
-
-        await supabaseAdmin
-          .from("milestones")
-          .update(msUpdates)
-          .eq("id", msId);
-
-        // Auto-send email when milestone transitions to Completed
-        if (allDone && sendEmails) {
-          const meta = msMetaMap.get(msId);
-          if (
-            meta &&
-            meta.status !== "Completed" && // was NOT already completed
-            meta.email_template_id &&       // has an email template linked
-            !meta.email_sent                // email not already sent
-          ) {
-            try {
-              const baseUrl = process.env.VERCEL_URL
-                ? `https://${process.env.VERCEL_URL}`
-                : "http://localhost:3000";
-              await fetch(
-                `${baseUrl}/api/admin/send-milestone-email`,
-                {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    milestoneId: msId,
-                    dealId: famDealId,
-                    sendToLinkedDeals: true,
-                  }),
-                },
-              );
-            } catch {
-              // Non-blocking — email send failure should not break recalc
-            }
-          }
-        }
-      }
-    } catch {
-      // Non-blocking per deal
     }
   }
 }

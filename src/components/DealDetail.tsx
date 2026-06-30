@@ -14,7 +14,6 @@ import {
   CheckCircle,
   GripVertical,
   FileText,
-  ChevronDown,
   Pencil,
   Eye,
   Download,
@@ -114,6 +113,12 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     taskTemplateId: t.task_template_id ?? null,
     leadType: t.task_templates?.lead_type ?? null,
     orderIndex: t.order_index ?? null,
+    ownerDealId: t.owner_deal_id ?? null,
+    ownerLeadId: t.owner_lead_id ?? null,
+    ownerName: t.owner_name ?? null,
+    ownerFirstName: t.owner_first_name ?? null,
+    ownerLastName: t.owner_last_name ?? null,
+    ownerPhone: t.owner_phone ?? null,
   });
 
   // Use state to allow modification simulation
@@ -144,6 +149,19 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     return raw;
   };
 
+  // Unified family view: on the PRIMARY deal that has co-purchasers/co-sellers,
+  // the tasks fetch aggregates every person's ID & Personal Information rows
+  // (include_family=1) so they show in one list labeled by name. Co-person
+  // pages and single-person deals keep the original single-deal scope, leaving
+  // the customer portal and direct co-person views byte-for-byte unchanged.
+  const isPrimaryDealView =
+    ((rawDeal?.current_deal_role as string | undefined) ?? "")
+      .toLowerCase()
+      .startsWith("primary") || !rawDeal?.current_deal_role;
+  const familyMemberCount = 1 + ((rawDeal?.linked_deals as any[]) ?? []).length;
+  const includeFamilyTasks = isPrimaryDealView && familyMemberCount > 1;
+  const tasksFetchUrl = `/api/admin/tasks?deal_id=${deal.id}${includeFamilyTasks ? "&include_family=1" : ""}`;
+
   // For combined deals (e.g. "Purchase & Sale"), tasks, milestones, and the
   // displayed property address all share a single active-workflow tab so
   // switching one section moves them all together.
@@ -159,7 +177,15 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
   // Extended display types with template flag and resolved lead-type (for combined deals)
   type DisplayTask = Task & { isTemplate?: boolean; leadType?: string | null };
-  type DisplayMilestone = Milestone & { isTemplate?: boolean; leadType?: string | null };
+  type DisplayMilestone = Milestone & {
+    isTemplate?: boolean;
+    leadType?: string | null;
+    // Set on the per-person rows produced when a personal-task stage (e.g.
+    // Identification / Personal Information) is split by person in the family
+    // view. Such rows are display-only: status is the person's task-derived
+    // progress, so they render a read-only badge and no edit/date/delete UI.
+    isPersonalSplit?: boolean;
+  };
 
   // View task detail modal
   const [viewingTask, setViewingTask] = useState<DisplayTask | null>(null);
@@ -658,7 +684,18 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           const respByLabel = new Map<string, any>(
             existingResponses.filter((r: any) => !r.field_id && r.field_label).map((r: any) => [r.field_label, r]),
           );
-          const leadValues = getLeadValuesFromRawDeal();
+          // In the unified family view, a personal task may belong to a
+          // co-person (their own deal). `getLeadValuesFromRawDeal` only knows
+          // the PRIMARY lead, so for an owner row prefill from the owner's
+          // name/phone (carried on the task) instead of the primary's.
+          const isOwnerRow = !!task.ownerDealId && task.ownerDealId !== deal.id;
+          const leadValues = isOwnerRow
+            ? {
+                firstName: task.ownerFirstName ?? "",
+                lastName: task.ownerLastName ?? "",
+                phone: task.ownerPhone ?? "",
+              }
+            : getLeadValuesFromRawDeal();
           const prefillRows: EditableResponse[] = [];
           // Mortgage task fields refer to the client's mortgage broker, not
           // the client, so we never auto-populate them from the lead — they
@@ -1344,7 +1381,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const refetchData = async () => {
     try {
       const [tasksRes, milestonesRes] = await Promise.all([
-        fetch(`/api/admin/tasks?deal_id=${deal.id}`),
+        fetch(tasksFetchUrl),
         fetch(`/api/admin/milestones?deal_id=${deal.id}`),
       ]);
       const tasksData = await tasksRes.json();
@@ -1370,7 +1407,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const fetchDealDocuments = async () => {
     setLoadingDocs(true);
     try {
-      const res = await fetch(`/api/admin/task-responses?deal_id=${deal.id}`);
+      const res = await fetch(`/api/admin/task-responses?deal_id=${deal.id}${includeFamilyTasks ? "&include_family=1" : ""}`);
       const data = await res.json();
       if (Array.isArray(data)) setDealDocuments(data);
     } catch {
@@ -1703,9 +1740,11 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     const [moved] = reordered.splice(from, 1);
     reordered.splice(to, 0, moved);
 
-    // Only real (non-ghost) milestones have a DB row to persist.
+    // Only real (non-ghost) milestones have a DB row to persist. Per-person
+    // split rows carry a synthetic id (`<id>::<ownerDealId>`) and no DB row, so
+    // they're excluded too.
     const items = reordered
-      .filter((m) => !m.isTemplate)
+      .filter((m) => !m.isTemplate && !(m as DisplayMilestone).isPersonalSplit)
       .map((m, i) => ({ id: m.id, order_index: i }));
     const orderById = new Map(items.map((it) => [it.id, it.order_index]));
 
@@ -2090,13 +2129,13 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
   // Fetch user-added tasks from DB
   useEffect(() => {
-    fetch(`/api/admin/tasks?deal_id=${deal.id}`)
+    fetch(tasksFetchUrl)
       .then(res => res.json())
       .then((data: any[]) => {
         if (Array.isArray(data)) setTasks(data.map(mapApiTask));
       })
       .catch(() => { });
-  }, [deal.id]);
+  }, [tasksFetchUrl]);
 
   // Fetch user-added milestones from DB
   useEffect(() => {
@@ -2269,6 +2308,24 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     return [currentEntry, ...linked].sort((a, b) => sortKey(a) - sortKey(b));
   })();
 
+  // Map each person's deal id → the workflow side their role belongs to, used
+  // in the unified family view to scope a co-client's PERSONAL rows (Personal
+  // Information / Identification, which carry no template lead_type) to the
+  // correct tab. A co-purchaser only acts on Purchase, a co-seller only on
+  // Sale, so their personal rows must not leak onto the other tab. The primary
+  // acts on both sides, so they're intentionally left unscoped (their personal
+  // rows show on every tab).
+  const ownerDealSide = (() => {
+    const m = new Map<string, "Purchase" | "Sale">();
+    for (const p of familyPeople) {
+      const r = p.role.toLowerCase();
+      if (r.startsWith("primary")) continue;
+      if (r.includes("co-purchaser")) m.set(p.id, "Purchase");
+      else if (r.includes("co-seller")) m.set(p.id, "Sale");
+    }
+    return m;
+  })();
+
   const roleChipClass = (role: string) => {
     const r = role.toLowerCase();
     if (r.startsWith("primary")) return "bg-green-100 text-green-700 border-green-200";
@@ -2367,6 +2424,17 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   // template id → lead_type lookups (used to resolve a task/milestone's source lead type)
   const taskTemplateLeadTypeMap = new Map<string, string>(
     (taskTemplates as any[]).map(t => [t.id, t.lead_type])
+  );
+
+  // task-template id → the stage (milestone) it belongs to. Lets us map a
+  // per-person personal task back to its milestone STAGE without the owner
+  // deal's milestone rows: a co-person's task only carries its own deal's
+  // milestone_id (not the primary's), but the task_template's stage_template_id
+  // is the family-stable key. Used to split personal-task milestones per person.
+  const taskTemplateStageMap = new Map<string, string>(
+    (taskTemplates as any[])
+      .filter(t => t.stage_template_id)
+      .map(t => [t.id, t.stage_template_id as string]),
   );
 
   // Match uploaded file docs to a task row, in priority order:
@@ -2477,8 +2545,15 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     const seen = new Set<string>();
     return rows.filter((task) => {
       if (!task.taskTemplateId) return true;
-      if (seen.has(task.taskTemplateId)) return false;
-      seen.add(task.taskTemplateId);
+      // In the unified family view each person has their own row for the same
+      // personal template (ID / Personal Information). Key those by template +
+      // owner deal so they aren't collapsed into one; shared rows still dedupe
+      // by template id alone.
+      const key = task.ownerDealId
+        ? `${task.taskTemplateId}:${task.ownerDealId}`
+        : task.taskTemplateId;
+      if (seen.has(key)) return false;
+      seen.add(key);
       return true;
     });
   };
@@ -2522,13 +2597,30 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         leadType: t.lead_type ?? null,
         orderIndex: t.order_index ?? null,
       }));
-    const userRows: DisplayTask[] = dedupedTasks.map(t => ({
-      ...t,
-      isTemplate: false,
-      leadType:
+    const userRows: DisplayTask[] = dedupedTasks.flatMap(t => {
+      // In the unified family view, scope each co-client's PERSONAL rows to the
+      // single side their role acts on. A co-purchaser only deals on Purchase,
+      // a co-seller only on Sale, so for a co-client row we:
+      //   • DROP it when its template lead_type is the OTHER side — e.g. a
+      //     Sale-side Personal Info/ID mis-seeded onto a co-purchaser's deal
+      //     (happens when the co-lead inherited a combined "Purchase & Sale"
+      //     lead_type); such a row doesn't belong to that person at all.
+      //   • PIN a row that has no template lead_type to the co-client's own side
+      //     so it lands on the correct tab instead of every tab.
+      // The primary acts on both sides, so their rows are left untouched.
+      const ownerSide =
+        includeFamilyTasks && t.ownerDealId ? ownerDealSide.get(t.ownerDealId) : undefined;
+      const rawLeadType =
         t.leadType
-        ?? (t.taskTemplateId ? taskTemplateLeadTypeMap.get(t.taskTemplateId) ?? null : null),
-    }));
+        ?? (t.taskTemplateId ? taskTemplateLeadTypeMap.get(t.taskTemplateId) ?? null : null);
+      if (ownerSide) {
+        if (rawLeadType && rawLeadType.toLowerCase() !== ownerSide.toLowerCase()) {
+          return [];
+        }
+        return [{ ...t, isTemplate: false, leadType: ownerSide }];
+      }
+      return [{ ...t, isTemplate: false, leadType: rawLeadType }];
+    });
     // Sort by order_index (the per-deal task sequence, kept in sync with the
     // template order and editable via the drag handles). Rows without an order
     // fall to the end; stable sort keeps ghost-before-real for equal indexes.
@@ -2580,10 +2672,64 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     const all = [...templateRows, ...userRows].sort(
       (a, b) => (a.orderIndex ?? Number.MAX_SAFE_INTEGER) - (b.orderIndex ?? Number.MAX_SAFE_INTEGER),
     );
+
+    // Family view: split a personal-task stage (e.g. Personal Information /
+    // Identification) into ONE row per person, mirroring how the task list
+    // already shows "<task> - <name>" per person. We synthesise these rows from
+    // the per-person personal TASKS (which carry owner + status) keyed to their
+    // stage via the task-template→stage map — the co-person's own milestone rows
+    // aren't fetched here, but the primary's stage row + each person's task
+    // progress is all we need. Shared/deal-level stages are left as a single row.
+    // Derived from displayTasks so the same side-scoping + active tab apply.
+    const splitAll: DisplayMilestone[] = (() => {
+      if (!includeFamilyTasks) return all;
+
+      // stage_template_id → (ownerDealId → { name, task statuses })
+      const stageOwners = new Map<string, Map<string, { name: string; statuses: string[] }>>();
+      for (const t of displayTasks) {
+        if (t.isTemplate || !t.ownerDealId || !t.taskTemplateId) continue;
+        const stageId = taskTemplateStageMap.get(t.taskTemplateId);
+        if (!stageId) continue;
+        const owners = stageOwners.get(stageId) ?? new Map();
+        const entry = owners.get(t.ownerDealId) ?? { name: t.ownerName ?? "", statuses: [] };
+        entry.statuses.push(t.status || "Pending");
+        if (t.ownerName) entry.name = t.ownerName;
+        owners.set(t.ownerDealId, entry);
+        stageOwners.set(stageId, owners);
+      }
+      if (stageOwners.size === 0) return all;
+
+      // A person's progress for a stage: Completed only if all their tasks in it
+      // are done; In Progress if any started/done; else Pending.
+      const ownerStatus = (statuses: string[]): Milestone["status"] => {
+        if (statuses.length === 0) return "Pending";
+        if (statuses.every((s) => s === "Completed")) return "Completed";
+        if (statuses.some((s) => s === "Completed" || s === "In Progress")) return "In Progress";
+        return "Pending";
+      };
+
+      return all.flatMap((m) => {
+        if (m.isTemplate || !m.stageTemplateId) return [m];
+        const owners = stageOwners.get(m.stageTemplateId);
+        if (!owners || owners.size === 0) return [m];
+        return Array.from(owners.entries())
+          .sort((a, b) =>
+            a[1].name.localeCompare(b[1].name, undefined, { sensitivity: "base" }),
+          )
+          .map(([ownerDealId, info]): DisplayMilestone => ({
+            ...m,
+            id: `${m.id}::${ownerDealId}`,
+            title: info.name ? `${m.title} - ${info.name}` : m.title,
+            status: ownerStatus(info.statuses),
+            isPersonalSplit: true,
+          }));
+      });
+    })();
+
     if (isCombinedDealType) {
-      return all.filter(m => matchesActiveTab(m.leadType, activeMilestoneTab));
+      return splitAll.filter(m => matchesActiveTab(m.leadType, activeMilestoneTab));
     }
-    return all.filter(m => !m.leadType || matchesDealType(m.leadType));
+    return splitAll.filter(m => !m.leadType || matchesDealType(m.leadType));
   })();
 
   useEffect(() => {
@@ -2612,7 +2758,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
   const fetchTaskFileDocs = async () => {
     try {
-      const res = await fetch(`/api/admin/task-responses?deal_id=${deal.id}`);
+      const res = await fetch(`/api/admin/task-responses?deal_id=${deal.id}${includeFamilyTasks ? "&include_family=1" : ""}`);
       const data = await res.json();
       if (Array.isArray(data)) setTaskFileDocs(data);
     } catch { }
@@ -2620,7 +2766,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   useEffect(() => {
     fetchTaskFileDocs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deal.id]);
+  }, [deal.id, includeFamilyTasks]);
 
   // All client responses (text + file) for the deal, grouped by task id. Powers
   // the PDF export — both the per-task button (so it can show the personal-info
@@ -2635,7 +2781,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/admin/task-responses?deal_id=${deal.id}&fields=all`);
+        const res = await fetch(`/api/admin/task-responses?deal_id=${deal.id}&fields=all${includeFamilyTasks ? "&include_family=1" : ""}`);
         const data = await res.json();
         if (cancelled || !Array.isArray(data)) return;
         const grouped = new Map<string, any[]>();
@@ -2651,7 +2797,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deal.id]);
+  }, [deal.id, includeFamilyTasks]);
 
   // Does this task have any downloadable data (client responses or files)?
   // Drives whether the per-task PDF button is shown.
@@ -3123,7 +3269,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
               </div>
               <h3 className="text-sm font-bold text-slate-900">People involved</h3>
               <span className="text-[11px] text-slate-400 truncate">
-                Click any person to switch to their view
+                {includeFamilyTasks
+                  ? "Everyone's tasks are listed together below"
+                  : "Click any person to switch to their view"}
               </span>
             </div>
             {/* Add Co-Purchaser / Co-Seller — only on the primary's view, and
@@ -3158,11 +3306,19 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
               return familyPeople.map((p) => (
                 <div
                   key={p.id}
-                  onClick={p.isCurrent ? undefined : () => router.push(`/admin/deals/${p.id}`)}
+                  onClick={
+                    includeFamilyTasks || p.isCurrent
+                      ? undefined
+                      : () => router.push(`/admin/deals/${p.id}`)
+                  }
                   className={`flex items-center justify-between px-4 py-3 rounded-lg border transition-all group ${
-                    p.isCurrent
-                      ? "border-brand-primary bg-brand-light/30 cursor-default"
-                      : "border-slate-100 hover:border-blue-200 hover:bg-blue-50/50 cursor-pointer"
+                    includeFamilyTasks
+                      ? p.isCurrent
+                        ? "border-brand-primary bg-brand-light/30 cursor-default"
+                        : "border-slate-100 cursor-default"
+                      : p.isCurrent
+                        ? "border-brand-primary bg-brand-light/30 cursor-default"
+                        : "border-slate-100 hover:border-blue-200 hover:bg-blue-50/50 cursor-pointer"
                   }`}
                 >
                   <div className="flex items-center gap-3">
@@ -3171,7 +3327,11 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                     </span>
                     <div>
                       <p className={`text-sm font-bold transition-colors ${
-                        p.isCurrent ? "text-brand-primary" : "text-slate-800 group-hover:text-blue-700"
+                        p.isCurrent
+                          ? "text-brand-primary"
+                          : includeFamilyTasks
+                            ? "text-slate-800"
+                            : "text-slate-800 group-hover:text-blue-700"
                       }`}>
                         {p.lead_name}
                       </p>
@@ -3300,7 +3460,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                     >
                       <LogIn size={14} />
                     </button>
-                    {p.isCurrent && (
+                    {p.isCurrent && !includeFamilyTasks && (
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-brand-primary text-white">
                         Currently viewing
                       </span>
@@ -3320,7 +3480,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                         Inactive
                       </span>
                     )}
-                    {!p.isCurrent && (
+                    {!p.isCurrent && !includeFamilyTasks && (
                       <ExternalLink size={14} className="text-slate-300 group-hover:text-blue-500" />
                     )}
                   </div>
@@ -3479,24 +3639,28 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                             Pending
                           </span>
                         ) : (
-                          <div className="relative inline-block">
-                            <select
-                              value={task.status || "Pending"}
-                              onChange={(e) =>
-                                handleTaskStatusChange(task.id, e.target.value as Task["status"])
-                              }
-                              onClick={(e) => e.stopPropagation()}
-                              className={`text-xs font-semibold border rounded pl-2 pr-6 py-1 outline-none cursor-pointer appearance-none ${getStatusColor(task.status || "Pending")}`}
-                            >
-                              <option value="Pending">Pending</option>
-                              <option value="In Progress">In Progress</option>
-                              <option value="Completed">Completed</option>
-                            </select>
-                            <ChevronDown
-                              size={12}
-                              className="absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none opacity-60"
-                            />
-                          </div>
+                          // Click-to-toggle status: one tap flips between
+                          // Pending and Completed (no "In Progress" here — the
+                          // admin marks work done, not partial). A task left in
+                          // "In Progress" by a milestone rollup still shows that
+                          // label and flips to Completed on the first click.
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const next: Task["status"] =
+                                task.status === "Completed" ? "Pending" : "Completed";
+                              handleTaskStatusChange(task.id, next);
+                            }}
+                            className={`text-xs font-semibold border rounded px-2 py-1 cursor-pointer transition-colors ${getStatusColor(task.status || "Pending")}`}
+                            title={
+                              task.status === "Completed"
+                                ? "Click to mark Pending"
+                                : "Click to mark Completed"
+                            }
+                          >
+                            {task.status || "Pending"}
+                          </button>
                         )}
                       </td>
                       <td className="px-2 py-3">
@@ -3513,7 +3677,11 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                           className="text-sm font-semibold text-slate-800 block leading-tight text-left hover:text-brand-primary transition-colors cursor-pointer bg-transparent border-none p-0"
                           title={task.isTemplate ? "View details" : "View / edit task"}
                         >
-                          {task.title}
+                          {/* In the unified family view, per-person personal
+                              tasks carry an owner name so the same template
+                              (ID / Personal Information) is distinguishable per
+                              person. Rendered, not stored on task.title. */}
+                          {task.ownerName ? `${task.title} - ${task.ownerName}` : task.title}
                         </button>
                       </td>
                       <td className="px-2 py-3">
@@ -3722,15 +3890,15 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                         return (
                           <React.Fragment key={milestone.id}>
                             <tr
-                              draggable={!milestone.isTemplate}
-                              onDragStart={() => !milestone.isTemplate && (dragMilestoneItem.current = index)}
-                              onDragEnter={() => !milestone.isTemplate && (dragMilestoneOverItem.current = index)}
-                              onDragEnd={!milestone.isTemplate ? handleSortMilestones : undefined}
+                              draggable={!milestone.isTemplate && !milestone.isPersonalSplit}
+                              onDragStart={() => !milestone.isTemplate && !milestone.isPersonalSplit && (dragMilestoneItem.current = index)}
+                              onDragEnter={() => !milestone.isTemplate && !milestone.isPersonalSplit && (dragMilestoneOverItem.current = index)}
+                              onDragEnd={!milestone.isTemplate && !milestone.isPersonalSplit ? handleSortMilestones : undefined}
                               onDragOver={(e) => e.preventDefault()}
-                              className={`hover:bg-slate-50 transition-colors group bg-white ${milestone.isTemplate ? "opacity-60" : "cursor-move"}`}
+                              className={`hover:bg-slate-50 transition-colors group bg-white ${milestone.isTemplate ? "opacity-60" : milestone.isPersonalSplit ? "" : "cursor-move"}`}
                             >
                               <td className="px-2 sm:px-3 py-3 text-slate-300 hidden sm:table-cell">
-                                {!milestone.isTemplate && <GripVertical size={16} />}
+                                {!milestone.isTemplate && !milestone.isPersonalSplit && <GripVertical size={16} />}
                               </td>
 
                               <td className="px-2 py-3 text-center text-xs text-slate-600 font-medium">
@@ -3742,33 +3910,42 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                                   <span className={`text-xs font-semibold border rounded px-2 py-1 inline-block ${getStatusColor("Pending")}`}>
                                     Pending
                                   </span>
+                                ) : milestone.isPersonalSplit ? (
+                                  // Per-person row — status is the person's
+                                  // task-derived progress, shown read-only.
+                                  <span className={`text-xs font-semibold border rounded px-2 py-1 inline-block ${getStatusColor(milestone.status || "Pending")}`}>
+                                    {milestone.status || "Pending"}
+                                  </span>
                                 ) : (
-                                  <div className="relative inline-block">
-                                    <select
-                                      value={milestone.status || "Pending"}
-                                      onChange={(e) =>
-                                        handleMilestoneStatusChange(
-                                          milestone.id,
-                                          e.target.value as Milestone["status"],
-                                        )
-                                      }
-                                      onClick={(e) => e.stopPropagation()}
-                                      className={`text-xs font-semibold border rounded pl-2 pr-6 py-1 outline-none cursor-pointer appearance-none ${getStatusColor(milestone.status || "Pending")}`}
-                                    >
-                                      <option value="Pending">Pending</option>
-                                      <option value="In Progress">In Progress</option>
-                                      <option value="Completed">Completed</option>
-                                    </select>
-                                    <ChevronDown
-                                      size={12}
-                                      className="absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none opacity-60"
-                                    />
-                                  </div>
+                                  // Click-to-toggle status (matches the task
+                                  // table): one tap flips Pending ⇄ Completed —
+                                  // completing the milestone cascades to its
+                                  // tasks and fires the milestone email as before.
+                                  // No "In Progress" option here; a rollup-set
+                                  // "In Progress" still shows and flips to
+                                  // Completed on the first click.
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const next: Milestone["status"] =
+                                        milestone.status === "Completed" ? "Pending" : "Completed";
+                                      handleMilestoneStatusChange(milestone.id, next);
+                                    }}
+                                    className={`text-xs font-semibold border rounded px-2 py-1 cursor-pointer transition-colors ${getStatusColor(milestone.status || "Pending")}`}
+                                    title={
+                                      milestone.status === "Completed"
+                                        ? "Click to mark Pending"
+                                        : "Click to mark Completed"
+                                    }
+                                  >
+                                    {milestone.status || "Pending"}
+                                  </button>
                                 )}
                               </td>
 
                               <td className="px-2 py-3">
-                                {milestone.isTemplate ? (
+                                {milestone.isTemplate || milestone.isPersonalSplit ? (
                                   <span className="text-sm text-slate-800 font-semibold">
                                     {milestone.title}
                                   </span>
@@ -3788,8 +3965,8 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                               </td>
 
                               <td className="px-2 py-3 hidden md:table-cell">
-                                {milestone.isTemplate ? (
-                                  <span className="text-slate-300 text-xs">-</span>
+                                {milestone.isTemplate || milestone.isPersonalSplit ? (
+                                  <span className="text-slate-300 text-xs">—</span>
                                 ) : (
                                   <div className="relative">
                                     <input
@@ -3820,20 +3997,24 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                               </td>
 
                               <td className="px-2 py-3 text-right">
-                                <div className="flex items-center justify-end gap-1">
-                                  {milestone.emailTemplateId && (
-                                    <button
-                                      title={milestone.emailSent ? "Email already sent" : "Send Email"}
-                                      onClick={() => handleSendMilestoneEmail(milestone.id)}
-                                      className={`p-1 rounded transition-colors ${milestone.emailSent ? "text-green-600 hover:bg-green-50" : "text-brand-primary hover:bg-brand-light"}`}
-                                    >
-                                      <Mail size={14} />
+                                {/* Per-person split rows have no DB milestone of
+                                    their own, so no email / delete actions. */}
+                                {!milestone.isPersonalSplit && (
+                                  <div className="flex items-center justify-end gap-1">
+                                    {milestone.emailTemplateId && (
+                                      <button
+                                        title={milestone.emailSent ? "Email already sent" : "Send Email"}
+                                        onClick={() => handleSendMilestoneEmail(milestone.id)}
+                                        className={`p-1 rounded transition-colors ${milestone.emailSent ? "text-green-600 hover:bg-green-50" : "text-brand-primary hover:bg-brand-light"}`}
+                                      >
+                                        <Mail size={14} />
+                                      </button>
+                                    )}
+                                    <button onClick={() => handleDeleteMilestone(milestone.id)} className="text-slate-300 hover:text-red-600 p-1 rounded transition-colors">
+                                      <Trash2 size={16} />
                                     </button>
-                                  )}
-                                  <button onClick={() => handleDeleteMilestone(milestone.id)} className="text-slate-300 hover:text-red-600 p-1 rounded transition-colors">
-                                    <Trash2 size={16} />
-                                  </button>
-                                </div>
+                                  </div>
+                                )}
                               </td>
                             </tr>
 

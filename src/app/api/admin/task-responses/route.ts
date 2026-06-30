@@ -98,6 +98,11 @@ export async function GET(req: Request) {
   // Documents modal / Doc-count column). `fields=all` lifts that filter so the
   // PDF export can also pull the text (personal-info) responses for every task.
   const includeAllFields = searchParams.get("fields") === "all";
+  // Unified family view: also surface every family member's PERSONAL task docs
+  // / responses (ID, Personal Information), each keyed by its own task id so the
+  // primary page's per-person rows show the right counts. Default mode stays
+  // deal-scoped, keeping the customer portal payload unchanged.
+  const includeFamily = searchParams.get("include_family") === "1";
 
   if (taskId) {
     try {
@@ -236,6 +241,22 @@ export async function GET(req: Request) {
   const localSharedTasks = localTasks.filter((task) => task.is_shared && task.task_template_id);
   const familyDealIds = await getFamilyDealIds(dealId);
 
+  // Unified family view: pull every OTHER family member's personal tasks so
+  // their docs/responses surface on the primary page, keyed by each person's
+  // own task id (matching the per-person rows from the tasks GET family mode).
+  let familyPersonalTasks: TaskRow[] = [];
+  if (includeFamily) {
+    const otherDealIds = familyDealIds.filter((id) => id !== dealId);
+    if (otherDealIds.length > 0) {
+      const { data: famPersonal } = await supabaseAdmin
+        .from("tasks")
+        .select("id, deal_id, title, is_shared, task_template_id")
+        .in("deal_id", otherDealIds)
+        .or("is_shared.is.null,is_shared.eq.false");
+      familyPersonalTasks = (famPersonal ?? []) as TaskRow[];
+    }
+  }
+
   // Pull every shared task across the family so we can surface primary
   // task_responses on co-* views regardless of local mirror state.
   const { data: familySharedTasksData } = await supabaseAdmin
@@ -281,13 +302,14 @@ export async function GET(req: Request) {
   // that would pull the primary's non-APS shared docs onto the co-*'s view.
   const allTaskIds = [...new Set([
     ...personalTaskIds,
+    ...familyPersonalTasks.map((task) => task.id),
     ...localSharedTasks.map((task) => task.id),
     ...allSharedTaskIds,
   ])];
 
-  const localTaskById = new Map(localTasks.map((task) => [task.id, task]));
+  const localTaskById = new Map([...localTasks, ...familyPersonalTasks].map((task) => [task.id, task]));
   const sharedTaskById = new Map(familySharedTasks.map((task) => [task.id, task]));
-  const taskTitleById = new Map(localTasks.map((task) => [task.id, task.title ?? "Unknown Task"]));
+  const taskTitleById = new Map([...localTasks, ...familyPersonalTasks].map((task) => [task.id, task.title ?? "Unknown Task"]));
 
   if (sharedTasks.length > 0) {
     const templateToTitle = new Map(

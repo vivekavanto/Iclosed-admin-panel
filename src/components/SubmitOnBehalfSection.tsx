@@ -4,7 +4,6 @@ import { useState } from "react";
 import {
   ShieldCheck,
   IdCard,
-  FileUp,
   UserCog,
   Check,
 } from "lucide-react";
@@ -18,14 +17,11 @@ import CoPersonPersonalInfoModal from "./CoPersonPersonalInfoModal";
  * popup). When the primary did not grant access, the parent renders nothing —
  * so there is simply no section, matching "no access → no section needed".
  *
- * Per co-person it offers the three things the client-portal popup promised:
+ * Per co-person it offers:
  *   1. Upload their ID      — reuses the parent's UploadIdentificationDrawer
  *                             via onUploadId(leadId, taskId).
- *   2. Upload verification documents — POSTs to /api/admin/uploadblobstorage
- *                             (blob + lead_corporate_docs row) as doc_type
- *                             "document".
- *   3. Submit contact information — PUTs first/last/email/phone to
- *                             /api/admin/leads.
+ *   2. Submit contact information — opens the personal-information task form
+ *                             (PUTs first/last/email/phone to /api/admin/leads).
  */
 
 export interface OnBehalfCoPerson {
@@ -92,18 +88,7 @@ function CoPersonCard({
           {idCompleted && <Check size={13} className="text-green-600" />}
         </button>
 
-        {/* 2. Upload verification documents — display-only button for now; the
-            upload flow is intentionally not wired up, so clicking does nothing. */}
-        <button
-          type="button"
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-300 bg-white text-slate-700 hover:border-brand-primary hover:text-brand-primary transition-colors cursor-pointer"
-          title="Upload a verification document for this person"
-        >
-          <FileUp size={13} />
-          Upload verification documents
-        </button>
-
-        {/* 3. Submit contact information — opens the full personal-information
+        {/* Submit contact information — opens the full personal-information
             task form for this person. */}
         <button
           type="button"

@@ -285,10 +285,26 @@ export async function convertSingleLead(
     // A lead can be a combined type like "Purchase & Sale" — split into parts so
     // we seed milestones/tasks from every constituent lead type, preserving the
     // order the parts appeared in (e.g. Purchase rows before Sale rows).
-    const leadTypeParts = leadType
+    let leadTypeParts = leadType
       .split(/\s*(?:&|\band\b|\+|\/)\s*/i)
       .map((s: string) => s.trim())
       .filter(Boolean);
+
+    // A co-client only acts on ONE side of the transaction: a co-purchaser on
+    // the Purchase side, a co-seller on the Sale side. When a co-lead inherits a
+    // combined "Purchase & Sale" lead_type from its parent (e.g. created via the
+    // customer portal intake), seeding both sides would give the co-purchaser
+    // Sale-side Personal Info/ID tasks (and vice-versa) that don't belong to
+    // them. Narrow the seeded parts to the role's side, keeping all parts as a
+    // fallback when that side isn't present (e.g. a Refinance co-client). This
+    // mirrors deriveDealTypeParts in the admin deal view so the two stay in
+    // lockstep.
+    const coRoleLower = String(lead.co_person_role ?? "").toLowerCase();
+    if (coRoleLower === "purchaser" || coRoleLower === "seller") {
+      const side = coRoleLower === "purchaser" ? "purchase" : "sale";
+      const narrowed = leadTypeParts.filter((p: string) => p.toLowerCase() === side);
+      if (narrowed.length > 0) leadTypeParts = narrowed;
+    }
     const leadTypePartIndex = (lt: string | null | undefined): number => {
       if (!lt) return Number.MAX_SAFE_INTEGER;
       const idx = leadTypeParts.findIndex(

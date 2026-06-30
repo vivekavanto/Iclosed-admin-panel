@@ -36,6 +36,16 @@ export interface Task {
   taskTemplateId?: string | null;
   leadType?: string | null;
   orderIndex?: number | null;
+  // Owner annotation — only populated in the unified family view (tasks GET
+  // include_family=1) for per-person personal tasks (ID, Personal Information).
+  // Lets the page label rows "<title> - <ownerName>" and target edits/prefill
+  // at the right person. Null/absent for shared rows and single-deal fetches.
+  ownerDealId?: string | null;
+  ownerLeadId?: string | null;
+  ownerName?: string | null;
+  ownerFirstName?: string | null;
+  ownerLastName?: string | null;
+  ownerPhone?: string | null;
 }
 
 export interface Milestone {

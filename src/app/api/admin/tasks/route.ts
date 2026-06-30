@@ -6,18 +6,14 @@ import { findFamilySharedTaskPeers } from "@/lib/findFamilySharedTaskPeers";
 
 const supabase = supabaseAdmin;
 
-export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const dealId = searchParams.get("deal_id");
-
-  if (!dealId) {
-    return NextResponse.json({ error: "deal_id is required" }, { status: 400 });
-  }
-
-  // Shared tasks are a single source of truth on the primary purchaser's deal.
-  // Co-purchaser deals should still show shared tasks, but fetched from the primary deal.
-  let primaryDealId = dealId;
-
+/**
+ * Resolves the primary (root) deal id for a deal's co-purchaser/co-seller
+ * family: deal → lead → root lead (parent_lead_id or self) → that lead's deal.
+ * Falls back to the input dealId on any miss. Shared by the GET aggregation
+ * and the PATCH milestone-recalc so pooling/email selection always key off the
+ * true primary.
+ */
+async function resolvePrimaryDealId(dealId: string): Promise<string> {
   try {
     const { data: deal } = await supabase
       .from("deals")
@@ -39,12 +35,36 @@ export async function GET(req: Request) {
           .select("id")
           .eq("lead_id", rootLeadId)
           .maybeSingle();
-        if (rootDeal?.id) primaryDealId = rootDeal.id;
+        if (rootDeal?.id) return rootDeal.id;
       }
     }
   } catch {
-    // Non-blocking: fallback to dealId
+    // Non-blocking: fall back to dealId
   }
+  return dealId;
+}
+
+export async function GET(req: Request) {
+  const { searchParams } = new URL(req.url);
+  const dealId = searchParams.get("deal_id");
+
+  if (!dealId) {
+    return NextResponse.json({ error: "deal_id is required" }, { status: 400 });
+  }
+
+  // Shared tasks are a single source of truth on the primary purchaser's deal.
+  // Co-purchaser deals should still show shared tasks, but fetched from the primary deal.
+  const primaryDealId = await resolvePrimaryDealId(dealId);
+
+  // Family mode (opt-in via include_family=1): the personal-task query spans
+  // every deal in the co-purchaser/co-seller family so the primary deal page
+  // can show each person's ID & Personal Information rows in one list. Default
+  // mode keeps the single-deal scope so the customer portal and co-person deal
+  // pages stay byte-for-byte unchanged.
+  const includeFamily = searchParams.get("include_family") === "1";
+  const personalDealIds = includeFamily
+    ? await getFamilyDealIds(primaryDealId)
+    : [dealId];
 
   // Order by order_index — the task sequence snapshotted from
   // task_templates.order_index at conversion (see convertLead.ts) and kept in
@@ -63,7 +83,7 @@ export async function GET(req: Request) {
     supabase
       .from("tasks")
       .select("*, task_templates(lead_type)")
-      .eq("deal_id", dealId)
+      .in("deal_id", personalDealIds)
       .or("is_shared.is.null,is_shared.eq.false")
       .eq("is_deleted", false)
       .order("order_index", { ascending: true, nullsFirst: false })
@@ -72,6 +92,59 @@ export async function GET(req: Request) {
 
   if (sharedErr) return NextResponse.json({ error: sharedErr.message }, { status: 500 });
   if (personalErr) return NextResponse.json({ error: personalErr.message }, { status: 500 });
+
+  // Family mode: annotate each personal row with its owner (the person whose
+  // deal it lives on) so the unified page can label rows
+  // "Personal Information - <name>" and target edits/prefill at the right lead.
+  // Shared rows get no owner fields. Single-deal (default) responses are never
+  // annotated, keeping the portal/co-person payloads identical.
+  if (includeFamily && personalTasks && personalTasks.length > 0) {
+    try {
+      const { data: ownerDeals } = await supabase
+        .from("deals")
+        .select("id, lead_id")
+        .in("id", personalDealIds);
+      const dealToLead = new Map<string, string>();
+      (ownerDeals ?? []).forEach((d) => {
+        if (d.lead_id) dealToLead.set(d.id, d.lead_id);
+      });
+
+      const leadIds = Array.from(new Set(Array.from(dealToLead.values())));
+      const { data: ownerLeads } = leadIds.length
+        ? await supabase
+            .from("leads")
+            .select("id, first_name, last_name, phone")
+            .in("id", leadIds)
+        : { data: [] as any[] };
+      const leadMeta = new Map<
+        string,
+        { name: string; firstName: string; lastName: string; phone: string }
+      >();
+      (ownerLeads ?? []).forEach((l: any) => {
+        const firstName = l.first_name ?? "";
+        const lastName = l.last_name ?? "";
+        leadMeta.set(l.id, {
+          name: `${firstName} ${lastName}`.trim(),
+          firstName,
+          lastName,
+          phone: l.phone ?? "",
+        });
+      });
+
+      for (const t of personalTasks as any[]) {
+        const leadId = dealToLead.get(t.deal_id) ?? null;
+        const meta = leadId ? leadMeta.get(leadId) : undefined;
+        t.owner_deal_id = t.deal_id;
+        t.owner_lead_id = leadId;
+        t.owner_name = meta?.name ?? null;
+        t.owner_first_name = meta?.firstName ?? null;
+        t.owner_last_name = meta?.lastName ?? null;
+        t.owner_phone = meta?.phone ?? null;
+      }
+    } catch {
+      // Non-blocking: rows still render, just without owner labels.
+    }
+  }
 
   if (dealId !== primaryDealId && sharedTasks && sharedTasks.length > 0) {
     try {
@@ -385,8 +458,13 @@ export async function PATCH(req: Request) {
     // earlier in the function via recalcMilestonesForFamily.
     if (updates.status !== undefined || updates.completed !== undefined) {
       try {
-        const familyDealIds = await getFamilyDealIds(existingTask.deal_id);
-        await recalcMilestonesForFamily(familyDealIds, existingTask.deal_id);
+        // Resolve the TRUE primary deal: for a co-person the task's own deal_id
+        // is not the primary, and recalc pools personal tasks + selects the
+        // milestone email instance off the primary, so passing the co-person
+        // deal here would break family-wide rollup/email.
+        const primaryDealId = await resolvePrimaryDealId(existingTask.deal_id);
+        const familyDealIds = await getFamilyDealIds(primaryDealId);
+        await recalcMilestonesForFamily(familyDealIds, primaryDealId);
       } catch {
         // Non-blocking: milestone recalc failure shouldn't fail the task update
       }
