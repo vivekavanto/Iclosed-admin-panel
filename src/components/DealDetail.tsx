@@ -3313,9 +3313,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                   }
                   className={`flex items-center justify-between px-4 py-3 rounded-lg border transition-all group ${
                     includeFamilyTasks
-                      ? p.isCurrent
-                        ? "border-brand-primary bg-brand-light/30 cursor-default"
-                        : "border-slate-100 cursor-default"
+                      ? "border-slate-100 cursor-default"
                       : p.isCurrent
                         ? "border-brand-primary bg-brand-light/30 cursor-default"
                         : "border-slate-100 hover:border-blue-200 hover:bg-blue-50/50 cursor-pointer"
@@ -3327,10 +3325,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                     </span>
                     <div>
                       <p className={`text-sm font-bold transition-colors ${
-                        p.isCurrent
-                          ? "text-brand-primary"
-                          : includeFamilyTasks
-                            ? "text-slate-800"
+                        includeFamilyTasks
+                          ? "text-slate-800"
+                          : p.isCurrent
+                            ? "text-brand-primary"
                             : "text-slate-800 group-hover:text-blue-700"
                       }`}>
                         {p.lead_name}
