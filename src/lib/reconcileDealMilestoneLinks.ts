@@ -424,33 +424,37 @@ export async function backfillTaskForTemplate(
 }
 
 /**
- * Reconcile already-seeded tasks when a template's `is_shared` flag is toggled.
- * The task's PRESENCE doesn't change — only where it lives and how the family
- * view renders it: a shared task is one row on the primary deal (skipping
- * co-client deals, see backfillTaskForTemplate), shown once family-wide; a
- * personal task is one row per family member, shown per-person. Editing the
- * template only updates the template row, so existing deals keep the old shape
- * until this runs.
+ * FAST half of the is_shared reconcile: restructure the ALREADY-seeded rows into
+ * their new shape. This is the only part that changes what the deal page renders,
+ * so callers run it SYNCHRONOUSLY (before flushing the response) — a handful of
+ * indexed UPDATEs — so the very next data load shows the collapsed/expanded shape
+ * instead of the stale one. The slow family seeding/recalc is deferred to
+ * `finishSharedTaskReconcile`.
+ *
+ * A shared task is one row on the primary deal (skipping co-client deals, see
+ * backfillTaskForTemplate), shown once family-wide; a personal task is one row
+ * per family member, shown per-person. Editing the template only updates the
+ * template row, so existing deals keep the old shape until this runs.
  *
  *  - false→true: soft-delete the per-person copies on co-client deals, mark the
- *    surviving (primary) rows is_shared=true, then backfill any family missing
- *    the primary row.
+ *    surviving (primary) rows is_shared=true.
  *  - true→false: restore the co-client copies a previous collapse soft-deleted
  *    (backfill counts soft-deleted rows as "already present" and would skip
- *    them), mark every live row is_shared=false, then backfill families that
- *    never had per-person rows.
+ *    them), mark every live row is_shared=false.
  *
- * Non-default templates are never auto-seeded, so this is a no-op for them.
- * Safe to call on every is_shared change; idempotent.
+ * Returns the co-client deal ids (whose per-person rows appeared/disappeared) so
+ * the deferred half can recalc just those families; returns `null` when the
+ * template isn't auto-seeded (non-default), signalling "nothing to finish".
+ * Idempotent — safe to call on every is_shared change.
  */
-export async function reconcileSharedTasksForTemplate(
+export async function restructureSharedTaskRows(
   taskTemplateId: string,
-): Promise<void> {
+): Promise<string[] | null> {
   const tpl = await loadTaskTemplate(taskTemplateId);
-  if (!tpl || !tpl.is_default) return;
+  if (!tpl || !tpl.is_default) return null;
 
   const dealIds = await dealsForLeadType(tpl.lead_type);
-  if (dealIds.length === 0) return;
+  if (dealIds.length === 0) return [];
 
   // Which of these deals belong to a co-client (their lead has a parent)? Those
   // are the deals whose per-person copies must appear/disappear.
@@ -506,12 +510,43 @@ export async function reconcileSharedTasksForTemplate(
       .eq("is_deleted", false);
   }
 
+  return coClientDealIds;
+}
+
+/**
+ * SLOW half of the is_shared reconcile, safe to defer (e.g. Next's `after()`):
+ * seed families still missing the task in its new shape and recalc the families
+ * whose task set changed. Neither affects the rows the current deal page already
+ * shows, so running it post-response keeps the save snappy.
+ *
+ * `coClientDealIds` comes from `restructureSharedTaskRows` (pass `null` to skip
+ * entirely — the template wasn't auto-seeded).
+ */
+export async function finishSharedTaskReconcile(
+  taskTemplateId: string,
+  coClientDealIds: string[] | null,
+): Promise<void> {
+  if (coClientDealIds === null) return;
+
   // Seed families still missing the task in its new shape (backfill self-gates
   // on is_shared, so it targets the right deals and skips ones already carrying
-  // it — including the co-client rows we just soft-deleted).
+  // it — including the co-client rows restructure just soft-deleted).
   await backfillTaskForTemplate(taskTemplateId);
 
   // Co-client deals gained/lost a Pending task, which can shift milestone
   // rollups; primary rows only had a flag flipped, so they don't need recalc.
   if (coClientDealIds.length > 0) await recalcFamiliesForDeals(coClientDealIds);
+}
+
+/**
+ * Full is_shared reconcile: fast row restructure + deferred seeding/recalc, run
+ * back-to-back. Kept for callers that don't need to split the two phases; the
+ * task-template PUT route splits them so the restructure lands before the
+ * response and only the slow half runs in `after()`.
+ */
+export async function reconcileSharedTasksForTemplate(
+  taskTemplateId: string,
+): Promise<void> {
+  const coClientDealIds = await restructureSharedTaskRows(taskTemplateId);
+  await finishSharedTaskReconcile(taskTemplateId, coClientDealIds);
 }

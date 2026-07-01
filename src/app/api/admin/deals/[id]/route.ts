@@ -343,6 +343,12 @@ const EDITABLE_DEAL_COLUMNS = new Set([
   "lawyer_name",
   "clerk_name",
   "property_address",
+  // Lock box code — a per-deal property attribute for Purchase files (surfaced
+  // only on Purchase / P&S deals in the Edit modal). Feeds the {{ lockbox_code }}
+  // milestone-email variable. Deliberately NOT in MIRROR_DEAL_COLUMNS: like
+  // property_address it stays per-deal, so it never leaks onto a family's
+  // Sale-side deal.
+  "lockbox_code",
   "closing_date",
   "opening_date",
   "requisition_date",

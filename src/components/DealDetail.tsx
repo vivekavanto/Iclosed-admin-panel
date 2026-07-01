@@ -216,6 +216,41 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     setTimeout(() => setToast(null), 3000);
   };
 
+  // Inline lock box code editor (Partner Details card, Purchase files only).
+  // Held in local state so a save reflects immediately — refetchData() only
+  // refreshes tasks/milestones, not the server-rendered deal prop — and
+  // router.refresh() re-syncs the source row afterward.
+  const initialLockbox = (rawDeal?.lockbox_code as string | null | undefined) ?? "";
+  const [lockboxValue, setLockboxValue] = useState<string>(initialLockbox);
+  const [lockboxDraft, setLockboxDraft] = useState<string>(initialLockbox);
+  const [savingLockbox, setSavingLockbox] = useState(false);
+  useEffect(() => {
+    const v = (rawDeal?.lockbox_code as string | null | undefined) ?? "";
+    setLockboxValue(v);
+    setLockboxDraft(v);
+  }, [rawDeal?.lockbox_code]);
+  const saveLockboxCode = async () => {
+    const next = lockboxDraft.trim();
+    if (next === (lockboxValue ?? "").trim()) return;
+    setSavingLockbox(true);
+    try {
+      const res = await fetch(`/api/admin/deals/${deal.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lockbox_code: next }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || "Failed to save lock box code");
+      setLockboxValue(next);
+      showToast("Lock box code saved");
+      router.refresh();
+    } catch (err: any) {
+      showToast(err?.message ?? "Failed to save lock box code", "error");
+    } finally {
+      setSavingLockbox(false);
+    }
+  };
+
   // Documents modal state
   const [showDocuments, setShowDocuments] = useState(false);
   const [dealDocuments, setDealDocuments] = useState<{ task_id: string; file_name: string; file_url: string; task_title: string }[]>([]);
@@ -4106,9 +4141,41 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
           {/* Partner Details */}
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-            <h3 className="font-bold text-slate-800 mb-4 text-sm">
-              Partner Details
-            </h3>
+            <div className="flex items-start justify-between gap-3 mb-4">
+              <h3 className="font-bold text-slate-800 text-sm">
+                Partner Details
+              </h3>
+              {/* Lock box code — Purchase files only. Editable inline; saves to
+                  the deal via PATCH and feeds the {{ lockbox_code }} email var. */}
+              {(deal.type ?? "").toLowerCase().includes("purchase") && (
+                <div className="text-right shrink-0">
+                  <p className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mb-0.5">
+                    Lock box code
+                  </p>
+                  <div className="flex items-center justify-end gap-1.5">
+                    <input
+                      type="text"
+                      value={lockboxDraft}
+                      onChange={(e) => setLockboxDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") saveLockboxCode();
+                      }}
+                      placeholder="e.g. 1234#"
+                      className="w-28 px-2 py-1 text-sm text-right border border-slate-200 rounded-md focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
+                    />
+                    {lockboxDraft.trim() !== (lockboxValue ?? "").trim() && (
+                      <button
+                        onClick={saveLockboxCode}
+                        disabled={savingLockbox}
+                        className="px-2 py-1 text-xs font-semibold text-white bg-[#C10007] rounded-md hover:bg-[#a30006] disabled:opacity-60 whitespace-nowrap"
+                      >
+                        {savingLockbox ? "Saving…" : "Save"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 bg-slate-900 text-white rounded-lg flex items-center justify-center font-black text-xs shadow-md">
                 KW

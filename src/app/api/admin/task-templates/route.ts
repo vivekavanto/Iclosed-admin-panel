@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse, after } from 'next/server';
 import supabaseAdmin from '@/lib/supabaseAdmin';
-import { repointTasksForTemplate, backfillTaskForTemplate, reconcileSharedTasksForTemplate } from '@/lib/reconcileDealMilestoneLinks';
+import { repointTasksForTemplate, backfillTaskForTemplate, restructureSharedTaskRows, finishSharedTaskReconcile, reconcileSharedTasksForTemplate } from '@/lib/reconcileDealMilestoneLinks';
 
 const supabase = supabaseAdmin;
 
@@ -114,6 +114,30 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
+    const newIsDefault = is_default ?? false;
+    const newIsShared = is_shared ?? false;
+    const sharedToggled = previousIsShared !== newIsShared;
+
+    // Toggling `is_shared` restructures the already-seeded rows: a shared task is
+    // ONE row on the primary deal (shown once family-wide) while a personal task
+    // is one row PER family member. That reshaping is what the deal page renders,
+    // so for a PURE is_shared toggle (is_default unchanged & on) we do it
+    // SYNCHRONOUSLY here — a few indexed UPDATEs — so the admin's immediate
+    // reload shows the collapsed/expanded shape instead of the stale one. Only
+    // the slow seed+recalc half defers to `after()`. When is_default ALSO changed
+    // in this same edit, its un/re-seed runs inside `after()` first, so we leave
+    // the WHOLE reconcile deferred (below) to operate on that freshly seeded row
+    // set rather than racing it here.
+    const fastShared = sharedToggled && previousIsDefault && newIsDefault;
+    let fastSharedCoClientDealIds: string[] | null = null;
+    if (fastShared) {
+      try {
+        fastSharedCoClientDealIds = await restructureSharedTaskRows(id);
+      } catch (sharedErr) {
+        console.error('[TaskTemplate PUT] is_shared restructure failed (non-blocking):', sharedErr);
+      }
+    }
+
     // The template row itself is now saved — that's the admin's "save". The
     // deal-side reconciliation below (rename propagation, stage repoint,
     // backfill) pages through every deal of this lead type and recalcs each
@@ -161,7 +185,6 @@ export async function PUT(req: NextRequest) {
       // re-runs the backfill below) cleanly restores them. Skip the backfill on
       // this same edit since is_default is now false (it would early-return
       // anyway). Only fires on the true→false transition.
-      const newIsDefault = is_default ?? false;
       if (previousIsDefault && !newIsDefault) {
         try {
           await supabase
@@ -209,15 +232,21 @@ export async function PUT(req: NextRequest) {
         }
       }
 
-      // Toggling `is_shared` must restructure the already-seeded rows, not just
-      // the template: a shared task is ONE row on the primary deal (shown once
-      // family-wide) while a personal task is one row PER family member. Without
-      // this, checking/unchecking "Shared" updates the template but the deal
-      // page keeps rendering the old shape. Gated on the task still being
-      // seeded (is_default) — if default was just turned off, the un-seed above
-      // already removed the rows and reconciliation would wrongly restore them.
-      const newIsShared = is_shared ?? false;
-      if (newIsDefault && previousIsShared !== newIsShared) {
+      // Finish the is_shared reconcile. Two cases, both gated on the task still
+      // being seeded (is_default) — if default was just turned off, the un-seed
+      // above already removed the rows and reconciliation would wrongly restore
+      // them:
+      //  - Pure is_shared toggle: the rows were already restructured
+      //    synchronously before the response; only the slow seed+recalc remains.
+      //  - is_shared changed alongside is_default: the un/re-seed just ran above,
+      //    so run the FULL reconcile now against that freshly seeded row set.
+      if (fastShared) {
+        try {
+          await finishSharedTaskReconcile(id, fastSharedCoClientDealIds);
+        } catch (sharedErr) {
+          console.error('[TaskTemplate PUT] is_shared finish failed (non-blocking):', sharedErr);
+        }
+      } else if (sharedToggled && newIsDefault) {
         try {
           await reconcileSharedTasksForTemplate(id);
         } catch (sharedErr) {

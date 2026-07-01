@@ -244,6 +244,7 @@ export interface Database {
           type: "Purchase" | "Sale" | "Purchase & Sale" | "Refinance" | "Condo";
           status: "Active" | "Pending" | "Closed" | "Cancelled" | "Urgent";
           property_address: string;
+          lockbox_code: string | null;
           closing_date: string | null;
           opening_date: string | null;
           requisition_date: string | null;
@@ -269,6 +270,7 @@ export interface Database {
           type: "Purchase" | "Sale" | "Purchase & Sale" | "Refinance" | "Condo";
           status?: "Active" | "Pending" | "Closed" | "Cancelled" | "Urgent";
           property_address: string;
+          lockbox_code?: string | null;
           closing_date?: string | null;
           opening_date?: string | null;
           requisition_date?: string | null;
@@ -294,6 +296,7 @@ export interface Database {
           type?: "Purchase" | "Sale" | "Purchase & Sale" | "Refinance" | "Condo";
           status?: "Active" | "Pending" | "Closed" | "Cancelled" | "Urgent";
           property_address?: string;
+          lockbox_code?: string | null;
           closing_date?: string | null;
           opening_date?: string | null;
           requisition_date?: string | null;
@@ -338,6 +341,7 @@ export interface Database {
           type: "Purchase" | "Sale" | "Purchase & Sale" | "Refinance" | "Condo";
           status: "Active" | "Pending" | "Closed" | "Cancelled" | "Urgent";
           property_address: string;
+          lockbox_code: string | null;
           closing_date: string | null;
           opening_date: string | null;
           requisition_date: string | null;
@@ -363,6 +367,7 @@ export interface Database {
           type: "Purchase" | "Sale" | "Purchase & Sale" | "Refinance" | "Condo";
           status?: "Active" | "Pending" | "Closed" | "Cancelled" | "Urgent";
           property_address: string;
+          lockbox_code?: string | null;
           closing_date?: string | null;
           opening_date?: string | null;
           requisition_date?: string | null;
@@ -388,6 +393,7 @@ export interface Database {
           type?: "Purchase" | "Sale" | "Purchase & Sale" | "Refinance" | "Condo";
           status?: "Active" | "Pending" | "Closed" | "Cancelled" | "Urgent";
           property_address?: string;
+          lockbox_code?: string | null;
           closing_date?: string | null;
           opening_date?: string | null;
           requisition_date?: string | null;

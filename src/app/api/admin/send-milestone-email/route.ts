@@ -18,7 +18,7 @@ async function sendEmailForDeal(
     try {
         const { data: deal } = await supabaseAdmin
             .from("deals")
-            .select("client_id, lead_id, file_number, property_address, type, closing_date")
+            .select("client_id, lead_id, file_number, property_address, lockbox_code, type, closing_date")
             .eq("id", dealId)
             .single()
 
@@ -129,6 +129,8 @@ async function sendEmailForDeal(
             "{{ full_name }}": fullName,
             "{{ email }}": client.email,
             "{{ property_address }}": leadAddress,
+            "{{ lockbox_code }}": deal.lockbox_code ?? "",
+            "{{lockbox_code}}": deal.lockbox_code ?? "",
             "{{ file_number }}": fileNumber,
             "{{ side_suffix }}": sideSuffix,
             "{{ property_role_row }}": propertyRoleRow,
@@ -171,6 +173,7 @@ async function sendEmailForDeal(
         processedBody = processedBody.replace(/\{\{\s*full_name\s*\}\}/gi, fullName);
         processedBody = processedBody.replace(/\{\{\s*email\s*\}\}/gi, client.email ?? "");
         processedBody = processedBody.replace(/\{\{\s*property_address\s*\}\}/gi, leadAddress);
+        processedBody = processedBody.replace(/\{\{\s*lockbox_code\s*\}\}/gi, deal.lockbox_code ?? "");
         processedBody = processedBody.replace(/\{\{\s*file_number\s*\}\}/gi, fileNumber);
         processedBody = processedBody.replace(/\{\{\s*side_suffix\s*\}\}/gi, sideSuffix);
         processedBody = processedBody.replace(/\{\{\s*property_role_row\s*\}\}/gi, propertyRoleRow);
