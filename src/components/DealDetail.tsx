@@ -46,6 +46,7 @@ import { upload } from "@vercel/blob/client";
 import UploadIdentificationDrawer from "./UploadIdentificationDrawer";
 import UploadHomeInsuranceDrawer from "./UploadHomeInsuranceDrawer";
 import SubmitOnBehalfSection, { OnBehalfCoPerson } from "./SubmitOnBehalfSection";
+import AdminMultiPartyTaskDrawer from "./AdminMultiPartyTaskDrawer";
 import ClonePreviousDealDrawer from "./ClonePreviousDealDrawer";
 import EditDealModal from "./EditDealModal";
 import AddCoClientModal from "./AddCoClientModal";
@@ -180,11 +181,14 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   type DisplayMilestone = Milestone & {
     isTemplate?: boolean;
     leadType?: string | null;
-    // Set on the per-person rows produced when a personal-task stage (e.g.
-    // Identification / Personal Information) is split by person in the family
-    // view. Such rows are display-only: status is the person's task-derived
-    // progress, so they render a read-only badge and no edit/date/delete UI.
+    // Legacy per-person split flag (no longer produced — personal-task stages
+    // now collapse to a single aggregate row, see personalProgress).
     isPersonalSplit?: boolean;
+    // Set on the single row for a personal-task stage (Personal Information /
+    // Identification) in the family view. Carries the aggregate "X of N people
+    // done" so the row shows a "X/N completed" badge and a derived Pending/
+    // Completed status instead of splitting into one row per person.
+    personalProgress?: { completed: number; total: number } | null;
   };
 
   // View task detail modal
@@ -533,6 +537,17 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const [idDrawerTaskId, setIdDrawerTaskId] = useState<string | null>(null);
   const [idDrawerLeadId, setIdDrawerLeadId] = useState<string>(primaryLeadId);
 
+  // Multi-party accordion (Personal Info / Upload ID on co-person deals). Opened
+  // from a per-person task row OR the "Submit on behalf" section; mirrors the
+  // customer portal's accordion and honours upload_mode from the viewed
+  // (primary) person's perspective.
+  const [multiPartyTask, setMultiPartyTask] = useState<{
+    kind: "upload-id" | "personal-info";
+    taskId: string | null;
+    initialLeadId: string | null;
+  } | null>(null);
+  const [multiPartyChanged, setMultiPartyChanged] = useState(false);
+
   const openIdDrawerFor = (leadId: string, taskId: string) => {
     setIdDrawerLeadId(leadId);
     setIdDrawerTaskId(taskId);
@@ -620,6 +635,21 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   };
 
   const openEditTask = async (task: DisplayTask) => {
+    // On a co-person deal, the two per-person tasks (Personal Info / Upload ID)
+    // open the family accordion instead of the single-task edit modal.
+    if (
+      !task.isTemplate &&
+      familyMemberCount > 1 &&
+      (isIdentificationTask(task) || isPersonalInfoTask(task))
+    ) {
+      setMultiPartyChanged(false);
+      setMultiPartyTask({
+        kind: isIdentificationTask(task) ? "upload-id" : "personal-info",
+        taskId: task.id,
+        initialLeadId: (task.ownerLeadId as string | null) ?? null,
+      });
+      return;
+    }
     setEditingTask(task);
     if (isIdentificationTask(task)) {
       void fetchEditTaskIdDocs();
@@ -1977,14 +2007,21 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       // re-added shared task fans out family-wide just like the
       // auto-seeded original.
       const selectedTemplate = taskTemplates.find((t) => t.id === taskForm.title) ?? null;
+      const isShared = Boolean(selectedTemplate?.is_shared);
+      // `taskForm.client` now holds the selected person's DEAL id (see the
+      // "People involved" picker). A personal task lives on that person's own
+      // deal so the family view labels it with their name and scopes it to
+      // their Purchase/Sale side. A shared task must live on the primary deal
+      // (this view) so it fans out family-wide, exactly like auto-seeding does.
+      const targetDealId = isShared ? deal.id : (taskForm.client || deal.id);
       const taskPayload = {
-        deal_id: deal.id,
+        deal_id: targetDealId,
         title: selectedTemplate?.name ?? taskForm.title,
         status: taskForm.status,
         due_date: taskForm.deadlineDate || null,
         assignee: taskForm.partner || null,
         task_template_id: selectedTemplate?.id ?? null,
-        is_shared: Boolean(selectedTemplate?.is_shared),
+        is_shared: isShared,
         milestone_id: taskForm.milestoneId || null,
         client: taskForm.client,
       };
@@ -2000,12 +2037,22 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       const data = await response.json();
 
       if (data.success) {
-        setTasks((prev) => [...prev, mapApiTask(data.data)]);
+        // Refetch through the same family GET the page uses so the new row is
+        // annotated with owner_* and lands under the right person/side — it may
+        // live on a co-client's deal, not the one currently in `tasks`. Fall
+        // back to an optimistic append if the refetch fails.
+        try {
+          const refetched = await fetch(tasksFetchUrl).then((r) => r.json());
+          if (Array.isArray(refetched)) setTasks(refetched.map(mapApiTask));
+          else setTasks((prev) => [...prev, mapApiTask(data.data)]);
+        } catch {
+          setTasks((prev) => [...prev, mapApiTask(data.data)]);
+        }
 
         // Reset form
         setShowTaskForm(false);
         setTaskForm({
-          client: rawDeal?.client_id ?? "",
+          client: deal.id,
           partner: "",
           title: "",
           status: "Pending",
@@ -2025,7 +2072,8 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const [showTaskForm, setShowTaskForm] = useState(false);
 
   const [taskForm, setTaskForm] = useState({
-    client: rawDeal?.client_id ?? "",
+    // Holds the selected person's DEAL id; defaults to the current viewer.
+    client: deal.id,
     partner: "",
     title: "",
     status: "Pending",
@@ -2044,7 +2092,6 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     }));
   };
 
-  const [clients, setClients] = useState<any[]>([]);
   const [taskTemplates, setTaskTemplates] = useState<any[]>([]);
   // Templates the admin actively deleted on this deal in the current session.
   // The "default template" rendering in displayTasks treats any default
@@ -2107,6 +2154,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       const data = await res.json();
 
       if (data.success) {
+        // Resolve the side from the chosen stage template so the new row shows
+        // on the correct Purchase/Sale tab immediately (a later GET re-derives
+        // it from stage_templates.lead_type).
+        const selectedStage = stageTemplates.find((t) => t.name === stageForm.stageTemplate) ?? null;
         const newMilestone: Milestone = {
           id: data.data.id,
           title: data.data.title,
@@ -2114,6 +2165,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           milestoneDate: data.data.milestone_date ?? undefined,
           emailTemplateId: data.data.email_template_id ?? null,
           stageTemplateId: data.data.stage_template_id ?? null,
+          leadType: selectedStage?.lead_type ?? null,
         };
         setMilestones((prev) => [...prev, newMilestone]);
         setShowStageForm(false);
@@ -2465,7 +2517,17 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       ) {
         return true;
       }
+      // Legacy title fallback — ONLY for docs with no owning task_id. Every
+      // task_responses row carries a real task_id (matched by rule 1 above), so
+      // without this guard a doc would also match any OTHER task that happens to
+      // share the same stored title. That's exactly the per-person case:
+      // "Upload Identification" / "Provide Personal Information" store the same
+      // title on every family member's task (the "- Name" suffix is UI-only), so
+      // one person's uploaded docs would wrongly inflate another person's Doc
+      // count. Restricting to unlinked docs keeps the bridge for truly orphaned
+      // rows while scoping real docs to their own person via rule 1.
       if (
+        !d.task_id &&
         d.field_type === "file" &&
         d.task_title &&
         task.title &&
@@ -2712,17 +2774,17 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         if (m.isTemplate || !m.stageTemplateId) return [m];
         const owners = stageOwners.get(m.stageTemplateId);
         if (!owners || owners.size === 0) return [m];
-        return Array.from(owners.entries())
-          .sort((a, b) =>
-            a[1].name.localeCompare(b[1].name, undefined, { sensitivity: "base" }),
-          )
-          .map(([ownerDealId, info]): DisplayMilestone => ({
-            ...m,
-            id: `${m.id}::${ownerDealId}`,
-            title: info.name ? `${m.title} - ${info.name}` : m.title,
-            status: ownerStatus(info.statuses),
-            isPersonalSplit: true,
-          }));
+        // Collapse to ONE row for the stage with an aggregate "X of N people
+        // done" badge (instead of one row per person). Status is derived:
+        // Completed only once every party is done, otherwise Pending.
+        const infos = Array.from(owners.values());
+        const total = infos.length;
+        const completed = infos.filter((info) => ownerStatus(info.statuses) === "Completed").length;
+        return [{
+          ...m,
+          status: (total > 0 && completed === total ? "Completed" : "Pending") as Milestone["status"],
+          personalProgress: { completed, total },
+        }];
       });
     })();
 
@@ -2731,22 +2793,6 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     }
     return splitAll.filter(m => !m.leadType || matchesDealType(m.leadType));
   })();
-
-  useEffect(() => {
-    async function fetchClients() {
-      try {
-        const res = await fetch("/api/admin/clients");
-        const data = await res.json();
-        console.log(data, "fetched clients");
-        setClients(data);
-      } catch (error) {
-        console.error("Failed to fetch clients:", error);
-      }
-    }
-
-    fetchClients();
-  }, []);
-
 
   useEffect(() => {
     fetch("/api/admin/email-templates")
@@ -3520,9 +3566,29 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         return (
           <SubmitOnBehalfSection
             coPersons={coPersons}
-            onUploadId={(leadId, taskId) => openIdDrawerFor(leadId, taskId)}
-            onChanged={() => {
-              if (typeof window !== "undefined") window.location.reload();
+            onOpen={(kind, person) => {
+              setMultiPartyChanged(false);
+              if (kind === "upload-id") {
+                setMultiPartyTask({
+                  kind: "upload-id",
+                  taskId: person.identificationTaskId,
+                  initialLeadId: person.leadId,
+                });
+              } else {
+                // Seed with this person's Personal Info task (any family PI task
+                // works — the accordion resolves the whole roster from it).
+                const piTaskId =
+                  displayTasks.find(
+                    (t) => !t.isTemplate && isPersonalInfoTask(t) && t.ownerLeadId === person.leadId,
+                  )?.id ??
+                  displayTasks.find((t) => !t.isTemplate && isPersonalInfoTask(t))?.id ??
+                  null;
+                setMultiPartyTask({
+                  kind: "personal-info",
+                  taskId: piTaskId,
+                  initialLeadId: person.leadId,
+                });
+              }
             }}
           />
         );
@@ -3908,9 +3974,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                                   <span className={`text-xs font-semibold border rounded px-2 py-1 inline-block ${getStatusColor("Pending")}`}>
                                     Pending
                                   </span>
-                                ) : milestone.isPersonalSplit ? (
-                                  // Per-person row — status is the person's
-                                  // task-derived progress, shown read-only.
+                                ) : milestone.isPersonalSplit || milestone.personalProgress ? (
+                                  // Personal-task stage — status is the aggregate
+                                  // task-derived progress across the family, shown
+                                  // read-only (see the "X/N completed" badge on the title).
                                   <span className={`text-xs font-semibold border rounded px-2 py-1 inline-block ${getStatusColor(milestone.status || "Pending")}`}>
                                     {milestone.status || "Pending"}
                                   </span>
@@ -3960,10 +4027,21 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                                     {milestone.title}
                                   </button>
                                 )}
+                                {milestone.personalProgress && (
+                                  <span
+                                    className={`ml-2 text-[11px] font-semibold ${
+                                      milestone.personalProgress.completed === milestone.personalProgress.total
+                                        ? "text-green-600"
+                                        : "text-[#C10007]"
+                                    }`}
+                                  >
+                                    {milestone.personalProgress.completed}/{milestone.personalProgress.total} completed
+                                  </span>
+                                )}
                               </td>
 
                               <td className="px-2 py-3 hidden md:table-cell">
-                                {milestone.isTemplate || milestone.isPersonalSplit ? (
+                                {milestone.isTemplate || milestone.isPersonalSplit || milestone.personalProgress ? (
                                   <span className="text-slate-300 text-xs">—</span>
                                 ) : (
                                   <div className="relative">
@@ -4105,6 +4183,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                   <option value="">Select Stage Template</option>
                   {stageTemplates
                     .filter((t) => matchesDealType(t.lead_type))
+                    // Milestones are per-side deal stages, not personal items —
+                    // scope to the active Purchase/Sale tab so the stage lands
+                    // on the correct side (matching how milestones are seeded).
+                    .filter((t) => matchesActiveTab(t.lead_type, activeMilestoneTab))
                     .map((t) => {
                     const label = `${t.lead_type}-${t.role}-${t.name}`;
                     return (
@@ -4116,25 +4198,8 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                 </select>
               </div>
 
-              {/* Client */}
-              <div>
-                <label className="text-sm font-semibold text-gray-800 block mb-2">
-                  Client
-                </label>
-                <select
-                  name="client"
-                  value={stageForm.client}
-                  onChange={handleStageFormChange}
-                  className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
-                >
-                  <option value="">Select Client</option>
-                  {clients.map((client) => (
-                    <option key={client.id} value={client.id}>
-                      {client.first_name} {client.last_name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              {/* No person picker: a milestone is a per-side deal stage that
+                  fans out to linked deals, not a per-person item. */}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {/* Status */}
@@ -4257,10 +4322,11 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
             </div>
 
             <div className="px-6 py-6 space-y-5 overflow-y-auto flex-1">
-              {/* Client */}
+              {/* Person — value is the person's DEAL id, so the task is created
+                  on their own deal and shows under them in the family view. */}
               <div>
                 <label className="text-sm font-semibold text-gray-800 block mb-2">
-                  Client
+                  Assign to
                 </label>
                 <select
                   name="client"
@@ -4268,27 +4334,12 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                   onChange={handleTaskFormChange}
                   className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
                 >
-                  <option value="">Select Client</option>
-                  {clients.map((client) => (
-                    <option key={client.id} value={client.id}>
-                      {client.first_name} {client.last_name}
+                  <option value="">Select Person</option>
+                  {familyPeople.map((person) => (
+                    <option key={person.id} value={person.id}>
+                      {person.role} — {person.lead_name}
                     </option>
                   ))}
-                </select>
-              </div>
-
-              {/* Partner */}
-              <div>
-                <label className="text-sm font-semibold text-gray-800 block mb-2">
-                  Partner
-                </label>
-                <select
-                  name="partner"
-                  value={taskForm.partner}
-                  onChange={handleTaskFormChange}
-                  className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
-                >
-                  <option value="">Select Partner</option>
                 </select>
               </div>
 
@@ -4306,6 +4357,13 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                   <option value="">Select Task Template</option>
                   {taskTemplates
                     .filter((template) => matchesDealType(template.lead_type))
+                    // A co-purchaser only acts on Purchase, a co-seller only on
+                    // Sale — narrow to the selected person's side so you can't
+                    // add a Sale task to a purchaser. Primary is unscoped.
+                    .filter((template) => {
+                      const side = ownerDealSide.get(taskForm.client);
+                      return !side || (template.lead_type ?? "").toLowerCase() === side.toLowerCase();
+                    })
                     .map((template) => {
                     const label = `${template.lead_type} - ${template.role_type} - ${template.name}`;
                     return (
@@ -5630,6 +5688,30 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           />
         );
       })()}
+
+      {/* Multi-party accordion — Personal Info / Upload ID for co-person deals.
+          Fed by /api/admin/family-task-status; honours upload_mode from the
+          viewed (primary) person's perspective. */}
+      <AdminMultiPartyTaskDrawer
+        open={!!multiPartyTask}
+        onClose={() => {
+          const changed = multiPartyChanged;
+          setMultiPartyTask(null);
+          setMultiPartyChanged(false);
+          // Reflect any completions in the page's task list / statuses.
+          if (changed && typeof window !== "undefined") window.location.reload();
+        }}
+        taskTitle={
+          multiPartyTask?.kind === "upload-id"
+            ? "Upload Identification Documents"
+            : "Provide Personal Information"
+        }
+        taskId={multiPartyTask?.taskId ?? null}
+        kind={multiPartyTask?.kind ?? "personal-info"}
+        selfLeadId={primaryLeadId}
+        initialLeadId={multiPartyTask?.initialLeadId ?? null}
+        onAnyCompleted={() => setMultiPartyChanged(true)}
+      />
 
       {/* Clone-from-previous drawer — lets admin pick a prior deal for the
           same client (matched by email) and prefill personal fields +

@@ -20,6 +20,7 @@ import {
   ShieldCheck,
   ShieldAlert,
   Clock,
+  IdCard,
 } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { useIsLargeScreen } from "@/hooks/useMediaQuery";
@@ -46,6 +47,12 @@ interface UploadIdentificationDrawerProps {
     completed: boolean;
   }>;
   onPersonChange?: (leadId: string, taskId: string) => void;
+  /**
+   * When true, renders only the form body + footer (no backdrop, header, modal
+   * chrome, scroll-lock or Escape handling) so it can be embedded inside the
+   * multi-party accordion (AdminMultiPartyTaskDrawer), which owns that chrome.
+   */
+  embedded?: boolean;
 }
 
 // ── Camera slot model (used only by the guided camera flow) ───────────────────
@@ -461,6 +468,7 @@ export default function UploadIdentificationDrawer({
   onSaved,
   personOptions,
   onPersonChange,
+  embedded = false,
 }: UploadIdentificationDrawerProps) {
   const isLargeScreen = useIsLargeScreen();
   // Manual upload state
@@ -646,22 +654,25 @@ export default function UploadIdentificationDrawer({
     };
   }, [open, leadId]);
 
-  // Close on Escape
+  // Close on Escape — skipped when embedded (the parent accordion owns Escape;
+  // hijacking it here would close the whole multi-party modal).
   useEffect(() => {
+    if (embedded) return;
     const handle = (e: KeyboardEvent) => {
       if (e.key === "Escape" && open) handleClose();
     };
     document.addEventListener("keydown", handle);
     return () => document.removeEventListener("keydown", handle);
-  }, [open, handleClose]);
+  }, [open, handleClose, embedded]);
 
-  // Lock body scroll
+  // Lock body scroll — skipped when embedded (the parent accordion owns it).
   useEffect(() => {
+    if (embedded) return;
     document.body.style.overflow = open ? "hidden" : "";
     return () => {
       document.body.style.overflow = "";
     };
-  }, [open]);
+  }, [open, embedded]);
 
   // Cleanup object URLs on unmount
   useEffect(() => {
@@ -1473,60 +1484,73 @@ export default function UploadIdentificationDrawer({
 
   return (
     <>
-      {/* Backdrop */}
-      <div
-        className={[
-          "fixed inset-0 z-40 transition-opacity duration-300",
-          isLargeScreen ? "bg-black/40 backdrop-blur-sm" : "bg-black/30",
-          open ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none",
-        ].join(" ")}
-        onClick={handleClose}
-        aria-hidden="true"
-      />
+      {/* Backdrop — omitted when embedded (parent accordion owns chrome). */}
+      {!embedded && (
+        <div
+          className={[
+            "fixed inset-0 z-40 transition-opacity duration-300",
+            isLargeScreen ? "bg-black/40 backdrop-blur-sm" : "bg-black/30",
+            open ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none",
+          ].join(" ")}
+          onClick={handleClose}
+          aria-hidden="true"
+        />
+      )}
 
-      {/* Modal (large screens) / Drawer (mobile) */}
+      {/* Modal (large screens) / Drawer (mobile) — or a plain flow container when embedded */}
       <div
-        className={[
-          "fixed z-50 bg-white shadow-2xl flex flex-col",
-          isLargeScreen
-            ? "inset-4 sm:inset-8 md:inset-12 lg:inset-16 xl:inset-20 max-w-5xl max-h-[90vh] mx-auto my-auto rounded-2xl border border-gray-100"
-            : "top-0 right-0 h-full w-full max-w-[540px]",
-          isLargeScreen
-            ? open
-              ? "opacity-100 scale-100"
-              : "opacity-0 scale-95 pointer-events-none"
-            : open
-              ? "translate-x-0"
-              : "translate-x-full",
-          isLargeScreen
-            ? "transition-all duration-200 ease-out"
-            : "transition-transform duration-300 ease-in-out",
-        ].join(" ")}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Upload Identification Documents"
+        className={
+          embedded
+            ? "flex flex-col bg-white"
+            : [
+                "fixed z-50 bg-white shadow-2xl flex flex-col",
+                isLargeScreen
+                  ? "inset-4 sm:inset-8 md:inset-12 lg:inset-16 xl:inset-20 max-w-5xl max-h-[90vh] mx-auto my-auto rounded-2xl border border-gray-100"
+                  : "top-0 right-0 h-full w-full max-w-[540px]",
+                isLargeScreen
+                  ? open
+                    ? "opacity-100 scale-100"
+                    : "opacity-0 scale-95 pointer-events-none"
+                  : open
+                    ? "translate-x-0"
+                    : "translate-x-full",
+                isLargeScreen
+                  ? "transition-all duration-200 ease-out"
+                  : "transition-transform duration-300 ease-in-out",
+              ].join(" ")
+        }
+        role={embedded ? undefined : "dialog"}
+        aria-modal={embedded ? undefined : "true"}
+        aria-label={embedded ? undefined : "Upload Identification Documents"}
       >
-        {/* Header */}
-        <div className="flex items-start justify-between px-6 py-5 border-b border-gray-100">
-          <div className="flex-1 min-w-0 pr-4">
-            <h2 className="text-base font-bold text-gray-900 leading-snug">
-              Upload Identification Documents
-            </h2>
-            <p className="text-xs text-gray-400 mt-1 leading-relaxed">
-              Upload your identification documents to verify your identity for the property transaction.
-            </p>
+        {/* Header — omitted when embedded (the accordion section header stands in) */}
+        {!embedded && (
+          <div className="flex items-start justify-between gap-4 px-6 py-5 border-b border-gray-100">
+            <div className="flex items-center gap-3 min-w-0 pr-4">
+              <div className="w-9 h-9 rounded-full bg-[#FEF2F2] flex items-center justify-center text-[#C10007] flex-shrink-0">
+                <IdCard size={17} strokeWidth={2} />
+              </div>
+              <div className="min-w-0">
+                <h2 className="text-base font-bold text-gray-900 leading-snug truncate">
+                  Upload Identification Documents
+                </h2>
+                <p className="text-xs text-gray-400 mt-0.5 leading-relaxed">
+                  Upload your identification documents to verify your identity for the property transaction.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={handleClose}
+              className="cursor-pointer flex-shrink-0 rounded-md p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+              aria-label="Close"
+            >
+              <X className="h-5 w-5" />
+            </button>
           </div>
-          <button
-            onClick={handleClose}
-            className="cursor-pointer flex-shrink-0 rounded-md p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
-            aria-label="Close"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
+        )}
 
-        {/* Scrollable body */}
-        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
+        {/* Body — scrollable modal region, or plain flow when embedded */}
+        <div className={embedded ? "px-6 py-5 space-y-6" : "flex-1 overflow-y-auto px-6 py-5 space-y-6"}>
           {/* "Uploading for" person selector — only rendered when the primary
               opens the drawer and there's more than one family member to
               choose from. Switching selection bubbles up to the parent which

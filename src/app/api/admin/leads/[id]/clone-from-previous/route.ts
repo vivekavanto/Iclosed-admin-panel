@@ -13,7 +13,8 @@ import supabaseAdmin from "@/lib/supabaseAdmin";
  *   → applies the clone. Only fills empty fields; skips duplicate doc rows.
  */
 
-const PERSONAL_FIELDS = [
+// Fields that still live on the `leads` row — copied lead→lead as before.
+const LEAD_PERSONAL_FIELDS = [
   "first_name",
   "last_name",
   "phone",
@@ -22,13 +23,81 @@ const PERSONAL_FIELDS = [
   "address_city",
   "address_province",
   "address_postal_code",
-  "citizenship_status",
 ] as const;
 
-type PersonalField = (typeof PERSONAL_FIELDS)[number];
+// Fields that were moved off `leads` onto `public.clients` (the source of
+// truth) by migrations/2026-06-03-phaseE-drop-personal-from-leads.sql. These
+// must be read/written on clients, resolved via leads.client_id (email
+// fallback for pre-migration leads never linked to a client row).
+const CLIENT_PERSONAL_FIELDS = ["citizenship_status"] as const;
+
+type PersonalField =
+  | (typeof LEAD_PERSONAL_FIELDS)[number]
+  | (typeof CLIENT_PERSONAL_FIELDS)[number];
 
 const isEmpty = (v: unknown) =>
   v === null || v === undefined || (typeof v === "string" && v.trim() === "");
+
+/** Resolve each lead's citizenship_status from its client row (email fallback). */
+async function fetchCitizenshipForLeads(
+  leads: { id: string; client_id: string | null; email: string | null }[],
+): Promise<Map<string, string | null>> {
+  const out = new Map<string, string | null>();
+  const clientIds = [
+    ...new Set(leads.map((l) => l.client_id).filter(Boolean) as string[]),
+  ];
+  const byClientId = new Map<string, string | null>();
+  if (clientIds.length > 0) {
+    const { data } = await supabaseAdmin
+      .from("clients")
+      .select("id, citizenship_status")
+      .in("id", clientIds);
+    for (const c of data ?? [])
+      byClientId.set(c.id, (c as any).citizenship_status ?? null);
+  }
+  const emailByLower = new Map<string, string | null>();
+  const emailsNeedingLookup = [
+    ...new Set(
+      leads
+        .filter((l) => !l.client_id && l.email)
+        .map((l) => (l.email as string).toLowerCase()),
+    ),
+  ];
+  for (const email of emailsNeedingLookup) {
+    const pattern = email.replace(/[\\%_]/g, "\\$&");
+    const { data } = await supabaseAdmin
+      .from("clients")
+      .select("citizenship_status")
+      .ilike("email", pattern)
+      .maybeSingle();
+    emailByLower.set(email, (data as any)?.citizenship_status ?? null);
+  }
+  for (const l of leads) {
+    let v: string | null = null;
+    if (l.client_id) v = byClientId.get(l.client_id) ?? null;
+    else if (l.email) v = emailByLower.get(l.email.toLowerCase()) ?? null;
+    out.set(l.id, v);
+  }
+  return out;
+}
+
+/** Resolve the client row id a lead's personal fields should be written to. */
+async function resolveClientId(lead: {
+  client_id: string | null;
+  email: string | null;
+}): Promise<string | null> {
+  if (lead.client_id) return lead.client_id;
+  if (lead.email) {
+    const pattern = lead.email.replace(/[\\%_]/g, "\\$&");
+    const { data } = await supabaseAdmin
+      .from("clients")
+      .select("id")
+      .ilike("email", pattern)
+      .maybeSingle();
+    return (data as any)?.id ?? null;
+  }
+  return null;
+}
 
 export async function GET(
   _req: Request,
@@ -62,7 +131,7 @@ export async function GET(
     const { data: siblings, error: siblingsErr } = await supabaseAdmin
       .from("leads")
       .select(
-        "id, first_name, last_name, phone, address_street, address_unit, address_city, address_province, address_postal_code, citizenship_status, created_at",
+        "id, client_id, email, first_name, last_name, phone, address_street, address_unit, address_city, address_province, address_postal_code, created_at",
       )
       .eq("email", target.email)
       .neq("id", targetLeadId)
@@ -79,6 +148,9 @@ export async function GET(
     if (siblingIds.length === 0) {
       return NextResponse.json({ success: true, candidates: [] });
     }
+
+    // citizenship_status lives on clients now — resolve it per sibling.
+    const citizenshipByLead = await fetchCitizenshipForLeads(siblings ?? []);
 
     const [{ data: deals }, { data: docs }] = await Promise.all([
       supabaseAdmin
@@ -119,7 +191,7 @@ export async function GET(
           address_city: l.address_city,
           address_province: l.address_province,
           address_postal_code: l.address_postal_code,
-          citizenship_status: l.citizenship_status,
+          citizenship_status: citizenshipByLead.get(l.id) ?? null,
         },
       };
     });
@@ -161,7 +233,7 @@ export async function POST(
     const { data: pair, error: pairErr } = await supabaseAdmin
       .from("leads")
       .select(
-        "id, email, first_name, last_name, phone, address_street, address_unit, address_city, address_province, address_postal_code, citizenship_status",
+        "id, client_id, email, first_name, last_name, phone, address_street, address_unit, address_city, address_province, address_postal_code",
       )
       .in("id", [sourceLeadId, targetLeadId]);
 
@@ -192,8 +264,9 @@ export async function POST(
 
     const copiedFields: PersonalField[] = [];
     if (copyFields) {
+      // Lead-resident fields → update the leads row (unchanged behavior).
       const update: Partial<Record<PersonalField, unknown>> = {};
-      for (const f of PERSONAL_FIELDS) {
+      for (const f of LEAD_PERSONAL_FIELDS) {
         const srcVal = (source as any)[f];
         const tgtVal = (target as any)[f];
         if (!isEmpty(srcVal) && isEmpty(tgtVal)) {
@@ -201,7 +274,7 @@ export async function POST(
           copiedFields.push(f);
         }
       }
-      if (copiedFields.length > 0) {
+      if (Object.keys(update).length > 0) {
         const { error: updErr } = await supabaseAdmin
           .from("leads")
           .update(update)
@@ -211,6 +284,29 @@ export async function POST(
             { success: false, error: updErr.message },
             { status: 500 },
           );
+        }
+      }
+
+      // Client-resident fields (citizenship_status) → update the target's
+      // client row. Only fills when the source has a value and the target is
+      // empty, matching the leads-side "fill empty only" semantics.
+      const citizenship = await fetchCitizenshipForLeads([source, target]);
+      const srcCit = citizenship.get(sourceLeadId) ?? null;
+      const tgtCit = citizenship.get(targetLeadId) ?? null;
+      if (!isEmpty(srcCit) && isEmpty(tgtCit)) {
+        const tgtClientId = await resolveClientId(target);
+        if (tgtClientId) {
+          const { error: cliErr } = await supabaseAdmin
+            .from("clients")
+            .update({ citizenship_status: srcCit })
+            .eq("id", tgtClientId);
+          if (cliErr) {
+            return NextResponse.json(
+              { success: false, error: cliErr.message },
+              { status: 500 },
+            );
+          }
+          copiedFields.push("citizenship_status");
         }
       }
     }

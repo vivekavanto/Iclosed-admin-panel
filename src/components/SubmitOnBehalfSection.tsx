@@ -1,13 +1,11 @@
 "use client";
 
-import { useState } from "react";
 import {
   ShieldCheck,
   IdCard,
   UserCog,
   Check,
 } from "lucide-react";
-import CoPersonPersonalInfoModal from "./CoPersonPersonalInfoModal";
 
 /**
  * "Submit on behalf of co-purchaser(s)/co-seller(s)" section.
@@ -38,24 +36,21 @@ export interface OnBehalfCoPerson {
 
 interface Props {
   coPersons: OnBehalfCoPerson[];
-  /** Opens the existing identification drawer for a given co-person. */
-  onUploadId: (leadId: string, taskId: string) => void;
-  /** Called after a successful document/contact change so the parent can refresh. */
-  onChanged: () => void;
+  /**
+   * Opens the multi-party accordion for a given co-person and task kind.
+   * "upload-id" → Upload Identification section; "personal-info" → Personal
+   * Information section (both auto-expanded to this person).
+   */
+  onOpen: (kind: "upload-id" | "personal-info", person: OnBehalfCoPerson) => void;
 }
 
 function CoPersonCard({
   person,
-  onUploadId,
-  onChanged,
+  onOpen,
 }: {
   person: OnBehalfCoPerson;
-  onUploadId: (leadId: string, taskId: string) => void;
-  onChanged: () => void;
+  onOpen: (kind: "upload-id" | "personal-info", person: OnBehalfCoPerson) => void;
 }) {
-  // Opens the full "Provide Personal Information" task popup for this person.
-  const [personalInfoOpen, setPersonalInfoOpen] = useState(false);
-
   const idCompleted = person.identificationStatus === "Completed";
 
   return (
@@ -68,14 +63,11 @@ function CoPersonCard({
       </div>
 
       <div className="flex flex-wrap gap-2">
-        {/* 1. Upload their ID */}
+        {/* 1. Upload their ID — opens the accordion on this person's ID section. */}
         <button
           type="button"
           disabled={!person.identificationTaskId}
-          onClick={() =>
-            person.identificationTaskId &&
-            onUploadId(person.leadId, person.identificationTaskId)
-          }
+          onClick={() => person.identificationTaskId && onOpen("upload-id", person)}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-300 bg-white text-slate-700 hover:border-brand-primary hover:text-brand-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
           title={
             person.identificationTaskId
@@ -88,11 +80,11 @@ function CoPersonCard({
           {idCompleted && <Check size={13} className="text-green-600" />}
         </button>
 
-        {/* Submit contact information — opens the full personal-information
-            task form for this person. */}
+        {/* Submit contact information — opens the accordion on this person's
+            Personal Information section. */}
         <button
           type="button"
-          onClick={() => setPersonalInfoOpen(true)}
+          onClick={() => onOpen("personal-info", person)}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-300 bg-white text-slate-700 hover:border-brand-primary hover:text-brand-primary transition-colors cursor-pointer"
           title="Provide this person's personal information"
         >
@@ -100,26 +92,13 @@ function CoPersonCard({
           Submit contact information
         </button>
       </div>
-
-      <CoPersonPersonalInfoModal
-        open={personalInfoOpen}
-        onClose={() => setPersonalInfoOpen(false)}
-        coPerson={{
-          leadId: person.leadId,
-          dealId: person.dealId,
-          name: person.name,
-          role: person.role,
-        }}
-        onSaved={onChanged}
-      />
     </div>
   );
 }
 
 export default function SubmitOnBehalfSection({
   coPersons,
-  onUploadId,
-  onChanged,
+  onOpen,
 }: Props) {
   if (coPersons.length === 0) return null;
 
@@ -139,12 +118,7 @@ export default function SubmitOnBehalfSection({
       </p>
       <div className="space-y-3">
         {coPersons.map((p) => (
-          <CoPersonCard
-            key={p.leadId}
-            person={p}
-            onUploadId={onUploadId}
-            onChanged={onChanged}
-          />
+          <CoPersonCard key={p.leadId} person={p} onOpen={onOpen} />
         ))}
       </div>
     </div>

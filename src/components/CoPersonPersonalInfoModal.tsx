@@ -49,6 +49,13 @@ interface Props {
   onClose: () => void;
   coPerson: CoPerson | null;
   onSaved: () => void;
+  /**
+   * When true, renders only the form body + Save button (no backdrop, header,
+   * modal chrome, scroll-lock or Escape) for embedding inside the multi-party
+   * accordion (AdminMultiPartyTaskDrawer). It calls onSaved() and stays open
+   * (the accordion refreshes + advances) instead of auto-closing.
+   */
+  embedded?: boolean;
 }
 
 /* ── helpers ── */
@@ -168,7 +175,7 @@ function CustomSelect({
   );
 }
 
-export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onSaved }: Props) {
+export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onSaved, embedded = false }: Props) {
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [taskId, setTaskId] = useState<string | null>(null);
@@ -292,9 +299,10 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
     };
   }, [open, coPerson, findExisting]);
 
-  // ── Escape to close + body scroll lock ──
+  // ── Escape to close + body scroll lock ── skipped when embedded (the parent
+  // accordion owns Escape and scroll-lock).
   useEffect(() => {
-    if (!open) return;
+    if (!open || embedded) return;
     const handle = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !saving) onClose();
     };
@@ -304,7 +312,7 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
       document.removeEventListener("keydown", handle);
       document.body.style.overflow = "";
     };
-  }, [open, saving, onClose]);
+  }, [open, saving, onClose, embedded]);
 
   function setValue(field: FormField, raw: string) {
     const v = isPhoneField(field) ? formatPhone(raw) : raw;
@@ -401,7 +409,9 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
 
       setSaved(true);
       onSaved();
-      setTimeout(() => onClose(), 1200);
+      // Embedded in the accordion: stay open — the parent refreshes status and
+      // advances to the next incomplete person. Standalone modal: auto-close.
+      if (!embedded) setTimeout(() => onClose(), 1200);
     } catch (err) {
       setGlobalError(err instanceof Error ? err.message : "Could not save. Please try again.");
     } finally {
@@ -413,45 +423,53 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
 
   return (
     <>
-      {/* Backdrop */}
-      <div
-        className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-sm"
-        onClick={() => !saving && onClose()}
-        aria-hidden="true"
-      />
+      {/* Backdrop — omitted when embedded (parent accordion owns chrome). */}
+      {!embedded && (
+        <div
+          className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-sm"
+          onClick={() => !saving && onClose()}
+          aria-hidden="true"
+        />
+      )}
 
-      {/* Modal — same sizing as the Upload Identification popup. */}
+      {/* Modal — same sizing as the Upload Identification popup; plain flow when embedded. */}
       <div
-        className="fixed z-[70] inset-4 sm:inset-8 md:inset-12 lg:inset-16 xl:inset-20 max-w-5xl max-h-[90vh] mx-auto my-auto flex flex-col rounded-2xl border border-gray-100 bg-white shadow-2xl"
-        role="dialog"
-        aria-modal="true"
+        className={
+          embedded
+            ? "flex flex-col bg-white"
+            : "fixed z-[70] inset-4 sm:inset-8 md:inset-12 lg:inset-16 xl:inset-20 max-w-5xl max-h-[90vh] mx-auto my-auto flex flex-col rounded-2xl border border-gray-100 bg-white shadow-2xl"
+        }
+        role={embedded ? undefined : "dialog"}
+        aria-modal={embedded ? undefined : "true"}
       >
-        {/* Header */}
-        <div className="flex items-start justify-between gap-4 px-6 py-5 border-b border-gray-100">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-9 h-9 rounded-full bg-[#FEF2F2] flex items-center justify-center text-[#C10007] flex-shrink-0">
-              <UserCog size={17} strokeWidth={2} />
+        {/* Header — omitted when embedded (the accordion section header stands in) */}
+        {!embedded && (
+          <div className="flex items-start justify-between gap-4 px-6 py-5 border-b border-gray-100">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-9 h-9 rounded-full bg-[#FEF2F2] flex items-center justify-center text-[#C10007] flex-shrink-0">
+                <UserCog size={17} strokeWidth={2} />
+              </div>
+              <div className="min-w-0">
+                <h2 className="text-base font-bold text-gray-900 leading-snug truncate">
+                  Provide Personal Information
+                </h2>
+                <p className="text-xs text-gray-400 mt-0.5 truncate">
+                  {coPerson.role} · {coPerson.name}
+                </p>
+              </div>
             </div>
-            <div className="min-w-0">
-              <h2 className="text-base font-bold text-gray-900 leading-snug truncate">
-                Provide Personal Information
-              </h2>
-              <p className="text-xs text-gray-400 mt-0.5 truncate">
-                {coPerson.role} · {coPerson.name}
-              </p>
-            </div>
+            <button
+              onClick={() => !saving && onClose()}
+              className="cursor-pointer flex-shrink-0 rounded-md p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+              aria-label="Close"
+            >
+              <X className="h-5 w-5" />
+            </button>
           </div>
-          <button
-            onClick={() => !saving && onClose()}
-            className="cursor-pointer flex-shrink-0 rounded-md p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
-            aria-label="Close"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
+        )}
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
+        <div className={embedded ? "px-6 py-6 space-y-5" : "flex-1 overflow-y-auto px-6 py-6 space-y-5"}>
           {loading && (
             <div className="flex items-center justify-center py-16">
               <Loader2 size={22} className="text-gray-300 animate-spin" />
@@ -602,14 +620,16 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
         {/* Footer */}
         {!loading && !loadError && !saved && fields.length > 0 && (
           <div className="flex justify-end gap-2 px-6 py-4 border-t border-gray-100">
-            <button
-              type="button"
-              onClick={() => !saving && onClose()}
-              disabled={saving}
-              className="px-4 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-50 cursor-pointer"
-            >
-              Cancel
-            </button>
+            {!embedded && (
+              <button
+                type="button"
+                onClick={() => !saving && onClose()}
+                disabled={saving}
+                className="px-4 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-50 cursor-pointer"
+              >
+                Cancel
+              </button>
+            )}
             <button
               type="button"
               onClick={handleSave}

@@ -422,3 +422,96 @@ export async function backfillTaskForTemplate(
 
   return { created };
 }
+
+/**
+ * Reconcile already-seeded tasks when a template's `is_shared` flag is toggled.
+ * The task's PRESENCE doesn't change — only where it lives and how the family
+ * view renders it: a shared task is one row on the primary deal (skipping
+ * co-client deals, see backfillTaskForTemplate), shown once family-wide; a
+ * personal task is one row per family member, shown per-person. Editing the
+ * template only updates the template row, so existing deals keep the old shape
+ * until this runs.
+ *
+ *  - false→true: soft-delete the per-person copies on co-client deals, mark the
+ *    surviving (primary) rows is_shared=true, then backfill any family missing
+ *    the primary row.
+ *  - true→false: restore the co-client copies a previous collapse soft-deleted
+ *    (backfill counts soft-deleted rows as "already present" and would skip
+ *    them), mark every live row is_shared=false, then backfill families that
+ *    never had per-person rows.
+ *
+ * Non-default templates are never auto-seeded, so this is a no-op for them.
+ * Safe to call on every is_shared change; idempotent.
+ */
+export async function reconcileSharedTasksForTemplate(
+  taskTemplateId: string,
+): Promise<void> {
+  const tpl = await loadTaskTemplate(taskTemplateId);
+  if (!tpl || !tpl.is_default) return;
+
+  const dealIds = await dealsForLeadType(tpl.lead_type);
+  if (dealIds.length === 0) return;
+
+  // Which of these deals belong to a co-client (their lead has a parent)? Those
+  // are the deals whose per-person copies must appear/disappear.
+  const dealLeads = await fetchAllByDealIds<{ id: string; lead_id: string | null }>(
+    "deals",
+    "id, lead_id",
+    dealIds,
+    (q) => q,
+  );
+  const leadIds = [...new Set(dealLeads.map((d) => d.lead_id).filter(Boolean) as string[])];
+  const parentByLead = new Map<string, string | null>();
+  for (let i = 0; i < leadIds.length; i += 200) {
+    const { data } = await supabaseAdmin
+      .from("leads")
+      .select("id, parent_lead_id")
+      .in("id", leadIds.slice(i, i + 200));
+    for (const l of data ?? []) parentByLead.set(l.id, l.parent_lead_id ?? null);
+  }
+  const coClientDealIds = dealLeads
+    .filter((d) => d.lead_id && parentByLead.get(d.lead_id))
+    .map((d) => d.id);
+
+  if (tpl.is_shared) {
+    // Collapse to a single shared row on the primary deal.
+    for (let i = 0; i < coClientDealIds.length; i += 200) {
+      await supabaseAdmin
+        .from("tasks")
+        .update({ is_deleted: true })
+        .eq("task_template_id", taskTemplateId)
+        .eq("is_deleted", false)
+        .in("deal_id", coClientDealIds.slice(i, i + 200));
+    }
+    await supabaseAdmin
+      .from("tasks")
+      .update({ is_shared: true })
+      .eq("task_template_id", taskTemplateId)
+      .eq("is_deleted", false);
+  } else {
+    // Fan back out to per-person rows. Restore the co-client copies a prior
+    // collapse soft-deleted so their task_responses come back attached.
+    for (let i = 0; i < coClientDealIds.length; i += 200) {
+      await supabaseAdmin
+        .from("tasks")
+        .update({ is_deleted: false })
+        .eq("task_template_id", taskTemplateId)
+        .eq("is_deleted", true)
+        .in("deal_id", coClientDealIds.slice(i, i + 200));
+    }
+    await supabaseAdmin
+      .from("tasks")
+      .update({ is_shared: false })
+      .eq("task_template_id", taskTemplateId)
+      .eq("is_deleted", false);
+  }
+
+  // Seed families still missing the task in its new shape (backfill self-gates
+  // on is_shared, so it targets the right deals and skips ones already carrying
+  // it — including the co-client rows we just soft-deleted).
+  await backfillTaskForTemplate(taskTemplateId);
+
+  // Co-client deals gained/lost a Pending task, which can shift milestone
+  // rollups; primary rows only had a flag flipped, so they don't need recalc.
+  if (coClientDealIds.length > 0) await recalcFamiliesForDeals(coClientDealIds);
+}

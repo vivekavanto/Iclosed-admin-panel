@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse, after } from 'next/server';
 import supabaseAdmin from '@/lib/supabaseAdmin';
-import { repointTasksForTemplate, backfillTaskForTemplate } from '@/lib/reconcileDealMilestoneLinks';
+import { repointTasksForTemplate, backfillTaskForTemplate, reconcileSharedTasksForTemplate } from '@/lib/reconcileDealMilestoneLinks';
 
 const supabase = supabaseAdmin;
 
@@ -84,13 +84,14 @@ export async function PUT(req: NextRequest) {
     // the milestone-link cascade (tasks.milestone_id is also a snapshot).
     const { data: prevTemplate } = await supabase
       .from('task_templates')
-      .select('name, stage_template_id, is_default')
+      .select('name, stage_template_id, is_default, is_shared')
       .eq('id', id)
       .maybeSingle();
     const previousName: string | null = prevTemplate?.name ?? null;
     const oldStageTemplateId: string | null = prevTemplate?.stage_template_id ?? null;
     const newStageTemplateId: string | null = stageTemplateId || null;
     const previousIsDefault: boolean = prevTemplate?.is_default ?? false;
+    const previousIsShared: boolean = prevTemplate?.is_shared ?? false;
 
     const { data, error } = await supabase
       .from('task_templates')
@@ -205,6 +206,22 @@ export async function PUT(req: NextRequest) {
           await backfillTaskForTemplate(id);
         } catch (backfillErr) {
           console.error('[TaskTemplate PUT] Task backfill failed (non-blocking):', backfillErr);
+        }
+      }
+
+      // Toggling `is_shared` must restructure the already-seeded rows, not just
+      // the template: a shared task is ONE row on the primary deal (shown once
+      // family-wide) while a personal task is one row PER family member. Without
+      // this, checking/unchecking "Shared" updates the template but the deal
+      // page keeps rendering the old shape. Gated on the task still being
+      // seeded (is_default) — if default was just turned off, the un-seed above
+      // already removed the rows and reconciliation would wrongly restore them.
+      const newIsShared = is_shared ?? false;
+      if (newIsDefault && previousIsShared !== newIsShared) {
+        try {
+          await reconcileSharedTasksForTemplate(id);
+        } catch (sharedErr) {
+          console.error('[TaskTemplate PUT] is_shared cascade failed (non-blocking):', sharedErr);
         }
       }
     });
