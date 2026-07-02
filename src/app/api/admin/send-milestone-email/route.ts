@@ -131,6 +131,8 @@ async function sendEmailForDeal(
             "{{ property_address }}": leadAddress,
             "{{ lockbox_code }}": deal.lockbox_code ?? "",
             "{{lockbox_code}}": deal.lockbox_code ?? "",
+            "{{ lead.lockbox_code }}": deal.lockbox_code ?? "",
+            "{{lead.lockbox_code}}": deal.lockbox_code ?? "",
             "{{ file_number }}": fileNumber,
             "{{ side_suffix }}": sideSuffix,
             "{{ property_role_row }}": propertyRoleRow,
@@ -174,6 +176,7 @@ async function sendEmailForDeal(
         processedBody = processedBody.replace(/\{\{\s*email\s*\}\}/gi, client.email ?? "");
         processedBody = processedBody.replace(/\{\{\s*property_address\s*\}\}/gi, leadAddress);
         processedBody = processedBody.replace(/\{\{\s*lockbox_code\s*\}\}/gi, deal.lockbox_code ?? "");
+        processedBody = processedBody.replace(/\{\{\s*lead\.lockbox_code\s*\}\}/gi, deal.lockbox_code ?? "");
         processedBody = processedBody.replace(/\{\{\s*file_number\s*\}\}/gi, fileNumber);
         processedBody = processedBody.replace(/\{\{\s*side_suffix\s*\}\}/gi, sideSuffix);
         processedBody = processedBody.replace(/\{\{\s*property_role_row\s*\}\}/gi, propertyRoleRow);
