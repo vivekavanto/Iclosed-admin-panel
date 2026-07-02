@@ -313,7 +313,6 @@ export async function GET(
               data.identification_status = primaryIdTask?.status ?? null;
             }
           }
-
           // Also determine the current deal's role
           data.current_deal_role = lead.parent_lead_id
             ? labelForCo(
@@ -323,6 +322,7 @@ export async function GET(
               )
             : labelForPrimary(lead.lead_type);
         }
+
       }
     }
   } catch (err) {
@@ -349,6 +349,7 @@ const EDITABLE_DEAL_COLUMNS = new Set([
   // property_address it stays per-deal, so it never leaks onto a family's
   // Sale-side deal.
   "lockbox_code",
+  "garage_access_code",
   "closing_date",
   "opening_date",
   "requisition_date",

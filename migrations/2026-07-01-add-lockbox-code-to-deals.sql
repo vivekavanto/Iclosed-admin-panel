@@ -7,4 +7,5 @@
 -- co-seller family) since it describes the specific property on that deal.
 
 ALTER TABLE deals
-  ADD COLUMN IF NOT EXISTS lockbox_code text;
+  ADD COLUMN IF NOT EXISTS lockbox_code text,
+  ADD COLUMN IF NOT EXISTS garage_access_code text;
