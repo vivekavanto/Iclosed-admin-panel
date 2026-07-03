@@ -2400,6 +2400,11 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     return [currentEntry, ...linked].sort((a, b) => sortKey(a) - sortKey(b));
   })();
 
+  // The family's designated document uploader (the person flagged
+  // can_upload_for_all by the deals API), or null when everyone uploads their
+  // own ('both'/unset). Drives the per-person upload badge below.
+  const familyUploader = familyPeople.find((p) => p.canUploadForAll) ?? null;
+
   // Map each person's deal id → the workflow side their role belongs to, used
   // in the unified family view to scope a co-client's PERSONAL rows (Personal
   // Information / Identification, which carry no template lead_type) to the
@@ -3544,17 +3549,38 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                     >
                       <LogIn size={14} />
                     </button>
-                    {/* Document-uploader badge — flags the family's designated
-                        uploader (resolved from the primary's upload_mode). Only
-                        meaningful once there's more than one person on the file. */}
-                    {familyPeople.length > 1 && p.canUploadForAll && (
-                      <span
-                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-50 text-green-700 border border-green-300"
-                        title="This person will upload documents for everyone on this file"
-                      >
-                        <Upload size={10} />
-                        Uploads documents
-                      </span>
+                    {/* Document-uploader badge — three states resolved from the
+                        primary's upload_mode. Only meaningful once there's more
+                        than one person on the file:
+                          • designated uploader          → "Can upload for all"
+                          • someone else uploads for them → "Uploaded by {name}"
+                          • everyone uploads their own    → "Uploads own" */}
+                    {familyPeople.length > 1 && (
+                      p.canUploadForAll ? (
+                        <span
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-50 text-green-700 border border-green-300"
+                          title="This person uploads documents for everyone on this file"
+                        >
+                          <Upload size={10} />
+                          Can upload for all
+                        </span>
+                      ) : familyUploader ? (
+                        <span
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-300"
+                          title={`Documents uploaded by ${familyUploader.lead_name}`}
+                        >
+                          <Upload size={10} />
+                          Uploaded by {familyUploader.lead_name}
+                        </span>
+                      ) : (
+                        <span
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-300"
+                          title="This person uploads their own documents"
+                        >
+                          <Upload size={10} />
+                          Uploads own
+                        </span>
+                      )
                     )}
                     {p.isCurrent && !includeFamilyTasks && (
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-brand-primary text-white">
@@ -3746,7 +3772,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                       onDragEnter={() => !task.isTemplate && (dragTaskOverItem.current = index)}
                       onDragEnd={!task.isTemplate ? handleSortTasks : undefined}
                       onDragOver={(e) => e.preventDefault()}
-                      className={`hover:bg-slate-50 transition-colors group ${task.isTemplate ? "opacity-60" : "cursor-move"}`}
+                      onMouseDown={(e) => { if (!task.isTemplate) (e.currentTarget as HTMLTableRowElement).style.cursor = 'grabbing'; }}
+                      onMouseUp={(e) => { if (!task.isTemplate) (e.currentTarget as HTMLTableRowElement).style.cursor = 'grab'; }}
+                      className={`hover:bg-slate-50 transition-colors group ${task.isTemplate ? "opacity-60" : "cursor-grab"}`}
                     >
                       <td className="px-2 sm:px-3 py-3 text-slate-300 hidden sm:table-cell">
                         {!task.isTemplate && <GripVertical size={16} />}
@@ -4018,7 +4046,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                               onDragEnter={() => !milestone.isTemplate && !milestone.isPersonalSplit && (dragMilestoneOverItem.current = index)}
                               onDragEnd={!milestone.isTemplate && !milestone.isPersonalSplit ? handleSortMilestones : undefined}
                               onDragOver={(e) => e.preventDefault()}
-                              className={`hover:bg-slate-50 transition-colors group bg-white ${milestone.isTemplate ? "opacity-60" : milestone.isPersonalSplit ? "" : "cursor-move"}`}
+                              onMouseDown={(e) => { if (!milestone.isTemplate && !milestone.isPersonalSplit) (e.currentTarget as HTMLTableRowElement).style.cursor = 'grabbing'; }}
+                              onMouseUp={(e) => { if (!milestone.isTemplate && !milestone.isPersonalSplit) (e.currentTarget as HTMLTableRowElement).style.cursor = 'grab'; }}
+                              className={`hover:bg-slate-50 transition-colors group bg-white ${milestone.isTemplate ? "opacity-60" : milestone.isPersonalSplit ? "" : "cursor-grab"}`}
                             >
                               <td className="px-2 sm:px-3 py-3 text-slate-300 hidden sm:table-cell">
                                 {!milestone.isTemplate && !milestone.isPersonalSplit && <GripVertical size={16} />}

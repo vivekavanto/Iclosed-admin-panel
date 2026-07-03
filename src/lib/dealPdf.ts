@@ -220,6 +220,16 @@ function writeTaskSection(
     }
     w.kv(label, val, { indent: 8, gap: 4 });
   }
+  // List uploaded documents for this task in a compact, explicit way.
+  const files = responses.filter((rr) => rr.field_type === "file" && (rr.file_name || rr.file_url));
+  if (files.length > 0) {
+    w.text("Documents", { size: 11, bold: true, color: [40, 40, 40], gap: 6 });
+    for (const f of files) {
+      const name = f.file_name || "(uploaded file)";
+      const note = f.file_url ? "Available (embedded)" : "Uploaded (no public URL)";
+      w.kv(name, note, { indent: 12, labelW: 220, size: 9, gap: 4 });
+    }
+  }
   w.spacer(8);
 }
 
@@ -364,7 +374,9 @@ async function appendFileToDoc(
   const kind = detectKind(r.file_name, file.contentType);
   try {
     if (kind === "pdf") {
-      addDividerPage(pdfDoc, font, lib, caption);
+      // Add a small caption page (no horizontal divider) so the attachment's
+      // origin is explicit, then append the PDF pages.
+      addNotePage(pdfDoc, font, lib, caption, "");
       const src = await lib.PDFDocument.load(file.bytes, { ignoreEncryption: true });
       const pages = await pdfDoc.copyPages(src, src.getPageIndices());
       for (const p of pages) pdfDoc.addPage(p);
@@ -482,7 +494,7 @@ export async function downloadDealPdf(
   const groups: EmbedGroup[] = [];
   for (const sec of sections) {
     w.spacer(4);
-    w.rule();
+    // Removed horizontal divider line for cleaner PDF output.
     const heading = sec.leadType ? `${sec.milestoneTitle}  (${sec.leadType})` : sec.milestoneTitle;
     w.text(heading, { size: 13.5, bold: true, color: BRAND, gap: 10 });
     if (sec.tasks.length === 0) {
@@ -490,8 +502,15 @@ export async function downloadDealPdf(
       continue;
     }
     for (const t of sec.tasks) {
+      // Show which party the task belongs to (e.g. Co-purchaser / Co-seller)
+      if (t.leadType) {
+        w.kv("Party", String(t.leadType), { indent: 8, labelW: 120, size: 9.5, gap: 6 });
+      }
       writeTaskSection(w, t);
-      groups.push({ caption: `${sec.milestoneTitle} / ${t.title}`, responses: t.responses });
+      const caption = t.leadType
+        ? `${sec.milestoneTitle} / ${t.title} (${t.leadType})`
+        : `${sec.milestoneTitle} / ${t.title}`;
+      groups.push({ caption, responses: t.responses });
     }
   }
   await finalizeAndDownload(doc, groups, `Deal ${sanitizeFile(deal.fileNumber)} - All Documents.pdf`);
