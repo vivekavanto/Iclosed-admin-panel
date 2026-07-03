@@ -323,8 +323,9 @@ function addNotePage(pdfDoc: any, font: any, lib: PdfLib, caption: string, note:
     font,
     color: rgb(BRAND[0] / 255, BRAND[1] / 255, BRAND[2] / 255),
   });
-  const afterCaption = drawWrapped(page, font, caption, 48, A4.h - 96, A4.w - 96, 11);
-  drawWrapped(page, font, note, 48, afterCaption - 12, A4.w - 96, 10);
+  // Make the caption slightly larger and darker so it's clearly visible.
+  const afterCaption = drawWrapped(page, font, caption, 48, A4.h - 96, A4.w - 96, 12);
+  drawWrapped(page, font, note, 48, afterCaption - 14, A4.w - 96, 10);
 }
 
 function addImagePage(pdfDoc: any, font: any, lib: PdfLib, caption: string, img: any) {
@@ -332,12 +333,13 @@ function addImagePage(pdfDoc: any, font: any, lib: PdfLib, caption: string, img:
   const { rgb } = lib;
   const margin = 40;
   const captionY = A4.h - margin;
+  // Slightly larger, higher-contrast caption for uploaded images.
   page.drawText(ascii(caption), {
     x: margin,
     y: captionY,
-    size: 10,
+    size: 12,
     font,
-    color: rgb(0.2, 0.2, 0.2),
+    color: rgb(0, 0, 0),
   });
   const maxW = A4.w - margin * 2;
   const maxH = A4.h - margin * 2 - 24;
@@ -380,12 +382,50 @@ async function appendFileToDoc(
       const src = await lib.PDFDocument.load(file.bytes, { ignoreEncryption: true });
       const pages = await pdfDoc.copyPages(src, src.getPageIndices());
       for (const p of pages) pdfDoc.addPage(p);
-    } else if (kind === "jpg") {
-      const img = await pdfDoc.embedJpg(file.bytes);
-      addImagePage(pdfDoc, font, lib, caption, img);
-    } else if (kind === "png") {
-      const img = await pdfDoc.embedPng(file.bytes);
-      addImagePage(pdfDoc, font, lib, caption, img);
+    } else if (kind === "jpg" || kind === "png") {
+      const img = kind === "jpg" ? await pdfDoc.embedJpg(file.bytes) : await pdfDoc.embedPng(file.bytes);
+      // Try to place the image on the existing last page (the text report)
+      // to avoid leaving a mostly-empty page between the report and images.
+      try {
+        const pages = pdfDoc.getPages();
+        const last = pages[pages.length - 1];
+        if (last) {
+          const margin = 40;
+          const captionSize = 12;
+          const captionY = A4.h - margin;
+          // Draw caption on the last page (will simply add text at top area).
+          const { rgb } = lib;
+          last.drawText(ascii(caption), {
+            x: margin,
+            y: captionY,
+            size: captionSize,
+            font,
+            color: rgb(0, 0, 0),
+          });
+
+          // Compute scaled image size to fit below caption on the same page.
+          const maxW = A4.w - margin * 2;
+          const maxH = A4.h - margin * 2 - 36; // leave room for caption
+          const scale = Math.min(maxW / img.width, maxH / img.height, 1);
+          const w = img.width * scale;
+          const h = img.height * scale;
+          const imgY = captionY - 24 - h;
+          // If computed imgY would be too low (off the page), fall back to a
+          // fresh page so we don't overlap existing content in unpredictable ways.
+          if (imgY > margin) {
+            last.drawImage(img, { x: (A4.w - w) / 2, y: imgY, width: w, height: h });
+            return;
+          }
+        }
+      } catch {
+        // ignore and fall back to creating a dedicated image page
+      }
+      // Fallback: create a dedicated image page with caption.
+      if (kind === "jpg") {
+        addImagePage(pdfDoc, font, lib, caption, img);
+      } else {
+        addImagePage(pdfDoc, font, lib, caption, img);
+      }
     } else {
       addNotePage(
         pdfDoc,
@@ -447,7 +487,9 @@ async function finalizeAndDownload(
   for (const g of groups) {
     for (const r of g.responses ?? []) {
       if (r.field_type !== "file" || !r.file_url) continue;
-      const caption = `${g.caption} — ${r.file_name || "file"}`;
+      // Use an ASCII hyphen instead of an em-dash so the embedded-font
+      // WinAnsi encoding doesn't replace it with a question mark.
+      const caption = `${g.caption} - ${r.file_name || "file"}`;
       await appendFileToDoc(pdfDoc, font, lib, caption, r);
     }
   }
