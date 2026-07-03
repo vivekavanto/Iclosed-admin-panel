@@ -147,6 +147,39 @@ function makeWriter(doc: JsPdfDoc) {
     y += h;
   }
 
+  async function addImageFromBytes(bytes: Uint8Array, format: "jpg" | "png") {
+    try {
+      const blob = new Blob([bytes], { type: format === "jpg" ? "image/jpeg" : "image/png" });
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error("Image load error"));
+        img.src = url;
+      });
+
+      const origW = img.naturalWidth;
+      const origH = img.naturalHeight;
+      const maxW = contentW;
+      let remainingH = pageH - margin - y;
+      let scale = Math.min(maxW / origW, remainingH / origH, 1);
+      if (scale <= 0) {
+        doc.addPage();
+        y = margin;
+        remainingH = pageH - margin - y;
+        scale = Math.min(maxW / origW, remainingH / origH, 1);
+      }
+      const wImg = origW * scale;
+      const hImg = origH * scale;
+      // jsPDF expects the image element or data URL; pass the element.
+      doc.addImage(img, format === "jpg" ? "JPEG" : "PNG", margin, y, wImg, hImg);
+      y += hImg + 12;
+      URL.revokeObjectURL(url);
+    } catch {
+      // ignore image errors — caller will fall back to embedding via pdf-lib
+    }
+  }
+
   function rule(color: [number, number, number] = [222, 222, 226]) {
     ensure(14);
     doc.setDrawColor(color[0], color[1], color[2]);
@@ -155,7 +188,7 @@ function makeWriter(doc: JsPdfDoc) {
     y += 12;
   }
 
-  return { text, kv, spacer, rule, ensure };
+  return { text, kv, spacer, rule, ensure, addImageFromBytes };
 }
 
 function writeHeader(w: ReturnType<typeof makeWriter>, deal: PdfDealMeta, title: string) {
@@ -198,7 +231,7 @@ function writeTaskSection(
 ) {
   const { showTitle = true } = opts;
   if (showTitle) {
-    w.text(task.title || "Untitled task", { size: 12, bold: true, color: [25, 25, 25], gap: 6 });
+    w.text(task.title || "Untitled task", { size: 13, bold: true, color: BRAND, gap: 6 });
   }
 
   const responses = task.responses ?? [];
@@ -391,29 +424,32 @@ async function appendFileToDoc(
         const last = pages[pages.length - 1];
         if (last) {
           const margin = 40;
-          const captionSize = 12;
-          const captionY = A4.h - margin;
-          // Draw caption on the last page (will simply add text at top area).
+          const captionSize = 11;
+          // When drawing onto the last page, only render the file name
+          // (avoid repeating the task title). If the caption contains a
+          // hyphenated filename, take the last part.
+          const displayCaption = caption.includes(" - ") ? caption.split(" - ").pop() || caption : caption;
           const { rgb } = lib;
-          last.drawText(ascii(caption), {
-            x: margin,
-            y: captionY,
-            size: captionSize,
-            font,
-            color: rgb(0, 0, 0),
-          });
-
-          // Compute scaled image size to fit below caption on the same page.
-          const maxW = A4.w - margin * 2;
-          const maxH = A4.h - margin * 2 - 36; // leave room for caption
+          // Place the image on the right column below the header so it
+          // doesn't overlap the main report title on the left.
+          const maxW = (A4.w - margin * 3) / 2; // right-hand column
+          const maxH = A4.h - margin * 2 - 60;
           const scale = Math.min(maxW / img.width, maxH / img.height, 1);
           const w = img.width * scale;
           const h = img.height * scale;
-          const imgY = captionY - 24 - h;
-          // If computed imgY would be too low (off the page), fall back to a
-          // fresh page so we don't overlap existing content in unpredictable ways.
+          const captionY = A4.h - margin - 20; // slightly below page top
+          const imgY = captionY - 20 - h;
           if (imgY > margin) {
-            last.drawImage(img, { x: (A4.w - w) / 2, y: imgY, width: w, height: h });
+            // draw caption on left area of page
+            last.drawText(ascii(displayCaption), {
+              x: margin,
+              y: captionY,
+              size: captionSize,
+              font,
+              color: rgb(BRAND[0] / 255, BRAND[1] / 255, BRAND[2] / 255),
+            });
+            // draw image on the right half
+            last.drawImage(img, { x: A4.w - margin - w, y: imgY, width: w, height: h });
             return;
           }
         }
@@ -512,9 +548,28 @@ export async function downloadTaskPdf(deal: PdfDealMeta, task: PdfTaskInput): Pr
   w.text("iClosed", { size: 10, bold: true, color: BRAND, gap: 8 });
   w.text(heading, { size: 16, bold: true, color: [20, 20, 20], gap: 12 });
   writeTaskSection(w, task, { showTitle: false });
+  // Embed JPG/PNG images inline into the jsPDF report so they appear
+  // exactly where the writer left off. Remove any embedded images from
+  // the group so finalizeAndDownload only handles remaining files (PDFs/other).
+  const group = { caption: task.title || "Task", responses: (task.responses || []).slice() } as EmbedGroup;
+  for (let i = group.responses.length - 1; i >= 0; --i) {
+    const r = group.responses[i];
+    if (r.field_type === "file" && r.file_url) {
+      const file = await fetchFile(r.file_url);
+      if (file) {
+        const kind = detectKind(r.file_name, file.contentType);
+        if (kind === "jpg" || kind === "png") {
+          // embed into jsPDF and remove from future embedding list
+          await (w as any).addImageFromBytes(file.bytes, kind);
+          group.responses.splice(i, 1);
+        }
+      }
+    }
+  }
+
   await finalizeAndDownload(
     doc,
-    [{ caption: task.title || "Task", responses: task.responses }],
+    [group],
     `Task - ${sanitizeFile(task.title || "task")}.pdf`,
   );
 }
@@ -549,11 +604,29 @@ export async function downloadDealPdf(
         w.kv("Party", String(t.leadType), { indent: 8, labelW: 120, size: 9.5, gap: 6 });
       }
       writeTaskSection(w, t);
-      const caption = t.leadType
-        ? `${sec.milestoneTitle} / ${t.title} (${t.leadType})`
-        : `${sec.milestoneTitle} / ${t.title}`;
+      // Keep embed group caption short (task title + optional party). The
+      // full file caption will include the filename when embedding.
+      const caption = t.leadType ? `${t.title} (${t.leadType})` : t.title;
       groups.push({ caption, responses: t.responses });
     }
   }
+  // Embed JPG/PNG images inline into the jsPDF report before handing off
+  // to pdf-lib. Removing embedded images from `groups` avoids double-embedding.
+  for (const g of groups) {
+    for (let i = (g.responses || []).length - 1; i >= 0; --i) {
+      const r = g.responses[i];
+      if (r.field_type === "file" && r.file_url) {
+        const file = await fetchFile(r.file_url);
+        if (file) {
+          const kind = detectKind(r.file_name, file.contentType);
+          if (kind === "jpg" || kind === "png") {
+            await (w as any).addImageFromBytes(file.bytes, kind);
+            g.responses.splice(i, 1);
+          }
+        }
+      }
+    }
+  }
+
   await finalizeAndDownload(doc, groups, `Deal ${sanitizeFile(deal.fileNumber)} - All Documents.pdf`);
 }
