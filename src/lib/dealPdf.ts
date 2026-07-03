@@ -149,7 +149,7 @@ function makeWriter(doc: JsPdfDoc) {
 
   async function addImageFromBytes(bytes: Uint8Array, format: "jpg" | "png") {
     try {
-      const blob = new Blob([bytes], { type: format === "jpg" ? "image/jpeg" : "image/png" });
+      const blob = new Blob([bytes as unknown as BlobPart], { type: format === "jpg" ? "image/jpeg" : "image/png" });
       const url = URL.createObjectURL(blob);
       const img = new Image();
       await new Promise<void>((resolve, reject) => {
