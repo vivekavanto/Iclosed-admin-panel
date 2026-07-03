@@ -15,7 +15,7 @@ export const dynamic = "force-dynamic";
  * — the SAME edit gating the client sees.
  *
  * Back-office rule: the admin can edit EVERY party's section (`can_edit: true`),
- * regardless of the family's upload_mode / submit_on_behalf. Those client-side
+ * regardless of the family's upload_mode. Those client-side
  * permissions govern who may submit in the customer portal; admin staff fill on
  * behalf of anyone, so the accordion never locks a section here. `self_lead_id`
  * (the viewed deal's lead) is used only to flag `is_self` for display.

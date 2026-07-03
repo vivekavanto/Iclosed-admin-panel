@@ -58,7 +58,9 @@ export interface FamilyTaskRoster {
     completed: boolean;
   };
   deal: { id: string; client_id: string | null; lead_id: string; type: string | null };
-  /** Designated uploader for the family (submit_on_behalf === true), or null. */
+  /** Designated uploader for the family (resolved from the primary's
+   * upload_mode: 'me' → primary, 'co' → upload_consent_uploader_lead_id),
+   * or null when each person uploads their own ('both'/unset). */
   uploaderLeadId: string | null;
   /** The lead behind the opened task (deal.lead_id). */
   selfLeadId: string;
@@ -93,7 +95,7 @@ export async function getFamilyTaskRoster(
   // The "self" lead: the lead behind the opened task.
   const { data: selfLead } = await supabaseAdmin
     .from("leads")
-    .select("id, first_name, last_name, parent_lead_id, submit_on_behalf, lead_type, co_person_role")
+    .select("id, first_name, last_name, parent_lead_id, lead_type, co_person_role")
     .eq("id", deal.lead_id)
     .maybeSingle();
 
@@ -116,10 +118,19 @@ export async function getFamilyTaskRoster(
   const primaryId = selfLead?.parent_lead_id ?? selfLead?.id ?? deal.lead_id;
   const { data: familyLeads } = await supabaseAdmin
     .from("leads")
-    .select("id, first_name, last_name, parent_lead_id, submit_on_behalf, lead_type, co_person_role")
+    .select("id, first_name, last_name, parent_lead_id, lead_type, co_person_role, upload_mode, upload_consent_uploader_lead_id")
     .or(`id.eq.${primaryId},parent_lead_id.eq.${primaryId}`);
 
-  const uploader = (familyLeads ?? []).find((l) => l.submit_on_behalf === true);
+  // Resolve the designated uploader from the primary lead's upload_mode:
+  //   'me' → primary uploads; 'co' → the co-person in
+  //   upload_consent_uploader_lead_id; 'both'/unset → no single uploader.
+  const primaryLead = (familyLeads ?? []).find((l) => l.parent_lead_id == null);
+  let uploaderLeadId: string | null = null;
+  if (primaryLead?.upload_mode === "me") {
+    uploaderLeadId = primaryLead.id;
+  } else if (primaryLead?.upload_mode === "co") {
+    uploaderLeadId = primaryLead.upload_consent_uploader_lead_id ?? null;
+  }
 
   // Every OTHER family member + their equivalent task.
   const otherMembers = (familyLeads ?? []).filter((l) => l.id !== selfMember.lead_id);
@@ -190,7 +201,7 @@ export async function getFamilyTaskRoster(
       completed: !!task.completed,
     },
     deal,
-    uploaderLeadId: uploader?.id ?? null,
+    uploaderLeadId,
     selfLeadId: selfMember.lead_id,
     members: [selfMember, ...others],
   };

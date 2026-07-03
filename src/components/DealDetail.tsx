@@ -2343,6 +2343,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     isCurrent: boolean;
     identificationTaskId: string | null;
     identificationStatus: string | null;
+    /** True for the family's designated document uploader (resolved from the
+     *  primary's upload_mode by the deals API). */
+    canUploadForAll: boolean;
   };
   const familyPeople: FamilyPerson[] = (() => {
     const currentName = [rawDeal?.lead_first_name, rawDeal?.lead_last_name]
@@ -2366,6 +2369,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       isCurrent: true,
       identificationTaskId: (rawDeal?.identification_task_id as string | null) ?? null,
       identificationStatus: (rawDeal?.identification_status as string | null) ?? null,
+      canUploadForAll: (rawDeal as any)?.can_upload_for_all === true,
     };
     const linked: FamilyPerson[] = ((rawDeal?.linked_deals ?? []) as any[]).map((ld) => ({
       id: ld.id,
@@ -2384,6 +2388,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       isCurrent: false,
       identificationTaskId: (ld.identification_task_id as string | null) ?? null,
       identificationStatus: (ld.identification_status as string | null) ?? null,
+      canUploadForAll: ld.can_upload_for_all === true,
     }));
     const sortKey = (p: FamilyPerson) => {
       const r = p.role.toLowerCase();
@@ -3539,6 +3544,18 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                     >
                       <LogIn size={14} />
                     </button>
+                    {/* Document-uploader badge — flags the family's designated
+                        uploader (resolved from the primary's upload_mode). Only
+                        meaningful once there's more than one person on the file. */}
+                    {familyPeople.length > 1 && p.canUploadForAll && (
+                      <span
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-50 text-green-700 border border-green-300"
+                        title="This person will upload documents for everyone on this file"
+                      >
+                        <Upload size={10} />
+                        Uploads documents
+                      </span>
+                    )}
                     {p.isCurrent && !includeFamilyTasks && (
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-brand-primary text-white">
                         Currently viewing
@@ -3571,8 +3588,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       )}
 
       {/* Submit-on-behalf section — only on the PRIMARY's view, and only when
-          the primary opted in (leads.submit_on_behalf === true). When the
-          primary did not grant access, nothing renders here. */}
+          the primary is the family's designated uploader (upload_mode === 'me',
+          surfaced as primary_submit_on_behalf by the deals API). When the
+          primary is not the uploader, nothing renders here. */}
       {(() => {
         const isPrimaryView =
           ((rawDeal?.current_deal_role as string | undefined) ?? "")
@@ -3598,7 +3616,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
             identificationStatus: p.identificationStatus,
           }));
         if (coPersons.length === 0) return null;
-        return (
+        // Section hidden per request — set showSection to true to restore it.
+        const showSection = false;
+        return showSection ? (
           <SubmitOnBehalfSection
             coPersons={coPersons}
             onOpen={(kind, person) => {
@@ -3626,7 +3646,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
               }
             }}
           />
-        );
+        ) : null;
       })()}
 
       <div className="space-y-8">
@@ -3655,6 +3675,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                 )}
               </button>
               )}
+              {/* Add Task hidden per request.
               <button
                 onClick={() => setShowTaskForm(true)}
                 className="text-brand-primary text-xs font-bold flex items-center hover:bg-brand-light px-2 py-1 rounded transition-colors"
@@ -3662,6 +3683,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                 <Plus size={14} className="mr-1" />
                 Add Task
               </button>
+              */}
             </div>
           </div>
 
@@ -3925,12 +3947,14 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           <div>
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-bold text-slate-900">Milestones</h2>
+              {/* Add Stage hidden per request.
               <button
                 onClick={() => setShowStageForm(true)}
                 className="text-brand-primary text-xs font-bold flex items-center hover:bg-brand-light px-2 py-1 rounded transition-colors"
               >
                 <Plus size={14} className="mr-1" /> Add Stage
               </button>
+              */}
             </div>
 
             {isCombinedDealType && (

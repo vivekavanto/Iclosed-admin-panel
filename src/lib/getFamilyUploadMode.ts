@@ -12,7 +12,7 @@ export type UploadMode = "me" | "co" | "both";
  *
  * Returns null when the popup hasn't been answered yet (or there are no
  * co-persons, so it never showed). Callers treat null like "me" — a single
- * uploader, no cross-party access beyond the existing submit_on_behalf rules.
+ * uploader, no cross-party access beyond the upload_mode rules.
  *
  * Ported verbatim from the portal so the admin gates edit permissions the same
  * way the client experience does.

@@ -116,20 +116,33 @@ export async function GET(
         const { data: familyLeads } = await supabase
           .from("leads")
           .select(
-            "id, parent_lead_id, first_name, last_name, email, phone, lead_type, co_person_role, submit_on_behalf, address_street, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code, client_id",
+            "id, parent_lead_id, first_name, last_name, corporate_name, email, phone, lead_type, co_person_role, upload_mode, upload_consent_uploader_lead_id, address_street, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code, client_id",
           )
           .or(`id.eq.${rootLeadId},parent_lead_id.eq.${rootLeadId}`);
 
-        // Whether the PRIMARY applicant opted to submit ID + documents on
-        // behalf of their co-purchaser(s)/co-seller(s) (set from the client
-        // portal's post-retainer popup → leads.submit_on_behalf on the root
-        // lead). Drives the "Submit on behalf" section on the primary's deal
-        // view. The flag always lives on the root lead regardless of which
-        // family member's deal is being viewed.
+        // Resolve the family's designated uploader from the PRIMARY lead's
+        // upload_mode (set from the client portal's post-retainer popup →
+        // leads.upload_mode / upload_consent_uploader_lead_id on the root lead):
+        //   'me'          → the primary uploads for everyone
+        //   'co'          → the co-person in upload_consent_uploader_lead_id does
+        //   'both'/unset  → each person uploads their own (no single uploader)
+        // These fields always live on the root lead regardless of which family
+        // member's deal is being viewed.
         const rootLead = (familyLeads ?? []).find(
           (l) => l.id === rootLeadId,
-        ) as { submit_on_behalf?: boolean | null } | undefined;
-        data.primary_submit_on_behalf = rootLead?.submit_on_behalf === true;
+        ) as { upload_mode?: string | null; upload_consent_uploader_lead_id?: string | null } | undefined;
+        let designatedUploaderLeadId: string | null = null;
+        if (rootLead?.upload_mode === "me") {
+          designatedUploaderLeadId = rootLeadId;
+        } else if (rootLead?.upload_mode === "co") {
+          designatedUploaderLeadId = rootLead.upload_consent_uploader_lead_id ?? null;
+        } else {
+          designatedUploaderLeadId = null; // 'both' or unset
+        }
+        // Drives the "Submit on behalf" section on the primary's deal view:
+        // shown when the primary is the family's designated uploader.
+        data.primary_submit_on_behalf = designatedUploaderLeadId === rootLeadId;
+        data.can_upload_for_all = designatedUploaderLeadId === lead.id;
 
         // Determine a co-lead's role. Priority order:
         //   1. Authoritative `co_person_role` recorded at intake — the
@@ -298,9 +311,11 @@ export async function GET(
                   lead_name: dLead
                     ? `${dLead.first_name ?? ""} ${dLead.last_name ?? ""}`.trim()
                     : null,
+                  lead_corporate_name: dLead?.corporate_name ?? null,
                   lead_email: dLead?.email ?? null,
                   lead_phone: dLead?.phone ?? null,
                   role,
+                  can_upload_for_all: dLead ? designatedUploaderLeadId === dLead.id : false,
                   identification_task_id: idTask?.id ?? null,
                   identification_status: idTask?.status ?? null,
                 };

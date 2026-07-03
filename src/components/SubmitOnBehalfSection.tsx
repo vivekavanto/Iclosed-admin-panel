@@ -10,10 +10,11 @@ import {
 /**
  * "Submit on behalf of co-purchaser(s)/co-seller(s)" section.
  *
- * Rendered on the PRIMARY applicant's deal view ONLY when the primary opted in
- * (leads.submit_on_behalf === true, set from the client portal's post-retainer
- * popup). When the primary did not grant access, the parent renders nothing —
- * so there is simply no section, matching "no access → no section needed".
+ * Rendered on the PRIMARY applicant's deal view ONLY when the primary is the
+ * family's designated uploader (leads.upload_mode === 'me' on the primary, set
+ * from the client portal's post-retainer popup). When the primary is not the
+ * uploader, the parent renders nothing — so there is simply no section,
+ * matching "no access → no section needed".
  *
  * Per co-person it offers:
  *   1. Upload their ID      — reuses the parent's UploadIdentificationDrawer

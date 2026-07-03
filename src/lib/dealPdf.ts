@@ -159,11 +159,9 @@ function makeWriter(doc: JsPdfDoc) {
 }
 
 function writeHeader(w: ReturnType<typeof makeWriter>, deal: PdfDealMeta, title: string) {
-  w.text("iClosed", { size: 10, bold: true, color: BRAND, gap: 4 });
+  w.text("iClosed", { size: 10, bold: true, color: BRAND, gap: 8 });
   w.text(title, { size: 18, bold: true, color: [20, 20, 20], gap: 4 });
-  w.text(`File ${deal.fileNumber || "—"}`, { size: 9, color: [120, 120, 120], gap: 12 });
-  w.rule();
-  w.spacer(2);
+  w.text(`File ${deal.fileNumber || "—"}`, { size: 9, color: [120, 120, 120], gap: 16 });
 }
 
 function writeDealMeta(w: ReturnType<typeof makeWriter>, deal: PdfDealMeta) {
@@ -193,20 +191,19 @@ function writePeople(w: ReturnType<typeof makeWriter>, people?: PdfPerson[]) {
   });
 }
 
-function writeTaskSection(w: ReturnType<typeof makeWriter>, task: PdfTaskInput) {
-  w.text(task.title || "Untitled task", { size: 12, bold: true, color: [25, 25, 25], gap: 4 });
-  const meta: string[] = [];
-  if (task.status) meta.push(`Status: ${task.status}`);
-  if (task.leadType) meta.push(`Side: ${task.leadType}`);
-  if (task.milestoneTitle) meta.push(`Milestone: ${task.milestoneTitle}`);
-  if (task.dueDate) meta.push(`Due: ${task.dueDate}`);
-  if (task.completedAt) meta.push(`Completed: ${task.completedAt}`);
-  if (meta.length) w.text(meta.join("    |    "), { size: 9, color: [120, 120, 120], gap: 8 });
+function writeTaskSection(
+  w: ReturnType<typeof makeWriter>,
+  task: PdfTaskInput,
+  opts: { showTitle?: boolean } = {},
+) {
+  const { showTitle = true } = opts;
+  if (showTitle) {
+    w.text(task.title || "Untitled task", { size: 12, bold: true, color: [25, 25, 25], gap: 6 });
+  }
 
   const responses = task.responses ?? [];
   if (responses.length === 0) {
-    w.text("No client responses submitted.", { size: 9.5, color: [150, 150, 150], gap: 8 });
-    w.spacer(6);
+    w.text("No client responses submitted.", { size: 9.5, color: [150, 150, 150], gap: 6 });
     return;
   }
   for (const r of responses) {
@@ -454,8 +451,13 @@ export async function downloadTaskPdf(deal: PdfDealMeta, task: PdfTaskInput): Pr
   const { jsPDF } = await import("jspdf");
   const doc = new jsPDF({ unit: "pt", format: "a4" });
   const w = makeWriter(doc);
-  writeHeader(w, deal, `Task: ${task.title || "Untitled task"}`);
-  writeTaskSection(w, task);
+  // Single bold task title with the file number in brackets — the section
+  // below renders the client responses without repeating the title.
+  const title = task.title || "Untitled task";
+  const heading = deal.fileNumber ? `${title} (${deal.fileNumber})` : title;
+  w.text("iClosed", { size: 10, bold: true, color: BRAND, gap: 8 });
+  w.text(heading, { size: 16, bold: true, color: [20, 20, 20], gap: 12 });
+  writeTaskSection(w, task, { showTitle: false });
   await finalizeAndDownload(
     doc,
     [{ caption: task.title || "Task", responses: task.responses }],
