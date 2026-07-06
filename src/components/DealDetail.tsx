@@ -46,7 +46,7 @@ import { upload } from "@vercel/blob/client";
 import UploadIdentificationDrawer from "./UploadIdentificationDrawer";
 import UploadHomeInsuranceDrawer from "./UploadHomeInsuranceDrawer";
 import SubmitOnBehalfSection, { OnBehalfCoPerson } from "./SubmitOnBehalfSection";
-import AdminMultiPartyTaskDrawer from "./AdminMultiPartyTaskDrawer";
+import CoPersonPersonalInfoModal from "./CoPersonPersonalInfoModal";
 import ClonePreviousDealDrawer from "./ClonePreviousDealDrawer";
 import EditDealModal from "./EditDealModal";
 import AddCoClientModal from "./AddCoClientModal";
@@ -572,16 +572,17 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const [idDrawerTaskId, setIdDrawerTaskId] = useState<string | null>(null);
   const [idDrawerLeadId, setIdDrawerLeadId] = useState<string>(primaryLeadId);
 
-  // Multi-party accordion (Personal Info / Upload ID on co-person deals). Opened
-  // from a per-person task row OR the "Submit on behalf" section; mirrors the
-  // customer portal's accordion and honours upload_mode from the viewed
-  // (primary) person's perspective.
-  const [multiPartyTask, setMultiPartyTask] = useState<{
-    kind: "upload-id" | "personal-info";
-    taskId: string | null;
-    initialLeadId: string | null;
+  // Single-party Personal Info modal (matches the customer portal's
+  // PersonalInfoTaskDrawer design). Opened per-person from a "Provide Personal
+  // Information" task row — no multi-party accordion. Upload ID uses the
+  // dedicated UploadIdentificationDrawer via openIdDrawerFor instead.
+  const [personalInfoModal, setPersonalInfoModal] = useState<{
+    leadId: string;
+    dealId: string;
+    name: string;
+    role: string;
   } | null>(null);
-  const [multiPartyChanged, setMultiPartyChanged] = useState(false);
+  const [personalInfoChanged, setPersonalInfoChanged] = useState(false);
 
   const openIdDrawerFor = (leadId: string, taskId: string) => {
     setIdDrawerLeadId(leadId);
@@ -671,18 +672,27 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
   const openEditTask = async (task: DisplayTask) => {
     // On a co-person deal, the two per-person tasks (Personal Info / Upload ID)
-    // open the family accordion instead of the single-task edit modal.
+    // open the single-party drawer for THAT person — same design as the customer
+    // portal — instead of a multi-party accordion. Scoped to the row's owner so
+    // uploads/answers land on the right person.
     if (
       !task.isTemplate &&
       familyMemberCount > 1 &&
       (isIdentificationTask(task) || isPersonalInfoTask(task))
     ) {
-      setMultiPartyChanged(false);
-      setMultiPartyTask({
-        kind: isIdentificationTask(task) ? "upload-id" : "personal-info",
-        taskId: task.id,
-        initialLeadId: (task.ownerLeadId as string | null) ?? null,
-      });
+      const ownerLead = (task.ownerLeadId as string | null) ?? primaryLeadId;
+      if (isIdentificationTask(task)) {
+        openIdDrawerFor(ownerLead, task.id);
+      } else {
+        const person = familyPeople.find((p) => p.lead_id === ownerLead);
+        setPersonalInfoChanged(false);
+        setPersonalInfoModal({
+          leadId: ownerLead,
+          dealId: (task.ownerDealId as string | null) ?? person?.id ?? deal.id,
+          name: (task.ownerName as string | null) ?? person?.lead_name ?? "",
+          role: person?.role ?? "",
+        });
+      }
       return;
     }
     setEditingTask(task);
@@ -1166,7 +1176,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       // the portal show the task as done on the side the admin filled. Scoped
       // to editingTask.id only, so the other side's PPI task is untouched.
       // Skipped when the admin explicitly chose a status from the dropdown so
-      // an intentional "Pending"/"In Progress" is still respected.
+      // an intentional "Pending" is still respected.
       const statusUnchanged = editTaskStatus === (editingTask.status ?? "Pending");
       if (
         isPersonalInfoTask(editingTask) &&
@@ -1732,7 +1742,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               id: task.id,
-              status: newStatus === "In Progress" ? "In Progress" : "Pending",
+              status: "Pending",
               completed: false,
               completed_at: null,
             }),
@@ -1871,7 +1881,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       const milestoneId = task.milestoneId;
       const milestoneTasks = updatedTasks.filter((t) => t.milestoneId === milestoneId);
       const allDone = milestoneTasks.length > 0 && milestoneTasks.every((t) => t.status === "Completed");
-      const newMilestoneStatus = allDone ? "Completed" : milestoneTasks.some((t) => t.status === "In Progress" || t.status === "Completed") ? "In Progress" : "Pending";
+      const newMilestoneStatus = allDone ? "Completed" : "Pending";
 
       setMilestones((prev) =>
         prev.map((m) =>
@@ -1977,8 +1987,6 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     switch (status) {
       case "Completed":
         return "bg-green-50 text-green-700 border-green-200";
-      case "In Progress":
-        return "bg-blue-50 text-blue-700 border-blue-200";
       case "Pending":
         return "bg-yellow-50 text-yellow-700 border-yellow-200";
       default:
@@ -2807,11 +2815,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       if (stageOwners.size === 0) return all;
 
       // A person's progress for a stage: Completed only if all their tasks in it
-      // are done; In Progress if any started/done; else Pending.
+      // are done; else Pending.
       const ownerStatus = (statuses: string[]): Milestone["status"] => {
         if (statuses.length === 0) return "Pending";
         if (statuses.every((s) => s === "Completed")) return "Completed";
-        if (statuses.some((s) => s === "Completed" || s === "In Progress")) return "In Progress";
         return "Pending";
       };
 
@@ -2935,6 +2942,15 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         : null,
       dueDate: task.dueDate ? formatLocalDate(task.dueDate) : null,
       completedAt: task.completedAt ? formatLocalDateTime(task.completedAt) : null,
+      // Per-person tasks (Personal Information / Upload ID) carry the person's
+      // name in the PDF heading, a "Name" row, and the file name. Family deals
+      // supply task.ownerName; single-person deals fall back to this deal's own
+      // client name. Other tasks stay name-less.
+      ownerName:
+        task.ownerName ??
+        ((isPersonalInfoTask(task) || isIdentificationTask(task))
+          ? familyPeople.find((p) => p.isCurrent)?.lead_name || null
+          : null),
       responses,
     };
   };
@@ -3648,26 +3664,18 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           <SubmitOnBehalfSection
             coPersons={coPersons}
             onOpen={(kind, person) => {
-              setMultiPartyChanged(false);
               if (kind === "upload-id") {
-                setMultiPartyTask({
-                  kind: "upload-id",
-                  taskId: person.identificationTaskId,
-                  initialLeadId: person.leadId,
-                });
+                if (person.identificationTaskId) {
+                  openIdDrawerFor(person.leadId, person.identificationTaskId);
+                }
               } else {
-                // Seed with this person's Personal Info task (any family PI task
-                // works — the accordion resolves the whole roster from it).
-                const piTaskId =
-                  displayTasks.find(
-                    (t) => !t.isTemplate && isPersonalInfoTask(t) && t.ownerLeadId === person.leadId,
-                  )?.id ??
-                  displayTasks.find((t) => !t.isTemplate && isPersonalInfoTask(t))?.id ??
-                  null;
-                setMultiPartyTask({
-                  kind: "personal-info",
-                  taskId: piTaskId,
-                  initialLeadId: person.leadId,
+                const fp = familyPeople.find((p) => p.lead_id === person.leadId);
+                setPersonalInfoChanged(false);
+                setPersonalInfoModal({
+                  leadId: person.leadId,
+                  dealId: person.dealId ?? fp?.id ?? deal.id,
+                  name: person.name ?? fp?.lead_name ?? "",
+                  role: person.role ?? fp?.role ?? "",
                 });
               }
             }}
@@ -3789,10 +3797,8 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                           </span>
                         ) : (
                           // Click-to-toggle status: one tap flips between
-                          // Pending and Completed (no "In Progress" here — the
-                          // admin marks work done, not partial). A task left in
-                          // "In Progress" by a milestone rollup still shows that
-                          // label and flips to Completed on the first click.
+                          // Pending and Completed. Tasks are only ever Pending
+                          // or Completed — there is no partial state.
                           <button
                             type="button"
                             onClick={(e) => {
@@ -4075,9 +4081,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                                   // table): one tap flips Pending ⇄ Completed —
                                   // completing the milestone cascades to its
                                   // tasks and fires the milestone email as before.
-                                  // No "In Progress" option here; a rollup-set
-                                  // "In Progress" still shows and flips to
-                                  // Completed on the first click.
+                                  // Milestones are only ever Pending or Completed.
                                   <button
                                     type="button"
                                     onClick={(e) => {
@@ -4335,7 +4339,6 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                     className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
                   >
                     <option value="Pending">Pending</option>
-                    <option value="In Progress">In Progress</option>
                     <option value="Completed">Completed</option>
                   </select>
                 </div>
@@ -4626,7 +4629,6 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                     className="w-full px-4 py-3 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
                   >
                     <option value="Pending">Pending</option>
-                    <option value="In Progress">In Progress</option>
                     <option value="Completed">Completed</option>
                   </select>
                 </div>
@@ -5810,28 +5812,20 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         );
       })()}
 
-      {/* Multi-party accordion — Personal Info / Upload ID for co-person deals.
-          Fed by /api/admin/family-task-status; honours upload_mode from the
-          viewed (primary) person's perspective. */}
-      <AdminMultiPartyTaskDrawer
-        open={!!multiPartyTask}
+      {/* Single-party Personal Info modal — matches the customer portal's
+          PersonalInfoTaskDrawer. Opened per-person from a "Provide Personal
+          Information" task row (no multi-party accordion). */}
+      <CoPersonPersonalInfoModal
+        open={!!personalInfoModal}
         onClose={() => {
-          const changed = multiPartyChanged;
-          setMultiPartyTask(null);
-          setMultiPartyChanged(false);
-          // Reflect any completions in the page's task list / statuses.
+          const changed = personalInfoChanged;
+          setPersonalInfoModal(null);
+          setPersonalInfoChanged(false);
+          // Reflect any completion in the page's task list / statuses.
           if (changed && typeof window !== "undefined") window.location.reload();
         }}
-        taskTitle={
-          multiPartyTask?.kind === "upload-id"
-            ? "Upload Identification Documents"
-            : "Provide Personal Information"
-        }
-        taskId={multiPartyTask?.taskId ?? null}
-        kind={multiPartyTask?.kind ?? "personal-info"}
-        selfLeadId={primaryLeadId}
-        initialLeadId={multiPartyTask?.initialLeadId ?? null}
-        onAnyCompleted={() => setMultiPartyChanged(true)}
+        coPerson={personalInfoModal}
+        onSaved={() => setPersonalInfoChanged(true)}
       />
 
       {/* Clone-from-previous drawer — lets admin pick a prior deal for the

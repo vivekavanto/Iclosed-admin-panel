@@ -53,6 +53,24 @@ async function sendEmailForDeal(
         const leadType = formatLeadTypeLabel(lead?.lead_type ?? deal.type)
         const fileNumber = deal.file_number ?? ""
 
+        // Lock box code is stored per-deal on the primary PURCHASE deal (it's
+        // deliberately not mirrored across the family). A co-purchaser's own
+        // deal has no code, so fall back to the primary purchaser's deal —
+        // it's the same physical property. Sale-side people (co-sellers) never
+        // inherit it. `lockboxValue` is bolded for the HTML email; an empty
+        // code stays empty so we don't emit an orphan <strong></strong>.
+        let lockboxCode = deal.lockbox_code ?? ""
+        if (!lockboxCode && lead?.parent_lead_id && lead?.co_person_role === "purchaser") {
+            const { data: primaryDeal } = await supabaseAdmin
+                .from("deals")
+                .select("lockbox_code")
+                .eq("lead_id", lead.parent_lead_id)
+                .limit(1)
+                .maybeSingle()
+            lockboxCode = primaryDeal?.lockbox_code ?? ""
+        }
+        const lockboxValue = lockboxCode ? `<strong>${lockboxCode}</strong>` : ""
+
         // Short-form / specialty tokens used by some templates (retainer agreement etc.)
         const leadTypeLower = leadType.toLowerCase()
         const sideSuffix = leadTypeLower.includes("purchase") && leadTypeLower.includes("sale")
@@ -129,10 +147,10 @@ async function sendEmailForDeal(
             "{{ full_name }}": fullName,
             "{{ email }}": client.email,
             "{{ property_address }}": leadAddress,
-            "{{ lockbox_code }}": deal.lockbox_code ?? "",
-            "{{lockbox_code}}": deal.lockbox_code ?? "",
-            "{{ lead.lockbox_code }}": deal.lockbox_code ?? "",
-            "{{lead.lockbox_code}}": deal.lockbox_code ?? "",
+            "{{ lockbox_code }}": lockboxValue,
+            "{{lockbox_code}}": lockboxValue,
+            "{{ lead.lockbox_code }}": lockboxValue,
+            "{{lead.lockbox_code}}": lockboxValue,
             "{{ file_number }}": fileNumber,
             "{{ side_suffix }}": sideSuffix,
             "{{ property_role_row }}": propertyRoleRow,
@@ -175,8 +193,8 @@ async function sendEmailForDeal(
         processedBody = processedBody.replace(/\{\{\s*full_name\s*\}\}/gi, fullName);
         processedBody = processedBody.replace(/\{\{\s*email\s*\}\}/gi, client.email ?? "");
         processedBody = processedBody.replace(/\{\{\s*property_address\s*\}\}/gi, leadAddress);
-        processedBody = processedBody.replace(/\{\{\s*lockbox_code\s*\}\}/gi, deal.lockbox_code ?? "");
-        processedBody = processedBody.replace(/\{\{\s*lead\.lockbox_code\s*\}\}/gi, deal.lockbox_code ?? "");
+        processedBody = processedBody.replace(/\{\{\s*lockbox_code\s*\}\}/gi, lockboxValue);
+        processedBody = processedBody.replace(/\{\{\s*lead\.lockbox_code\s*\}\}/gi, lockboxValue);
         processedBody = processedBody.replace(/\{\{\s*file_number\s*\}\}/gi, fileNumber);
         processedBody = processedBody.replace(/\{\{\s*side_suffix\s*\}\}/gi, sideSuffix);
         processedBody = processedBody.replace(/\{\{\s*property_role_row\s*\}\}/gi, propertyRoleRow);

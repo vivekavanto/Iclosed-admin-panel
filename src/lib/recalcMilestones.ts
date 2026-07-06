@@ -8,7 +8,6 @@ import supabaseAdmin from "./supabaseAdmin";
  * per-deal instance of that stage.
  *
  *   - "Completed" only when ALL pooled tasks (every person's) are completed
- *   - "In Progress" when at least one pooled task is in-progress or completed
  *   - "Pending" otherwise
  *
  * We pool by `stage_template_id` (not `milestone_id`) because each deal owns its
@@ -105,10 +104,7 @@ export async function recalcMilestonesForFamily(
     if (statuses.length === 0) continue;
 
     const allDone = statuses.every((s) => s === "Completed");
-    const anyActive = statuses.some(
-      (s) => s === "In Progress" || s === "Completed",
-    );
-    const newStatus = allDone ? "Completed" : anyActive ? "In Progress" : "Pending";
+    const newStatus = allDone ? "Completed" : "Pending";
 
     const msUpdates: Record<string, any> = {
       status: newStatus,

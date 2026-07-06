@@ -324,7 +324,7 @@ export async function backfillMilestoneForStage(
  *   - Idempotent: deals that already carry this task_template_id are skipped.
  *
  * Recalcs touched families since a fresh Pending task can flip a previously
- * "Completed" milestone back to "In Progress"/"Pending".
+ * "Completed" milestone back to "Pending".
  */
 export async function backfillTaskForTemplate(
   taskTemplateId: string,

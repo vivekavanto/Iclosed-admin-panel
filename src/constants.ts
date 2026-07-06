@@ -47,7 +47,7 @@ export const MOCK_DEALS: Deal[] = [
     milestones: [
       { id: '1178', title: 'Agreement of Purchase and Sale', status: 'Completed', milestoneDate: '2026-01-15', completedAt: '2026-01-15 10:30 AM', emailSent: true },
       { id: '1179', title: 'Initial Call', status: 'Completed', milestoneDate: '2026-01-16', completedAt: '2026-01-16 02:15 PM', emailSent: true },
-      { id: '1180', title: 'Personal Information', status: 'In Progress', milestoneDate: '2026-01-18' },
+      { id: '1180', title: 'Personal Information', status: 'Pending', milestoneDate: '2026-01-18' },
       { id: '1181', title: 'Identification', status: 'Pending', milestoneDate: '2026-02-01' },
       { id: '1182', title: 'Title Search', status: '', milestoneDate: '2026-02-02' },
       { id: '1183', title: 'Financing Firm → Mortgage Instructions', status: '', milestoneDate: '2026-02-03' },

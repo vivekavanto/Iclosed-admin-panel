@@ -668,7 +668,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[1180px] table-fixed text-left border-t border-slate-200">
+        <table className="w-full min-w-[1180px] text-left border-t border-slate-200">
           <thead>
             <tr className="bg-white text-slate-800 text-xs font-bold border-b border-slate-200">
               {/* Row number — no heading text per request. */}
@@ -969,7 +969,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                                   className="inline-flex items-center gap-1.5 bg-white border border-slate-200 rounded-full px-2.5 py-1 text-[11px] text-slate-700"
                                   title={t.status}
                                 >
-                                  <span className={`w-1.5 h-1.5 rounded-full ${t.status === 'In Progress' ? 'bg-amber-400' : 'bg-slate-300'}`} />
+                                  <span className="w-1.5 h-1.5 rounded-full bg-slate-300" />
                                   {t.title}
                                 </span>
                               ))}

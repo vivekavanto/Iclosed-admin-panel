@@ -33,6 +33,10 @@ export interface PdfTaskInput {
   completedAt?: string | null;
   milestoneTitle?: string | null;
   leadType?: string | null;
+  /** Owner's full name for per-person tasks (Personal Information / Upload ID).
+   *  When set, it's added to the single-task PDF heading, a "Name" row, and the
+   *  file name so each person's export is attributable. Null for shared tasks. */
+  ownerName?: string | null;
   responses: PdfResponse[];
 }
 
@@ -541,12 +545,31 @@ export async function downloadTaskPdf(deal: PdfDealMeta, task: PdfTaskInput): Pr
   const { jsPDF } = await import("jspdf");
   const doc = new jsPDF({ unit: "pt", format: "a4" });
   const w = makeWriter(doc);
-  // Single bold task title with the file number in brackets — the section
-  // below renders the client responses without repeating the title.
+  // Single bold task title with the file number in brackets, plus the person's
+  // name for per-person tasks (Personal Information / Upload ID) so each
+  // export is attributable. The section below renders the client responses
+  // without repeating the title.
   const title = task.title || "Untitled task";
-  const heading = deal.fileNumber ? `${title} (${deal.fileNumber})` : title;
+  const base = deal.fileNumber ? `${title} (${deal.fileNumber})` : title;
+  const heading = task.ownerName ? `${base} — ${task.ownerName}` : base;
   w.text("iClosed", { size: 10, bold: true, color: BRAND, gap: 8 });
-  w.text(heading, { size: 16, bold: true, color: [20, 20, 20], gap: 12 });
+  // Shrink the heading font until the full "… — Name" fits on one line (down to
+  // a floor), so a long name gets a smaller heading rather than wrapping.
+  const HEADING_MARGIN = 56;
+  const headingMaxW = doc.internal.pageSize.getWidth() - HEADING_MARGIN * 2;
+  let headingSize = 16;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(headingSize);
+  while (headingSize > 11 && doc.getTextWidth(heading) > headingMaxW) {
+    headingSize -= 0.5;
+    doc.setFontSize(headingSize);
+  }
+  w.text(heading, { size: headingSize, bold: true, color: [20, 20, 20], gap: 12 });
+  // "Name" row at the top of the details for per-person tasks — the name isn't
+  // a form field, so it's added explicitly.
+  if (task.ownerName) {
+    w.kv("Name", task.ownerName, { indent: 8, gap: 4 });
+  }
   writeTaskSection(w, task, { showTitle: false });
   // Embed JPG/PNG images inline into the jsPDF report so they appear
   // exactly where the writer left off. Remove any embedded images from
@@ -570,7 +593,7 @@ export async function downloadTaskPdf(deal: PdfDealMeta, task: PdfTaskInput): Pr
   await finalizeAndDownload(
     doc,
     [group],
-    `Task - ${sanitizeFile(task.title || "task")}.pdf`,
+    `Task - ${sanitizeFile(task.title || "task")}${task.ownerName ? ` - ${sanitizeFile(task.ownerName)}` : ""}.pdf`,
   );
 }
 

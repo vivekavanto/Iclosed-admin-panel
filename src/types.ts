@@ -27,7 +27,7 @@ export interface Task {
   completed: boolean;
   dueDate?: string;
   assignee?: string;
-  status?: 'Pending' | 'In Progress' | 'Completed';
+  status?: 'Pending' | 'Completed';
   completedAt?: string;
   document?: { name: string; url: string };
   clientId?: string;
@@ -51,7 +51,7 @@ export interface Task {
 export interface Milestone {
   id: string;
   title: string;
-  status: '' | 'Pending' | 'In Progress' | 'Completed';
+  status: '' | 'Pending' | 'Completed';
   milestoneDate?: string;
   completedAt?: string;
   emailSent?: boolean;
