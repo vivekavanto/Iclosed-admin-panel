@@ -6,7 +6,7 @@ const supabase = supabaseAdmin;
 export async function GET() {
   const { data, error } = await supabase
     .from("deals")
-    .select("*, tasks(id, status, is_deleted), leads(id, parent_lead_id, first_name, last_name, co_person_role, address_street, address_unit, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code, clients(id, auth_user_id, citizenship_status))")
+    .select("*, tasks(id, status, is_deleted), leads(id, parent_lead_id, first_name, last_name, email, co_person_role, address_street, address_unit, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code, clients(id, auth_user_id, citizenship_status))")
     .or("source.is.null,source.neq.bulk_import")
     .eq("is_deleted", false)
     .order("created_at", { ascending: false });
@@ -146,6 +146,9 @@ export async function GET() {
       co_party_names: coPartyNames,
       account_created_at: accountCreatedAt,
       lead_name: lead ? `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim() : null,
+      // Intake email (leads.email, NOT NULL) — surfaced so the All Files list
+      // can hide test accounts by the @navawilson.law domain and search by email.
+      lead_email: lead?.email ?? null,
       // Citizenship sourced from the customer record (clients) — source of
       // truth for the non-citizen flag — falling back to the lead in transition.
       lead_citizenship_status: lead?.clients?.citizenship_status ?? null,

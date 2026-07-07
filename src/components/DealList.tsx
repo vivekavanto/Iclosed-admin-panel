@@ -47,8 +47,9 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   const [dateFrom, setDateFrom] = useState<string>(() => localTodayISO());
   const [dateTo, setDateTo] = useState('');
   const [showOnlyFlagged, setShowOnlyFlagged] = useState(false);
-  // Hide accounts whose client/file name contains "TEST" — toggled by the
-  // "Remove test accounts" checkbox above the table.
+  // Hide test accounts — files whose client email is @navawilson.law (the
+  // firm's test-domain convention) or whose client/file name contains "TEST".
+  // Toggled by the "Hide test account" checkbox above the table.
   const [removeTestAccounts, setRemoveTestAccounts] = useState(false);
   // Deal id currently being logged into (client-view impersonation in flight),
   // so the row's button can show a disabled/loading state.
@@ -109,7 +110,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
         const mapped: Deal[] = (data || []).map((d: any) => ({
           id: d.id,
           fileNumber: d.fileNumber ?? d.file_number ?? '',
-          client: d.client ?? { id: '', firstName: '', lastName: d.client_last_name ?? '', email: '', phone: '' },
+          client: d.client ?? { id: '', firstName: '', lastName: d.client_last_name ?? '', email: d.lead_email ?? '', phone: '' },
           type: d.type,
           status: d.status,
           propertyAddress: d.propertyAddress ?? d.property_address ?? '',
@@ -297,9 +298,13 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
     if (filterClerk && ((deal as any).clerkName ?? '').trim() !== filterClerk) return false;
     if (showOnlyFlagged && !isNonCitizenFlagged({ citizenship_status: (deal as any).leadCitizenshipStatus })) return false;
     if (removeTestAccounts) {
-      // Treat a file as a "test account" when "TEST" appears in any of the
-      // name-ish fields (lead/client name or file name). Case-insensitive.
+      // Treat a file as a "test account" when the client email uses the firm's
+      // test domain (@navawilson.law — the going-forward convention) OR "TEST"
+      // appears in any name-ish field (lead/client name or file name), which
+      // catches older test files created before the domain convention.
       const d = deal as any;
+      const email = (deal.client?.email ?? '').trim().toLowerCase();
+      if (email.endsWith('@navawilson.law')) return false;
       const nameHay = [
         d.leadName ?? '',
         deal.client?.firstName ?? '',
@@ -463,12 +468,12 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
       <div className="flex flex-col xl:flex-row items-start xl:items-center justify-between p-4 sm:p-6 pb-2 gap-4">
         <div className="flex flex-wrap items-center gap-3 sm:gap-4">
           <h1 className="text-lg sm:text-xl font-bold text-slate-900 border-b-2 border-brand-primary pb-0.5">All files</h1>
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-            <span><span className="font-bold text-slate-900">{visibleCount}</span> <span className="text-slate-400">files</span></span>
-            <span className="flex items-center gap-1.5 text-slate-600" title="Sales"><span className="w-2 h-2 rounded-full bg-orange-400" />{countS} Sale</span>
-            <span className="flex items-center gap-1.5 text-slate-600" title="Purchases"><span className="w-2 h-2 rounded-full bg-blue-500" />{countP} Purchase</span>
-            <span className="flex items-center gap-1.5 text-slate-600" title="Purchase &amp; Sale"><span className="w-2 h-2 rounded-full bg-purple-500" />{countPS} Purchase + Sale</span>
-            <span className="flex items-center gap-1.5 text-slate-600" title="Refinances"><span className="w-2 h-2 rounded-full bg-slate-400" />{countR} Refinance</span>
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-slate-500">Total: <span className="font-bold text-slate-900">{visibleCount}</span></span>
+            <span className="px-2 py-0.5 rounded-md text-xs font-bold bg-orange-100 text-orange-600" title="Sales">S {countS}</span>
+            <span className="px-2 py-0.5 rounded-md text-xs font-bold bg-blue-100 text-blue-600" title="Purchases">P {countP}</span>
+            <span className="px-2 py-0.5 rounded-md text-xs font-bold bg-purple-100 text-purple-600" title="Purchase &amp; Sale">PS {countPS}</span>
+            <span className="px-2 py-0.5 rounded-md text-xs font-bold bg-slate-900 text-white" title="Refinances">R {countR}</span>
           </div>
         </div>
 
@@ -653,31 +658,35 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
             </button>
           </div>
         </div>
-        {/* "Remove test accounts" toggle hidden for now — kept (not deleted)
-            so it can be re-enabled later. The filter logic still honours
-            removeTestAccounts, which stays false while this is hidden. */}
-        <label className="hidden items-center gap-2 text-sm text-slate-600 cursor-pointer select-none">
+        {/* "Hide test account" toggle — hides files on the firm's test domain
+            (@navawilson.law) or with "TEST" in the name. Independent of the
+            other filters, so ticking it never resets them and vice versa. */}
+        <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer select-none">
           <input
             type="checkbox"
             checked={removeTestAccounts}
             onChange={(e) => setRemoveTestAccounts(e.target.checked)}
             className="h-4 w-4 rounded border-slate-300 text-brand-primary focus:ring-brand-primary cursor-pointer"
           />
-          Remove test accounts
+          Hide test account
         </label>
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[1180px] text-left border-t border-slate-200">
+        {/* table-fixed + percentage column widths (on the header cells below)
+            keep the SAME columns visible and proportional at any browser zoom.
+            No large min-width, so the table always fits the container instead of
+            overflowing and scrolling the middle columns out of view on zoom-in. */}
+        <table className="w-full table-fixed text-left border-t border-slate-200">
           <thead>
             <tr className="bg-white text-slate-800 text-xs font-bold border-b border-slate-200">
               {/* Row number — no heading text per request. */}
-              <th className="px-4 py-3 w-12" aria-label="Row number"></th>
-              <th className="px-4 py-3 w-32">Account status</th>
-              <th className="px-4 py-3 w-24">File No.</th>
-              <th className="px-4 py-3 w-48">Client Name</th>
-              <th className="px-4 py-3 w-64">Address</th>
-              <th className="px-4 py-3 w-32">
+              <th className="px-2 py-1.5 w-[4%]" aria-label="Row number"></th>
+              <th className="px-2 py-1.5 w-[9%]">Account status</th>
+              <th className="px-2 py-1.5 w-[8%]">File No.</th>
+              <th className="px-2 py-1.5 w-[14%]">Client Name</th>
+              <th className="px-2 py-1.5 w-[17%]">Address</th>
+              <th className="px-2 py-1.5 w-[9%]">
                 <button
                   type="button"
                   onClick={toggleClosingSort}
@@ -690,15 +699,15 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                   </span>
                 </button>
               </th>
-              <th className="px-4 py-3 w-40">Progress</th>
-              <th className="px-4 py-3 w-20">Lawyer</th>
-              <th className="px-4 py-3 w-20">Clerk</th>
-              <th className="px-4 py-3 w-32">Account created</th>
+              <th className="px-2 py-1.5 w-[11%]">Progress</th>
+              <th className="px-2 py-1.5 w-[6%]">Lawyer</th>
+              <th className="px-2 py-1.5 w-[6%]">Clerk</th>
+              <th className="px-2 py-1.5 w-[9%]">Account created</th>
               {/* Requisition date column hidden per request — kept (not deleted) to avoid breaking anything. */}
-              <th className="px-4 py-3 hidden">Requisition date</th>
+              <th className="px-2 py-1.5 hidden">Requisition date</th>
               {/* File name column hidden per request — kept (not deleted) to avoid breaking anything. */}
-              <th className="px-4 py-3 hidden">File name</th>
-              <th className="sticky right-0 z-20 bg-white px-4 py-3 w-24 text-center">Actions</th>
+              <th className="px-2 py-1.5 hidden">File name</th>
+              <th className="sticky right-0 z-20 bg-white px-2 py-1.5 w-[7%] text-center">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -719,8 +728,8 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                   console.log("Clicked deal id:", deal.id);
                   onSelectDeal(deal.id);
                 }} className={`${rowClass} hover:bg-brand-light/20 cursor-pointer transition-colors border-b border-slate-100 text-xs text-slate-700 whitespace-nowrap`}>
-                  <td className="px-4 py-3">{rowNumber}</td>
-                  <td className="px-4 py-3">
+                  <td className="px-2 py-1.5">{rowNumber}</td>
+                  <td className="px-2 py-1.5">
                     {/* Active/Inactive is derived (not the raw DB status) —
                         "Active" = the linked client has signed into the portal
                         at least once. Shared with the Edit Deal modal via
@@ -751,8 +760,8 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       );
                     })()}
                   </td>
-                  <td className="px-4 py-3 font-medium">{deal.fileNumber}</td>
-                  <td className="px-4 py-3">
+                  <td className="px-2 py-1.5 font-medium">{deal.fileNumber}</td>
+                  <td className="px-2 py-1.5">
                     {/* min-w-0 + truncate lets a long name ellipsize instead of
                         spilling past this fixed-width column, while the badges
                         stay pinned (flex-shrink-0) and always visible. */}
@@ -820,7 +829,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                     )}
                     </div>
                   </td>
-                  <td className="px-4 py-3 max-w-xs" title={isCombined ? `Purchase: ${deal.propertyAddress || "—"}\nSale: ${deal.sellingPropertyAddress || "—"}` : deal.propertyAddress}>
+                  <td className="px-2 py-1.5 max-w-xs" title={isCombined ? `Purchase: ${deal.propertyAddress || "—"}\nSale: ${deal.sellingPropertyAddress || "—"}` : deal.propertyAddress}>
                     {isCombined ? (
                       <div className="flex flex-col gap-1">
                         <div className="flex items-baseline gap-2">
@@ -837,8 +846,8 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       <span className="truncate block">{deal.propertyAddress}</span>
                     )}
                   </td>
-                  <td className="px-4 py-3">{formatDate(deal.closingDate)}</td>
-                  <td className="px-4 py-3">
+                  <td className="px-2 py-1.5">{formatDate(deal.closingDate)}</td>
+                  <td className="px-2 py-1.5">
                     <button
                       type="button"
                       onClick={(e) => {
@@ -861,7 +870,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       />
                     </button>
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-2 py-1.5">
                     {(deal as any).lawyerName ? (
                       <span
                         className="bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded text-[10px] font-bold border border-blue-100"
@@ -873,7 +882,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       <span className="text-slate-300">—</span>
                     )}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-2 py-1.5">
                     {(deal as any).clerkName ? (
                       <span
                         className="bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded text-[10px] font-bold border border-blue-100"
@@ -885,7 +894,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       <span className="text-slate-300">—</span>
                     )}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-2 py-1.5">
                     {(deal as any).accountCreatedAt ? (
                       <span
                         className="text-xs text-slate-700"
@@ -898,12 +907,12 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                     )}
                   </td>
                   {/* Requisition date column hidden per request — kept (not deleted). */}
-                  <td className="px-4 py-3 hidden">{formatDate(deal.requisitionDate)}</td>
+                  <td className="px-2 py-1.5 hidden">{formatDate(deal.requisitionDate)}</td>
                   {/* File name column hidden per request — kept (not deleted). */}
-                  <td className="px-4 py-3 hidden">
+                  <td className="px-2 py-1.5 hidden">
                     {(deal as any).fileName || deal.propertyAddress}
                   </td>
-                  <td className={`sticky right-0 z-10 ${stickyBg} px-4 py-3 text-center`}>
+                  <td className={`sticky right-0 z-10 ${stickyBg} px-2 py-1.5 text-center`}>
                     <div className="inline-flex items-center justify-center gap-1">
                       {(() => {
                         const canImpersonate = !!(deal as any).accountCreatedAt && !!(deal as any).authUserId;
@@ -945,7 +954,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                 </tr>
                 {expandedDealId === deal.id && (
                   <tr className="bg-brand-light/10 border-b border-slate-100">
-                    <td colSpan={13} className="px-4 py-3">
+                    <td colSpan={13} className="px-2 py-1.5">
                       {(() => {
                         const entry = pendingTasks[deal.id];
                         if (!entry || entry.loading) {

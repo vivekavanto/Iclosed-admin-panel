@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import {
   History,
@@ -77,8 +78,23 @@ interface LeadUser {
 }
 
 const Leads: React.FC = () => {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  // The lead detail view is in-page state, but we mirror it in the URL as
+  // ?lead=<id> so navigation stays in sync. Clicking "Leads" in the sidebar
+  // links to /admin/leads (no param); Next.js keeps this component mounted on a
+  // same-route click, so without a URL-driven reset the detail view would stay
+  // stuck open. The effect below snaps back to the list whenever the param goes.
+  const leadParam = searchParams.get("lead");
   const [view, setView] = useState<"LIST" | "DETAIL">("LIST");
   const [selectedLead, setSelectedLead] = useState<LeadUser | null>(null);
+
+  useEffect(() => {
+    if (!leadParam) {
+      setView("LIST");
+      setSelectedLead(null);
+    }
+  }, [leadParam]);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [newClientType, setNewClientType] = useState<
     "residential" | "corporate"
@@ -359,6 +375,7 @@ const Leads: React.FC = () => {
     setIsEditing(false);
     setEditResult(null);
     setView("DETAIL");
+    router.push(`/admin/leads?lead=${lead.id}`);
   };
 
   const openLeadForEdit = (lead: LeadUser) => {
@@ -368,6 +385,7 @@ const Leads: React.FC = () => {
     setIsEditing(true);
     setEditResult(null);
     setView("DETAIL");
+    router.push(`/admin/leads?lead=${lead.id}`);
   };
 
   const getLeadName = (id: string) => {
@@ -905,7 +923,11 @@ const Leads: React.FC = () => {
       <div key={selectedLead.id} className="max-w-6xl mx-auto space-y-4 sm:space-y-6 animate-in slide-in-from-right duration-300 py-2 sm:py-4 pb-20">
         {/* Back button */}
         <button
-          onClick={() => setView("LIST")}
+          onClick={() => {
+            setView("LIST");
+            setSelectedLead(null);
+            router.push("/admin/leads");
+          }}
           className="flex items-center gap-2 text-slate-500 font-bold text-sm hover:text-brand-primary transition-colors"
         >
           <ArrowLeft size={18} /> Back to Leads Dashboard

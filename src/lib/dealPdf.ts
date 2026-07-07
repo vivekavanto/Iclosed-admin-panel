@@ -238,6 +238,13 @@ function writeTaskSection(
     w.text(task.title || "Untitled task", { size: 13, bold: true, color: BRAND, gap: 6 });
   }
 
+  // "Name" row for per-person tasks (Personal Information / Upload ID). The name
+  // isn't a form response, so it's rendered explicitly here — in the shared
+  // helper so both the single-task and combined "Download All" exports print it.
+  if (task.ownerName) {
+    w.kv("Name", task.ownerName, { indent: 8, gap: 4 });
+  }
+
   const responses = task.responses ?? [];
   if (responses.length === 0) {
     w.text("No client responses submitted.", { size: 9.5, color: [150, 150, 150], gap: 6 });
@@ -565,11 +572,8 @@ export async function downloadTaskPdf(deal: PdfDealMeta, task: PdfTaskInput): Pr
     doc.setFontSize(headingSize);
   }
   w.text(heading, { size: headingSize, bold: true, color: [20, 20, 20], gap: 12 });
-  // "Name" row at the top of the details for per-person tasks — the name isn't
-  // a form field, so it's added explicitly.
-  if (task.ownerName) {
-    w.kv("Name", task.ownerName, { indent: 8, gap: 4 });
-  }
+  // The "Name" row for per-person tasks is rendered inside writeTaskSection
+  // (shared with the combined export), so it prints here too via that helper.
   writeTaskSection(w, task, { showTitle: false });
   // Embed JPG/PNG images inline into the jsPDF report so they appear
   // exactly where the writer left off. Remove any embedded images from
