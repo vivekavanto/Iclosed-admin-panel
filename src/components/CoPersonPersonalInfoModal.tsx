@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { X, Loader2, AlertCircle, CheckCircle2, UserCog } from "lucide-react";
 
 /**
@@ -589,8 +589,14 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
                       ? "tel"
                       : "text";
 
+              const isMailForwardingStart =
+                (field.label || "").trim().toLowerCase() === "street address";
               return (
-                <div key={field.id}>
+                <Fragment key={field.id}>
+                  {isMailForwardingStart && (
+                    <p className="text-sm font-bold text-gray-900">Mail forwarding address</p>
+                  )}
+                  <div>
                   {labelEl}
                   <input
                     type={inputType}
@@ -605,7 +611,8 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
                       {errors[field.id]}
                     </p>
                   )}
-                </div>
+                  </div>
+                </Fragment>
               );
             })}
 

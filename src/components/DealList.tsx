@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { Deal, DealType, DealStatus } from '../types';
-import { Search, Trash2, Users, AlertTriangle, Upload, ChevronDown, LogIn, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Search, Trash2, Users, AlertTriangle, Upload, ChevronDown, LogIn } from 'lucide-react';
 import {
   isNonCitizenFlagged,
   NON_CITIZEN_FLAG_TOOLTIP,
@@ -55,10 +55,6 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   // so the row's button can show a disabled/loading state.
   const [impersonatingId, setImpersonatingId] = useState<string | null>(null);
   const [deals, setDeals] = useState<Deal[]>([]);
-  // Pagination — page is 1-based. PAGE_SIZE rows per page; page resets to 1
-  // whenever the filtered/sorted result set changes (see effect below).
-  const PAGE_SIZE = 10;
-  const [page, setPage] = useState(1);
   // Closing-date column sort. null = no sort (API order), 'asc' = earliest
   // first, 'desc' = latest first. Clicking the header cycles asc → desc.
   // Defaults to 'asc' so the upcoming closings (the default filtered view)
@@ -370,20 +366,6 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   const toggleClosingSort = () =>
     setClosingSort((prev) => (prev === 'asc' ? 'desc' : 'asc'));
 
-  // Pagination derived state. Clamp the current page to the available range so
-  // a shrinking result set (e.g. after filtering) never strands the view on an
-  // empty page, then slice out just the rows for the current page.
-  const totalPages = Math.max(1, Math.ceil(sortedDeals.length / PAGE_SIZE));
-  const currentPage = Math.min(page, totalPages);
-  const pageStart = (currentPage - 1) * PAGE_SIZE;
-  const pagedDeals = sortedDeals.slice(pageStart, pageStart + PAGE_SIZE);
-
-  // Reset to the first page whenever the filters/search/sort change so the user
-  // always lands on the top of the new result set instead of a stale page.
-  useEffect(() => {
-    setPage(1);
-  }, [searchTerm, filterType, filterStatus, filterLawyer, filterClerk, dateFrom, dateTo, showOnlyFlagged, removeTestAccounts, closingSort]);
-
   const applyPreset = (preset: 'today' | 'week' | 'nextWeek' | 'month') => {
     const now = new Date();
     const toISO = (d: Date) => d.toISOString().split('T')[0];
@@ -673,20 +655,46 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
       </div>
 
       <div className="overflow-x-auto">
-        {/* table-fixed + percentage column widths (on the header cells below)
-            keep the SAME columns visible and proportional at any browser zoom.
-            No large min-width, so the table always fits the container instead of
-            overflowing and scrolling the middle columns out of view on zoom-in. */}
-        <table className="w-full table-fixed text-left border-t border-slate-200">
+        {/* Responsive table (priority: responsiveness at every width):
+            - table-fixed + the colgroup percentages below keep the columns
+              proportional and perfectly aligned at any browser zoom.
+            - xl and up (large laptops / desktops): no min-width, so w-full makes
+              the table fit the content area exactly and ALL columns show in a
+              single view without horizontal scroll — even with the sidebar open.
+            - below xl (small laptops, tablets): min-w-[1080px] keeps the 11
+              columns readable instead of crushing them to fit; this parent's
+              overflow-x-auto scrolls horizontally and the sticky Actions column
+              stays pinned. We intentionally do NOT force single-view here. */}
+        <table className="w-full min-w-[1080px] xl:min-w-0 table-fixed text-left border-t border-slate-200">
+          {/* colgroup is the single source of truth for column widths. With
+              table-fixed, the header and every body row inherit these exact
+              percentages, so columns stay perfectly aligned at any browser
+              zoom. The two hidden columns get 0% (their cells are display:none,
+              so the column collapses). Visible widths sum to 100%. */}
+          <colgroup>
+            <col style={{ width: '4%' }} />{/* Row number */}
+            <col style={{ width: '9%' }} />{/* Account status */}
+            <col style={{ width: '8%' }} />{/* File No. */}
+            <col style={{ width: '14%' }} />{/* Client Name */}
+            <col style={{ width: '15%' }} />{/* Address */}
+            <col style={{ width: '9%' }} />{/* Closing date */}
+            <col style={{ width: '13%' }} />{/* Progress */}
+            <col style={{ width: '6%' }} />{/* Lawyer */}
+            <col style={{ width: '6%' }} />{/* Clerk */}
+            <col style={{ width: '9%' }} />{/* Account created */}
+            <col style={{ width: '0%' }} />{/* Requisition date (hidden) */}
+            <col style={{ width: '0%' }} />{/* File name (hidden) */}
+            <col style={{ width: '7%' }} />{/* Actions */}
+          </colgroup>
           <thead>
             <tr className="bg-white text-slate-800 text-xs font-bold border-b border-slate-200">
               {/* Row number — no heading text per request. */}
-              <th className="px-2 py-1.5 w-[4%]" aria-label="Row number"></th>
-              <th className="px-2 py-1.5 w-[9%]">Account status</th>
-              <th className="px-2 py-1.5 w-[8%]">File No.</th>
-              <th className="px-2 py-1.5 w-[14%]">Client Name</th>
-              <th className="px-2 py-1.5 w-[17%]">Address</th>
-              <th className="px-2 py-1.5 w-[9%]">
+              <th className="px-2 py-1.5" aria-label="Row number"></th>
+              <th className="px-2 py-1.5">Account status</th>
+              <th className="px-2 py-1.5">File No.</th>
+              <th className="px-2 py-1.5">Client Name</th>
+              <th className="px-2 py-1.5">Address</th>
+              <th className="px-2 py-1.5">
                 <button
                   type="button"
                   onClick={toggleClosingSort}
@@ -699,22 +707,21 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                   </span>
                 </button>
               </th>
-              <th className="px-2 py-1.5 w-[11%]">Progress</th>
-              <th className="px-2 py-1.5 w-[6%]">Lawyer</th>
-              <th className="px-2 py-1.5 w-[6%]">Clerk</th>
-              <th className="px-2 py-1.5 w-[9%]">Account created</th>
+              <th className="px-2 py-1.5">Progress</th>
+              <th className="px-2 py-1.5">Lawyer</th>
+              <th className="px-2 py-1.5">Clerk</th>
+              <th className="px-2 py-1.5">Account created</th>
               {/* Requisition date column hidden per request — kept (not deleted) to avoid breaking anything. */}
               <th className="px-2 py-1.5 hidden">Requisition date</th>
               {/* File name column hidden per request — kept (not deleted) to avoid breaking anything. */}
               <th className="px-2 py-1.5 hidden">File name</th>
-              <th className="sticky right-0 z-20 bg-white px-2 py-1.5 w-[7%] text-center">Actions</th>
+              <th className="sticky right-0 z-20 bg-white px-2 py-1.5 text-center">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {pagedDeals.length > 0 ? pagedDeals.map((deal, index) => {
-              // Continuous row number across pages (1-based) so the count keeps
-              // climbing on page 2, 3, … instead of restarting at 1.
-              const rowNumber = pageStart + index + 1;
+            {sortedDeals.length > 0 ? sortedDeals.map((deal, index) => {
+              // 1-based row number across the full (unpaginated) list.
+              const rowNumber = index + 1;
               const isEven = index % 2 === 0;
               const rowClass = isEven ? 'bg-white' : 'bg-slate-50/80';
               // Solid background for the sticky Actions cell — the row's
@@ -829,7 +836,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                     )}
                     </div>
                   </td>
-                  <td className="px-2 py-1.5 max-w-xs" title={isCombined ? `Purchase: ${deal.propertyAddress || "—"}\nSale: ${deal.sellingPropertyAddress || "—"}` : deal.propertyAddress}>
+                  <td className="px-2 py-1.5 overflow-hidden" title={isCombined ? `Purchase: ${deal.propertyAddress || "—"}\nSale: ${deal.sellingPropertyAddress || "—"}` : deal.propertyAddress}>
                     {isCombined ? (
                       <div className="flex flex-col gap-1">
                         <div className="flex items-baseline gap-2">
@@ -854,19 +861,19 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                         e.stopPropagation();
                         togglePendingTasks(deal.id);
                       }}
-                      className="group/steps flex items-center gap-2 cursor-pointer"
+                      className="group/steps flex items-center gap-1.5 cursor-pointer min-w-0"
                       title="Show pending tasks for this file"
                     >
-                      <div className="w-16 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                      <div className="w-14 h-1.5 bg-slate-200 rounded-full overflow-hidden flex-shrink-0">
                         <div
                           className="h-full bg-red-500 rounded-full transition-all"
                           style={{ width: `${deal.totalTasks ? (deal.completedTasks! / deal.totalTasks) * 100 : 0}%` }}
                         />
                       </div>
-                      <span className="text-[11px] text-slate-500 font-medium group-hover/steps:text-brand-primary transition-colors">{deal.completedTasks ?? 0}/{deal.totalTasks ?? 0}</span>
+                      <span className="text-[11px] text-slate-500 font-medium group-hover/steps:text-brand-primary transition-colors flex-shrink-0">{deal.completedTasks ?? 0}/{deal.totalTasks ?? 0}</span>
                       <ChevronDown
                         size={12}
-                        className={`text-slate-400 group-hover/steps:text-brand-primary transition-all ${expandedDealId === deal.id ? 'rotate-180' : ''}`}
+                        className={`text-slate-400 group-hover/steps:text-brand-primary transition-all flex-shrink-0 ${expandedDealId === deal.id ? 'rotate-180' : ''}`}
                       />
                     </button>
                   </td>
@@ -998,40 +1005,12 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
         </table>
       </div>
 
-      {/* Pagination — only shown when there is more than one page. Prev/Next
-          plus the current range so the admin knows where they are in the list. */}
+      {/* Total count — pagination removed; the full list renders in one scrollable view. */}
       {sortedDeals.length > 0 && (
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 sm:px-6 py-4 border-t border-slate-200">
+        <div className="flex items-center justify-end px-4 sm:px-6 py-3 border-t border-slate-200">
           <span className="text-xs text-slate-500">
-            Showing{' '}
-            <span className="font-bold text-slate-900">{pageStart + 1}</span>–
-            <span className="font-bold text-slate-900">{Math.min(pageStart + PAGE_SIZE, sortedDeals.length)}</span>{' '}
-            of <span className="font-bold text-slate-900">{sortedDeals.length}</span>
+            Showing all <span className="font-bold text-slate-900">{sortedDeals.length}</span> file{sortedDeals.length === 1 ? '' : 's'}
           </span>
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={currentPage <= 1}
-              className="inline-flex items-center gap-1 h-8 px-2.5 rounded border border-slate-300 text-xs font-medium text-slate-600 hover:border-brand-primary hover:text-brand-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-slate-300 disabled:hover:text-slate-600"
-            >
-              <ChevronLeft size={14} />
-              Prev
-            </button>
-            <span className="px-3 text-xs text-slate-500">
-              Page <span className="font-bold text-slate-900">{currentPage}</span> of{' '}
-              <span className="font-bold text-slate-900">{totalPages}</span>
-            </span>
-            <button
-              type="button"
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={currentPage >= totalPages}
-              className="inline-flex items-center gap-1 h-8 px-2.5 rounded border border-slate-300 text-xs font-medium text-slate-600 hover:border-brand-primary hover:text-brand-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-slate-300 disabled:hover:text-slate-600"
-            >
-              Next
-              <ChevronRight size={14} />
-            </button>
-          </div>
         </div>
       )}
     </div>

@@ -1085,6 +1085,12 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       // auto-completed the task (last required file filled), also refresh
       // tasks + milestones so the table row flips to Completed.
       const taskCompleted = pj.task_completed === true;
+      // Keep the open modal's Status dropdown in sync: when this upload was the
+      // final required file, the server auto-completed the task, so reflect that
+      // in the modal immediately instead of leaving the dropdown on "Pending".
+      if (taskCompleted) {
+        setEditTaskStatus("Completed");
+      }
       await Promise.all([
         refreshEditTaskResponses(),
         fetchTaskFileDocs(),
@@ -1169,19 +1175,36 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           : null;
       }
 
-      // Personal Information has no file/upload step — filling and saving the
-      // form IS completing it. The required-field validation above guarantees
-      // every required field has a value here, so auto-mark the task Completed
-      // (mirrors the customer portal's own auto-complete on submit). This makes
-      // the portal show the task as done on the side the admin filled. Scoped
-      // to editingTask.id only, so the other side's PPI task is untouched.
+      // Auto-complete on save: filling in a task's required content IS
+      // completing it, so the admin shouldn't also have to flip the Status
+      // dropdown. When every required field is satisfied and the admin hasn't
+      // explicitly picked a status, mark the task Completed (mirrors the
+      // customer portal's auto-complete on submit). Scoped to editingTask.id.
       // Skipped when the admin explicitly chose a status from the dropdown so
       // an intentional "Pending" is still respected.
+      //
+      // "Satisfied" means: required non-file fields have a value (already
+      // guaranteed by the validation above, which blocks save otherwise) AND
+      // every required file field has an uploaded response. File uploads also
+      // auto-complete server-side via maybeCompleteFileTask on the final
+      // upload; this is the save-time equivalent for the rest of the fields.
       const statusUnchanged = editTaskStatus === (editingTask.status ?? "Pending");
+      const requiredFields = editTaskFormFields.filter((f) => f.required);
+      const allRequiredFilled =
+        requiredFields.length > 0 &&
+        requiredFields.every((field) => {
+          if (field.field_type === "file") {
+            return findResponsesForField(field).some((r) => !!r.file_url);
+          }
+          const resp = findResponseForField(field);
+          return !resp?.deleted && !!(resp?.value ?? "").trim();
+        });
       if (
-        isPersonalInfoTask(editingTask) &&
         statusUnchanged &&
-        editTaskStatus !== "Completed"
+        editTaskStatus !== "Completed" &&
+        // Personal Information tasks stay auto-completing even if they carry no
+        // strictly-required fields, preserving the prior behaviour.
+        (allRequiredFilled || isPersonalInfoTask(editingTask))
       ) {
         payload.status = "Completed";
         payload.completed = true;
@@ -5288,9 +5311,14 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                       const respId = resp?.id ?? null;
                       const isTempResp = respId?.startsWith("tmp-") ?? false;
                       const isPersistedDeleted = Boolean(resp?.deleted);
+                      const isMailForwardingStart =
+                        (field.label || "").trim().toLowerCase() === "street address";
                       return (
+                        <React.Fragment key={field.id}>
+                        {isMailForwardingStart && (
+                          <p className="text-sm font-semibold text-gray-800">Mail forwarding address</p>
+                        )}
                         <div
-                          key={field.id}
                           className={`bg-gray-50 rounded-lg px-4 py-3 ${isPersistedDeleted ? "opacity-40" : ""}`}
                         >
                           <div className="flex items-start justify-between gap-2">
@@ -5497,6 +5525,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                             </p>
                           )}
                         </div>
+                        </React.Fragment>
                       );
                     })}
                   </div>
@@ -5705,8 +5734,15 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                   </div>
                 ) : viewTaskResponses.length > 0 ? (
                   <div className="space-y-3">
-                    {viewTaskResponses.map((resp: any, i: number) => (
-                      <div key={i} className="bg-gray-50 rounded-lg px-4 py-3">
+                    {viewTaskResponses.map((resp: any, i: number) => {
+                      const isMailForwardingStart =
+                        (resp.field_label || "").trim().toLowerCase() === "street address";
+                      return (
+                      <React.Fragment key={i}>
+                        {isMailForwardingStart && (
+                          <p className="text-sm font-semibold text-gray-800">Mail forwarding address</p>
+                        )}
+                        <div className="bg-gray-50 rounded-lg px-4 py-3">
                         <p className="text-xs font-semibold text-gray-800">
                           {resp.field_label || resp.field_id || `Field ${i + 1}`}
                         </p>
@@ -5726,8 +5762,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                             {resp.value || resp.text_value || "—"}
                           </p>
                         )}
-                      </div>
-                    ))}
+                        </div>
+                      </React.Fragment>
+                      );
+                    })}
                   </div>
                 ) : (
                   <p className="text-sm text-gray-400 italic">No responses submitted yet.</p>
