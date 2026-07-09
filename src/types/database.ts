@@ -467,6 +467,87 @@ export interface Database {
         Relationships: [];
       };
 
+      coupons: {
+        Row: {
+          id: string;
+          code: string;
+          discount_type: "percent" | "fixed" | null;
+          discount_value: number | null;
+          is_active: boolean;
+          is_deleted: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          code: string;
+          discount_type?: "percent" | "fixed" | null;
+          discount_value?: number | null;
+          is_active?: boolean;
+          is_deleted?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          code?: string;
+          discount_type?: "percent" | "fixed" | null;
+          discount_value?: number | null;
+          is_active?: boolean;
+          is_deleted?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+
+      brokers: {
+        Row: {
+          id: string;
+          name: string;
+          email: string | null;
+          phone: string | null;
+          type: "Mortgage Broker" | "Real Estate Agent" | null;
+          company: string | null;
+          coupon_id: string | null;
+          is_deleted: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          name: string;
+          email?: string | null;
+          phone?: string | null;
+          type?: "Mortgage Broker" | "Real Estate Agent" | null;
+          company?: string | null;
+          coupon_id?: string | null;
+          is_deleted?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          name?: string;
+          email?: string | null;
+          phone?: string | null;
+          type?: "Mortgage Broker" | "Real Estate Agent" | null;
+          company?: string | null;
+          coupon_id?: string | null;
+          is_deleted?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "brokers_coupon_id_fkey";
+            columns: ["coupon_id"];
+            referencedRelation: "coupons";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+
       invitation_tokens: {
         Row: {
           id: string;

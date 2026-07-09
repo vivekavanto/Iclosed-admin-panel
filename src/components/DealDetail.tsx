@@ -2935,6 +2935,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     propertyAddress: deal.propertyAddress || "",
     sellingPropertyAddress: ((deal as any).sellingPropertyAddress as string | undefined) || "",
     closingDate: deal.closingDate ? formatLocalDate(deal.closingDate) : "",
+    price: (deal as any).price ?? null,
     people: familyPeople.map((p) => ({
       name: p.lead_name,
       role: p.role,

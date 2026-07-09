@@ -41,6 +41,9 @@ const ROUTE_MAP: Record<string, string> = {
   "stage-templates": "/admin/templates",
   "task-templates": "/admin/templates/tasks",
   "email-templates": "/admin/templates/emails",
+  masters: "/admin/masters/brokers",
+  brokers: "/admin/masters/brokers",
+  coupons: "/admin/masters/coupons",
   leads: "/admin/leads",
   staff: "/admin/users",
   settings: "/admin/settings",
@@ -75,10 +78,12 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed =
   };
 
   const isTemplateActive = pathname.startsWith("/admin/templates");
+  const isMastersActive = pathname.startsWith("/admin/masters");
 
   const [openMenus, setOpenMenus] = useState<Set<string>>(() => {
     const initial = new Set<string>();
     if (pathname.startsWith("/admin/templates")) initial.add("templates");
+    if (pathname.startsWith("/admin/masters")) initial.add("masters");
     if (pathname.startsWith("/admin/settings")) initial.add("settings");
     if (pathname.startsWith("/admin/account-settings")) initial.add("settings");
     return initial;
@@ -121,7 +126,9 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed =
         <nav className="flex-1 px-2 py-4 space-y-1 overflow-y-auto">
           {NAV_ITEMS.map((item) => {
             const active =
-              isActive(item.id) || (item.id === "templates" && isTemplateActive);
+              isActive(item.id) ||
+              (item.id === "templates" && isTemplateActive) ||
+              (item.id === "masters" && isMastersActive);
             const hasChildren = item.children && item.children.length > 0;
             const route = ROUTE_MAP[item.id] || "/";
 

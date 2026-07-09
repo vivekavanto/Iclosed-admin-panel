@@ -252,6 +252,15 @@ export const NAV_ITEMS = [
       { label: 'Email Templates', id: 'email-templates' },
     ]
   },
+  {
+    label: 'Masters',
+    id: 'masters',
+    icon: 'Briefcase',
+    children: [
+      { label: 'Brokers', id: 'brokers' },
+      { label: 'Coupons', id: 'coupons' },
+    ]
+  },
   { label: 'Leads', id: 'leads', icon: 'Users' },
   { label: 'Staff', id: 'staff', icon: 'UserCog' },
   {
