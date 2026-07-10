@@ -83,6 +83,40 @@ export async function GET() {
     return lead;
   });
 
+  // ── Referral attribution ─────────────────────────────────────────────────
+  // Resolve each lead's referring broker + coupon code in bulk. Done as separate
+  // queries (not an embedded select) so this is migration-safe: before the
+  // broker_id/coupon_id columns exist, `*` simply omits them and this no-ops.
+  const brokerIds = [...new Set(leads.map((l: any) => l.broker_id).filter(Boolean))];
+  const couponIds = [...new Set(leads.map((l: any) => l.coupon_id).filter(Boolean))];
+  const brokerMap = new Map<string, any>();
+  const couponCodeMap = new Map<string, string>();
+
+  if (brokerIds.length > 0) {
+    const { data: brokers } = await supabaseAdmin
+      .from("brokers")
+      .select("id, name, email, phone, type, company, coupons(code)")
+      .in("id", brokerIds);
+    for (const b of brokers ?? []) brokerMap.set(b.id, b);
+  }
+  if (couponIds.length > 0) {
+    const { data: coupons } = await supabaseAdmin
+      .from("coupons")
+      .select("id, code")
+      .in("id", couponIds);
+    for (const c of coupons ?? []) couponCodeMap.set(c.id, c.code);
+  }
+
+  for (const lead of leads as any[]) {
+    const b = lead.broker_id ? brokerMap.get(lead.broker_id) : null;
+    lead.referral_broker = b
+      ? { id: b.id, name: b.name, email: b.email, phone: b.phone, type: b.type, company: b.company }
+      : null;
+    lead.referral_coupon_code =
+      (b?.coupons?.code as string | undefined) ??
+      (lead.coupon_id ? couponCodeMap.get(lead.coupon_id) ?? null : null);
+  }
+
   return NextResponse.json({ success: true, leads });
 }
 

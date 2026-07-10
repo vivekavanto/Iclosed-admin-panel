@@ -31,6 +31,7 @@ import {
   CalendarDays,
   Zap,
   Users,
+  UserPlus,
   Link2,
   Trash2,
   Edit3,
@@ -75,6 +76,20 @@ interface LeadUser {
   // matching heuristic in getCoRole(), which can't distinguish roles on
   // Purchase & Sale parents where both co-leads share both addresses.
   coPersonRole?: "purchaser" | "seller" | null;
+  // Referral attribution resolved from the code applied at intake.
+  referralBroker?: {
+    id: string;
+    name: string;
+    email: string | null;
+    phone: string | null;
+    type: string | null;
+    company: string | null;
+  } | null;
+  referralCouponCode?: string | null;
+  // Manual "no code" referral captured at intake.
+  referralAgentName?: string | null;
+  referralAgentCompany?: string | null;
+  referralAgentEmail?: string | null;
 }
 
 const Leads: React.FC = () => {
@@ -307,6 +322,11 @@ const Leads: React.FC = () => {
     subService: l.sub_service,
     apsSigned: l.aps_signed,
     referralSource: l.referral_source,
+    referralBroker: l.referral_broker ?? null,
+    referralCouponCode: l.referral_coupon_code ?? null,
+    referralAgentName: l.referral_agent_name ?? null,
+    referralAgentCompany: l.referral_agent_company ?? null,
+    referralAgentEmail: l.referral_agent_email ?? null,
     sellingAddressStreet: l.selling_address_street,
     sellingAddressCity: l.selling_address_city,
     sellingAddressPostalCode: l.selling_address_postal_code,
@@ -1005,6 +1025,67 @@ const Leads: React.FC = () => {
               {renderList(coPurchasers, "Co-purchasers", "border-green-200 bg-green-50 text-green-800", "hover:text-green-600")}
               {renderList(coSellers, "Co-sellers", "border-amber-200 bg-amber-50 text-amber-800", "hover:text-amber-600")}
             </>
+          );
+        })()}
+
+        {/* Referred By — broker (from code) or a manually-named agent/broker,
+            captured at intake. Only shows when some referral data exists. */}
+        {(() => {
+          const hasManualAgent = !!(
+            selectedLead.referralAgentName ||
+            selectedLead.referralAgentCompany ||
+            selectedLead.referralAgentEmail
+          );
+          if (!selectedLead.referralBroker && !selectedLead.referralCouponCode && !hasManualAgent) {
+            return null;
+          }
+          return (
+            <div className="flex items-start gap-3 px-5 py-4 rounded-xl border border-brand-primary/20 bg-brand-light">
+              <UserPlus size={18} className="flex-shrink-0 text-brand-primary mt-0.5" />
+              <div className="min-w-0">
+                <p className="text-[10px] uppercase font-black tracking-wider text-slate-500 mb-1">
+                  Referred By
+                </p>
+                {selectedLead.referralBroker ? (
+                  <>
+                    <p className="text-sm font-bold text-slate-900 leading-snug">
+                      {selectedLead.referralBroker.name}
+                    </p>
+                    <p className="text-xs text-slate-500 leading-snug">
+                      {[selectedLead.referralBroker.type, selectedLead.referralBroker.company]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </p>
+                    <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-1 text-xs text-slate-500">
+                      {selectedLead.referralBroker.email && <span>{selectedLead.referralBroker.email}</span>}
+                      {selectedLead.referralBroker.phone && <span>{selectedLead.referralBroker.phone}</span>}
+                    </div>
+                  </>
+                ) : hasManualAgent ? (
+                  <>
+                    <p className="text-sm font-bold text-slate-900 leading-snug">
+                      {selectedLead.referralAgentName || "—"}
+                    </p>
+                    {selectedLead.referralAgentCompany && (
+                      <p className="text-xs text-slate-500 leading-snug">{selectedLead.referralAgentCompany}</p>
+                    )}
+                    {selectedLead.referralAgentEmail && (
+                      <p className="text-xs text-slate-500 leading-snug mt-0.5">{selectedLead.referralAgentEmail}</p>
+                    )}
+                    {selectedLead.referralSource && (
+                      <p className="text-[11px] text-slate-400 mt-1">via {selectedLead.referralSource}</p>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-sm font-bold text-slate-900 leading-snug">Referral code applied</p>
+                )}
+                {selectedLead.referralCouponCode && (
+                  <span className="inline-flex items-center mt-2 px-2 py-0.5 bg-white border border-slate-200 rounded text-[10px] font-bold text-slate-600 uppercase tracking-wide">
+                    Code: {selectedLead.referralCouponCode}
+                  </span>
+                )}
+              </div>
+            </div>
           );
         })()}
 

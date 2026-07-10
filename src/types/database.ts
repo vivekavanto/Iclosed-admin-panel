@@ -261,6 +261,8 @@ export interface Database {
           outstanding_undertakings: number | null;
           outstanding_requisitions: number | null;
           source: string | null;
+          broker_id: string | null;
+          coupon_id: string | null;
         };
         Insert: {
           id?: string;
@@ -287,6 +289,8 @@ export interface Database {
           outstanding_undertakings?: number | null;
           outstanding_requisitions?: number | null;
           source?: string | null;
+          broker_id?: string | null;
+          coupon_id?: string | null;
         };
         Update: {
           id?: string;
@@ -313,6 +317,8 @@ export interface Database {
           outstanding_undertakings?: number | null;
           outstanding_requisitions?: number | null;
           source?: string | null;
+          broker_id?: string | null;
+          coupon_id?: string | null;
         };
         Relationships: [
           {
@@ -358,6 +364,8 @@ export interface Database {
           outstanding_undertakings: number | null;
           outstanding_requisitions: number | null;
           source: string | null;
+          broker_id: string | null;
+          coupon_id: string | null;
         };
         Insert: {
           id?: string;
@@ -384,6 +392,8 @@ export interface Database {
           outstanding_undertakings?: number | null;
           outstanding_requisitions?: number | null;
           source?: string | null;
+          broker_id?: string | null;
+          coupon_id?: string | null;
         };
         Update: {
           id?: string;
@@ -410,6 +420,8 @@ export interface Database {
           outstanding_undertakings?: number | null;
           outstanding_requisitions?: number | null;
           source?: string | null;
+          broker_id?: string | null;
+          coupon_id?: string | null;
         };
         Relationships: [
           {
@@ -762,6 +774,8 @@ export interface Database {
           selling_price: number | null;
           is_deleted: boolean;
           account_activation_deferred: boolean;
+          broker_id: string | null;
+          coupon_id: string | null;
         };
         Insert: {
           id?: string;
@@ -810,6 +824,8 @@ export interface Database {
           selling_price?: number | null;
           is_deleted?: boolean;
           account_activation_deferred?: boolean;
+          broker_id?: string | null;
+          coupon_id?: string | null;
         };
         Update: {
           id?: string;
@@ -858,6 +874,8 @@ export interface Database {
           selling_price?: number | null;
           is_deleted?: boolean;
           account_activation_deferred?: boolean;
+          broker_id?: string | null;
+          coupon_id?: string | null;
         };
         Relationships: [
           {

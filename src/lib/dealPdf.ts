@@ -520,54 +520,115 @@ async function finalizeAndDownload(
 export async function downloadTaskPdf(deal: PdfDealMeta, task: PdfTaskInput): Promise<void> {
   const { jsPDF } = await import("jspdf");
   const doc = new jsPDF({ unit: "pt", format: "a4" });
-  const w = makeWriter(doc);
-  // Single bold task title with the file number in brackets, plus the person's
-  // name for per-person tasks (Personal Information / Upload ID) so each
-  // export is attributable. The section below renders the client responses
-  // without repeating the title.
-  const title = task.title || "Untitled task";
-  const base = deal.fileNumber ? `${title} (${deal.fileNumber})` : title;
-  const heading = task.ownerName ? `${base} — ${task.ownerName}` : base;
-  w.text("iClosed", { size: 10, bold: true, color: BRAND, gap: 8 });
-  // Shrink the heading font until the full "… — Name" fits on one line (down to
-  // a floor), so a long name gets a smaller heading rather than wrapping.
-  const HEADING_MARGIN = 56;
-  const headingMaxW = doc.internal.pageSize.getWidth() - HEADING_MARGIN * 2;
-  let headingSize = 16;
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(headingSize);
-  while (headingSize > 11 && doc.getTextWidth(heading) > headingMaxW) {
-    headingSize -= 0.5;
-    doc.setFontSize(headingSize);
-  }
-  w.text(heading, { size: headingSize, bold: true, color: [20, 20, 20], gap: 12 });
-  // The "Name" row for per-person tasks is rendered inside writeTaskSection
-  // (shared with the combined export), so it prints here too via that helper.
-  writeTaskSection(w, task, { showTitle: false });
-  // Embed JPG/PNG images inline into the jsPDF report so they appear
-  // exactly where the writer left off. Remove any embedded images from
-  // the group so finalizeAndDownload only handles remaining files (PDFs/other).
-  const group = { caption: task.title || "Task", responses: (task.responses || []).slice() } as EmbedGroup;
-  for (let i = group.responses.length - 1; i >= 0; --i) {
-    const r = group.responses[i];
-    if (r.field_type === "file" && r.file_url) {
-      const file = await fetchFile(r.file_url);
-      if (file) {
-        const kind = detectKind(r.file_name, file.contentType);
-        if (kind === "jpg" || kind === "png") {
-          // embed into jsPDF and remove from future embedding list
-          await (w as any).addImageFromBytes(file.bytes, kind);
-          group.responses.splice(i, 1);
-        }
+  const g = pkgGeom(doc);
+
+  const textResponses = (task.responses ?? []).filter((r) => r.field_type !== "file");
+  const fileResponses = (task.responses ?? []).filter((r) => r.field_type === "file" && r.file_url);
+
+  let y = g.top;
+  const flow = {
+    page() {
+      doc.addPage();
+      y = g.top;
+    },
+    band(title: string, label?: string) {
+      if (y + 62 > g.bottom) {
+        doc.addPage();
+        y = g.top;
       }
+      y = drawBand(doc, g, y, title, label);
+    },
+    kv(label: string, value: string) {
+      const h = kvRowHeight(doc, label, value, 180, g.contentW);
+      if (y + h > g.bottom) {
+        doc.addPage();
+        y = g.top;
+      }
+      y = drawKvRow(doc, g.M, y, g.contentW, label, value, 180);
+    },
+  };
+
+  const inserts: Array<{ afterPage: number; bytes: Uint8Array }> = [];
+
+  if (textResponses.length > 0 || !!task.ownerName) {
+    const bandTitle = task.ownerName || task.title || "Details";
+    const bandLabel = task.ownerName ? task.title : undefined;
+    flow.band(bandTitle, bandLabel);
+    if (task.ownerName) {
+      flow.kv("Name", task.ownerName);
+    }
+    for (const r of textResponses) {
+      const label = (r.field_label || r.field_id || "Field").toString();
+      const val = (r.value ?? "").toString().trim() || "—";
+      flow.kv(label, val);
+    }
+  } else {
+    flow.band(task.title || "Task", undefined);
+    flow.kv("No client responses submitted.", "—");
+  }
+
+  let docIdx = 0;
+  const totalFiles = fileResponses.length;
+  for (const r of fileResponses) {
+    docIdx++;
+    const fname = r.file_name || "Document";
+    const file = await fetchFile(r.file_url!);
+    if (file) {
+      const kind = detectKind(r.file_name, file.contentType);
+      if (kind === "jpg" || kind === "png") {
+        const img = await loadImageEl(file.bytes, kind);
+        if (img) {
+          pkgImagePage(doc, task.ownerName || task.title || "Document", task.ownerName ? task.title : "", img, kind === "png" ? "PNG" : "JPEG");
+          continue;
+        }
+        pkgAttachedTitle(doc, docIdx, totalFiles, task.title || "Document", fname);
+        pkgPlaceholder(doc, fname, "This image could not be rendered. It remains available via its original link.", false);
+      } else if (kind === "pdf") {
+        pkgAttachedTitle(doc, docIdx, totalFiles, task.title || "Document", fname);
+        pkgPlaceholder(doc, fname, "The original document is merged into the package at this position.", true);
+        inserts.push({ afterPage: doc.getNumberOfPages(), bytes: file.bytes });
+      } else {
+        pkgAttachedTitle(doc, docIdx, totalFiles, task.title || "Document", fname);
+        pkgPlaceholder(doc, fname, "This file type can't be previewed inline. It remains available via its original link.", false);
+      }
+    } else {
+      pkgAttachedTitle(doc, docIdx, totalFiles, task.title || "Document", fname);
+      pkgPlaceholder(doc, fname, "This file could not be downloaded for embedding (it may require sign-in or block cross-origin access). It remains available via its original link.", false);
     }
   }
 
-  await finalizeAndDownload(
-    doc,
-    [group],
-    `Task - ${sanitizeFile(task.title || "task")}${task.ownerName ? ` - ${sanitizeFile(task.ownerName)}` : ""}.pdf`,
-  );
+  stampChrome(doc, deal);
+
+  const fileName = `Task - ${sanitizeFile(task.title || "task")}${task.ownerName ? ` - ${sanitizeFile(task.ownerName)}` : ""}.pdf`;
+  const reportBuf: ArrayBuffer = doc.output("arraybuffer");
+  const lib = await import("pdf-lib");
+  let pdfDoc: any;
+  try {
+    pdfDoc = await lib.PDFDocument.load(reportBuf);
+  } catch {
+    triggerDownload(new Blob([reportBuf], { type: "application/pdf" }), fileName);
+    return;
+  }
+
+  inserts.sort((a, b) => a.afterPage - b.afterPage);
+  let offset = 0;
+  for (const ins of inserts) {
+    try {
+      const src = await lib.PDFDocument.load(ins.bytes, { ignoreEncryption: true });
+      const copied = await pdfDoc.copyPages(src, src.getPageIndices());
+      let at = ins.afterPage + offset;
+      for (const p of copied) {
+        pdfDoc.insertPage(at, p);
+        at++;
+      }
+      offset += copied.length;
+    } catch {
+      /* leave the placeholder page standing if this PDF can't be merged */
+    }
+  }
+
+  const out = await pdfDoc.save();
+  triggerDownload(new Blob([out as BlobPart], { type: "application/pdf" }), fileName);
 }
 
 // ═══════════════════════ Deal Package (branded layout) ═══════════════════════
@@ -835,24 +896,10 @@ function pkgAttachedTitle(
 ) {
   doc.addPage();
   const g = pkgGeom(doc);
-  let y = 180;
 
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(9);
-  doc.setTextColor(...PKG.brand);
-  const eyebrow = total > 1 ? `ATTACHED DOCUMENT · ${idx} OF ${total}` : "ATTACHED DOCUMENT";
-  doc.text(eyebrow, g.M, y, { charSpace: 2 } as any);
-  y += 32;
-
-  doc.setFont("times", "bold");
-  doc.setFontSize(24);
-  doc.setTextColor(28, 28, 32);
-  const lines: string[] = doc.splitTextToSize(String(sectionTitle || "Attached Document"), g.contentW);
-  for (const ln of lines) {
-    doc.text(ln, g.M, y);
-    y += 27;
-  }
-  y += 18;
+  const label = total > 1 ? `Attached Document · ${idx} of ${total}` : "Attached Document";
+  let y = drawBand(doc, g, g.top, sectionTitle || "Attached Document", label);
+  y += 24;
 
   doc.setFont("courier", "bold");
   doc.setFontSize(10.5);
@@ -883,7 +930,7 @@ function pkgPlaceholder(doc: JsPdfDoc, fileName: string, note: string, embedded:
   setDash(doc, []);
 
   const cx = g.pageW / 2;
-  let y = by + bh / 2 - 30;
+  let y = by + 64;
   doc.setFont("helvetica", "bold");
   doc.setFontSize(8.5);
   doc.setTextColor(...PKG.brand);
@@ -891,7 +938,7 @@ function pkgPlaceholder(doc: JsPdfDoc, fileName: string, note: string, embedded:
     align: "center",
     charSpace: 2,
   } as any);
-  y += 26;
+  y += 28;
 
   doc.setFont("courier", "bold");
   doc.setFontSize(12);
@@ -899,9 +946,9 @@ function pkgPlaceholder(doc: JsPdfDoc, fileName: string, note: string, embedded:
   const nameLines: string[] = doc.splitTextToSize(String(fileName || "document"), bw - 80);
   for (const ln of nameLines) {
     doc.text(ln, cx, y, { align: "center" } as any);
-    y += 16;
+    y += 18;
   }
-  y += 8;
+  y += 12;
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(10);
@@ -909,7 +956,7 @@ function pkgPlaceholder(doc: JsPdfDoc, fileName: string, note: string, embedded:
   const noteLines: string[] = doc.splitTextToSize(String(note || ""), bw - 120);
   for (const ln of noteLines) {
     doc.text(ln, cx, y, { align: "center" } as any);
-    y += 15;
+    y += 18;
   }
 }
 

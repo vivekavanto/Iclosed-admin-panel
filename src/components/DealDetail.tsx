@@ -2944,9 +2944,65 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     })),
   });
 
+  const templateFieldOrderCache = useRef(new Map<string, Promise<Map<string, number> | null>>());
+
+  const getTemplateFieldOrder = async (taskTemplateId: string | null) => {
+    if (!taskTemplateId) return null;
+    const cached = templateFieldOrderCache.current.get(taskTemplateId);
+    if (cached) return cached;
+
+    const promise = (async () => {
+      try {
+        const res = await fetch(`/api/admin/task-form-fields?task_template_id=${encodeURIComponent(taskTemplateId)}`);
+        if (!res.ok) return null;
+        const fieldsData = await res.json();
+        if (!Array.isArray(fieldsData)) return null;
+
+        const orderByFieldId = new Map<string, number>();
+        const orderByFieldLabel = new Map<string, number>();
+        fieldsData.forEach((f: any, index: number) => {
+          const fieldId = f?.id ? String(f.id) : "";
+          const fieldLabel = (f?.label ?? "").trim().toLowerCase();
+          const order = Number(f?.order_index ?? index);
+          if (fieldId) orderByFieldId.set(fieldId, order);
+          if (fieldLabel) orderByFieldLabel.set(fieldLabel, order);
+        });
+
+        return new Map<string, number>([...orderByFieldId.entries(), ...orderByFieldLabel.entries()]);
+      } catch {
+        return null;
+      }
+    })();
+
+    templateFieldOrderCache.current.set(taskTemplateId, promise);
+    return promise;
+  };
+
+  const sortResponsesByFormOrder = async (task: DisplayTask, responses: any[]) => {
+    if (!Array.isArray(responses) || responses.length === 0) return responses;
+
+    const templateOrder = await getTemplateFieldOrder(task.taskTemplateId ?? null);
+    if (!templateOrder || templateOrder.size === 0) return responses;
+
+    return [...responses].sort((a, b) => {
+      const aOrder = a?.field_id
+        ? (templateOrder.get(String(a.field_id)) ?? Number.MAX_SAFE_INTEGER)
+        : Number.MAX_SAFE_INTEGER;
+      const bOrder = b?.field_id
+        ? (templateOrder.get(String(b.field_id)) ?? Number.MAX_SAFE_INTEGER)
+        : Number.MAX_SAFE_INTEGER;
+
+      if (aOrder !== bOrder) return aOrder - bOrder;
+
+      const aLabel = String(a?.field_label ?? a?.field_id ?? "").toLowerCase();
+      const bLabel = String(b?.field_label ?? b?.field_id ?? "").toLowerCase();
+      return aLabel.localeCompare(bLabel);
+    });
+  };
+
   // Merge responses (text + file) for a task, deduping file rows that also
   // surface via taskFileDocs (e.g. APS) so a document isn't embedded twice.
-  const buildPdfTaskInput = (task: DisplayTask): PdfTaskInput => {
+  const buildPdfTaskInput = async (task: DisplayTask): Promise<PdfTaskInput> => {
     const responses = [...(responsesByTask.get(task.id) ?? [])];
     const seenFileUrls = new Set(
       responses.filter((r) => r.field_type === "file" && r.file_url).map((r) => r.file_url),
@@ -2957,6 +3013,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         seenFileUrls.add(d.file_url);
       }
     }
+
+    const orderedResponses = await sortResponsesByFormOrder(task, responses);
+
     return {
       title: task.title,
       status: task.status ?? "Pending",
@@ -2975,14 +3034,15 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         ((isPersonalInfoTask(task) || isIdentificationTask(task))
           ? familyPeople.find((p) => p.isCurrent)?.lead_name || null
           : null),
-      responses,
+      responses: orderedResponses,
     };
   };
 
   const handleDownloadTaskPdf = async (task: DisplayTask) => {
     setDownloadingTaskId(task.id);
     try {
-      await downloadTaskPdf(buildPdfDealMeta(), buildPdfTaskInput(task));
+      const taskInput = await buildPdfTaskInput(task);
+      await downloadTaskPdf(buildPdfDealMeta(), taskInput);
     } catch {
       showToast("Could not generate the task PDF", "error");
     } finally {
@@ -3010,18 +3070,24 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           .sort((a, b) => (a.orderIndex ?? Number.MAX_SAFE_INTEGER) - (b.orderIndex ?? Number.MAX_SAFE_INTEGER));
         if (milestoneTasks.length === 0) continue;
         milestoneTasks.forEach((t) => usedTaskIds.add(t.id));
+        const builtTasks = await Promise.all(
+          milestoneTasks.map((t) => buildPdfTaskInput({ ...t, isTemplate: false })),
+        );
         sections.push({
           milestoneTitle: m.title,
           leadType: m.leadType ?? null,
-          tasks: milestoneTasks.map((t) => buildPdfTaskInput({ ...t, isTemplate: false })),
+          tasks: builtTasks,
         });
       }
       // Tasks not attached to any milestone (manually-added / unlinked).
       const orphanTasks = realTasks.filter((t) => !usedTaskIds.has(t.id));
       if (orphanTasks.length > 0) {
+        const builtOrphanTasks = await Promise.all(
+          orphanTasks.map((t) => buildPdfTaskInput({ ...t, isTemplate: false })),
+        );
         sections.push({
           milestoneTitle: "Other Tasks",
-          tasks: orphanTasks.map((t) => buildPdfTaskInput({ ...t, isTemplate: false })),
+          tasks: builtOrphanTasks,
         });
       }
       if (sections.length === 0) {
@@ -3167,6 +3233,61 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           </div>
         </div>
       )}
+
+      {/* Referral card — who referred this file (broker/agent + coupon code),
+          captured at intake when the client applied a referral code. */}
+      {(() => {
+        const referralBroker = rawDeal?.referral_broker as
+          | { name: string; email: string | null; phone: string | null; type: string | null; company: string | null }
+          | null
+          | undefined;
+        const referralCode = (rawDeal?.referral_coupon_code as string | null | undefined) ?? null;
+        // Manual "no code" referral — a free-text agent/broker named at intake.
+        const agentName = (rawDeal?.referral_agent_name as string | null | undefined) ?? null;
+        const agentCompany = (rawDeal?.referral_agent_company as string | null | undefined) ?? null;
+        const agentEmail = (rawDeal?.referral_agent_email as string | null | undefined) ?? null;
+        const hasManualAgent = !!(agentName || agentCompany || agentEmail);
+        if (!referralBroker && !referralCode && !hasManualAgent) return null;
+        return (
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5 mb-6">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-full bg-brand-light border border-brand-primary/20 flex items-center justify-center text-brand-primary shrink-0">
+                <UserPlus size={16} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[10px] uppercase font-bold text-slate-400 tracking-wider leading-none mb-1.5">
+                  Referred By
+                </p>
+                {referralBroker ? (
+                  <>
+                    <p className="font-bold text-sm text-slate-900 leading-snug">{referralBroker.name}</p>
+                    <p className="text-xs text-slate-500 leading-snug">
+                      {[referralBroker.type, referralBroker.company].filter(Boolean).join(" · ")}
+                    </p>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1.5 text-xs text-slate-500">
+                      {referralBroker.email && <span>{referralBroker.email}</span>}
+                      {referralBroker.phone && <span>{referralBroker.phone}</span>}
+                    </div>
+                  </>
+                ) : hasManualAgent ? (
+                  <>
+                    <p className="font-bold text-sm text-slate-900 leading-snug">{agentName || "—"}</p>
+                    {agentCompany && <p className="text-xs text-slate-500 leading-snug">{agentCompany}</p>}
+                    {agentEmail && <p className="text-xs text-slate-500 leading-snug mt-1">{agentEmail}</p>}
+                  </>
+                ) : (
+                  <p className="font-bold text-sm text-slate-900 leading-snug">Referral code applied</p>
+                )}
+                {referralCode && (
+                  <span className="inline-flex items-center mt-2 px-2 py-0.5 bg-slate-100 border border-slate-200 rounded text-[10px] font-bold text-slate-600 uppercase tracking-wide">
+                    Code: {referralCode}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Property Details Card (Top - Full Width) */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mb-6">

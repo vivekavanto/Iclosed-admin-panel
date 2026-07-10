@@ -19,6 +19,40 @@ export async function GET(
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
+  // ── Referral attribution ─────────────────────────────────────────────────
+  // If this deal was referred (broker_id set at intake), resolve the broker +
+  // its coupon code so the detail page can show who referred the file.
+  data.referral_broker = null;
+  data.referral_coupon_code = null;
+  if (data.broker_id) {
+    const { data: broker } = await supabase
+      .from("brokers")
+      .select("id, name, email, phone, type, company, coupons(code)")
+      .eq("id", data.broker_id)
+      .maybeSingle();
+    if (broker) {
+      data.referral_broker = {
+        id: broker.id,
+        name: broker.name,
+        email: broker.email,
+        phone: broker.phone,
+        type: broker.type,
+        company: broker.company,
+      };
+      data.referral_coupon_code =
+        (broker as any).coupons?.code ?? null;
+    }
+  }
+  // A coupon may be applied without a specific broker — surface its code too.
+  if (!data.referral_coupon_code && data.coupon_id) {
+    const { data: coupon } = await supabase
+      .from("coupons")
+      .select("code")
+      .eq("id", data.coupon_id)
+      .maybeSingle();
+    data.referral_coupon_code = coupon?.code ?? null;
+  }
+
   // Resolve "account created" (last_sign_in_at) for the current lead and
   // every family member. Mirrors the All Files list so the detail page
   // can show the same Pending/Active and per-person Active/Inactive

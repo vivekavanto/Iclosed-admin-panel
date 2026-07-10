@@ -265,6 +265,15 @@ export async function convertSingleLead(
         property_address: lead.address_street ?? "Address TBD",
         closing_date: opts.closing_date ?? null,
         price: cleanPrice ?? 0,
+        // Carry referral attribution (broker/coupon captured at intake) onto the
+        // deal so admins can see who referred each file. Only spread when the
+        // lead actually carries a referral so a non-referred conversion never
+        // references the columns (safe before the migration is applied).
+        ...(lead.broker_id ? { broker_id: lead.broker_id } : {}),
+        ...(lead.coupon_id ? { coupon_id: lead.coupon_id } : {}),
+        ...(lead.referral_agent_name ? { referral_agent_name: lead.referral_agent_name } : {}),
+        ...(lead.referral_agent_company ? { referral_agent_company: lead.referral_agent_company } : {}),
+        ...(lead.referral_agent_email ? { referral_agent_email: lead.referral_agent_email } : {}),
       })
       .select("id")
       .single();
