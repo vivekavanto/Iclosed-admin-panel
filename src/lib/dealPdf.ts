@@ -483,6 +483,13 @@ function sanitizeFile(name: string): string {
     .slice(0, 120);
 }
 
+// Pull a lowercase file extension off an uploaded file's name (no dot), so a
+// raw single-attachment download keeps its original type.
+function extFromName(name?: string | null): string {
+  const m = /\.([a-z0-9]{1,8})$/i.exec((name ?? "").trim());
+  return m ? m[1].toLowerCase() : "";
+}
+
 async function finalizeAndDownload(
   doc: JsPdfDoc,
   groups: EmbedGroup[],
@@ -515,9 +522,104 @@ async function finalizeAndDownload(
 
 // ─────────────────────────── public entry points ───────────────────────────
 
-/** Build and download a PDF for a single task: its info, client responses, and
- *  every file attached to it (images rendered, uploaded PDFs appended). */
+/** Build and download a PDF for a single task.
+ *
+ *  Only the "Provide Personal Information" task uses the branded report layout
+ *  (cover band + key/value responses). Every other task — mortgage statement,
+ *  void cheque, ID, APS, etc. — downloads just its raw attachment(s) so no blank
+ *  cover/divider pages are prepended: a single attachment comes down exactly as
+ *  uploaded; multiple attachments are merged into one PDF with nothing else added.
+ *
+ *  The download file name is "<file number> <task title>" (plus the person's
+ *  name for per-person exports). */
 export async function downloadTaskPdf(deal: PdfDealMeta, task: PdfTaskInput): Promise<void> {
+  const isPersonalInfo = (task.title ?? "").toLowerCase().includes("personal info");
+
+  const baseName = sanitizeFile(
+    `${deal.fileNumber ? `${deal.fileNumber} ` : ""}${task.title || "task"}${
+      task.ownerName ? ` - ${task.ownerName}` : ""
+    }`,
+  );
+
+  const fileResponses = (task.responses ?? []).filter(
+    (r) => r.field_type === "file" && r.file_url,
+  );
+
+  // Attachment-only download for every task except Personal Information. Falls
+  // through to the branded report if nothing could be fetched/embedded (or if
+  // the task has no attachment at all).
+  if (!isPersonalInfo && fileResponses.length > 0) {
+    const ok = await downloadAttachmentsOnly(fileResponses, baseName);
+    if (ok) return;
+  }
+
+  await downloadBrandedTaskPdf(deal, task, `${baseName}.pdf`);
+}
+
+/** Download just a task's uploaded attachment(s), with no generated pages.
+ *  Returns false if nothing could be fetched/embedded so the caller can fall
+ *  back to the branded report. */
+async function downloadAttachmentsOnly(
+  fileResponses: PdfResponse[],
+  baseName: string,
+): Promise<boolean> {
+  // A single attachment is downloaded exactly as uploaded (original bytes, no
+  // re-encoding) so a mortgage statement / void cheque / ID / APS arrives as
+  // its own file with no extra pages.
+  if (fileResponses.length === 1) {
+    const r = fileResponses[0];
+    const file = await fetchFile(r.file_url!);
+    if (!file) return false;
+    const kind = detectKind(r.file_name, file.contentType);
+    const ext =
+      kind === "pdf" ? "pdf" : kind === "png" ? "png" : kind === "jpg" ? "jpg" : extFromName(r.file_name);
+    const type = kind === "pdf" ? "application/pdf" : file.contentType || "application/octet-stream";
+    triggerDownload(
+      new Blob([file.bytes as BlobPart], { type }),
+      ext ? `${baseName}.${ext}` : baseName,
+    );
+    return true;
+  }
+
+  // Multiple attachments are merged into one PDF: uploaded PDFs' pages are
+  // copied in, images are placed each on their own page sized to the image.
+  const lib = await import("pdf-lib");
+  const out = await lib.PDFDocument.create();
+  let added = 0;
+  for (const r of fileResponses) {
+    const file = await fetchFile(r.file_url!);
+    if (!file) continue;
+    const kind = detectKind(r.file_name, file.contentType);
+    try {
+      if (kind === "pdf") {
+        const src = await lib.PDFDocument.load(file.bytes, { ignoreEncryption: true });
+        const pages = await out.copyPages(src, src.getPageIndices());
+        for (const p of pages) out.addPage(p);
+        added++;
+      } else if (kind === "jpg" || kind === "png") {
+        const img = kind === "jpg" ? await out.embedJpg(file.bytes) : await out.embedPng(file.bytes);
+        const page = out.addPage([img.width, img.height]);
+        page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+        added++;
+      }
+    } catch {
+      /* skip a single file that can't be embedded, keep the rest */
+    }
+  }
+  if (added === 0) return false;
+  const bytes = await out.save();
+  triggerDownload(new Blob([bytes as BlobPart], { type: "application/pdf" }), `${baseName}.pdf`);
+  return true;
+}
+
+/** Build and download the branded single-task report: its info, client
+ *  responses, and every file attached to it (images rendered, uploaded PDFs
+ *  appended). Used for the Personal Information task and as a fallback. */
+async function downloadBrandedTaskPdf(
+  deal: PdfDealMeta,
+  task: PdfTaskInput,
+  fileName: string,
+): Promise<void> {
   const { jsPDF } = await import("jspdf");
   const doc = new jsPDF({ unit: "pt", format: "a4" });
   const g = pkgGeom(doc);
@@ -599,7 +701,6 @@ export async function downloadTaskPdf(deal: PdfDealMeta, task: PdfTaskInput): Pr
 
   stampChrome(doc, deal);
 
-  const fileName = `Task - ${sanitizeFile(task.title || "task")}${task.ownerName ? ` - ${sanitizeFile(task.ownerName)}` : ""}.pdf`;
   const reportBuf: ArrayBuffer = doc.output("arraybuffer");
   const lib = await import("pdf-lib");
   let pdfDoc: any;

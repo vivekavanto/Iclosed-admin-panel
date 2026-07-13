@@ -18,7 +18,7 @@ async function sendEmailForDeal(
     try {
         const { data: deal } = await supabaseAdmin
             .from("deals")
-            .select("client_id, lead_id, file_number, property_address, lockbox_code, type, closing_date")
+            .select("client_id, lead_id, file_number, property_address, lockbox_code, type, closing_date, broker_id")
             .eq("id", dealId)
             .single()
 
@@ -219,10 +219,25 @@ async function sendEmailForDeal(
         processedSubject = processedSubject.replace(/\{\{\s*file_number\s*\}\}/gi, fileNumber);
         processedSubject = processedSubject.replace(/\{\{\s*side_suffix\s*\}\}/gi, sideSuffix);
 
+        // "Shared with agent?" templates also CC the deal's referral broker.
+        // Client stays the primary recipient; CC is skipped when the flag is
+        // off, no broker is linked, or the linked broker has no email.
+        let cc: string[] | undefined
+        if (template.shared_with_agent && deal.broker_id) {
+            const { data: broker } = await supabaseAdmin
+                .from("brokers")
+                .select("email")
+                .eq("id", deal.broker_id)
+                .eq("is_deleted", false)
+                .maybeSingle()
+            if (broker?.email) cc = [broker.email]
+        }
+
         const { data: sendResult, error: sendError } = await resend.emails.send({
             from: fromEmail,
             replyTo: "testing@iclosed.ca",
             to: [client.email],
+            ...(cc ? { cc } : {}),
             subject: processedSubject,
             html: htmlBody,
         })
@@ -232,7 +247,9 @@ async function sendEmailForDeal(
         }
 
         console.log(
-            `[Milestone Email] Sent to ${client.email}, milestone: "${milestone.title}", id: ${sendResult?.id}`
+            `[Milestone Email] Sent to ${client.email}` +
+            `${cc ? ` (cc agent: ${cc.join(", ")})` : template.shared_with_agent ? " (shared_with_agent on, but no broker email on deal — no cc)" : ""}` +
+            `, milestone: "${milestone.title}", id: ${sendResult?.id}`
         )
 
         return { success: true, email: client.email }

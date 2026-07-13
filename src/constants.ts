@@ -262,6 +262,7 @@ export const NAV_ITEMS = [
   //   ]
   // },
   { label: 'Leads', id: 'leads', icon: 'Users' },
+  { label: 'Partners', id: 'partners', icon: 'Handshake' },
   { label: 'Staff', id: 'staff', icon: 'UserCog' },
   {
     label: 'Settings',

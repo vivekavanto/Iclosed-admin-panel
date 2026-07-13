@@ -21,6 +21,7 @@ import {
   ListTodo,
   KeyRound,
   UserCog,
+  Handshake,
   Menu,
   X,
 } from "lucide-react";
@@ -45,6 +46,7 @@ const ROUTE_MAP: Record<string, string> = {
   brokers: "/admin/masters/brokers",
   coupons: "/admin/masters/coupons",
   leads: "/admin/leads",
+  partners: "/admin/partners",
   staff: "/admin/users",
   settings: "/admin/settings",
   "default-tasks": "/admin/settings/default-tasks",
@@ -60,6 +62,7 @@ const iconMap: Record<string, React.ReactNode> = {
   FileStack: <FileStack size={20} />,
   Users: <Users size={20} />,
   UserCog: <UserCog size={20} />,
+  Handshake: <Handshake size={20} />,
   Settings: <Settings size={20} />,
   Briefcase: <Briefcase size={20} />,
   FileText: <FileText size={20} />,

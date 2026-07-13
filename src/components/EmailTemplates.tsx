@@ -14,7 +14,6 @@ import {
   Edit,
   Trash2,
 } from "lucide-react";
-import { formatLocalDate } from "@/lib/formatDate";
 
 interface EmailTemplate {
   id: string;
@@ -22,6 +21,7 @@ interface EmailTemplate {
   subject: string | null;
   body: string;
   is_active: boolean;
+  shared_with_agent: boolean;
   created_at: string;
 }
 
@@ -66,6 +66,7 @@ const EmailTemplates: React.FC = () => {
     subject: "",
     body: "",
     is_active: true,
+    shared_with_agent: false,
   });
 
   const handleCopy = (key: string) => {
@@ -78,7 +79,29 @@ const EmailTemplates: React.FC = () => {
     setForm((prev) => ({ ...prev, body: prev.body + key }));
   };
   const resetForm = () => {
-    setForm({ id: "", name: "", subject: "", body: "", is_active: true });
+    setForm({ id: "", name: "", subject: "", body: "", is_active: true, shared_with_agent: false });
+  };
+
+  // Inline toggle of the "Shared with agent?" column. Optimistically flips the
+  // row, then PUTs just { id, shared_with_agent }; reverts on failure.
+  const toggleSharedWithAgent = async (template: EmailTemplate) => {
+    const next = !template.shared_with_agent;
+    setTemplates((prev) =>
+      prev.map((t) => (t.id === template.id ? { ...t, shared_with_agent: next } : t)),
+    );
+    try {
+      const res = await fetch("/api/admin/email-templates", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: template.id, shared_with_agent: next }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch {
+      setTemplates((prev) =>
+        prev.map((t) => (t.id === template.id ? { ...t, shared_with_agent: !next } : t)),
+      );
+      alert("Could not update 'Shared with agent'. Please try again.");
+    }
   };
   const handleDelete = async (template: EmailTemplate) => {
     setDeletingId(template.id);
@@ -110,6 +133,7 @@ const EmailTemplates: React.FC = () => {
       subject: template.subject ?? "",
       body: template.body ?? "",
       is_active: template.is_active ?? true,
+      shared_with_agent: template.shared_with_agent ?? false,
     });
     setIsModalOpen(true);
   };
@@ -232,7 +256,7 @@ const EmailTemplates: React.FC = () => {
                 <th className="px-6 py-5">Name</th>
                 <th className="px-4 py-5">Subject</th>
                 <th className="px-4 py-5 text-center w-24">Active</th>
-                <th className="px-4 py-5 w-40">Created</th>
+                <th className="px-4 py-5 text-center w-40">Shared with agent?</th>
                 <th className="px-4 py-5 text-center w-24">Actions</th>
               </tr>
             </thead>
@@ -270,10 +294,17 @@ const EmailTemplates: React.FC = () => {
                       )}
                     </div>
                   </td>
-                  <td className="px-4 py-4">
-                    <span className="text-xs text-slate-400 font-medium">
-                      {formatLocalDate(template.created_at) || "—"}
-                    </span>
+                  <td className="px-4 py-4 text-center">
+                    <div className="flex justify-center">
+                      <input
+                        type="checkbox"
+                        checked={template.shared_with_agent ?? false}
+                        onChange={() => toggleSharedWithAgent(template)}
+                        className="h-4 w-4 rounded border-slate-300 text-brand-primary accent-[#C10007] cursor-pointer focus:ring-brand-primary/30"
+                        title="CC the client's referral agent/broker on this email"
+                        aria-label={`Shared with agent: ${template.name}`}
+                      />
+                    </div>
                   </td>
                   <td className="px-4 py-4 text-center">
                     <div className="flex justify-center items-center gap-1">
@@ -530,6 +561,30 @@ const EmailTemplates: React.FC = () => {
                   >
                     <span
                       className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ${form.is_active ? "translate-x-6" : "translate-x-0"}`}
+                    />
+                  </button>
+                </div>
+
+                {/* Shared with agent toggle */}
+                <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-gray-100">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-800">
+                      Shared with agent
+                    </p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      When on, this email also CCs the client&apos;s referral agent
+                      or broker (if one is linked to the deal).
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setForm((prev) => ({ ...prev, shared_with_agent: !prev.shared_with_agent }))
+                    }
+                    className={`relative w-12 h-6 rounded-full transition-colors duration-200 focus:outline-none ${form.shared_with_agent ? "bg-[#C10007]" : "bg-slate-300"}`}
+                  >
+                    <span
+                      className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ${form.shared_with_agent ? "translate-x-6" : "translate-x-0"}`}
                     />
                   </button>
                 </div>

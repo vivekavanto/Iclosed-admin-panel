@@ -84,27 +84,22 @@ export async function GET() {
   });
 
   // ── Referral attribution ─────────────────────────────────────────────────
-  // Resolve each lead's referring broker + coupon code in bulk. Done as separate
-  // queries (not an embedded select) so this is migration-safe: before the
-  // broker_id/coupon_id columns exist, `*` simply omits them and this no-ops.
+  // Resolve each lead's referring partner (brokers row) in bulk. The partner's
+  // own referral_code is the referral code — coupons are no longer read. Done as
+  // a separate query (not an embedded select) so this is migration-safe: before
+  // the broker_id column exists, `*` simply omits it and this no-ops.
   const brokerIds = [...new Set(leads.map((l: any) => l.broker_id).filter(Boolean))];
-  const couponIds = [...new Set(leads.map((l: any) => l.coupon_id).filter(Boolean))];
   const brokerMap = new Map<string, any>();
-  const couponCodeMap = new Map<string, string>();
 
   if (brokerIds.length > 0) {
     const { data: brokers } = await supabaseAdmin
       .from("brokers")
-      .select("id, name, email, phone, type, company, coupons(code)")
-      .in("id", brokerIds);
+      .select("id, name, email, phone, type, company, referral_code")
+      .in("id", brokerIds)
+      // Exclude soft-deleted partners — a deleted broker must not resurface as a
+      // lead's referral just because the lead still carries its broker_id.
+      .eq("is_deleted", false);
     for (const b of brokers ?? []) brokerMap.set(b.id, b);
-  }
-  if (couponIds.length > 0) {
-    const { data: coupons } = await supabaseAdmin
-      .from("coupons")
-      .select("id, code")
-      .in("id", couponIds);
-    for (const c of coupons ?? []) couponCodeMap.set(c.id, c.code);
   }
 
   for (const lead of leads as any[]) {
@@ -112,9 +107,7 @@ export async function GET() {
     lead.referral_broker = b
       ? { id: b.id, name: b.name, email: b.email, phone: b.phone, type: b.type, company: b.company }
       : null;
-    lead.referral_coupon_code =
-      (b?.coupons?.code as string | undefined) ??
-      (lead.coupon_id ? couponCodeMap.get(lead.coupon_id) ?? null : null);
+    lead.referral_coupon_code = (b?.referral_code as string | undefined) ?? null;
   }
 
   return NextResponse.json({ success: true, leads });

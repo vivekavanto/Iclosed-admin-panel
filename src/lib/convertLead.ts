@@ -430,7 +430,7 @@ export async function convertSingleLead(
                   // Fetch the email template
                   const { data: emailTemplate } = await supabaseAdmin
                     .from("email_templates")
-                    .select("name, subject, body, is_active")
+                    .select("name, subject, body, is_active, shared_with_agent")
                     .eq("id", st.email_template_id)
                     .single();
 
@@ -517,10 +517,25 @@ export async function convertSingleLead(
                       // No HTML wrapper / logo injection — the DB template owns its layout.
                       const htmlBody = processedBody;
 
+                      // "Shared with agent?" templates also CC the referral
+                      // broker linked to this lead/deal (skipped when unset or
+                      // the broker has no email).
+                      let cc: string[] | undefined;
+                      if (emailTemplate.shared_with_agent && lead.broker_id) {
+                        const { data: broker } = await supabaseAdmin
+                          .from("brokers")
+                          .select("email")
+                          .eq("id", lead.broker_id)
+                          .eq("is_deleted", false)
+                          .maybeSingle();
+                        if (broker?.email) cc = [broker.email];
+                      }
+
                       await resend.emails.send({
                         from: fromEmail,
                         replyTo: "testing@iclosed.ca",
                         to: [clientData.email],
+                        ...(cc ? { cc } : {}),
                         subject: processedSubject,
                         html: htmlBody,
                       });

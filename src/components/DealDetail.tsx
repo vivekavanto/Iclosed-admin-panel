@@ -4342,74 +4342,115 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
             </div>
           </div>
 
-          {/* Partner Details */}
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-            <div className="flex items-start justify-between gap-3 mb-4">
-              <h3 className="font-bold text-slate-800 text-sm">
-                Partner Details
-              </h3>
-              {/* Lock box code — Purchase files only. Editable inline; saves to
-                  the deal via PATCH and feeds the {{ lockbox_code }} email var. */}
-              {(deal.type ?? "").toLowerCase().includes("purchase") && (
-                <div className="text-right shrink-0">
-                  <p className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mb-0.5">
-                    Lock box code
-                  </p>
-                  <div className="flex items-center justify-end gap-1.5">
-                    <input
-                      type="text"
-                      value={lockboxDraft}
-                      onChange={(e) => setLockboxDraft(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") saveLockboxCode();
-                      }}
-                      placeholder="e.g. 1234#"
-                      className="w-28 px-2 py-1 text-sm text-right border border-slate-200 rounded-md focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
-                    />
-                    {lockboxDraft.trim() !== (lockboxValue ?? "").trim() && (
-                      <button
-                        onClick={saveLockboxCode}
-                        disabled={savingLockbox}
-                        className="px-2 py-1 text-xs font-semibold text-white bg-[#C10007] rounded-md hover:bg-[#a30006] disabled:opacity-60 whitespace-nowrap"
-                      >
-                        {savingLockbox ? "Saving…" : "Save"}
-                      </button>
-                    )}
-                  </div>
+          {/* Partner Details — the deal's referral broker/agent (from
+              deals.broker_id, or a free-text referral agent). Hidden entirely
+              when there's no partner in the DB, unless this is a Purchase file
+              (the Lock Box Code editor lives in this card). */}
+          {(() => {
+            const rb = rawDeal?.referral_broker as
+              | { name: string; email: string | null; phone: string | null; type: string | null; company: string | null }
+              | null
+              | undefined;
+            const partnerCompany =
+              rb?.company || ((rawDeal?.referral_agent_company as string | null | undefined) ?? null);
+            const partnerPerson =
+              rb?.name || ((rawDeal?.referral_agent_name as string | null | undefined) ?? null);
+            const partnerEmail =
+              rb?.email || ((rawDeal?.referral_agent_email as string | null | undefined) ?? null);
+            const partnerType = rb?.type ?? null;
+            const hasPartner = !!(partnerPerson || partnerCompany || partnerEmail);
+            const isPurchase = (deal.type ?? "").toLowerCase().includes("purchase");
+
+            // Nothing to show and no lock box to host → render no card at all.
+            if (!hasPartner && !isPurchase) return null;
+
+            const logoSource = partnerCompany || partnerPerson || "";
+            const initials =
+              logoSource
+                .split(/\s+/)
+                .filter(Boolean)
+                .slice(0, 2)
+                .map((w) => w[0]?.toUpperCase() ?? "")
+                .join("") || "—";
+
+            return (
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                <div className="flex items-start justify-between gap-3 mb-4">
+                  <h3 className="font-bold text-slate-800 text-sm">
+                    Partner Details
+                  </h3>
+                  {/* Lock box code — Purchase files only. Editable inline; saves to
+                      the deal via PATCH and feeds the {{ lockbox_code }} email var. */}
+                  {isPurchase && (
+                    <div className="text-right shrink-0">
+                      <p className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mb-0.5">
+                        Lock box code
+                      </p>
+                      <div className="flex items-center justify-end gap-1.5">
+                        <input
+                          type="text"
+                          value={lockboxDraft}
+                          onChange={(e) => setLockboxDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") saveLockboxCode();
+                          }}
+                          placeholder="e.g. 1234#"
+                          className="w-28 px-2 py-1 text-sm text-right border border-slate-200 rounded-md focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
+                        />
+                        {lockboxDraft.trim() !== (lockboxValue ?? "").trim() && (
+                          <button
+                            onClick={saveLockboxCode}
+                            disabled={savingLockbox}
+                            className="px-2 py-1 text-xs font-semibold text-white bg-[#C10007] rounded-md hover:bg-[#a30006] disabled:opacity-60 whitespace-nowrap"
+                          >
+                            {savingLockbox ? "Saving…" : "Save"}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 bg-slate-900 text-white rounded-lg flex items-center justify-center font-black text-xs shadow-md">
-                KW
+                {hasPartner && (
+                  <>
+                    <div className="flex items-center gap-3 mb-4">
+                      <div className="w-10 h-10 bg-slate-900 text-white rounded-lg flex items-center justify-center font-black text-xs shadow-md shrink-0">
+                        {initials}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-bold text-slate-900 truncate">
+                          {partnerCompany || partnerPerson}
+                        </p>
+                        {partnerType && <p className="text-xs text-slate-500">{partnerType}</p>}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                      <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                        <p className="text-[10px] text-slate-500 font-medium mb-0.5 uppercase tracking-wide">
+                          Agent
+                        </p>
+                        <p className="font-bold text-slate-800 text-xs">{partnerPerson || "—"}</p>
+                      </div>
+                      <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                        <p className="text-[10px] text-slate-500 font-medium mb-0.5 uppercase tracking-wide">
+                          Email
+                        </p>
+                        {partnerEmail ? (
+                          <a
+                            href={`mailto:${partnerEmail}`}
+                            className="font-bold text-brand-primary hover:underline truncate block text-xs"
+                          >
+                            {partnerEmail}
+                          </a>
+                        ) : (
+                          <p className="font-bold text-slate-400 text-xs">—</p>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
-              <div>
-                <p className="text-sm font-bold text-slate-900">
-                  Keller Williams
-                </p>
-                <p className="text-xs text-slate-500">Real Estate Brokerage</p>
-              </div>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-              <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
-                <p className="text-[10px] text-slate-500 font-medium mb-0.5 uppercase tracking-wide">
-                  Agent
-                </p>
-                <p className="font-bold text-slate-800 text-xs">Sarah Connor</p>
-              </div>
-              <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
-                <p className="text-[10px] text-slate-500 font-medium mb-0.5 uppercase tracking-wide">
-                  Email
-                </p>
-                <a
-                  href="#"
-                  className="font-bold text-brand-primary hover:underline truncate block text-xs"
-                >
-                  sarah@kw.com
-                </a>
-              </div>
-            </div>
-          </div>
+            );
+          })()}
         </div>
       </div>
       {showStageForm && (

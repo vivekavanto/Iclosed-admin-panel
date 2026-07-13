@@ -453,6 +453,9 @@ export interface Database {
           is_deleted: boolean | null;
           subject: string | null;
           deleted: boolean;
+          // When true, milestone emails from this template also CC the deal's
+          // referral broker (deals.broker_id -> brokers.email).
+          shared_with_agent: boolean | null;
         };
         Insert: {
           id?: string;
@@ -464,6 +467,7 @@ export interface Database {
           is_deleted?: boolean | null;
           subject?: string | null;
           deleted?: boolean;
+          shared_with_agent?: boolean | null;
         };
         Update: {
           id?: string;
@@ -475,6 +479,7 @@ export interface Database {
           is_deleted?: boolean | null;
           subject?: string | null;
           deleted?: boolean;
+          shared_with_agent?: boolean | null;
         };
         Relationships: [];
       };
@@ -522,6 +527,7 @@ export interface Database {
           type: "Mortgage Broker" | "Real Estate Agent" | null;
           company: string | null;
           coupon_id: string | null;
+          referral_code: string | null;
           is_deleted: boolean;
           created_at: string;
           updated_at: string;
@@ -534,6 +540,7 @@ export interface Database {
           type?: "Mortgage Broker" | "Real Estate Agent" | null;
           company?: string | null;
           coupon_id?: string | null;
+          referral_code?: string | null;
           is_deleted?: boolean;
           created_at?: string;
           updated_at?: string;
@@ -546,6 +553,7 @@ export interface Database {
           type?: "Mortgage Broker" | "Real Estate Agent" | null;
           company?: string | null;
           coupon_id?: string | null;
+          referral_code?: string | null;
           is_deleted?: boolean;
           created_at?: string;
           updated_at?: string;

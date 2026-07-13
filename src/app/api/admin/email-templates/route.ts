@@ -21,7 +21,7 @@ export async function GET() {
 // POST /api/admin/email-templates
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { name, body: emailBody, is_active, subject } = body;
+  const { name, body: emailBody, is_active, subject, shared_with_agent } = body;
 
   if (!name || !emailBody) {
     return NextResponse.json(
@@ -32,7 +32,13 @@ export async function POST(req: NextRequest) {
 
   const { data, error } = await supabase
     .from('email_templates')
-    .insert([{ name, body: emailBody, is_active: is_active ?? true, subject: subject || null }])
+    .insert([{
+      name,
+      body: emailBody,
+      is_active: is_active ?? true,
+      subject: subject || null,
+      shared_with_agent: shared_with_agent ?? false,
+    }])
     .select()
     .single();
 
@@ -47,7 +53,7 @@ export async function POST(req: NextRequest) {
 export async function PUT(req: NextRequest) {
   try {
     const body = await req.json();
-    const { id, name, body: emailBody, is_active, subject } = body;
+    const { id, name, body: emailBody, is_active, subject, shared_with_agent } = body;
 
     if (!id) {
       return NextResponse.json({ error: "ID required" }, { status: 400 });
@@ -59,6 +65,8 @@ export async function PUT(req: NextRequest) {
     if (emailBody !== undefined) updateData.body = emailBody;
     if (is_active !== undefined) updateData.is_active = is_active;
     if (subject !== undefined) updateData.subject = subject || null;
+    // Lets the inline column checkbox persist by PUT-ing just { id, shared_with_agent }.
+    if (shared_with_agent !== undefined) updateData.shared_with_agent = shared_with_agent;
 
     const { data, error } = await supabase
       .from("email_templates")

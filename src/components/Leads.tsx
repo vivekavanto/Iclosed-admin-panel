@@ -1459,113 +1459,108 @@ const Leads: React.FC = () => {
             </>
           )}
 
-          {/* Associated deals */}
-          <SectionHeader
-            title="Associated Client Leads"
-            id="client-leads"
-            icon={BriefcaseIcon}
-          />
-          {expandedSections.includes("client-leads") && (() => {
-            // Find associated leads: parent + siblings + children
-            const associatedLeads: { lead: LeadUser; role: string }[] = [];
+          {(() => {
+            const rb = selectedLead.referralBroker ?? null;
+            const partnerName = rb?.name || selectedLead.referralAgentName || null;
+            const partnerCompany = rb?.company || selectedLead.referralAgentCompany || null;
+            const partnerEmail = rb?.email || selectedLead.referralAgentEmail || null;
+            const partnerPhone = rb?.phone || null;
+            const partnerType = rb?.type || null;
+            const referralCode = selectedLead.referralCouponCode || null;
+            const hasPartner = !!(partnerName || partnerCompany || partnerEmail);
 
-            const formatRole = (role: "co-purchaser" | "co-seller") =>
-              role === "co-seller" ? "Co-Seller" : "Co-Purchaser";
+            // Hide the Partner Details section entirely when this lead has no
+            // referral partner in the DB (never referred, or the partner was
+            // deleted) — no empty-state placeholder.
+            if (!hasPartner) return null;
 
-            const primaryLabelFor = (lead: LeadUser): string => {
-              const lt = (lead.lead_type ?? "").toLowerCase().trim();
-              // For combined "Purchase & Sale" we show a generic label since the
-              // primary is both a purchaser and a seller.
-              if (lt.includes("purchase") && lt.includes("sale")) return "Primary Client";
-              if (lt === "sale") return "Primary Seller";
-              return "Primary Purchaser";
-            };
+            const typeLabel = partnerType
+              ? partnerType.toLowerCase().includes("agent")
+                ? "Agent"
+                : partnerType.toLowerCase().includes("broker")
+                  ? "Broker"
+                  : partnerType
+              : null;
 
-            if (selectedLead.parentLeadId) {
-              // This is a co-purchaser/co-seller — show the primary
-              const parent = leads.find((l) => l.id === selectedLead.parentLeadId) ?? null;
-              if (parent) {
-                associatedLeads.push({ lead: parent, role: primaryLabelFor(parent) });
-              }
-              // Also show siblings, each labeled by their own role
-              leads
-                .filter((l) => l.parentLeadId === selectedLead.parentLeadId && l.id !== selectedLead.id)
-                .forEach((l) =>
-                  associatedLeads.push({ lead: l, role: formatRole(getCoRole(l, parent)) }),
-                );
-            } else {
-              // This is a primary — show all co-leads, each labeled by their own role
-              leads
-                .filter((l) => l.parentLeadId === selectedLead.id)
-                .forEach((l) =>
-                  associatedLeads.push({ lead: l, role: formatRole(getCoRole(l, selectedLead)) }),
-                );
-            }
+            const dash = <span className="text-slate-300 italic">—</span>;
 
             return (
-              <div className="p-0 animate-in slide-in-from-top-2 duration-300 overflow-x-auto border-t border-slate-50">
-                {associatedLeads.length === 0 ? (
-                  <div className="p-12 text-center text-slate-400 font-medium italic text-sm bg-slate-50/20">
-                    No associated leads for this client.
-                  </div>
-                ) : (
-                  <table className="w-full text-left">
-                    <thead>
-                      <tr className="bg-slate-50/50 border-b border-slate-200 text-[11px] font-black text-slate-400 uppercase tracking-widest">
-                        <th className="px-6 py-3">Name</th>
-                        <th className="px-6 py-3">Email</th>
-                        <th className="px-6 py-3">Phone</th>
-                        <th className="px-6 py-3">Role</th>
-                        <th className="px-6 py-3">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-50">
-                      {associatedLeads.map(({ lead: al, role }) => (
-                        <tr
-                          key={al.id}
-                          onClick={() => openLead(al)}
-                          className="hover:bg-slate-50/50 transition-colors cursor-pointer group"
-                        >
+              <>
+                {/* Partner Details — the referral broker/agent for this lead
+                    (resolved from broker_id, or a manually-named agent captured
+                    at intake). Family co-leads are still listed higher up. */}
+                <SectionHeader
+                  title="Partner Details"
+                  id="client-leads"
+                  icon={BriefcaseIcon}
+                />
+                {expandedSections.includes("client-leads") && (
+                  <div className="p-0 animate-in slide-in-from-top-2 duration-300 overflow-x-auto border-t border-slate-50">
+                    <table className="w-full text-left">
+                      <thead>
+                        <tr className="bg-slate-50/50 border-b border-slate-200 text-[11px] font-black text-slate-400 uppercase tracking-widest">
+                          <th className="px-6 py-3">Name</th>
+                          <th className="px-6 py-3">Company</th>
+                          <th className="px-6 py-3">Email</th>
+                          <th className="px-6 py-3">Phone</th>
+                          <th className="px-6 py-3">Type</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-50">
+                        <tr className="hover:bg-slate-50/50 transition-colors">
                           <td className="px-6 py-4">
                             <div className="flex items-center gap-3">
-                              <div className="w-8 h-8 rounded-lg bg-brand-light flex items-center justify-center text-brand-primary group-hover:bg-brand-primary group-hover:text-white transition-colors">
-                                <UserIcon size={16} />
+                              <div className="w-8 h-8 rounded-lg bg-brand-light flex items-center justify-center text-brand-primary">
+                                <UserPlus size={16} />
                               </div>
-                              <span className="font-bold text-slate-900 text-sm group-hover:text-brand-primary">
-                                {al.firstName} {al.lastName}
+                              <span className="font-bold text-slate-900 text-sm">
+                                {partnerName || "—"}
                               </span>
                             </div>
                           </td>
-                          <td className="px-6 py-4 text-sm text-slate-600">{al.email}</td>
-                          <td className="px-6 py-4 text-sm text-slate-600">{al.phone}</td>
-                          <td className="px-6 py-4">
-                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-tight border ${
-                              role.startsWith("Primary")
-                                ? "bg-green-100 text-green-700 border-green-200"
-                                : role === "Co-Seller"
-                                ? "bg-amber-100 text-amber-700 border-amber-200"
-                                : "bg-blue-100 text-blue-700 border-blue-200"
-                            }`}>
-                              {role}
-                            </span>
+                          <td className="px-6 py-4 text-sm text-slate-600">{partnerCompany || dash}</td>
+                          <td className="px-6 py-4 text-sm">
+                            {partnerEmail ? (
+                              <a
+                                href={`mailto:${partnerEmail}`}
+                                className="text-brand-primary font-semibold hover:underline"
+                              >
+                                {partnerEmail}
+                              </a>
+                            ) : (
+                              dash
+                            )}
                           </td>
+                          <td className="px-6 py-4 text-sm text-slate-600">{partnerPhone || dash}</td>
                           <td className="px-6 py-4">
-                            {al.status === "Converted" ? (
-                              <span className="flex items-center gap-1 text-green-700 font-bold text-xs bg-green-50 px-2 py-0.5 rounded-full border border-green-100 w-fit">
-                                <CheckCircle2 size={12} /> Converted
+                            {typeLabel ? (
+                              <span
+                                className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-tight border ${
+                                  typeLabel === "Agent"
+                                    ? "bg-blue-100 text-blue-700 border-blue-200"
+                                    : typeLabel === "Broker"
+                                      ? "bg-amber-100 text-amber-700 border-amber-200"
+                                      : "bg-slate-100 text-slate-600 border-slate-200"
+                                }`}
+                              >
+                                {typeLabel}
                               </span>
                             ) : (
-                              <span className="flex items-center gap-1 text-emerald-600 font-bold text-xs bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100 w-fit">
-                                Active Lead
-                              </span>
+                              dash
                             )}
                           </td>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </tbody>
+                    </table>
+                    {referralCode && (
+                      <div className="px-6 py-3 border-t border-slate-50 text-xs text-slate-500 bg-slate-50/20">
+                        Referral code:{" "}
+                        <span className="font-bold text-slate-700 uppercase tracking-wide">{referralCode}</span>
+                      </div>
+                    )}
+                  </div>
                 )}
-              </div>
+              </>
             );
           })()}
         </div>

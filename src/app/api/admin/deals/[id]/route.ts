@@ -20,15 +20,19 @@ export async function GET(
   }
 
   // ── Referral attribution ─────────────────────────────────────────────────
-  // If this deal was referred (broker_id set at intake), resolve the broker +
-  // its coupon code so the detail page can show who referred the file.
+  // If this deal was referred (broker_id set at intake), resolve the partner +
+  // its referral code so the detail page can show who referred the file. The
+  // partner's own referral_code is the referral code — coupons are no longer read.
   data.referral_broker = null;
   data.referral_coupon_code = null;
   if (data.broker_id) {
     const { data: broker } = await supabase
       .from("brokers")
-      .select("id, name, email, phone, type, company, coupons(code)")
+      .select("id, name, email, phone, type, company, referral_code")
       .eq("id", data.broker_id)
+      // Exclude soft-deleted partners so a deleted broker doesn't resurface as
+      // the deal's referral (Partner Details card / email CC).
+      .eq("is_deleted", false)
       .maybeSingle();
     if (broker) {
       data.referral_broker = {
@@ -39,18 +43,8 @@ export async function GET(
         type: broker.type,
         company: broker.company,
       };
-      data.referral_coupon_code =
-        (broker as any).coupons?.code ?? null;
+      data.referral_coupon_code = (broker as any).referral_code ?? null;
     }
-  }
-  // A coupon may be applied without a specific broker — surface its code too.
-  if (!data.referral_coupon_code && data.coupon_id) {
-    const { data: coupon } = await supabase
-      .from("coupons")
-      .select("code")
-      .eq("id", data.coupon_id)
-      .maybeSingle();
-    data.referral_coupon_code = coupon?.code ?? null;
   }
 
   // Resolve "account created" (last_sign_in_at) for the current lead and
