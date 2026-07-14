@@ -1551,41 +1551,7 @@ export default function UploadIdentificationDrawer({
 
         {/* Body — scrollable modal region, or plain flow when embedded */}
         <div className={embedded ? "px-6 py-5 space-y-6" : "flex-1 overflow-y-auto px-6 py-5 space-y-6"}>
-          {/* "Uploading for" person selector — only rendered when the primary
-              opens the drawer and there's more than one family member to
-              choose from. Switching selection bubbles up to the parent which
-              remounts the drawer so internal upload state resets cleanly. */}
-          {personOptions && personOptions.length > 1 && onPersonChange && (
-            <div className="rounded-xl border border-blue-200 bg-blue-50/40 px-4 py-3">
-              <label
-                htmlFor="upload-id-person-selector"
-                className="block text-xs font-bold text-slate-700 mb-1.5"
-              >
-                Uploading identification for
-              </label>
-              <select
-                id="upload-id-person-selector"
-                value={leadId ?? ""}
-                onChange={(e) => {
-                  const opt = personOptions.find(
-                    (p) => p.leadId === e.target.value,
-                  );
-                  if (opt) onPersonChange(opt.leadId, opt.taskId);
-                }}
-                className="w-full px-3 py-2 text-sm font-semibold text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007]"
-              >
-                {personOptions.map((p) => (
-                  <option key={p.leadId} value={p.leadId}>
-                    {p.name} — {p.role}
-                    {p.completed ? " (already completed)" : ""}
-                  </option>
-                ))}
-              </select>
-              <p className="text-[11px] text-slate-500 mt-1.5">
-                Switching changes who these documents are attached to.
-              </p>
-            </div>
-          )}
+          {/* "Uploading for" person selector removed per request. */}
 
           {/* Acceptable Documents Section - Always visible */}
           <AcceptableDocumentsSection />
