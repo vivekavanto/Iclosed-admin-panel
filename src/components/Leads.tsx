@@ -179,6 +179,7 @@ const Leads: React.FC = () => {
     "current-address",
     "selling-address",
     "property-personal",
+    "client-leads", // Partner Details — expanded by default
   ]);
 
   // ── Edit-mode state for the detail view ────────────────────────────────────
@@ -1028,66 +1029,8 @@ const Leads: React.FC = () => {
           );
         })()}
 
-        {/* Referred By — broker (from code) or a manually-named agent/broker,
-            captured at intake. Only shows when some referral data exists. */}
-        {(() => {
-          const hasManualAgent = !!(
-            selectedLead.referralAgentName ||
-            selectedLead.referralAgentCompany ||
-            selectedLead.referralAgentEmail
-          );
-          if (!selectedLead.referralBroker && !selectedLead.referralCouponCode && !hasManualAgent) {
-            return null;
-          }
-          return (
-            <div className="flex items-start gap-3 px-5 py-4 rounded-xl border border-brand-primary/20 bg-brand-light">
-              <UserPlus size={18} className="flex-shrink-0 text-brand-primary mt-0.5" />
-              <div className="min-w-0">
-                <p className="text-[10px] uppercase font-black tracking-wider text-slate-500 mb-1">
-                  Referred By
-                </p>
-                {selectedLead.referralBroker ? (
-                  <>
-                    <p className="text-sm font-bold text-slate-900 leading-snug">
-                      {selectedLead.referralBroker.name}
-                    </p>
-                    <p className="text-xs text-slate-500 leading-snug">
-                      {[selectedLead.referralBroker.type, selectedLead.referralBroker.company]
-                        .filter(Boolean)
-                        .join(" · ")}
-                    </p>
-                    <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-1 text-xs text-slate-500">
-                      {selectedLead.referralBroker.email && <span>{selectedLead.referralBroker.email}</span>}
-                      {selectedLead.referralBroker.phone && <span>{selectedLead.referralBroker.phone}</span>}
-                    </div>
-                  </>
-                ) : hasManualAgent ? (
-                  <>
-                    <p className="text-sm font-bold text-slate-900 leading-snug">
-                      {selectedLead.referralAgentName || "—"}
-                    </p>
-                    {selectedLead.referralAgentCompany && (
-                      <p className="text-xs text-slate-500 leading-snug">{selectedLead.referralAgentCompany}</p>
-                    )}
-                    {selectedLead.referralAgentEmail && (
-                      <p className="text-xs text-slate-500 leading-snug mt-0.5">{selectedLead.referralAgentEmail}</p>
-                    )}
-                    {selectedLead.referralSource && (
-                      <p className="text-[11px] text-slate-400 mt-1">via {selectedLead.referralSource}</p>
-                    )}
-                  </>
-                ) : (
-                  <p className="text-sm font-bold text-slate-900 leading-snug">Referral code applied</p>
-                )}
-                {selectedLead.referralCouponCode && (
-                  <span className="inline-flex items-center mt-2 px-2 py-0.5 bg-white border border-slate-200 rounded text-[10px] font-bold text-slate-600 uppercase tracking-wide">
-                    Code: {selectedLead.referralCouponCode}
-                  </span>
-                )}
-              </div>
-            </div>
-          );
-        })()}
+        {/* "Referred By" box removed — the partner is shown in the Partner
+            Details section below. */}
 
         {/* Top Identity Card */}
         <div className="bg-white rounded-2xl border border-slate-200 p-8 shadow-sm flex flex-col md:flex-row justify-between items-center gap-6">

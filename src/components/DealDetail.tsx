@@ -216,7 +216,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     setTimeout(() => setToast(null), 3000);
   };
 
-  // Inline lock box code editor (Partner Details card, Purchase files only).
+  // Inline lock box code editor (its own card under Milestones, Purchase files only).
   // Held in local state so a save reflects immediately — refetchData() only
   // refreshes tasks/milestones, not the server-rendered deal prop — and
   // router.refresh() re-syncs the source row afterward.
@@ -3002,8 +3002,37 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
   // Merge responses (text + file) for a task, deduping file rows that also
   // surface via taskFileDocs (e.g. APS) so a document isn't embedded twice.
-  const buildPdfTaskInput = async (task: DisplayTask): Promise<PdfTaskInput> => {
-    const responses = [...(responsesByTask.get(task.id) ?? [])];
+  // Fetch the freshest task responses for this deal (incl. family) so a PDF
+  // download reflects edits saved AFTER the page loaded — e.g. a co-person's
+  // Business/Employer Phone entered in the Personal Information modal. Returns
+  // a task_id → responses map, or null on failure (caller falls back to state).
+  const fetchFreshResponsesMap = async (): Promise<Map<string, any[]> | null> => {
+    try {
+      const res = await fetch(
+        `/api/admin/task-responses?deal_id=${deal.id}&fields=all${includeFamilyTasks ? "&include_family=1" : ""}`,
+      );
+      const data = await res.json();
+      if (!Array.isArray(data)) return null;
+      const grouped = new Map<string, any[]>();
+      for (const r of data) {
+        const key = r.task_id as string;
+        if (!key) continue;
+        const arr = grouped.get(key) ?? [];
+        arr.push(r);
+        grouped.set(key, arr);
+      }
+      return grouped;
+    } catch {
+      return null;
+    }
+  };
+
+  const buildPdfTaskInput = async (
+    task: DisplayTask,
+    respMap?: Map<string, any[]>,
+  ): Promise<PdfTaskInput> => {
+    const source = respMap ?? responsesByTask;
+    const responses = [...(source.get(task.id) ?? [])];
     const seenFileUrls = new Set(
       responses.filter((r) => r.field_type === "file" && r.file_url).map((r) => r.file_url),
     );
@@ -3015,6 +3044,38 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     }
 
     const orderedResponses = await sortResponsesByFormOrder(task, responses);
+
+    // "Business/Employer Phone" is optional in the intake form, so a client who
+    // leaves it blank produces no response row and it silently drops out of the
+    // Personal Information PDF. Personal fields live on the client record (the
+    // source of truth), surfaced here as rawDeal.lead_employer_phone for THIS
+    // deal's own person. When there's no response for it but the client record
+    // has a value, inject the row so the PDF isn't missing the number. Only for
+    // the current person — co-persons' employer phone isn't available here, and
+    // we must not print the wrong person's number.
+    const finalResponses = [...orderedResponses];
+    if (isPersonalInfoTask(task)) {
+      const hasEmployerPhone = finalResponses.some(
+        (r) =>
+          /(employer|business)/i.test(r.field_label ?? "") && /phone/i.test(r.field_label ?? ""),
+      );
+      const currentName = familyPeople.find((p) => p.isCurrent)?.lead_name ?? null;
+      const isCurrentPerson = !task.ownerName || task.ownerName === currentName;
+      const employerPhone = ((rawDeal?.lead_employer_phone as string | null | undefined) ?? "").trim();
+      if (!hasEmployerPhone && isCurrentPerson && employerPhone) {
+        const empRow = {
+          field_id: null,
+          field_label: "Business/Employer Phone",
+          field_type: "text",
+          value: employerPhone,
+        };
+        // Place it right after Occupation (its natural neighbour); append if
+        // there's no occupation row.
+        const occIdx = finalResponses.findIndex((r) => /occupation/i.test(r.field_label ?? ""));
+        if (occIdx >= 0) finalResponses.splice(occIdx + 1, 0, empRow);
+        else finalResponses.push(empRow);
+      }
+    }
 
     return {
       title: task.title,
@@ -3034,14 +3095,18 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         ((isPersonalInfoTask(task) || isIdentificationTask(task))
           ? familyPeople.find((p) => p.isCurrent)?.lead_name || null
           : null),
-      responses: orderedResponses,
+      responses: finalResponses,
     };
   };
 
   const handleDownloadTaskPdf = async (task: DisplayTask) => {
     setDownloadingTaskId(task.id);
     try {
-      const taskInput = await buildPdfTaskInput(task);
+      // Pull the latest responses so a just-saved value (e.g. a co-person's
+      // employer phone) is included even without a page refresh.
+      const fresh = await fetchFreshResponsesMap();
+      if (fresh) setResponsesByTask(fresh);
+      const taskInput = await buildPdfTaskInput(task, fresh ?? undefined);
       await downloadTaskPdf(buildPdfDealMeta(), taskInput);
     } catch {
       showToast("Could not generate the task PDF", "error");
@@ -3057,6 +3122,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const handleDownloadDealPdf = async () => {
     setDownloadingDealPdf(true);
     try {
+      // Freshest responses so recently-saved edits are included.
+      const fresh = await fetchFreshResponsesMap();
+      if (fresh) setResponsesByTask(fresh);
       const realTasks = dedupeTasksByTemplate(tasks).filter((t) =>
         taskHasData({ ...t, isTemplate: false }),
       );
@@ -3071,7 +3139,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         if (milestoneTasks.length === 0) continue;
         milestoneTasks.forEach((t) => usedTaskIds.add(t.id));
         const builtTasks = await Promise.all(
-          milestoneTasks.map((t) => buildPdfTaskInput({ ...t, isTemplate: false })),
+          milestoneTasks.map((t) => buildPdfTaskInput({ ...t, isTemplate: false }, fresh ?? undefined)),
         );
         sections.push({
           milestoneTitle: m.title,
@@ -3083,7 +3151,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
       const orphanTasks = realTasks.filter((t) => !usedTaskIds.has(t.id));
       if (orphanTasks.length > 0) {
         const builtOrphanTasks = await Promise.all(
-          orphanTasks.map((t) => buildPdfTaskInput({ ...t, isTemplate: false })),
+          orphanTasks.map((t) => buildPdfTaskInput({ ...t, isTemplate: false }, fresh ?? undefined)),
         );
         sections.push({
           milestoneTitle: "Other Tasks",
@@ -3234,60 +3302,8 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
         </div>
       )}
 
-      {/* Referral card — who referred this file (broker/agent + coupon code),
-          captured at intake when the client applied a referral code. */}
-      {(() => {
-        const referralBroker = rawDeal?.referral_broker as
-          | { name: string; email: string | null; phone: string | null; type: string | null; company: string | null }
-          | null
-          | undefined;
-        const referralCode = (rawDeal?.referral_coupon_code as string | null | undefined) ?? null;
-        // Manual "no code" referral — a free-text agent/broker named at intake.
-        const agentName = (rawDeal?.referral_agent_name as string | null | undefined) ?? null;
-        const agentCompany = (rawDeal?.referral_agent_company as string | null | undefined) ?? null;
-        const agentEmail = (rawDeal?.referral_agent_email as string | null | undefined) ?? null;
-        const hasManualAgent = !!(agentName || agentCompany || agentEmail);
-        if (!referralBroker && !referralCode && !hasManualAgent) return null;
-        return (
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5 mb-6">
-            <div className="flex items-start gap-3">
-              <div className="w-9 h-9 rounded-full bg-brand-light border border-brand-primary/20 flex items-center justify-center text-brand-primary shrink-0">
-                <UserPlus size={16} />
-              </div>
-              <div className="min-w-0">
-                <p className="text-[10px] uppercase font-bold text-slate-400 tracking-wider leading-none mb-1.5">
-                  Referred By
-                </p>
-                {referralBroker ? (
-                  <>
-                    <p className="font-bold text-sm text-slate-900 leading-snug">{referralBroker.name}</p>
-                    <p className="text-xs text-slate-500 leading-snug">
-                      {[referralBroker.type, referralBroker.company].filter(Boolean).join(" · ")}
-                    </p>
-                    <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1.5 text-xs text-slate-500">
-                      {referralBroker.email && <span>{referralBroker.email}</span>}
-                      {referralBroker.phone && <span>{referralBroker.phone}</span>}
-                    </div>
-                  </>
-                ) : hasManualAgent ? (
-                  <>
-                    <p className="font-bold text-sm text-slate-900 leading-snug">{agentName || "—"}</p>
-                    {agentCompany && <p className="text-xs text-slate-500 leading-snug">{agentCompany}</p>}
-                    {agentEmail && <p className="text-xs text-slate-500 leading-snug mt-1">{agentEmail}</p>}
-                  </>
-                ) : (
-                  <p className="font-bold text-sm text-slate-900 leading-snug">Referral code applied</p>
-                )}
-                {referralCode && (
-                  <span className="inline-flex items-center mt-2 px-2 py-0.5 bg-slate-100 border border-slate-200 rounded text-[10px] font-bold text-slate-600 uppercase tracking-wide">
-                    Code: {referralCode}
-                  </span>
-                )}
-              </div>
-            </div>
-          </div>
-        );
-      })()}
+      {/* "Referred By" card removed — the partner is shown in the Partner
+          Details section (under Milestones). */}
 
       {/* Property Details Card (Top - Full Width) */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mb-6">
@@ -4342,10 +4358,41 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
             </div>
           </div>
 
+          {/* Lock Box Code — Purchase files only. Sits under Milestones and
+              above Partner Details. Editable inline; saves to the deal via PATCH
+              and feeds the {{ lockbox_code }} email variable. */}
+          {(deal.type ?? "").toLowerCase().includes("purchase") && (
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="font-bold text-slate-800 text-sm">Lock Box Code</h3>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    value={lockboxDraft}
+                    onChange={(e) => setLockboxDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") saveLockboxCode();
+                    }}
+                    placeholder="e.g. 1234#"
+                    className="w-32 px-2 py-1.5 text-sm text-right border border-slate-200 rounded-md focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
+                  />
+                  {lockboxDraft.trim() !== (lockboxValue ?? "").trim() && (
+                    <button
+                      onClick={saveLockboxCode}
+                      disabled={savingLockbox}
+                      className="px-3 py-1.5 text-xs font-semibold text-white bg-[#C10007] rounded-md hover:bg-[#a30006] disabled:opacity-60 whitespace-nowrap"
+                    >
+                      {savingLockbox ? "Saving…" : "Save"}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Partner Details — the deal's referral broker/agent (from
-              deals.broker_id, or a free-text referral agent). Hidden entirely
-              when there's no partner in the DB, unless this is a Purchase file
-              (the Lock Box Code editor lives in this card). */}
+              deals.broker_id, or a free-text referral agent). Hidden when
+              there's no partner in the DB. */}
           {(() => {
             const rb = rawDeal?.referral_broker as
               | { name: string; email: string | null; phone: string | null; type: string | null; company: string | null }
@@ -4357,12 +4404,11 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
               rb?.name || ((rawDeal?.referral_agent_name as string | null | undefined) ?? null);
             const partnerEmail =
               rb?.email || ((rawDeal?.referral_agent_email as string | null | undefined) ?? null);
+            const partnerPhone = rb?.phone ?? null;
             const partnerType = rb?.type ?? null;
             const hasPartner = !!(partnerPerson || partnerCompany || partnerEmail);
-            const isPurchase = (deal.type ?? "").toLowerCase().includes("purchase");
 
-            // Nothing to show and no lock box to host → render no card at all.
-            if (!hasPartner && !isPurchase) return null;
+            if (!hasPartner) return null;
 
             const logoSource = partnerCompany || partnerPerson || "";
             const initials =
@@ -4375,79 +4421,56 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
             return (
               <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-                <div className="flex items-start justify-between gap-3 mb-4">
-                  <h3 className="font-bold text-slate-800 text-sm">
-                    Partner Details
-                  </h3>
-                  {/* Lock box code — Purchase files only. Editable inline; saves to
-                      the deal via PATCH and feeds the {{ lockbox_code }} email var. */}
-                  {isPurchase && (
-                    <div className="text-right shrink-0">
-                      <p className="text-[10px] text-slate-500 font-medium uppercase tracking-wide mb-0.5">
-                        Lock box code
-                      </p>
-                      <div className="flex items-center justify-end gap-1.5">
-                        <input
-                          type="text"
-                          value={lockboxDraft}
-                          onChange={(e) => setLockboxDraft(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") saveLockboxCode();
-                          }}
-                          placeholder="e.g. 1234#"
-                          className="w-28 px-2 py-1 text-sm text-right border border-slate-200 rounded-md focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
-                        />
-                        {lockboxDraft.trim() !== (lockboxValue ?? "").trim() && (
-                          <button
-                            onClick={saveLockboxCode}
-                            disabled={savingLockbox}
-                            className="px-2 py-1 text-xs font-semibold text-white bg-[#C10007] rounded-md hover:bg-[#a30006] disabled:opacity-60 whitespace-nowrap"
-                          >
-                            {savingLockbox ? "Saving…" : "Save"}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  )}
+                <h3 className="font-bold text-slate-800 text-sm mb-4">Partner Details</h3>
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-10 h-10 bg-slate-900 text-white rounded-lg flex items-center justify-center font-black text-xs shadow-md shrink-0">
+                    {initials}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-slate-900 truncate">
+                      {partnerCompany || partnerPerson}
+                    </p>
+                    {partnerType && <p className="text-xs text-slate-500">{partnerType}</p>}
+                  </div>
                 </div>
-                {hasPartner && (
-                  <>
-                    <div className="flex items-center gap-3 mb-4">
-                      <div className="w-10 h-10 bg-slate-900 text-white rounded-lg flex items-center justify-center font-black text-xs shadow-md shrink-0">
-                        {initials}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-sm font-bold text-slate-900 truncate">
-                          {partnerCompany || partnerPerson}
-                        </p>
-                        {partnerType && <p className="text-xs text-slate-500">{partnerType}</p>}
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                      <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
-                        <p className="text-[10px] text-slate-500 font-medium mb-0.5 uppercase tracking-wide">
-                          Agent
-                        </p>
-                        <p className="font-bold text-slate-800 text-xs">{partnerPerson || "—"}</p>
-                      </div>
-                      <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
-                        <p className="text-[10px] text-slate-500 font-medium mb-0.5 uppercase tracking-wide">
-                          Email
-                        </p>
-                        {partnerEmail ? (
-                          <a
-                            href={`mailto:${partnerEmail}`}
-                            className="font-bold text-brand-primary hover:underline truncate block text-xs"
-                          >
-                            {partnerEmail}
-                          </a>
-                        ) : (
-                          <p className="font-bold text-slate-400 text-xs">—</p>
-                        )}
-                      </div>
-                    </div>
-                  </>
-                )}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                  <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                    <p className="text-[10px] text-slate-500 font-medium mb-0.5 uppercase tracking-wide">
+                      Agent
+                    </p>
+                    <p className="font-bold text-slate-800 text-xs">{partnerPerson || "—"}</p>
+                  </div>
+                  <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                    <p className="text-[10px] text-slate-500 font-medium mb-0.5 uppercase tracking-wide">
+                      Phone
+                    </p>
+                    {partnerPhone ? (
+                      <a
+                        href={`tel:${partnerPhone}`}
+                        className="font-bold text-slate-800 hover:text-brand-primary truncate block text-xs"
+                      >
+                        {partnerPhone}
+                      </a>
+                    ) : (
+                      <p className="font-bold text-slate-400 text-xs">—</p>
+                    )}
+                  </div>
+                  <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 sm:col-span-2">
+                    <p className="text-[10px] text-slate-500 font-medium mb-0.5 uppercase tracking-wide">
+                      Email
+                    </p>
+                    {partnerEmail ? (
+                      <a
+                        href={`mailto:${partnerEmail}`}
+                        className="font-bold text-brand-primary hover:underline truncate block text-xs"
+                      >
+                        {partnerEmail}
+                      </a>
+                    ) : (
+                      <p className="font-bold text-slate-400 text-xs">—</p>
+                    )}
+                  </div>
+                </div>
               </div>
             );
           })()}
