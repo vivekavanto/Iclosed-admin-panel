@@ -261,8 +261,7 @@ export interface Database {
           outstanding_undertakings: number | null;
           outstanding_requisitions: number | null;
           source: string | null;
-          broker_id: string | null;
-          coupon_id: string | null;
+          partner_id: string | null;
         };
         Insert: {
           id?: string;
@@ -289,8 +288,7 @@ export interface Database {
           outstanding_undertakings?: number | null;
           outstanding_requisitions?: number | null;
           source?: string | null;
-          broker_id?: string | null;
-          coupon_id?: string | null;
+          partner_id?: string | null;
         };
         Update: {
           id?: string;
@@ -317,8 +315,7 @@ export interface Database {
           outstanding_undertakings?: number | null;
           outstanding_requisitions?: number | null;
           source?: string | null;
-          broker_id?: string | null;
-          coupon_id?: string | null;
+          partner_id?: string | null;
         };
         Relationships: [
           {
@@ -364,8 +361,7 @@ export interface Database {
           outstanding_undertakings: number | null;
           outstanding_requisitions: number | null;
           source: string | null;
-          broker_id: string | null;
-          coupon_id: string | null;
+          partner_id: string | null;
         };
         Insert: {
           id?: string;
@@ -392,8 +388,7 @@ export interface Database {
           outstanding_undertakings?: number | null;
           outstanding_requisitions?: number | null;
           source?: string | null;
-          broker_id?: string | null;
-          coupon_id?: string | null;
+          partner_id?: string | null;
         };
         Update: {
           id?: string;
@@ -420,8 +415,7 @@ export interface Database {
           outstanding_undertakings?: number | null;
           outstanding_requisitions?: number | null;
           source?: string | null;
-          broker_id?: string | null;
-          coupon_id?: string | null;
+          partner_id?: string | null;
         };
         Relationships: [
           {
@@ -482,90 +476,6 @@ export interface Database {
           shared_with_agent?: boolean | null;
         };
         Relationships: [];
-      };
-
-      coupons: {
-        Row: {
-          id: string;
-          code: string;
-          discount_type: "percent" | "fixed" | null;
-          discount_value: number | null;
-          is_active: boolean;
-          is_deleted: boolean;
-          created_at: string;
-          updated_at: string;
-        };
-        Insert: {
-          id?: string;
-          code: string;
-          discount_type?: "percent" | "fixed" | null;
-          discount_value?: number | null;
-          is_active?: boolean;
-          is_deleted?: boolean;
-          created_at?: string;
-          updated_at?: string;
-        };
-        Update: {
-          id?: string;
-          code?: string;
-          discount_type?: "percent" | "fixed" | null;
-          discount_value?: number | null;
-          is_active?: boolean;
-          is_deleted?: boolean;
-          created_at?: string;
-          updated_at?: string;
-        };
-        Relationships: [];
-      };
-
-      brokers: {
-        Row: {
-          id: string;
-          name: string;
-          email: string | null;
-          phone: string | null;
-          type: "Mortgage Broker" | "Real Estate Agent" | null;
-          company: string | null;
-          coupon_id: string | null;
-          referral_code: string | null;
-          is_deleted: boolean;
-          created_at: string;
-          updated_at: string;
-        };
-        Insert: {
-          id?: string;
-          name: string;
-          email?: string | null;
-          phone?: string | null;
-          type?: "Mortgage Broker" | "Real Estate Agent" | null;
-          company?: string | null;
-          coupon_id?: string | null;
-          referral_code?: string | null;
-          is_deleted?: boolean;
-          created_at?: string;
-          updated_at?: string;
-        };
-        Update: {
-          id?: string;
-          name?: string;
-          email?: string | null;
-          phone?: string | null;
-          type?: "Mortgage Broker" | "Real Estate Agent" | null;
-          company?: string | null;
-          coupon_id?: string | null;
-          referral_code?: string | null;
-          is_deleted?: boolean;
-          created_at?: string;
-          updated_at?: string;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "brokers_coupon_id_fkey";
-            columns: ["coupon_id"];
-            referencedRelation: "coupons";
-            referencedColumns: ["id"];
-          },
-        ];
       };
 
       invitation_tokens: {
@@ -782,8 +692,7 @@ export interface Database {
           selling_price: number | null;
           is_deleted: boolean;
           account_activation_deferred: boolean;
-          broker_id: string | null;
-          coupon_id: string | null;
+          partner_id: string | null;
         };
         Insert: {
           id?: string;
@@ -832,8 +741,7 @@ export interface Database {
           selling_price?: number | null;
           is_deleted?: boolean;
           account_activation_deferred?: boolean;
-          broker_id?: string | null;
-          coupon_id?: string | null;
+          partner_id?: string | null;
         };
         Update: {
           id?: string;
@@ -882,8 +790,7 @@ export interface Database {
           selling_price?: number | null;
           is_deleted?: boolean;
           account_activation_deferred?: boolean;
-          broker_id?: string | null;
-          coupon_id?: string | null;
+          partner_id?: string | null;
         };
         Relationships: [
           {
@@ -1019,33 +926,46 @@ export interface Database {
         ];
       };
 
+      // Referral-source master. agent_* is the person, brokerage_* the firm.
+      // Each partner owns one unique referral_code (partners_referral_code_unique_idx,
+      // partial on is_deleted = false); unlimited clients may apply it, which is
+      // the leads.partner_id / deals.partner_id link.
       partners: {
         Row: {
           id: string;
-          brokerage_name: string;
-          brokerage_type: string | null;
+          brokerage_name: string | null;
+          brokerage_type: "Mortgage Broker" | "Real Estate Agent" | null;
           agent_name: string | null;
           agent_email: string | null;
           agent_phone: string | null;
+          referral_code: string | null;
+          is_deleted: boolean;
           created_at: string | null;
+          updated_at: string;
         };
         Insert: {
           id?: string;
-          brokerage_name: string;
-          brokerage_type?: string | null;
+          brokerage_name?: string | null;
+          brokerage_type?: "Mortgage Broker" | "Real Estate Agent" | null;
           agent_name?: string | null;
           agent_email?: string | null;
           agent_phone?: string | null;
+          referral_code?: string | null;
+          is_deleted?: boolean;
           created_at?: string | null;
+          updated_at?: string;
         };
         Update: {
           id?: string;
-          brokerage_name?: string;
-          brokerage_type?: string | null;
+          brokerage_name?: string | null;
+          brokerage_type?: "Mortgage Broker" | "Real Estate Agent" | null;
           agent_name?: string | null;
           agent_email?: string | null;
           agent_phone?: string | null;
+          referral_code?: string | null;
+          is_deleted?: boolean;
           created_at?: string | null;
+          updated_at?: string;
         };
         Relationships: [];
       };

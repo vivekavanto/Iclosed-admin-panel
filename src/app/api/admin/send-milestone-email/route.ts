@@ -18,7 +18,7 @@ async function sendEmailForDeal(
     try {
         const { data: deal } = await supabaseAdmin
             .from("deals")
-            .select("client_id, lead_id, file_number, property_address, lockbox_code, type, closing_date, broker_id")
+            .select("client_id, lead_id, file_number, property_address, lockbox_code, type, closing_date, partner_id")
             .eq("id", dealId)
             .single()
 
@@ -219,18 +219,18 @@ async function sendEmailForDeal(
         processedSubject = processedSubject.replace(/\{\{\s*file_number\s*\}\}/gi, fileNumber);
         processedSubject = processedSubject.replace(/\{\{\s*side_suffix\s*\}\}/gi, sideSuffix);
 
-        // "Shared with agent?" templates also CC the deal's referral broker.
+        // "Shared with agent?" templates also CC the deal's referral partner.
         // Client stays the primary recipient; CC is skipped when the flag is
-        // off, no broker is linked, or the linked broker has no email.
+        // off, no partner is linked, or the linked partner has no email.
         let cc: string[] | undefined
-        if (template.shared_with_agent && deal.broker_id) {
-            const { data: broker } = await supabaseAdmin
-                .from("brokers")
-                .select("email")
-                .eq("id", deal.broker_id)
+        if (template.shared_with_agent && deal.partner_id) {
+            const { data: partner } = await supabaseAdmin
+                .from("partners")
+                .select("agent_email")
+                .eq("id", deal.partner_id)
                 .eq("is_deleted", false)
                 .maybeSingle()
-            if (broker?.email) cc = [broker.email]
+            if (partner?.agent_email) cc = [partner.agent_email]
         }
 
         const { data: sendResult, error: sendError } = await resend.emails.send({
@@ -248,7 +248,7 @@ async function sendEmailForDeal(
 
         console.log(
             `[Milestone Email] Sent to ${client.email}` +
-            `${cc ? ` (cc agent: ${cc.join(", ")})` : template.shared_with_agent ? " (shared_with_agent on, but no broker email on deal — no cc)" : ""}` +
+            `${cc ? ` (cc agent: ${cc.join(", ")})` : template.shared_with_agent ? " (shared_with_agent on, but no partner email on deal — no cc)" : ""}` +
             `, milestone: "${milestone.title}", id: ${sendResult?.id}`
         )
 

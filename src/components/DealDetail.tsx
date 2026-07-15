@@ -2436,6 +2436,25 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   // own ('both'/unset). Drives the per-person upload badge below.
   const familyUploader = familyPeople.find((p) => p.canUploadForAll) ?? null;
 
+  // Whose Personal Information this is. The client portal shows Full Name as a
+  // read-only field at the top of that task, sourced from the client record
+  // rather than task_form_fields — so it has no response row and would
+  // otherwise be invisible here. Prefer the task's own owner (family view lists
+  // one row per person), else the current lead.
+  const personalInfoFullName = (task: DisplayTask): string | null => {
+    const owner =
+      [task.ownerFirstName, task.ownerLastName].filter(Boolean).join(" ").trim() ||
+      (task.ownerName ?? "").trim();
+    if (owner) return owner;
+    const current = familyPeople.find((p) => p.isCurrent)?.lead_name;
+    if (current) return current;
+    const lead = [rawDeal?.lead_first_name, rawDeal?.lead_last_name]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    return lead || null;
+  };
+
   // Map each person's deal id → the workflow side their role belongs to, used
   // in the unified family view to scope a co-client's PERSONAL rows (Personal
   // Information / Identification, which carry no template lead_type) to the
@@ -4390,22 +4409,29 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
             </div>
           )}
 
-          {/* Partner Details — the deal's referral broker/agent (from
-              deals.broker_id, or a free-text referral agent). Hidden when
+          {/* Partner Details — the deal's referral partner (from
+              deals.partner_id, or a free-text referral agent). Hidden when
               there's no partner in the DB. */}
           {(() => {
-            const rb = rawDeal?.referral_broker as
-              | { name: string; email: string | null; phone: string | null; type: string | null; company: string | null }
+            const rp = rawDeal?.referral_partner as
+              | {
+                  agent_name: string | null;
+                  agent_email: string | null;
+                  agent_phone: string | null;
+                  brokerage_type: string | null;
+                  brokerage_name: string | null;
+                  referral_code: string | null;
+                }
               | null
               | undefined;
             const partnerCompany =
-              rb?.company || ((rawDeal?.referral_agent_company as string | null | undefined) ?? null);
+              rp?.brokerage_name || ((rawDeal?.referral_agent_company as string | null | undefined) ?? null);
             const partnerPerson =
-              rb?.name || ((rawDeal?.referral_agent_name as string | null | undefined) ?? null);
+              rp?.agent_name || ((rawDeal?.referral_agent_name as string | null | undefined) ?? null);
             const partnerEmail =
-              rb?.email || ((rawDeal?.referral_agent_email as string | null | undefined) ?? null);
-            const partnerPhone = rb?.phone ?? null;
-            const partnerType = rb?.type ?? null;
+              rp?.agent_email || ((rawDeal?.referral_agent_email as string | null | undefined) ?? null);
+            const partnerPhone = rp?.agent_phone ?? null;
+            const partnerType = rp?.brokerage_type ?? null;
             const hasPartner = !!(partnerPerson || partnerCompany || partnerEmail);
 
             if (!hasPartner) return null;
@@ -5488,6 +5514,21 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                   // filled with any existing response (matched by field_id).
                   // Empty rows let the admin fill in on the client's behalf.
                   <div className="space-y-3">
+                    {/* Full Name — read-only, mirroring the portal. It lives on
+                        the client record, not this template, so it is not
+                        editable here; name changes go through the client's
+                        name-change request. */}
+                    {editingTask && isPersonalInfoTask(editingTask) && personalInfoFullName(editingTask) && (
+                      <div className="bg-gray-50 rounded-lg px-4 py-3 opacity-90">
+                        <p className="text-xs font-semibold text-gray-800">
+                          Full Name
+                          <span className="ml-2 font-medium text-gray-400">(read-only)</span>
+                        </p>
+                        <p className="text-sm text-gray-700 mt-1 break-words">
+                          {personalInfoFullName(editingTask)}
+                        </p>
+                      </div>
+                    )}
                     {editTaskFormFields.map((field) => {
                       const resp = findResponseForField(field);
                       const currentValue = resp?.value ?? "";
@@ -5920,6 +5961,17 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                   </div>
                 ) : viewTaskResponses.length > 0 ? (
                   <div className="space-y-3">
+                    {/* Full Name — shown by the portal at the top of this task
+                        but sourced from the client record, so it has no
+                        response row of its own. */}
+                    {viewingTask && isPersonalInfoTask(viewingTask) && personalInfoFullName(viewingTask) && (
+                      <div className="bg-gray-50 rounded-lg px-4 py-3">
+                        <p className="text-xs font-semibold text-gray-800">Full Name</p>
+                        <p className="text-sm text-gray-700 mt-1 break-words">
+                          {personalInfoFullName(viewingTask)}
+                        </p>
+                      </div>
+                    )}
                     {viewTaskResponses.map((resp: any, i: number) => {
                       const isMailForwardingStart =
                         (resp.field_label || "").trim().toLowerCase() === "street address";

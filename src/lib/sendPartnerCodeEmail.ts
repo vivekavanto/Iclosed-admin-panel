@@ -3,15 +3,15 @@
 // replyTo: testing@iclosed.ca).
 
 interface PartnerLike {
-  name?: string | null;
-  email?: string | null;
+  agent_name?: string | null;
+  agent_email?: string | null;
   referral_code?: string | null;
 }
 
 export async function sendPartnerCodeEmail(
   partner: PartnerLike,
 ): Promise<{ success: boolean; error?: string }> {
-  const email = (partner.email ?? "").trim();
+  const email = (partner.agent_email ?? "").trim();
   if (!email) {
     return { success: false, error: "This partner has no email on file." };
   }
@@ -19,7 +19,7 @@ export async function sendPartnerCodeEmail(
     return { success: false, error: "This partner has no referral code yet." };
   }
 
-  const firstName = (partner.name ?? "").trim().split(/\s+/)[0] || "there";
+  const firstName = (partner.agent_name ?? "").trim().split(/\s+/)[0] || "there";
   const code = partner.referral_code;
 
   const { Resend } = await import("resend");

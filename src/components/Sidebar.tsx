@@ -42,9 +42,6 @@ const ROUTE_MAP: Record<string, string> = {
   "stage-templates": "/admin/templates",
   "task-templates": "/admin/templates/tasks",
   "email-templates": "/admin/templates/emails",
-  masters: "/admin/masters/brokers",
-  brokers: "/admin/masters/brokers",
-  coupons: "/admin/masters/coupons",
   leads: "/admin/leads",
   partners: "/admin/partners",
   staff: "/admin/users",
@@ -81,12 +78,10 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed =
   };
 
   const isTemplateActive = pathname.startsWith("/admin/templates");
-  const isMastersActive = pathname.startsWith("/admin/masters");
 
   const [openMenus, setOpenMenus] = useState<Set<string>>(() => {
     const initial = new Set<string>();
     if (pathname.startsWith("/admin/templates")) initial.add("templates");
-    if (pathname.startsWith("/admin/masters")) initial.add("masters");
     if (pathname.startsWith("/admin/settings")) initial.add("settings");
     if (pathname.startsWith("/admin/account-settings")) initial.add("settings");
     return initial;
@@ -130,8 +125,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed =
           {NAV_ITEMS.map((item) => {
             const active =
               isActive(item.id) ||
-              (item.id === "templates" && isTemplateActive) ||
-              (item.id === "masters" && isMastersActive);
+              (item.id === "templates" && isTemplateActive);
             const hasChildren = item.children && item.children.length > 0;
             const route = ROUTE_MAP[item.id] || "/";
 

@@ -77,15 +77,15 @@ interface LeadUser {
   // Purchase & Sale parents where both co-leads share both addresses.
   coPersonRole?: "purchaser" | "seller" | null;
   // Referral attribution resolved from the code applied at intake.
-  referralBroker?: {
+  referralPartner?: {
     id: string;
-    name: string;
-    email: string | null;
-    phone: string | null;
-    type: string | null;
-    company: string | null;
+    agent_name: string | null;
+    agent_email: string | null;
+    agent_phone: string | null;
+    brokerage_type: string | null;
+    brokerage_name: string | null;
+    referral_code: string | null;
   } | null;
-  referralCouponCode?: string | null;
   // Manual "no code" referral captured at intake.
   referralAgentName?: string | null;
   referralAgentCompany?: string | null;
@@ -323,8 +323,7 @@ const Leads: React.FC = () => {
     subService: l.sub_service,
     apsSigned: l.aps_signed,
     referralSource: l.referral_source,
-    referralBroker: l.referral_broker ?? null,
-    referralCouponCode: l.referral_coupon_code ?? null,
+    referralPartner: l.referral_partner ?? null,
     referralAgentName: l.referral_agent_name ?? null,
     referralAgentCompany: l.referral_agent_company ?? null,
     referralAgentEmail: l.referral_agent_email ?? null,
@@ -1403,13 +1402,13 @@ const Leads: React.FC = () => {
           )}
 
           {(() => {
-            const rb = selectedLead.referralBroker ?? null;
-            const partnerName = rb?.name || selectedLead.referralAgentName || null;
-            const partnerCompany = rb?.company || selectedLead.referralAgentCompany || null;
-            const partnerEmail = rb?.email || selectedLead.referralAgentEmail || null;
-            const partnerPhone = rb?.phone || null;
-            const partnerType = rb?.type || null;
-            const referralCode = selectedLead.referralCouponCode || null;
+            const rp = selectedLead.referralPartner ?? null;
+            const partnerName = rp?.agent_name || selectedLead.referralAgentName || null;
+            const partnerCompany = rp?.brokerage_name || selectedLead.referralAgentCompany || null;
+            const partnerEmail = rp?.agent_email || selectedLead.referralAgentEmail || null;
+            const partnerPhone = rp?.agent_phone || null;
+            const partnerType = rp?.brokerage_type || null;
+            const referralCode = rp?.referral_code || null;
             const hasPartner = !!(partnerName || partnerCompany || partnerEmail);
 
             // Hide the Partner Details section entirely when this lead has no
@@ -1429,8 +1428,8 @@ const Leads: React.FC = () => {
 
             return (
               <>
-                {/* Partner Details — the referral broker/agent for this lead
-                    (resolved from broker_id, or a manually-named agent captured
+                {/* Partner Details — the referral partner for this lead
+                    (resolved from partner_id, or a manually-named agent captured
                     at intake). Family co-leads are still listed higher up. */}
                 <SectionHeader
                   title="Partner Details"

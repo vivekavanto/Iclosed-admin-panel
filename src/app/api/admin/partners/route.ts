@@ -3,12 +3,19 @@ import supabaseAdmin from "@/lib/supabaseAdmin";
 
 const supabase = supabaseAdmin;
 
-// Partners are the referral sources stored in the `brokers` table (a partner is
+// Partners are the referral sources stored in the `partners` table (a partner is
 // a Mortgage Broker or Real Estate Agent). Each gets a unique referral_code: a
 // name-derived prefix + a GLOBALLY sequential number, so no two codes ever
 // share the same number (JANE0001, SARAH0002, JOHN0003…). Numbering globally
 // (rather than per-prefix) avoids two different partners both showing "0001".
-// Coupons are no longer read here — the per-partner code is the only referral code.
+//
+// agent_name is the person and brokerage_name the firm; only agent_name is
+// required. Coupons are not read here — the per-partner code is the only
+// referral code.
+//
+// This file is the canonical source of the code-generation scheme. The public
+// web app mirrors it when intake find-or-creates a partner for a keyed-in agent
+// — keep both in sync: D:\iclosed_dev_web\src\lib\resolvePartner.ts
 
 // True when another non-deleted partner already uses this email (case-
 // insensitive). Blank emails are allowed to repeat since email is optional.
@@ -17,11 +24,11 @@ async function emailTaken(email: string, excludeId?: string): Promise<boolean> {
   const normalized = email.trim().toLowerCase();
   if (!normalized) return false;
   const { data } = await supabase
-    .from("brokers")
-    .select("id, email")
+    .from("partners")
+    .select("id, agent_email")
     .eq("is_deleted", false);
   return (data ?? []).some(
-    (r) => (r.email ?? "").trim().toLowerCase() === normalized && r.id !== excludeId,
+    (r) => (r.agent_email ?? "").trim().toLowerCase() === normalized && r.id !== excludeId,
   );
 }
 
@@ -38,7 +45,7 @@ function derivePrefix(name?: string | null, email?: string | null): string {
 // GET /api/admin/partners — list partners (newest first) + clients_referred count
 export async function GET() {
   const { data, error } = await supabase
-    .from("brokers")
+    .from("partners")
     .select("*")
     .eq("is_deleted", false)
     .order("created_at", { ascending: false });
@@ -49,17 +56,17 @@ export async function GET() {
 
   const partners = data ?? [];
 
-  // Attach clients_referred per partner — one query on leads by broker_id.
+  // Attach clients_referred per partner — one query on leads by partner_id.
   const ids = partners.map((p) => p.id);
   const referredCount = new Map<string, number>();
   if (ids.length > 0) {
     const { data: leads } = await supabase
       .from("leads")
-      .select("broker_id")
-      .in("broker_id", ids);
+      .select("partner_id")
+      .in("partner_id", ids);
     for (const l of leads ?? []) {
-      if (!l.broker_id) continue;
-      referredCount.set(l.broker_id, (referredCount.get(l.broker_id) ?? 0) + 1);
+      if (!l.partner_id) continue;
+      referredCount.set(l.partner_id, (referredCount.get(l.partner_id) ?? 0) + 1);
     }
   }
 
@@ -74,26 +81,27 @@ export async function GET() {
 // POST /api/admin/partners — create a partner + generate its referral_code
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { name, email, phone, type, company } = body;
+  const { agent_name, agent_email, agent_phone, brokerage_type, brokerage_name } = body;
 
-  if (!name || !String(name).trim()) {
+  if (!agent_name || !String(agent_name).trim()) {
     return NextResponse.json({ error: "Name is required" }, { status: 400 });
   }
 
-  if (email && (await emailTaken(String(email)))) {
+  if (agent_email && (await emailTaken(String(agent_email)))) {
     return NextResponse.json(
       { error: "A partner with this email already exists." },
       { status: 409 },
     );
   }
 
-  const prefix = derivePrefix(name, email);
+  const prefix = derivePrefix(agent_name, agent_email);
 
-  // Scan-max the trailing number across ALL existing codes (any prefix), so the
-  // next code's number is globally unique — two partners never both get "0001".
-  // Then insert with retry on the unique index (23505).
+  // Scan-max the trailing number across ALL existing codes (any prefix, including
+  // soft-deleted partners), so the next code's number is globally unique and a
+  // retired partner's number is never reissued. Then insert with retry on the
+  // unique index (23505).
   const { data: existing } = await supabase
-    .from("brokers")
+    .from("partners")
     .select("referral_code");
 
   let maxNum = 0;
@@ -107,14 +115,14 @@ export async function POST(req: NextRequest) {
   for (let attempt = 1; attempt <= 10; attempt++) {
     const referral_code = `${prefix}${String(maxNum + attempt).padStart(4, "0")}`;
     const { data, error } = await supabase
-      .from("brokers")
+      .from("partners")
       .insert([
         {
-          name: String(name).trim(),
-          email: email || null,
-          phone: phone || null,
-          type: type || null,
-          company: company || null,
+          agent_name: String(agent_name).trim(),
+          agent_email: agent_email || null,
+          agent_phone: agent_phone || null,
+          brokerage_type: brokerage_type || null,
+          brokerage_name: brokerage_name || null,
           referral_code,
         },
       ])
@@ -138,13 +146,13 @@ export async function POST(req: NextRequest) {
 // PUT /api/admin/partners — update fields (referral_code is stable, never changed)
 export async function PUT(req: NextRequest) {
   const body = await req.json();
-  const { id, name, email, phone, type, company } = body;
+  const { id, agent_name, agent_email, agent_phone, brokerage_type, brokerage_name } = body;
 
   if (!id) {
     return NextResponse.json({ error: "ID is required" }, { status: 400 });
   }
 
-  if (email && (await emailTaken(String(email), id))) {
+  if (agent_email && (await emailTaken(String(agent_email), id))) {
     return NextResponse.json(
       { error: "A partner with this email already exists." },
       { status: 409 },
@@ -152,14 +160,14 @@ export async function PUT(req: NextRequest) {
   }
 
   const updateData: Record<string, unknown> = { updated_at: new Date().toISOString() };
-  if (name !== undefined) updateData.name = name;
-  if (email !== undefined) updateData.email = email || null;
-  if (phone !== undefined) updateData.phone = phone || null;
-  if (type !== undefined) updateData.type = type || null;
-  if (company !== undefined) updateData.company = company || null;
+  if (agent_name !== undefined) updateData.agent_name = agent_name;
+  if (agent_email !== undefined) updateData.agent_email = agent_email || null;
+  if (agent_phone !== undefined) updateData.agent_phone = agent_phone || null;
+  if (brokerage_type !== undefined) updateData.brokerage_type = brokerage_type || null;
+  if (brokerage_name !== undefined) updateData.brokerage_name = brokerage_name || null;
 
   const { data, error } = await supabase
-    .from("brokers")
+    .from("partners")
     .update(updateData)
     .eq("id", id)
     .select("*")
@@ -191,7 +199,7 @@ export async function DELETE(req: NextRequest) {
   }
 
   const { data, error } = await supabase
-    .from("brokers")
+    .from("partners")
     .update({ is_deleted: true, updated_at: new Date().toISOString() })
     .eq("id", id)
     .select();

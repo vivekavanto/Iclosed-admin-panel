@@ -13,8 +13,8 @@ export async function POST(req: NextRequest) {
   }
 
   const { data: partner, error } = await supabaseAdmin
-    .from("brokers")
-    .select("id, name, email, referral_code")
+    .from("partners")
+    .select("id, agent_name, agent_email, referral_code")
     .eq("id", id)
     .eq("is_deleted", false)
     .maybeSingle();

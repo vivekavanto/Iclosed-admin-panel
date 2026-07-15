@@ -84,30 +84,28 @@ export async function GET() {
   });
 
   // ── Referral attribution ─────────────────────────────────────────────────
-  // Resolve each lead's referring partner (brokers row) in bulk. The partner's
-  // own referral_code is the referral code — coupons are no longer read. Done as
-  // a separate query (not an embedded select) so this is migration-safe: before
-  // the broker_id column exists, `*` simply omits it and this no-ops.
-  const brokerIds = [...new Set(leads.map((l: any) => l.broker_id).filter(Boolean))];
-  const brokerMap = new Map<string, any>();
+  // Resolve each lead's referring partner in bulk. The partner's own
+  // referral_code is the referral code — coupons are no longer read. Done as a
+  // separate query (not an embedded select) so this is migration-safe: before
+  // the partner_id column exists, `*` simply omits it and this no-ops.
+  const partnerIds = [...new Set(leads.map((l: any) => l.partner_id).filter(Boolean))];
+  const partnerMap = new Map<string, any>();
 
-  if (brokerIds.length > 0) {
-    const { data: brokers } = await supabaseAdmin
-      .from("brokers")
-      .select("id, name, email, phone, type, company, referral_code")
-      .in("id", brokerIds)
-      // Exclude soft-deleted partners — a deleted broker must not resurface as a
-      // lead's referral just because the lead still carries its broker_id.
+  if (partnerIds.length > 0) {
+    const { data: partners } = await supabaseAdmin
+      .from("partners")
+      .select("id, agent_name, agent_email, agent_phone, brokerage_type, brokerage_name, referral_code")
+      .in("id", partnerIds)
+      // Exclude soft-deleted partners — a deleted partner must not resurface as
+      // a lead's referral just because the lead still carries its partner_id.
       .eq("is_deleted", false);
-    for (const b of brokers ?? []) brokerMap.set(b.id, b);
+    for (const p of partners ?? []) partnerMap.set(p.id, p);
   }
 
   for (const lead of leads as any[]) {
-    const b = lead.broker_id ? brokerMap.get(lead.broker_id) : null;
-    lead.referral_broker = b
-      ? { id: b.id, name: b.name, email: b.email, phone: b.phone, type: b.type, company: b.company }
+    lead.referral_partner = lead.partner_id
+      ? partnerMap.get(lead.partner_id) ?? null
       : null;
-    lead.referral_coupon_code = (b?.referral_code as string | undefined) ?? null;
   }
 
   return NextResponse.json({ success: true, leads });

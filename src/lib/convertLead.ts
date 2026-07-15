@@ -265,12 +265,12 @@ export async function convertSingleLead(
         property_address: lead.address_street ?? "Address TBD",
         closing_date: opts.closing_date ?? null,
         price: cleanPrice ?? 0,
-        // Carry referral attribution (broker/coupon captured at intake) onto the
-        // deal so admins can see who referred each file. Only spread when the
-        // lead actually carries a referral so a non-referred conversion never
-        // references the columns (safe before the migration is applied).
-        ...(lead.broker_id ? { broker_id: lead.broker_id } : {}),
-        ...(lead.coupon_id ? { coupon_id: lead.coupon_id } : {}),
+        // Carry referral attribution (the partner whose code was applied at
+        // intake) onto the deal so admins can see who referred each file. Only
+        // spread when the lead actually carries a referral so a non-referred
+        // conversion never references the column (safe before the migration is
+        // applied).
+        ...(lead.partner_id ? { partner_id: lead.partner_id } : {}),
         ...(lead.referral_agent_name ? { referral_agent_name: lead.referral_agent_name } : {}),
         ...(lead.referral_agent_company ? { referral_agent_company: lead.referral_agent_company } : {}),
         ...(lead.referral_agent_email ? { referral_agent_email: lead.referral_agent_email } : {}),
@@ -518,17 +518,17 @@ export async function convertSingleLead(
                       const htmlBody = processedBody;
 
                       // "Shared with agent?" templates also CC the referral
-                      // broker linked to this lead/deal (skipped when unset or
-                      // the broker has no email).
+                      // partner linked to this lead/deal (skipped when unset or
+                      // the partner has no email).
                       let cc: string[] | undefined;
-                      if (emailTemplate.shared_with_agent && lead.broker_id) {
-                        const { data: broker } = await supabaseAdmin
-                          .from("brokers")
-                          .select("email")
-                          .eq("id", lead.broker_id)
+                      if (emailTemplate.shared_with_agent && lead.partner_id) {
+                        const { data: partner } = await supabaseAdmin
+                          .from("partners")
+                          .select("agent_email")
+                          .eq("id", lead.partner_id)
                           .eq("is_deleted", false)
                           .maybeSingle();
-                        if (broker?.email) cc = [broker.email];
+                        if (partner?.agent_email) cc = [partner.agent_email];
                       }
 
                       await resend.emails.send({

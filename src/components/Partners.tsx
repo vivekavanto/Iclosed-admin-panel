@@ -17,13 +17,14 @@ import { formatLocalDate } from "@/lib/formatDate";
 
 type PartnerType = "Mortgage Broker" | "Real Estate Agent";
 
+// Mirrors the `partners` table: agent_* is the person, brokerage_* the firm.
 interface Partner {
   id: string;
-  name: string;
-  email: string | null;
-  phone: string | null;
-  type: PartnerType | null;
-  company: string | null;
+  agent_name: string;
+  agent_email: string | null;
+  agent_phone: string | null;
+  brokerage_type: PartnerType | null;
+  brokerage_name: string | null;
   referral_code: string | null;
   clients_referred?: number;
   created_at: string;
@@ -45,11 +46,11 @@ const firstNameOf = (name?: string | null) =>
 
 const emptyForm = {
   id: "",
-  name: "",
-  email: "",
-  phone: "",
-  type: "Real Estate Agent" as PartnerType,
-  company: "",
+  agent_name: "",
+  agent_email: "",
+  agent_phone: "",
+  brokerage_type: "Real Estate Agent" as PartnerType,
+  brokerage_name: "",
 };
 
 type TabFilter = "all" | "Real Estate Agent" | "Mortgage Broker";
@@ -100,11 +101,11 @@ const Partners: React.FC = () => {
   const handleEdit = (p: Partner) => {
     setForm({
       id: p.id,
-      name: p.name ?? "",
-      email: p.email ?? "",
-      phone: p.phone ?? "",
-      type: p.type ?? "Real Estate Agent",
-      company: p.company ?? "",
+      agent_name: p.agent_name ?? "",
+      agent_email: p.agent_email ?? "",
+      agent_phone: p.agent_phone ?? "",
+      brokerage_type: p.brokerage_type ?? "Real Estate Agent",
+      brokerage_name: p.brokerage_name ?? "",
     });
     setCreatedPartner(null);
     setIsModalOpen(true);
@@ -123,11 +124,11 @@ const Partners: React.FC = () => {
       const method = form.id ? "PUT" : "POST";
       const payload = {
         id: form.id || undefined,
-        name: form.name.trim(),
-        email: form.email.trim() || null,
-        phone: form.phone.trim() || null,
-        type: form.type || null,
-        company: form.company.trim() || null,
+        agent_name: form.agent_name.trim(),
+        agent_email: form.agent_email.trim() || null,
+        agent_phone: form.agent_phone.trim() || null,
+        brokerage_type: form.brokerage_type || null,
+        brokerage_name: form.brokerage_name.trim() || null,
       };
       const res = await fetch("/api/admin/partners", {
         method,
@@ -192,7 +193,7 @@ const Partners: React.FC = () => {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-      alert(`Referral code sent to ${p.email}.`);
+      alert(`Referral code sent to ${p.agent_email}.`);
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to send code.");
     } finally {
@@ -201,18 +202,18 @@ const Partners: React.FC = () => {
   };
 
   // ── Derived data ──────────────────────────────────────────────────────────
-  const agentCount = partners.filter((p) => p.type === "Real Estate Agent").length;
-  const brokerCount = partners.filter((p) => p.type === "Mortgage Broker").length;
+  const agentCount = partners.filter((p) => p.brokerage_type === "Real Estate Agent").length;
+  const brokerCount = partners.filter((p) => p.brokerage_type === "Mortgage Broker").length;
   const clientsReferred = partners.reduce((sum, p) => sum + (p.clients_referred ?? 0), 0);
 
   const filtered = partners.filter((p) => {
-    if (tab !== "all" && p.type !== tab) return false;
+    if (tab !== "all" && p.brokerage_type !== tab) return false;
     const q = searchTerm.toLowerCase();
     if (!q) return true;
     return (
-      p.name.toLowerCase().includes(q) ||
-      (p.email ?? "").toLowerCase().includes(q) ||
-      (p.company ?? "").toLowerCase().includes(q) ||
+      p.agent_name.toLowerCase().includes(q) ||
+      (p.agent_email ?? "").toLowerCase().includes(q) ||
+      (p.brokerage_name ?? "").toLowerCase().includes(q) ||
       (p.referral_code ?? "").toLowerCase().includes(q)
     );
   });
@@ -293,13 +294,14 @@ const Partners: React.FC = () => {
 
       {/* List */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-x-auto">
-        <table className="w-full min-w-[900px] text-left text-sm">
+        <table className="w-full min-w-[1000px] text-left text-sm">
           <thead className="bg-slate-50/30 border-b border-slate-100">
             <tr className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">
               <th className="px-6 py-5 w-12">#</th>
               <th className="px-4 py-5">Partner</th>
               <th className="px-4 py-5">Type</th>
               <th className="px-4 py-5">Company</th>
+              <th className="px-4 py-5">Phone</th>
               <th className="px-4 py-5">Referral Code</th>
               <th className="px-4 py-5 text-center w-24">Clients</th>
               <th className="px-4 py-5 w-40">Date Added</th>
@@ -317,24 +319,24 @@ const Partners: React.FC = () => {
                     </div>
                     <div className="min-w-0">
                       <span className="font-bold text-slate-800 text-sm leading-snug block truncate">
-                        {p.name}
+                        {p.agent_name}
                       </span>
                       <span className="text-xs text-slate-400 truncate block">
-                        {p.email || <span className="italic text-slate-300">No email</span>}
+                        {p.agent_email || <span className="italic text-slate-300">No email</span>}
                       </span>
                     </div>
                   </div>
                 </td>
                 <td className="px-4 py-4">
-                  {p.type ? (
+                  {p.brokerage_type ? (
                     <span
                       className={`inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ring-1 ${
-                        p.type === "Real Estate Agent"
+                        p.brokerage_type === "Real Estate Agent"
                           ? "bg-blue-50 text-blue-700 ring-blue-200"
                           : "bg-amber-50 text-amber-700 ring-amber-200"
                       }`}
                     >
-                      {typeLabel(p.type)}
+                      {typeLabel(p.brokerage_type)}
                     </span>
                   ) : (
                     <span className="italic text-slate-300 text-xs">—</span>
@@ -342,7 +344,12 @@ const Partners: React.FC = () => {
                 </td>
                 <td className="px-4 py-4">
                   <span className="text-xs text-slate-600 truncate block max-w-[180px]">
-                    {p.company || <span className="italic text-slate-300">—</span>}
+                    {p.brokerage_name || <span className="italic text-slate-300">—</span>}
+                  </span>
+                </td>
+                <td className="px-4 py-4">
+                  <span className="text-xs text-slate-600 whitespace-nowrap">
+                    {p.agent_phone || <span className="italic text-slate-300">—</span>}
                   </span>
                 </td>
                 <td className="px-4 py-4">
@@ -377,9 +384,9 @@ const Partners: React.FC = () => {
                   <div className="flex justify-center items-center gap-1">
                     <button
                       onClick={() => sendCode(p)}
-                      disabled={sendingId === p.id || !p.email}
+                      disabled={sendingId === p.id || !p.agent_email}
                       className="text-slate-400 hover:text-brand-primary transition-colors p-1 disabled:opacity-40 disabled:cursor-not-allowed"
-                      title={p.email ? "Resend code by email" : "No email on file"}
+                      title={p.agent_email ? "Resend code by email" : "No email on file"}
                     >
                       <Mail size={18} />
                     </button>
@@ -403,7 +410,7 @@ const Partners: React.FC = () => {
             ))}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-12 py-20 text-center text-slate-400">
+                <td colSpan={9} className="px-12 py-20 text-center text-slate-400">
                   <Handshake size={48} className="text-slate-100 mb-4 mx-auto" />
                   <p className="font-medium text-lg">No partners found.</p>
                   <button
@@ -463,7 +470,7 @@ const Partners: React.FC = () => {
                       <Check className="text-green-600" size={28} />
                     </div>
                     <p className="text-sm text-slate-600">
-                      <span className="font-bold text-slate-800">{createdPartner.name}</span> is
+                      <span className="font-bold text-slate-800">{createdPartner.agent_name}</span> is
                       now a partner. Their referral code is:
                     </p>
                   </div>
@@ -490,17 +497,17 @@ const Partners: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => sendCode(createdPartner)}
-                        disabled={sendingId === createdPartner.id || !createdPartner.email}
+                        disabled={sendingId === createdPartner.id || !createdPartner.agent_email}
                         className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-primary text-white text-sm font-semibold hover:bg-brand-primaryHover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        title={createdPartner.email ? undefined : "No email on file"}
+                        title={createdPartner.agent_email ? undefined : "No email on file"}
                       >
                         <Mail size={16} />
                         {sendingId === createdPartner.id
                           ? "Sending..."
-                          : `Email code to ${firstNameOf(createdPartner.name)}`}
+                          : `Email code to ${firstNameOf(createdPartner.agent_name)}`}
                       </button>
                     </div>
-                    {!createdPartner.email && (
+                    {!createdPartner.agent_email && (
                       <p className="text-xs text-amber-600">
                         No email on file — add one to email the code.
                       </p>
@@ -527,15 +534,15 @@ const Partners: React.FC = () => {
                     <div className="flex rounded-lg border border-gray-200 overflow-hidden">
                       <button
                         type="button"
-                        onClick={() => setForm((p) => ({ ...p, type: "Real Estate Agent" }))}
-                        className={`flex-1 py-2.5 text-sm font-semibold transition-colors ${form.type === "Real Estate Agent" ? "bg-[#C10007] text-white" : "bg-white text-gray-500 hover:bg-gray-50"}`}
+                        onClick={() => setForm((p) => ({ ...p, brokerage_type: "Real Estate Agent" }))}
+                        className={`flex-1 py-2.5 text-sm font-semibold transition-colors ${form.brokerage_type === "Real Estate Agent" ? "bg-[#C10007] text-white" : "bg-white text-gray-500 hover:bg-gray-50"}`}
                       >
                         Real Estate Agent
                       </button>
                       <button
                         type="button"
-                        onClick={() => setForm((p) => ({ ...p, type: "Mortgage Broker" }))}
-                        className={`flex-1 py-2.5 text-sm font-semibold transition-colors border-l border-gray-200 ${form.type === "Mortgage Broker" ? "bg-[#C10007] text-white" : "bg-white text-gray-500 hover:bg-gray-50"}`}
+                        onClick={() => setForm((p) => ({ ...p, brokerage_type: "Mortgage Broker" }))}
+                        className={`flex-1 py-2.5 text-sm font-semibold transition-colors border-l border-gray-200 ${form.brokerage_type === "Mortgage Broker" ? "bg-[#C10007] text-white" : "bg-white text-gray-500 hover:bg-gray-50"}`}
                       >
                         Mortgage Broker
                       </button>
@@ -552,8 +559,8 @@ const Partners: React.FC = () => {
                       required
                       placeholder="e.g. Jane Smith"
                       className={inputClasses}
-                      value={form.name}
-                      onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+                      value={form.agent_name}
+                      onChange={(e) => setForm((p) => ({ ...p, agent_name: e.target.value }))}
                     />
                   </div>
 
@@ -564,8 +571,8 @@ const Partners: React.FC = () => {
                       type="text"
                       placeholder="Brokerage / agency name"
                       className={inputClasses}
-                      value={form.company}
-                      onChange={(e) => setForm((p) => ({ ...p, company: e.target.value }))}
+                      value={form.brokerage_name}
+                      onChange={(e) => setForm((p) => ({ ...p, brokerage_name: e.target.value }))}
                     />
                   </div>
 
@@ -577,8 +584,8 @@ const Partners: React.FC = () => {
                         type="email"
                         placeholder="jane@brokerage.com"
                         className={inputClasses}
-                        value={form.email}
-                        onChange={(e) => setForm((p) => ({ ...p, email: e.target.value }))}
+                        value={form.agent_email}
+                        onChange={(e) => setForm((p) => ({ ...p, agent_email: e.target.value }))}
                       />
                     </div>
                     <div>
@@ -588,8 +595,8 @@ const Partners: React.FC = () => {
                         inputMode="numeric"
                         placeholder="(555) 123-4567"
                         className={inputClasses}
-                        value={form.phone}
-                        onChange={(e) => setForm((p) => ({ ...p, phone: formatPhone(e.target.value) }))}
+                        value={form.agent_phone}
+                        onChange={(e) => setForm((p) => ({ ...p, agent_phone: formatPhone(e.target.value) }))}
                       />
                     </div>
                   </div>
@@ -653,7 +660,7 @@ const Partners: React.FC = () => {
                   <h3 className="text-xl font-black text-slate-900 leading-tight">Delete Partner</h3>
                   <p className="text-sm text-slate-500 font-medium mt-2 leading-relaxed">
                     Are you sure you want to delete{" "}
-                    <span className="font-bold text-slate-800">“{confirmDelete.name}”</span>? Their
+                    <span className="font-bold text-slate-800">“{confirmDelete.agent_name}”</span>? Their
                     referral code will stop resolving.
                   </p>
                 </div>
