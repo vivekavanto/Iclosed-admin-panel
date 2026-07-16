@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { sendAuthEmailViaResend } from "@/lib/sendAuthEmail";
+import { guardServiceRequest } from "@/lib/verifyServiceSignature";
 
 const ALLOWED_ORIGINS = [
   "https://iclosed.ca",
@@ -41,7 +42,10 @@ export async function POST(req: Request) {
   const headers = corsHeaders(req);
 
   try {
-    const body = await req.json();
+    const raw = await req.text();
+    const blocked = guardServiceRequest(req, raw);
+    if (blocked) return blocked;
+    const body = JSON.parse(raw);
     const { email } = body as { email: string };
 
     if (!email) {

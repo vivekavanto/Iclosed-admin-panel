@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { activateClientDeals } from "@/lib/activateClientDeals";
+import { guardServiceRequest } from "@/lib/verifyServiceSignature";
 
 /**
  * POST /api/webhooks/activate-deal
@@ -11,7 +12,10 @@ import { activateClientDeals } from "@/lib/activateClientDeals";
  */
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
+    const raw = await req.text();
+    const blocked = guardServiceRequest(req, raw);
+    if (blocked) return blocked;
+    const body = JSON.parse(raw);
     const { email, lead_id, client_id } = body as {
       email?: string;
       lead_id?: string;

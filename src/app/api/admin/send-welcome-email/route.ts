@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sendWelcomeEmail } from "@/lib/sendWelcomeEmail";
+import { guardServiceRequest } from "@/lib/verifyServiceSignature";
 
 /**
  * POST /api/admin/send-welcome-email
@@ -18,7 +19,10 @@ import { sendWelcomeEmail } from "@/lib/sendWelcomeEmail";
  */
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
+    const raw = await req.text();
+    const blocked = guardServiceRequest(req, raw);
+    if (blocked) return blocked;
+    const body = JSON.parse(raw);
     const { lead_id, template_id, template_name, source } = body as {
       lead_id?: string;
       template_id?: string;

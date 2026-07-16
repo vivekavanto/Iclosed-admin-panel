@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { activateClientDeals } from "@/lib/activateClientDeals";
 import { sendWelcomeEmail } from "@/lib/sendWelcomeEmail";
+import { guardServiceRequest } from "@/lib/verifyServiceSignature";
 
 /**
  * POST /api/webhooks/new-lead
@@ -18,7 +19,10 @@ import { sendWelcomeEmail } from "@/lib/sendWelcomeEmail";
  */
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
+    const raw = await req.text();
+    const blocked = guardServiceRequest(req, raw);
+    if (blocked) return blocked;
+    const body = JSON.parse(raw);
 
     // Resolve to a lead_id
     let leadId: string | null = body.lead_id ?? null;

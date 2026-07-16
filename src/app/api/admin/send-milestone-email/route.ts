@@ -3,6 +3,7 @@ import supabaseAdmin from "@/lib/supabaseAdmin"
 import { Resend } from "resend"
 import { getFamilyDealIds } from "@/lib/familyDeals"
 import { formatLeadTypeLabel, buildLeadAddressForEmail } from "@/lib/leadEmailAddress"
+import { guardServiceRequest } from "@/lib/verifyServiceSignature"
 
 /**
  * Sends a milestone email to the client of a single deal.
@@ -390,10 +391,17 @@ async function handlePortalRequest(body: Record<string, any>) {
 
 export async function POST(req: Request) {
     try {
-        const body = await req.json()
+        const raw = await req.text()
+        const body = JSON.parse(raw)
 
-        // Detect customer portal format (snake_case fields with client_id)
+        // Detect customer portal format (snake_case fields with client_id).
+        // Only the portal path is signature-gated: it reaches this handler
+        // cookie-less (route is whitelisted in middleware). The admin-panel path
+        // below arrives with an authenticated admin cookie from the browser UI,
+        // so it is not signed. See SEC-002 scope note about splitting this route.
         if (body.client_id) {
+            const blocked = guardServiceRequest(req, raw)
+            if (blocked) return blocked
             return handlePortalRequest(body)
         }
 
