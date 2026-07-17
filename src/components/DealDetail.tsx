@@ -28,6 +28,7 @@ import {
   X,
   UserPlus,
   LogIn,
+  FileSignature,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
@@ -2436,6 +2437,46 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   // own ('both'/unset). Drives the per-person upload badge below.
   const familyUploader = familyPeople.find((p) => p.canUploadForAll) ?? null;
 
+  // Retainer-signed status per person, keyed by lead_id. Reuses the same
+  // endpoint the Leads "Send Email" modal uses; `signed` there means a row
+  // exists in retainer_signatures, which is the source of truth that the client
+  // actually signed (the generated PDF is a separate, async step and is NOT
+  // required for the badge to read "signed").
+  //
+  // A lead_id is absent from this map until the fetch resolves, which is what
+  // gates the badge below — rendering an empty map as "not signed" would
+  // briefly libel every person on the file.
+  const [retainerSigned, setRetainerSigned] = useState<Record<string, boolean>>({});
+  const familyLeadIdsKey = familyPeople
+    .map((p) => p.lead_id)
+    .filter(Boolean)
+    .join(",");
+  useEffect(() => {
+    if (!familyLeadIdsKey) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/admin/retainer-status?lead_ids=${encodeURIComponent(familyLeadIdsKey)}`,
+        );
+        const data = await res.json();
+        if (cancelled || !data?.success || !data.status) return;
+        setRetainerSigned(
+          Object.fromEntries(
+            Object.entries(
+              data.status as Record<string, { signed?: boolean }>,
+            ).map(([leadId, s]) => [leadId, s?.signed === true]),
+          ),
+        );
+      } catch {
+        // Non-blocking — on failure the badge simply doesn't render.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [familyLeadIdsKey]);
+
   // Whose Personal Information this is. The client portal shows Full Name as a
   // read-only field at the top of that task, sourced from the client record
   // rather than task_form_fields — so it has no response row and would
@@ -3544,9 +3585,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
 
       {/* People Involved Section — lists every person in the family
           (primary + co-purchasers + co-sellers) with a clear chip for
-          each role. The currently-viewed deal is highlighted and not
-          clickable; clicking any other entry navigates to that deal so
-          the admin can switch perspectives. */}
+          each role. The currently-viewed deal is not clickable; clicking
+          any other entry navigates to that deal so the admin can switch
+          perspectives. */}
       {(
         <div className="bg-white rounded-xl shadow-sm border border-blue-200 p-5 mb-6">
           <div className="flex items-center justify-between gap-2 mb-3">
@@ -3599,11 +3640,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                       : () => router.push(`/admin/deals/${p.id}`)
                   }
                   className={`flex items-center justify-between px-4 py-3 rounded-lg border transition-all group ${
-                    includeFamilyTasks
+                    includeFamilyTasks || p.isCurrent
                       ? "border-slate-100 cursor-default"
-                      : p.isCurrent
-                        ? "border-brand-primary bg-brand-light/30 cursor-default"
-                        : "border-slate-100 hover:border-blue-200 hover:bg-blue-50/50 cursor-pointer"
+                      : "border-slate-100 hover:border-blue-200 hover:bg-blue-50/50 cursor-pointer"
                   }`}
                 >
                   <div className="flex items-center gap-3">
@@ -3612,11 +3651,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                     </span>
                     <div>
                       <p className={`text-sm font-bold transition-colors ${
-                        includeFamilyTasks
+                        includeFamilyTasks || p.isCurrent
                           ? "text-slate-800"
-                          : p.isCurrent
-                            ? "text-brand-primary"
-                            : "text-slate-800 group-hover:text-blue-700"
+                          : "text-slate-800 group-hover:text-blue-700"
                       }`}>
                         {p.lead_name}
                       </p>
@@ -3778,10 +3815,27 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
                         </span>
                       )
                     )}
-                    {p.isCurrent && !includeFamilyTasks && (
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-brand-primary text-white">
-                        Currently viewing
-                      </span>
+                    {/* Retainer badge — only once we know this person's status
+                        (see retainerSigned above); an unresolved lead_id renders
+                        nothing rather than a wrong "not signed". */}
+                    {p.lead_id && p.lead_id in retainerSigned && (
+                      retainerSigned[p.lead_id] ? (
+                        <span
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-300"
+                          title="This person has signed the retainer agreement"
+                        >
+                          <FileSignature size={10} />
+                          Retainer signed
+                        </span>
+                      ) : (
+                        <span
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-300"
+                          title="This person has not signed the retainer agreement yet"
+                        >
+                          <FileText size={10} />
+                          Retainer not signed
+                        </span>
+                      )
                     )}
                     {p.accountCreated ? (
                       <span
