@@ -693,6 +693,7 @@ export interface Database {
           is_deleted: boolean;
           account_activation_deferred: boolean;
           partner_id: string | null;
+          agent_signup_email_sent: boolean;
         };
         Insert: {
           id?: string;
@@ -742,6 +743,7 @@ export interface Database {
           is_deleted?: boolean;
           account_activation_deferred?: boolean;
           partner_id?: string | null;
+          agent_signup_email_sent?: boolean;
         };
         Update: {
           id?: string;
@@ -791,6 +793,7 @@ export interface Database {
           is_deleted?: boolean;
           account_activation_deferred?: boolean;
           partner_id?: string | null;
+          agent_signup_email_sent?: boolean;
         };
         Relationships: [
           {

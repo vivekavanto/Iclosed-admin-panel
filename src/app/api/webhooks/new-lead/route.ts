@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { activateClientDeals } from "@/lib/activateClientDeals";
 import { sendWelcomeEmail } from "@/lib/sendWelcomeEmail";
+import { sendAgentSignupEmail } from "@/lib/sendAgentSignupEmail";
 import { guardServiceRequest } from "@/lib/verifyServiceSignature";
 
 /**
@@ -63,6 +64,25 @@ export async function POST(req: NextRequest) {
     }
 
     const result = await sendWelcomeEmail(leadId, { source: "first_login" });
+
+    // Notify the client's referral agent/broker that their client signed up.
+    // Non-blocking and idempotent (guarded by leads.agent_signup_email_sent):
+    // a failure here must never break the client's login/welcome flow, and it
+    // silently no-ops when the lead has no agent on file.
+    try {
+      const agentResult = await sendAgentSignupEmail(leadId, {
+        source: "first_login",
+      });
+      if (!agentResult.success) {
+        console.warn(
+          `[new-lead webhook] agent signup email failed (non-blocking): ${agentResult.error}`,
+        );
+      }
+    } catch (agentErr: any) {
+      console.warn(
+        `[new-lead webhook] agent signup email threw (non-blocking): ${agentErr?.message}`,
+      );
+    }
 
     if (!result.success) {
       return NextResponse.json(

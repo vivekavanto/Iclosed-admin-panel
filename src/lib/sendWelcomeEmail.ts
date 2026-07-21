@@ -64,7 +64,7 @@ function computeRole(lead: any): string {
   return "Purchaser";
 }
 
-async function interpolate(text: string, lead: any, fileNumber: string | null = null): Promise<string> {
+export async function interpolate(text: string, lead: any, fileNumber: string | null = null): Promise<string> {
   const firstName = lead.first_name ?? "";
   const lastName = lead.last_name ?? "";
   const fullName = `${firstName} ${lastName}`.trim();
