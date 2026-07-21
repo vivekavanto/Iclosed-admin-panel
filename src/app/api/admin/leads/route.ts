@@ -156,6 +156,22 @@ export async function PUT(req: NextRequest) {
     // Information task already keeps both in sync via its own trigger.)
     if (rest.phone !== undefined) clientData.phone = norm(rest.phone);
 
+    // Name has the same gap as phone: the leads→clients trigger
+    // (2026-06-03-phaseD-lead-edit-sync-to-clients.sql) syncs the personal
+    // fields but NOT first_name/last_name, and the lead→client INSERT trigger
+    // is ON CONFLICT DO NOTHING, so it never updates an existing row. Without
+    // this mirror an admin rename lands on `leads` only and every surface
+    // reading clients.first_name (customer portal, milestone emails) keeps
+    // showing the old name. NOT NULL on clients too, so blanks coerce to ''.
+    for (const [key, column] of [
+      ['firstName', 'first_name'],
+      ['lastName', 'last_name'],
+    ] as const) {
+      if (rest[key] === undefined) continue;
+      const raw = rest[key];
+      clientData[column] = typeof raw === 'string' && raw.trim() === '' ? '' : raw;
+    }
+
     if (Object.keys(updateData).length === 0 && Object.keys(clientData).length === 0) {
       return NextResponse.json(
         { success: false, error: 'No editable fields provided' },
@@ -209,23 +225,28 @@ export async function PUT(req: NextRequest) {
       }
     }
 
-    // Phone is a personal attribute of the PERSON, not of one deal. A client
-    // can have several deals — each is its own leads row, but they all share
-    // the same email — so a phone edit must update every one of that person's
+    // Phone and name are personal attributes of the PERSON, not of one deal. A
+    // client can have several deals — each is its own leads row, but they all
+    // share the same email — so an edit must update every one of that person's
     // leads (keyed by email), not just the deal being viewed. Co-purchasers /
     // co-sellers have their OWN distinct emails, so matching by email touches
-    // only this person's rows. The single customer record (clients.phone) was
+    // only this person's rows. The single customer record (clients.*) was
     // already updated above. Non-fatal: this lead + clients are saved even if
     // the cross-deal cascade fails.
-    if (rest.phone !== undefined && lead?.email) {
-      const phoneValue = norm(rest.phone);
+    const personCascade: Record<string, any> = {};
+    if (rest.phone !== undefined) personCascade.phone = norm(rest.phone);
+    if (updateData.first_name !== undefined)
+      personCascade.first_name = updateData.first_name;
+    if (updateData.last_name !== undefined)
+      personCascade.last_name = updateData.last_name;
+    if (Object.keys(personCascade).length > 0 && lead?.email) {
       const emailPattern = String(lead.email).replace(/[\\%_]/g, '\\$&');
       const { error: cascadeErr } = await supabaseAdmin
         .from('leads')
-        .update({ phone: phoneValue })
+        .update(personCascade)
         .ilike('email', emailPattern);
       if (cascadeErr) {
-        console.error('PUT /api/admin/leads phone cascade error:', cascadeErr);
+        console.error('PUT /api/admin/leads person cascade error:', cascadeErr);
       }
     }
 

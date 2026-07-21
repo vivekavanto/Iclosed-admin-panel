@@ -55,6 +55,10 @@ import AddCoClientModal from "./AddCoClientModal";
 interface DealDetailProps {
   deal: Deal;
   rawDeal?: Record<string, any> | null;
+  /** Re-fetch the deal row from the server. Needed after an edit that writes
+   *  to a table `rawDeal` only JOINs (the client's name lives on `leads`), so
+   *  the page's mount-time snapshot would otherwise stay stale. */
+  onDealChanged?: () => void | Promise<void>;
   onBack?: () => void;
 }
 
@@ -97,7 +101,7 @@ const IdentificationChip: React.FC<{ meta: any }> = ({ meta }) => {
   );
 };
 
-const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
+const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, onBack }) => {
   const router = useRouter();
   const handleBack = onBack || (() => router.push("/admin/deals"));
 
@@ -563,6 +567,13 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
   const [editTaskFieldErrors, setEditTaskFieldErrors] = useState<Record<string, string>>({});
   const [editTaskLoading, setEditTaskLoading] = useState(false);
   const [editTaskSaving, setEditTaskSaving] = useState(false);
+  // Editable Full Name on the Personal Information task. The name is not a
+  // task_form_fields row — it lives on the person's lead/client record — so it
+  // saves through /api/admin/leads rather than the task-response path. The ref
+  // snapshots the loaded value so a save only hits that endpoint on a change.
+  const [editTaskFirstName, setEditTaskFirstName] = useState<string>("");
+  const [editTaskLastName, setEditTaskLastName] = useState<string>("");
+  const editTaskInitialName = useRef<{ first: string; last: string }>({ first: "", last: "" });
 
   // Identification upload drawer — opens instead of the normal Edit Task modal
   // when the admin clicks Pencil on a task whose title contains "identif".
@@ -2496,6 +2507,30 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
     return lead || null;
   };
 
+  // The lead whose name the Personal Information task's Full Name belongs to,
+  // split into the parts /api/admin/leads expects. Resolution mirrors
+  // personalInfoFullName: the task's own owner first (the family view lists one
+  // row per person), else the deal's own lead — so an admin editing a
+  // co-purchaser's task renames THAT person, not the primary.
+  const personalInfoNameTarget = (
+    task: DisplayTask,
+  ): { leadId: string; first: string; last: string } | null => {
+    if (task.ownerLeadId) {
+      return {
+        leadId: task.ownerLeadId,
+        first: task.ownerFirstName ?? "",
+        last: task.ownerLastName ?? "",
+      };
+    }
+    const leadId = (rawDeal?.lead_id as string | null) ?? null;
+    if (!leadId) return null;
+    return {
+      leadId,
+      first: (rawDeal?.lead_first_name as string | null) ?? "",
+      last: (rawDeal?.lead_last_name as string | null) ?? "",
+    };
+  };
+
   // Map each person's deal id → the workflow side their role belongs to, used
   // in the unified family view to scope a co-client's PERSONAL rows (Personal
   // Information / Identification, which carry no template lead_type) to the
@@ -3329,6 +3364,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onBack }) => {
           onSaved={() => {
             setShowEditDeal(false);
             refetchData();
+            // The client name saves to `leads`, so refetchData() (tasks +
+            // milestones only) can't surface it — pull the deal row too.
+            void onDealChanged?.();
           }}
         />
       )}
