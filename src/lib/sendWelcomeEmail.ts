@@ -125,6 +125,19 @@ export async function interpolate(text: string, lead: any, fileNumber: string | 
     "{{lead.address_province}}": lead.address_province ?? "",
     "{{lead.file_number}}": resolvedFileNumber,
     "{{lead_type}}": leadType,
+    // client.* aliases — used by the "Signup email to agents" template, which
+    // is addressed to the agent and refers to the LEAD as "your client". Maps to
+    // the same lead fields as user.* / short-form.
+    "{{ client.first_name }}": firstName,
+    "{{ client.last_name }}": lastName,
+    "{{ client.full_name }}": fullName,
+    "{{ client.get_full_name }}": fullName,
+    "{{ client.email }}": email,
+    "{{client.first_name}}": firstName,
+    "{{client.last_name}}": lastName,
+    "{{client.full_name}}": fullName,
+    "{{client.get_full_name}}": fullName,
+    "{{client.email}}": email,
     // Short-form aliases (used by retainer-agreement and similar templates)
     "{{ first_name }}": firstName,
     "{{ last_name }}": lastName,
@@ -174,6 +187,12 @@ export async function interpolate(text: string, lead: any, fileNumber: string | 
   result = result.replace(/\{\{\s*lead\.address_city\s*\}\}/gi, lead.address_city ?? "");
   result = result.replace(/\{\{\s*lead\.address_province\s*\}\}/gi, lead.address_province ?? "");
   result = result.replace(/\{\{\s*lead\.file_number\s*\}\}/gi, resolvedFileNumber);
+  // client.* fallbacks
+  result = result.replace(/\{\{\s*client\.get_full_name\s*\}\}/gi, fullName);
+  result = result.replace(/\{\{\s*client\.full_name\s*\}\}/gi, fullName);
+  result = result.replace(/\{\{\s*client\.first_name\s*\}\}/gi, firstName);
+  result = result.replace(/\{\{\s*client\.last_name\s*\}\}/gi, lastName);
+  result = result.replace(/\{\{\s*client\.email\s*\}\}/gi, email);
   // Short-form alias fallbacks
   result = result.replace(/\{\{\s*first_name\s*\}\}/gi, firstName);
   result = result.replace(/\{\{\s*last_name\s*\}\}/gi, lastName);
