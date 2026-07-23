@@ -5,6 +5,15 @@ import {
   buildLeadAddressPartsForEmail,
   renderTransactionPhrase,
 } from "./leadEmailAddress";
+import {
+  renderTemplateSafe,
+  escapeHtml,
+  decodeTemplateBraces,
+  type TemplateValue,
+} from "./renderEmailTemplate";
+import { maskEmail } from "./maskEmail";
+import { logger } from "./logger";
+import { withRetry } from "./retry";
 
 export type WelcomeEmailResult = {
   success: boolean;
@@ -64,7 +73,15 @@ function computeRole(lead: any): string {
   return "Purchaser";
 }
 
-export async function interpolate(text: string, lead: any, fileNumber: string | null = null): Promise<string> {
+export async function interpolate(
+  text: string,
+  lead: any,
+  fileNumber: string | null = null,
+  opts: { escape?: boolean } = {},
+): Promise<string> {
+  // escape=true for HTML bodies (default); callers pass escape:false for the
+  // plain-text subject line so escaped entities don't show literally.
+  const escape = opts.escape !== false;
   const firstName = lead.first_name ?? "";
   const lastName = lead.last_name ?? "";
   const fullName = `${firstName} ${lastName}`.trim();
@@ -99,111 +116,60 @@ export async function interpolate(text: string, lead: any, fileNumber: string | 
   const role = computeRole(lead);
   const propertyRoleRow = role ? `Your Role: ${role}` : "";
 
-  const map: Record<string, string> = {
-    // Canonical, namespaced placeholders
-    "{{ user.first_name }}": firstName,
-    "{{ user.last_name }}": lastName,
-    "{{ user.get_full_name }}": fullName,
-    "{{ user.full_name }}": fullName,
-    "{{ user.email }}": email,
-    "{{ lead_address }}": address,
-    "{{ lead.address_line1 }}": lead.address_street ?? "",
-    "{{ lead.address_city }}": lead.address_city ?? "",
-    "{{ lead.address_province }}": lead.address_province ?? "",
-    "{{ lead.file_number }}": resolvedFileNumber,
-    "{{ lead_type }}": leadType,
-    "{{ stage_name }}": "",
-    "{{ stage_status }}": "",
-    "{{user.first_name}}": firstName,
-    "{{user.last_name}}": lastName,
-    "{{user.get_full_name}}": fullName,
-    "{{user.full_name}}": fullName,
-    "{{user.email}}": email,
-    "{{lead_address}}": address,
-    "{{lead.address_line1}}": lead.address_street ?? "",
-    "{{lead.address_city}}": lead.address_city ?? "",
-    "{{lead.address_province}}": lead.address_province ?? "",
-    "{{lead.file_number}}": resolvedFileNumber,
-    "{{lead_type}}": leadType,
-    // client.* aliases — used by the "Signup email to agents" template, which
-    // is addressed to the agent and refers to the LEAD as "your client". Maps to
-    // the same lead fields as user.* / short-form.
-    "{{ client.first_name }}": firstName,
-    "{{ client.last_name }}": lastName,
-    "{{ client.full_name }}": fullName,
-    "{{ client.get_full_name }}": fullName,
-    "{{ client.email }}": email,
-    "{{client.first_name}}": firstName,
-    "{{client.last_name}}": lastName,
-    "{{client.full_name}}": fullName,
-    "{{client.get_full_name}}": fullName,
-    "{{client.email}}": email,
-    // Short-form aliases (used by retainer-agreement and similar templates)
-    "{{ first_name }}": firstName,
-    "{{ last_name }}": lastName,
-    "{{ full_name }}": fullName,
-    "{{ email }}": email,
-    "{{ property_address }}": address,
-    "{{ file_number }}": resolvedFileNumber,
-    "{{ side_suffix }}": sideSuffix,
-    "{{ property_role_row }}": propertyRoleRow,
-    "{{first_name}}": firstName,
-    "{{last_name}}": lastName,
-    "{{full_name}}": fullName,
-    "{{email}}": email,
-    "{{property_address}}": address,
-    "{{file_number}}": resolvedFileNumber,
-    "{{side_suffix}}": sideSuffix,
-    "{{property_role_row}}": propertyRoleRow,
-    "{{NAME}}": fullName,
-    "{{LEAD_TYPE}}": leadType,
-    "{{CLIENT_ADDRESS}}": address,
+  // Normalized placeholder → value lookup. Keys are lowercased and have any
+  // leading dot stripped, so every spacing/case/alias variant the old map listed
+  // explicitly (user.*, client.*, short-form, {{NAME}}, {{LEAD_TYPE}},
+  // {{CLIENT_ADDRESS}}) collapses to one entry. The single-pass renderer trims
+  // and lowercases each token before lookup, so whitespace tolerance is built in.
+  const values: Record<string, string> = {
+    "user.first_name": firstName,
+    "client.first_name": firstName,
+    "first_name": firstName,
+    "user.last_name": lastName,
+    "client.last_name": lastName,
+    "last_name": lastName,
+    "user.full_name": fullName,
+    "user.get_full_name": fullName,
+    "client.full_name": fullName,
+    "client.get_full_name": fullName,
+    "full_name": fullName,
+    "name": fullName,
+    "user.email": email,
+    "client.email": email,
+    "email": email,
+    "lead_address": address,
+    "property_address": address,
+    "client_address": address,
+    "lead.address_line1": lead.address_street ?? "",
+    "lead.address_city": lead.address_city ?? "",
+    "lead.address_province": lead.address_province ?? "",
+    "lead.file_number": resolvedFileNumber,
+    "file_number": resolvedFileNumber,
+    "lead_type": leadType,
+    "stage_name": "",
+    "stage_status": "",
+    "side_suffix": sideSuffix,
+    "property_role_row": propertyRoleRow,
   };
 
-  let result = text;
+  const resolve = (name: string): TemplateValue | null => {
+    const key = name.toLowerCase().replace(/^\.+/, "");
+    return Object.prototype.hasOwnProperty.call(values, key)
+      ? { value: values[key] }
+      : null;
+  };
 
   // Pair-up pattern: "{{ lead_type }} of {{ lead_address }}" must render as
   // "Purchase of <P> and Sale of <S>" for combined files, not
-  // "Purchase & Sale of <P> and <S>" which collapses the two sides. Replace
-  // the whole phrase before the individual placeholders run.
-  result = result.replace(
+  // "Purchase & Sale of <P> and <S>" which collapses the two sides. Resolve the
+  // whole phrase first; it embeds the (user-controlled) address, so escape it
+  // when escaping. It is brace-free, so the single pass below won't re-scan it.
+  const result = text.replace(
     /\{\{\s*lead_type\s*\}\}\s+of\s+\{\{\s*lead_address\s*\}\}/gi,
-    transactionPhrase,
+    () => (escape ? escapeHtml(transactionPhrase) : transactionPhrase),
   );
 
-  for (const [key, value] of Object.entries(map)) {
-    result = result.split(key).join(value);
-  }
-
-  // Whitespace-tolerant fallbacks
-  result = result.replace(/\{\{\s*user\.get_full_name\s*\}\}/gi, fullName);
-  result = result.replace(/\{\{\s*user\.full_name\s*\}\}/gi, fullName);
-  result = result.replace(/\{\{\s*user\.first_name\s*\}\}/gi, firstName);
-  result = result.replace(/\{\{\s*user\.last_name\s*\}\}/gi, lastName);
-  result = result.replace(/\{\{\s*user\.email\s*\}\}/gi, email);
-  result = result.replace(/\{\{\s*lead_type\s*\}\}/gi, leadType);
-  result = result.replace(/\{\{\s*lead_address\s*\}\}/gi, address);
-  result = result.replace(/\{\{\s*lead\.address_line1\s*\}\}/gi, lead.address_street ?? "");
-  result = result.replace(/\{\{\s*lead\.address_city\s*\}\}/gi, lead.address_city ?? "");
-  result = result.replace(/\{\{\s*lead\.address_province\s*\}\}/gi, lead.address_province ?? "");
-  result = result.replace(/\{\{\s*lead\.file_number\s*\}\}/gi, resolvedFileNumber);
-  // client.* fallbacks
-  result = result.replace(/\{\{\s*client\.get_full_name\s*\}\}/gi, fullName);
-  result = result.replace(/\{\{\s*client\.full_name\s*\}\}/gi, fullName);
-  result = result.replace(/\{\{\s*client\.first_name\s*\}\}/gi, firstName);
-  result = result.replace(/\{\{\s*client\.last_name\s*\}\}/gi, lastName);
-  result = result.replace(/\{\{\s*client\.email\s*\}\}/gi, email);
-  // Short-form alias fallbacks
-  result = result.replace(/\{\{\s*first_name\s*\}\}/gi, firstName);
-  result = result.replace(/\{\{\s*last_name\s*\}\}/gi, lastName);
-  result = result.replace(/\{\{\s*full_name\s*\}\}/gi, fullName);
-  result = result.replace(/\{\{\s*email\s*\}\}/gi, email);
-  result = result.replace(/\{\{\s*property_address\s*\}\}/gi, address);
-  result = result.replace(/\{\{\s*file_number\s*\}\}/gi, resolvedFileNumber);
-  result = result.replace(/\{\{\s*side_suffix\s*\}\}/gi, sideSuffix);
-  result = result.replace(/\{\{\s*property_role_row\s*\}\}/gi, propertyRoleRow);
-
-  return result;
+  return renderTemplateSafe(result, resolve, { escape });
 }
 
 /**
@@ -264,7 +230,7 @@ export async function sendWelcomeEmail(
       .eq("id", opts.templateId)
       .single();
     if (data && !data.is_active) {
-      console.log(
+      logger.info(
         `[Welcome Email] Skipped — template "${data.name}" (id=${data.id}) is inactive. lead=${leadId} source=${opts.source ?? "unknown"}`,
       );
       return {
@@ -292,7 +258,7 @@ export async function sendWelcomeEmail(
     if (matching && matching.length > 0) {
       const active = matching.find((t: any) => t.is_active);
       if (!active) {
-        console.log(
+        logger.info(
           `[Welcome Email] Skipped — all matching templates (name~"${searchName}") are inactive. lead=${leadId} source=${opts.source ?? "unknown"}`,
         );
         return {
@@ -311,7 +277,7 @@ export async function sendWelcomeEmail(
   // template in /admin/templates/emails (or run the seed migration)
   // before this email can fire.
   if (!template?.body || template.body.trim() === "") {
-    console.log(
+    logger.info(
       `[Welcome Email] Skipped — no welcome template configured. lead=${leadId} source=${opts.source ?? "unknown"}`,
     );
     return {
@@ -322,12 +288,9 @@ export async function sendWelcomeEmail(
   }
 
   // 5. Build body
-  let rawBody = template.body;
-
-  rawBody = rawBody
-    .replace(/&#123;/g, "{")
-    .replace(/&#125;/g, "}")
-    .replace(/&nbsp;/g, " ")
+  // GAP-013: decode all brace encodings (decimal/hex/named) so placeholders
+  // are recognized regardless of how the template editor stored them.
+  const rawBody = decodeTemplateBraces(template.body)
     .replace(/ /g, " ");
 
   const emailBody = await interpolate(rawBody, lead, fileNumber);
@@ -342,41 +305,95 @@ export async function sendWelcomeEmail(
     template.subject && template.subject.trim() !== ""
       ? template.subject
       : template.name;
-  const subject = await interpolate(rawSubject, lead, fileNumber);
+  // Subject is plain text — don't HTML-escape (single-pass still applies).
+  const subject = await interpolate(rawSubject, lead, fileNumber, {
+    escape: false,
+  });
 
   // 7. Send
   if (!process.env.RESEND_API_KEY) {
     return { success: false, error: "Email service not configured (missing RESEND_API_KEY)", statusCode: 500 };
   }
 
+  // GAP-011: atomically CLAIM the send BEFORE calling Resend so two concurrent
+  // triggers can't both send. Only the caller that flips welcome_email_sent
+  // false→true wins the claim; a loser skips. If the send then fails we revert
+  // the flag so a later retry can send. (Skipped for a deliberate manual re-send.)
+  let claimedSend = false;
+  if (!opts.bypassIdempotency) {
+    const { data: claimed, error: claimErr } = await supabaseAdmin
+      .from("leads")
+      .update({ welcome_email_sent: true })
+      .eq("id", leadId)
+      .eq("welcome_email_sent", false)
+      .select("id");
+    if (claimErr) {
+      return { success: false, error: "Failed to reserve welcome email send", statusCode: 500 };
+    }
+    if (!claimed || claimed.length === 0) {
+      // Another trigger already claimed/sent it — don't send a duplicate.
+      return { success: true, alreadySent: true, templateUsed: "(already sent)" };
+    }
+    claimedSend = true;
+  }
+
   const resend = new Resend(process.env.RESEND_API_KEY);
   const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <support@iclosed.ca>";
 
-  const { data: sendResult, error: sendError } = await resend.emails.send({
-    from: fromEmail,
-    replyTo: "testing@iclosed.ca",
-    to: [lead.email],
-    subject,
-    html: htmlBody,
-  });
-
-  if (sendError) {
-    console.error(`[Welcome Email] Resend error (source=${opts.source ?? "unknown"}):`, sendError);
-    return { success: false, error: `Email send failed: ${sendError.message}`, statusCode: 500 };
+  // GAP-012: retry the send a few times with backoff so a transient Resend/API
+  // blip doesn't drop the welcome email. Resend returns { error } instead of
+  // throwing, so we throw on error to drive the retry.
+  let sendResult: { id?: string } | null = null;
+  try {
+    sendResult = await withRetry(
+      async () => {
+        const { data, error } = await resend.emails.send({
+          from: fromEmail,
+          replyTo: "testing@iclosed.ca",
+          to: [lead.email],
+          subject,
+          html: htmlBody,
+        });
+        if (error) throw new Error(error.message);
+        return data;
+      },
+      { attempts: 3, label: "welcome-email" },
+    );
+  } catch (sendErr: any) {
+    logger.error(
+      `[Welcome Email] Resend failed after retries (source=${opts.source ?? "unknown"}):`,
+      sendErr,
+    );
+    // GAP-011: the send failed — release the claim so a later retry can send.
+    if (claimedSend) {
+      await supabaseAdmin
+        .from("leads")
+        .update({ welcome_email_sent: false })
+        .eq("id", leadId);
+    }
+    return {
+      success: false,
+      error: `Email send failed: ${sendErr?.message ?? "unknown error"}`,
+      statusCode: 500,
+    };
   }
 
-  // 8. Mark sent — guards against duplicate sends from any other trigger
-  const { error: updateError } = await supabaseAdmin
-    .from("leads")
-    .update({ welcome_email_sent: true })
-    .eq("id", leadId);
-
-  if (updateError) {
-    console.error("[Welcome Email] Failed to update welcome_email_sent:", updateError);
+  // 8. Mark sent. When we claimed above, the flag is already true; this only
+  // matters for the bypassIdempotency (manual re-send) path, which didn't claim.
+  if (!claimedSend) {
+    const { error: updateError } = await supabaseAdmin
+      .from("leads")
+      .update({ welcome_email_sent: true })
+      .eq("id", leadId);
+    if (updateError) {
+      console.error("[Welcome Email] Failed to update welcome_email_sent:", updateError);
+    }
   }
 
-  console.log(
-    `[Welcome Email] Sent to ${lead.email} (source=${opts.source ?? "unknown"}), subject="${subject}", id=${sendResult?.id}`,
+  // SEC-022/CMP-008: mask the recipient and omit the subject (it contains the
+  // customer's name/address) so PII isn't written to server logs.
+  logger.info(
+    `[Welcome Email] Sent to ${maskEmail(lead.email)} (source=${opts.source ?? "unknown"}), id=${sendResult?.id}`,
   );
 
   return {

@@ -18,10 +18,18 @@ import { guardServiceRequest } from "@/lib/verifyServiceSignature";
  *   { email: string }   — looks up lead by email
  *   or { lead_id: string }
  */
+// SEC-017: this webhook is server-to-server only. It exposes NO CORS grant (no
+// Access-Control-Allow-Origin), so a browser on another origin cannot call it.
+// Answer preflight with 405 to make the "no cross-origin browser access" policy
+// explicit rather than relying on the framework default.
+export function OPTIONS() {
+  return new NextResponse(null, { status: 405 });
+}
+
 export async function POST(req: NextRequest) {
   try {
     const raw = await req.text();
-    const blocked = guardServiceRequest(req, raw);
+    const blocked = guardServiceRequest(req, raw, { routeKey: "new-lead" });
     if (blocked) return blocked;
     const body = JSON.parse(raw);
 
@@ -106,9 +114,11 @@ export async function POST(req: NextRequest) {
       template_used: result.templateUsed,
     });
   } catch (err: any) {
+    // SEC-012/CMP-008: full detail stays in the server log; the public webhook
+    // response is generic so internal/DB error text isn't echoed to callers.
     console.error("POST /api/webhooks/new-lead error:", err);
     return NextResponse.json(
-      { success: false, error: err.message || "Server error" },
+      { success: false, error: "Server error" },
       { status: 500 },
     );
   }

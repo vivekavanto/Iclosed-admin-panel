@@ -1,7 +1,44 @@
 import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
+import { logger } from "@/lib/logger";
 
 const supabase = supabaseAdmin;
+
+// ARC-002: cache auth_user_id → last_sign_in_at so we don't re-scan the ENTIRE
+// Supabase Auth user table on every deal-list load (an N+1-style full scan that
+// gets worse as the customer base grows). Refreshed at most once per TTL per warm
+// instance. (A materialised table synced on login would scale better still; this
+// removes the per-request full scan with no new infra.)
+let authSignInCache: { at: number; map: Map<string, string> } | null = null;
+const AUTH_CACHE_TTL_MS = 60_000;
+
+async function getAuthSignInMap(): Promise<Map<string, string>> {
+  if (authSignInCache && Date.now() - authSignInCache.at < AUTH_CACHE_TTL_MS) {
+    return authSignInCache.map;
+  }
+  const map = new Map<string, string>();
+  try {
+    let page = 1;
+    const perPage = 1000;
+    while (true) {
+      const { data: usersPage } = await supabase.auth.admin.listUsers({ page, perPage });
+      const users = usersPage?.users ?? [];
+      for (const u of users) {
+        // last_sign_in_at stays NULL until the client first signs in — the
+        // signal the "Account created" column wants.
+        if (u.last_sign_in_at) map.set(u.id, u.last_sign_in_at);
+      }
+      if (users.length < perPage) break;
+      page += 1;
+    }
+    authSignInCache = { at: Date.now(), map };
+    return map;
+  } catch (err) {
+    logger.error("[admin/deals] listUsers failed (non-blocking):", err);
+    // Fall back to a stale cache if we have one; otherwise an empty map.
+    return authSignInCache?.map ?? map;
+  }
+}
 
 export async function GET() {
   const { data, error } = await supabase
@@ -27,32 +64,10 @@ export async function GET() {
     const authId = lead?.clients?.auth_user_id;
     if (authId) authUserIds.add(authId);
   }
-  const authCreatedAtMap = new Map<string, string>();
-  if (authUserIds.size > 0) {
-    try {
-      let page = 1;
-      const perPage = 1000;
-      while (true) {
-        const { data: usersPage } = await supabase.auth.admin.listUsers({ page, perPage });
-        const users = usersPage?.users ?? [];
-        for (const u of users) {
-          // Use last_sign_in_at as the "Account created" signal — it stays
-          // NULL until the client actually signs in for the first time
-          // (vs. auth.users.created_at which is set the moment an invite
-          // creates the auth user, even before the client clicks the link).
-          // This keeps the "Account created" column empty for invited-but-
-          // not-yet-signed-up clients, matching the Pending deal status.
-          if (authUserIds.has(u.id) && u.last_sign_in_at) {
-            authCreatedAtMap.set(u.id, u.last_sign_in_at);
-          }
-        }
-        if (users.length < perPage) break;
-        page += 1;
-      }
-    } catch (err) {
-      console.error("[admin/deals] listUsers failed (non-blocking):", err);
-    }
-  }
+  // ARC-002: resolved from the cached auth sign-in map (see getAuthSignInMap)
+  // instead of scanning the whole auth table on every request.
+  const authCreatedAtMap =
+    authUserIds.size > 0 ? await getAuthSignInMap() : new Map<string, string>();
 
   // Build a set of primary lead IDs that have co-purchasers pointing to them
   const primaryLeadIds = new Set<string>();

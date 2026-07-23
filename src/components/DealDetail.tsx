@@ -44,6 +44,11 @@ import {
   type PdfDealSection,
 } from "@/lib/dealPdf";
 import { upload } from "@vercel/blob/client";
+import {
+  BLOB_ACCESS,
+  docDownloadHref,
+  docFetchCredentials,
+} from "@/lib/blobPrivacy";
 import UploadIdentificationDrawer from "./UploadIdentificationDrawer";
 import UploadHomeInsuranceDrawer from "./UploadHomeInsuranceDrawer";
 import SubmitOnBehalfSection, { OnBehalfCoPerson } from "./SubmitOnBehalfSection";
@@ -1056,7 +1061,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
       const leadId = (rawDeal?.lead_id as string | undefined) ?? deal.id;
       const pathname = `task-responses/${leadId}/${Date.now()}-${file.name}`;
       const blob = await upload(pathname, file, {
-        access: "public",
+        access: BLOB_ACCESS,
         handleUploadUrl: `/api/admin/deals/${deal.id}/uploadblobstorage/token`,
         contentType: file.type,
       });
@@ -1576,7 +1581,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
       for (const file of apsFiles) {
         const pathname = `corporate-docs/${leadId}/${Date.now()}-${file.name}`;
         const blob = await upload(pathname, file, {
-          access: "public",
+          access: BLOB_ACCESS,
           handleUploadUrl: `/api/admin/deals/${deal.id}/uploadblobstorage/token`,
           contentType: file.type,
         });
@@ -2567,12 +2572,17 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
       showToast("This client has not signed in yet — cannot impersonate.", "error");
       return;
     }
+    // SEC-006 step-up: re-confirm the admin's own password before impersonating.
+    const stepUpPassword = window.prompt(
+      "Security check: re-enter YOUR admin password to log in as this client.",
+    );
+    if (!stepUpPassword) return;
     setImpersonatingId(person.id);
     try {
       const res = await fetch("/api/admin/impersonate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: person.lead_email }),
+        body: JSON.stringify({ email: person.lead_email, stepUpPassword }),
       });
       const json = await res.json();
       if (!res.ok || !json.url) {
@@ -2715,8 +2725,13 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
   // falls back to a plain anchor click if fetch is blocked by CORS.
   const downloadDocFile = async (doc: any): Promise<void> => {
     if (!doc?.file_url) return;
+    // Private docs stream through the same-origin auth-gated proxy (needs the
+    // session cookie); public/legacy blobs are fetched directly with no creds.
+    const href = docDownloadHref(doc.file_url);
     try {
-      const res = await fetch(doc.file_url, { credentials: "omit" });
+      const res = await fetch(href, {
+        credentials: docFetchCredentials(doc.file_url),
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blob = await res.blob();
       const blobUrl = URL.createObjectURL(blob);
@@ -2729,7 +2744,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
       setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
     } catch {
       const a = document.createElement("a");
-      a.href = doc.file_url;
+      a.href = href;
       a.download = doc.file_name || "download";
       a.target = "_blank";
       a.rel = "noopener noreferrer";
@@ -5267,7 +5282,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                             </div>
                             {doc.file_url ? (
                               <a
-                                href={doc.file_url}
+                                href={docDownloadHref(doc.file_url)}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="text-xs font-semibold text-[#C10007] hover:underline shrink-0 ml-3"
@@ -5336,7 +5351,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                     {doc.file_url ? (
                       <div className="flex items-center gap-1 shrink-0 ml-3">
                         <a
-                          href={doc.file_url}
+                          href={docDownloadHref(doc.file_url)}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="inline-flex items-center justify-center w-8 h-8 rounded-md text-slate-500 hover:text-[#C10007] hover:bg-white transition-colors"
@@ -5579,7 +5594,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                               <FileText size={14} className="text-[#C10007] shrink-0" />
                               {doc.file_url ? (
                                 <a
-                                  href={doc.file_url}
+                                  href={docDownloadHref(doc.file_url)}
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   className="text-sm text-[#C10007] hover:underline truncate"
@@ -5698,7 +5713,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                                     <FileText size={14} className="text-[#C10007] shrink-0" />
                                     {r.file_url ? (
                                       <a
-                                        href={r.file_url}
+                                        href={docDownloadHref(r.file_url)}
                                         target="_blank"
                                         rel="noopener noreferrer"
                                         className="text-sm text-[#C10007] hover:underline truncate"
@@ -5924,7 +5939,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                             <FileText size={14} className="text-[#C10007] shrink-0" />
                             {resp.file_url ? (
                               <a
-                                href={resp.file_url}
+                                href={docDownloadHref(resp.file_url)}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="text-sm text-[#C10007] hover:underline truncate"
@@ -6080,7 +6095,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                           <div className="flex items-center gap-2 mt-1">
                             <FileText size={14} className="text-[#C10007] shrink-0" />
                             {resp.file_url ? (
-                              <a href={resp.file_url} target="_blank" rel="noopener noreferrer" className="text-sm text-[#C10007] hover:underline truncate">
+                              <a href={docDownloadHref(resp.file_url)} target="_blank" rel="noopener noreferrer" className="text-sm text-[#C10007] hover:underline truncate">
                                 {resp.file_name || "View file"}
                               </a>
                             ) : (

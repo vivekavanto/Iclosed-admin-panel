@@ -1,3 +1,7 @@
+// GAP-017: single source of truth for the file-number format, shared with deal
+// edit + the import route.
+import { FILE_NUMBER_REGEX } from "./fileNumber";
+
 export const REQUIRED_HEADERS = [
   "File Number",
   "File Type",
@@ -64,7 +68,6 @@ export interface ParsedRow {
   skipReason?: string;
 }
 
-const FILE_NUMBER_REGEX = /^[0-9]{2}[A-Z]{1,3}-[0-9]{3,5}$/;
 const FILE_TYPE_MAP: Record<string, string> = {
   purchase: "Purchase",
   sale: "Sale",

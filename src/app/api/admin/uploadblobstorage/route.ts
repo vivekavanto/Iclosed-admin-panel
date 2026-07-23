@@ -1,6 +1,8 @@
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { NextResponse } from "next/server";
-import { put } from "@vercel/blob";
+import { put, del } from "@vercel/blob";
+import { BLOB_ACCESS } from "@/lib/blobPrivacy";
+import { validateUpload } from "@/lib/uploadValidation";
 
 export async function POST(req: Request) {
   try {
@@ -28,11 +30,22 @@ export async function POST(req: Request) {
     if (!lead_id) throw new Error("No lead_id provided");
     if (!doc_type) throw new Error("No doc_type provided");
 
+    // GAP-009: reject oversized or non-document uploads server-side.
+    const check = validateUpload(file);
+    if (!check.ok) {
+      return NextResponse.json(
+        { success: false, error: check.error },
+        { status: 400 },
+      );
+    }
+
     const blob = await put(
       `corporate-docs/${lead_id}/${Date.now()}-${file.name}`,
       file,
       {
-        access: "public",
+        // "public" today; "private" once NEXT_PUBLIC_PRIVATE_BLOB is flipped on
+        // (SEC-003). Private uploads are served via /api/admin/documents/download.
+        access: BLOB_ACCESS,
         token: process.env.BLOB_READ_WRITE_TOKEN!,
       },
     );
@@ -53,7 +66,16 @@ export async function POST(req: Request) {
         detection_reason,
       });
 
-    if (error) throw new Error(error.message);
+    if (error) {
+      // GAP-008: the bytes are already in Blob storage but the DB row failed —
+      // delete the blob so it doesn't orphan (and keep costing) forever.
+      try {
+        await del(blob.url, { token: process.env.BLOB_READ_WRITE_TOKEN });
+      } catch (delErr) {
+        console.error("Upload error: failed to clean up orphan blob:", delErr);
+      }
+      throw new Error(error.message);
+    }
 
     return NextResponse.json({
       success: true,

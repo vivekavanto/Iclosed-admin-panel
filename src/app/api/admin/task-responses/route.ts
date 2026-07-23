@@ -396,22 +396,8 @@ export async function GET(req: Request) {
     }
   }
 
-  // ── Diagnostic: trace the synced-doc rewrite to help debug why a
-  // co-purchaser/co-seller view might not be showing the Doc count.
-  // Safe to remove once verified.
-  console.log("[task-responses GET]", {
-    requested_deal_id: dealId,
-    primary_deal_id: primaryDealId,
-    is_viewing_primary: dealId === primaryDealId,
-    family_deal_ids: familyDealIds,
-    deal_tasks_count: dealTasks.length,
-    shared_task_ids_local: sharedTasks.map(t => t.id),
-    family_shared_task_ids: familySharedTasks.map(t => `${t.id} (deal:${t.deal_id})`),
-    primary_shared_task_ids: primarySharedTasks.map(t => `${t.id} (template:${t.task_template_id})`),
-    template_to_primary_map: Array.from(templateToPrimaryTaskId.entries()),
-    raw_responses_count: data?.length ?? 0,
-    raw_response_task_ids: (data ?? []).map(r => r.task_id),
-  });
+  // SEC-014: removed verbose diagnostic logging that dumped deal/lead/task IDs
+  // and file names into production logs.
 
   const result = (data ?? []).map((response: TaskResponseRow) => {
     const taskMeta = sharedTaskById.get(response.task_id) ?? localTaskById.get(response.task_id);
@@ -428,16 +414,6 @@ export async function GET(req: Request) {
         sharedTasks.find((task) => task.task_template_id === templateId)?.title ??
         title;
     }
-
-    // Diagnostic per-row
-    console.log("[task-responses GET → row]", {
-      original_task_id: response.task_id,
-      effective_task_id: effectiveTaskId,
-      template_id: templateId,
-      is_shared_document: isSharedDocument,
-      file_name: response.file_name,
-      rewrote: response.task_id !== effectiveTaskId,
-    });
 
     return {
       ...response,
@@ -631,6 +607,20 @@ export async function POST(req: Request) {
         { status: 400 },
       );
     }
+    // GAP-018: only accept known form field types (generous allow-list covering
+    // every type the app renders, plus standard input types), so a caller can't
+    // persist an arbitrary field_type string.
+    const ALLOWED_FIELD_TYPES = new Set([
+      "text", "textarea", "number", "date", "datetime", "time",
+      "email", "phone", "tel", "url",
+      "select", "checkbox", "radio", "file",
+    ]);
+    if (!ALLOWED_FIELD_TYPES.has(String(field_type).toLowerCase())) {
+      return NextResponse.json(
+        { success: false, error: `Unsupported field_type: ${field_type}` },
+        { status: 400 },
+      );
+    }
 
     const insertRow = {
       task_id,
@@ -675,20 +665,44 @@ export async function POST(req: Request) {
         isApsTask,
       });
       if (peerTaskIds.length > 0) {
-        const peerRows = peerTaskIds.map((tid) => ({
-          task_id: tid,
-          field_id: insertRow.field_id,
-          field_label: insertRow.field_label,
-          field_type: insertRow.field_type,
-          value: insertRow.value,
-          file_url: insertRow.file_url,
-          file_name: insertRow.file_name,
-        }));
-        const { data: mirrored } = await supabaseAdmin
-          .from("task_responses")
-          .insert(peerRows)
-          .select("id");
-        mirroredCount = mirrored?.length ?? 0;
+        // GAP-004: a network retry re-POSTs the same response, which would
+        // duplicate the mirrored peer rows. Skip any peer that already holds an
+        // identical response — matched on field + the file_url for file answers
+        // (else the value). We dedupe in code rather than with a unique
+        // constraint because a file field can legitimately hold MULTIPLE distinct
+        // files, so (task_id, field_id) is NOT unique.
+        const matchCol = insertRow.file_url ? "file_url" : "value";
+        const matchVal = insertRow.file_url ?? insertRow.value ?? null;
+        let alreadyHave = new Set<string>();
+        if (matchVal != null && insertRow.field_id != null) {
+          const { data: existing } = await supabaseAdmin
+            .from("task_responses")
+            .select("task_id")
+            .in("task_id", peerTaskIds)
+            .eq("field_id", insertRow.field_id)
+            .eq(matchCol, matchVal);
+          alreadyHave = new Set(
+            (existing ?? []).map((r) => r.task_id as string),
+          );
+        }
+        const peerRows = peerTaskIds
+          .filter((tid) => !alreadyHave.has(tid))
+          .map((tid) => ({
+            task_id: tid,
+            field_id: insertRow.field_id,
+            field_label: insertRow.field_label,
+            field_type: insertRow.field_type,
+            value: insertRow.value,
+            file_url: insertRow.file_url,
+            file_name: insertRow.file_name,
+          }));
+        if (peerRows.length > 0) {
+          const { data: mirrored } = await supabaseAdmin
+            .from("task_responses")
+            .insert(peerRows)
+            .select("id");
+          mirroredCount = mirrored?.length ?? 0;
+        }
       }
     }
 

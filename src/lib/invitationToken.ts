@@ -4,6 +4,13 @@ import supabaseAdmin from "./supabaseAdmin";
 const TOKEN_TTL_DAYS = 7;
 const TOKEN_BYTES = 48;
 
+// SEC-008: the token is deliberately multi-use to survive email-scanner
+// pre-fetches, but not UNLIMITED-use. Refuse it past this many consumptions so a
+// leaked token can't be replayed for the full TTL. Kept generous (not 5) because
+// several independent scanners can each pre-fetch the same link before a human
+// clicks; 10 tolerates that while still bounding abuse.
+const MAX_CONSUMPTIONS = 10;
+
 export type InvitationType = "invite" | "recovery" | "retainer_sign";
 
 export type ConsumedInvitation = {
@@ -15,7 +22,11 @@ export type ConsumedInvitation = {
 
 export type ConsumeResult =
   | { ok: true; data: ConsumedInvitation }
-  | { ok: false; reason: "missing" | "expired" | "error"; detail?: string };
+  | {
+      ok: false;
+      reason: "missing" | "expired" | "exhausted" | "error";
+      detail?: string;
+    };
 
 function resolveBaseUrl(): string {
   const explicit = process.env.NEXT_PUBLIC_ADMIN_APP_URL;
@@ -78,7 +89,7 @@ export async function consumeInvitationToken(token: string): Promise<ConsumeResu
 
   const { data, error } = await supabaseAdmin
     .from("invitation_tokens")
-    .select("type, email, redirect_to, user_data, expires_at")
+    .select("type, email, redirect_to, user_data, expires_at, consumption_count")
     .eq("token", token)
     .maybeSingle();
 
@@ -94,14 +105,33 @@ export async function consumeInvitationToken(token: string): Promise<ConsumeResu
   // and bounce real customers to /login?reason=link_expired&detail=used. The
   // Supabase action_link minted per click below is itself one-time-use and
   // short-lived, so re-using the wrapper token within the 7-day window is
-  // safe. We still stamp used_at on first hit (best-effort, no .is() guard
-  // needed — overwriting later hits is fine) so admins can see when a token
-  // was first activated; failures here are non-fatal.
+  // safe.
+  //
+  // SEC-008: multi-use, but not UNLIMITED-use. Once the token has been consumed
+  // MAX_CONSUMPTIONS times, refuse it so a leaked token can't be replayed for
+  // the whole TTL. The cap is generous enough to absorb scanner pre-fetches.
+  const currentCount = data.consumption_count ?? 0;
+  if (currentCount >= MAX_CONSUMPTIONS) {
+    console.warn(
+      `[invitationToken] token exhausted (${currentCount}/${MAX_CONSUMPTIONS} uses). email=${data.email} type=${data.type}`,
+    );
+    return { ok: false, reason: "exhausted" };
+  }
+
+  // Count this consumption; stamp used_at on the FIRST hit only so admins still
+  // see when the token was first activated. Best-effort — failures here are
+  // non-fatal. Read-then-write is acceptable given the generous cap; a couple of
+  // concurrent scanner hits can't meaningfully overshoot it.
+  const tokenUpdate: { consumption_count: number; used_at?: string } = {
+    consumption_count: currentCount + 1,
+  };
+  if (currentCount === 0) {
+    tokenUpdate.used_at = new Date().toISOString();
+  }
   await supabaseAdmin
     .from("invitation_tokens")
-    .update({ used_at: new Date().toISOString() })
-    .eq("token", token)
-    .is("used_at", null);
+    .update(tokenUpdate)
+    .eq("token", token);
 
   return {
     ok: true,

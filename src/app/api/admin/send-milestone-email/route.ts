@@ -400,7 +400,7 @@ export async function POST(req: Request) {
         // below arrives with an authenticated admin cookie from the browser UI,
         // so it is not signed. See SEC-002 scope note about splitting this route.
         if (body.client_id) {
-            const blocked = guardServiceRequest(req, raw)
+            const blocked = guardServiceRequest(req, raw, { routeKey: "send-milestone-email" })
             if (blocked) return blocked
             return handlePortalRequest(body)
         }

@@ -8,6 +8,11 @@ import {
   buildLeadAddressPartsForEmail,
   renderTransactionPhrase,
 } from "./leadEmailAddress";
+import {
+  renderTemplateSafe,
+  escapeHtml,
+  type TemplateValue,
+} from "./renderEmailTemplate";
 
 /**
  * For each action type, list the template names we'll accept (in priority
@@ -302,88 +307,50 @@ export async function sendAuthEmailViaResend(opts: {
 
   if (template?.body) {
     // ── Render DB template with placeholders ──────────────────────────────
-    const placeholders: Record<string, string> = {
-      // iClosed-style user placeholders
-      "{{ user.first_name }}": firstName,
-      "{{ user.last_name }}": lastName,
-      "{{ user.full_name }}": fullName,
-      "{{ user.get_full_name }}": fullName,
-      "{{ user.email }}": email,
-      "{{user.first_name}}": firstName,
-      "{{user.last_name}}": lastName,
-      "{{user.full_name}}": fullName,
-      "{{user.get_full_name}}": fullName,
-      "{{user.email}}": email,
-      // Lead placeholders
-      "{{ lead_address }}": leadAddress,
-      "{{lead_address}}": leadAddress,
-      "{{ property_address }}": leadAddress,
-      "{{property_address}}": leadAddress,
-      "{{ lead.address_line1 }}": lead?.address_street ?? "",
-      "{{lead.address_line1}}": lead?.address_street ?? "",
-      "{{ lead.address_city }}": lead?.address_city ?? "",
-      "{{lead.address_city}}": lead?.address_city ?? "",
-      "{{ lead.address_province }}": lead?.address_province ?? "",
-      "{{lead.address_province}}": lead?.address_province ?? "",
-      "{{ lead.file_number }}": fileNumber,
-      "{{lead.file_number}}": fileNumber,
-      "{{ file_number }}": fileNumber,
-      "{{file_number}}": fileNumber,
-      "{{ lead_type }}": leadType,
-      "{{lead_type}}": leadType,
-      "{{ side_suffix }}": sideSuffix,
-      "{{side_suffix}}": sideSuffix,
-      // Stage placeholders (kept as empty for auth-flow emails)
-      "{{ stage_name }}": "",
-      "{{stage_name}}": "",
-      "{{ stage_status }}": "",
-      "{{stage_status}}": "",
-      // Confirmation/auth link — supports the documented placeholder plus
-      // common variants admins may type instead.
-      "{{ confirmation_url }}": actionLink,
-      "{{confirmation_url}}": actionLink,
-      "{{ confirmationUrl }}": actionLink,
-      "{{confirmationUrl}}": actionLink,
-      "{{ confirmation_link }}": actionLink,
-      "{{confirmation_link}}": actionLink,
-      "{{ activation_url }}": actionLink,
-      "{{activation_url}}": actionLink,
-      "{{ activate_url }}": actionLink,
-      "{{activate_url}}": actionLink,
-      "{{ activation_link }}": actionLink,
-      "{{activation_link}}": actionLink,
-      "{{ activate_link }}": actionLink,
-      "{{activate_link}}": actionLink,
-      "{{ action_url }}": actionLink,
-      "{{action_url}}": actionLink,
-      "{{ action_link }}": actionLink,
-      "{{action_link}}": actionLink,
-      "{{ button_url }}": actionLink,
-      "{{button_url}}": actionLink,
-      "{{ invite_url }}": actionLink,
-      "{{invite_url}}": actionLink,
-      "{{ invite_link }}": actionLink,
-      "{{invite_link}}": actionLink,
-      "{{ reset_url }}": actionLink,
-      "{{reset_url}}": actionLink,
-      "{{ reset_link }}": actionLink,
-      "{{reset_link}}": actionLink,
-      // Login page (NOT an auth link) — the "Log Into iClosed" button.
-      "{{ login_url }}": loginUrl,
-      "{{login_url}}": loginUrl,
-      "{{ login_link }}": loginUrl,
-      "{{login_link}}": loginUrl,
-      // Supabase-style placeholders
-      "{{ .ConfirmationURL }}": actionLink,
-      "{{.ConfirmationURL}}": actionLink,
-      "{{ ConfirmationURL }}": actionLink,
-      "{{ConfirmationURL}}": actionLink,
-      "{{ .UserMetadata.first_name }}": firstName,
-      "{{.UserMetadata.first_name}}": firstName,
-      "{{ .UserMetadata.last_name }}": lastName,
-      "{{.UserMetadata.last_name}}": lastName,
-      "{{ .UserMetadata.email }}": email,
-      "{{.UserMetadata.email}}": email,
+    // Normalized placeholder → value lookup (lowercased, leading dot stripped).
+    // One entry per meaning; the single-pass renderer trims + lowercases each
+    // token before lookup, so every spacing/case variant the old explicit map
+    // listed (user.*, Supabase .ConfirmationURL / .UserMetadata.*, etc.) resolves
+    // here. Auth links are handled separately in resolve() so they stay raw.
+    const values: Record<string, string> = {
+      "user.first_name": firstName,
+      "user.last_name": lastName,
+      "user.full_name": fullName,
+      "user.get_full_name": fullName,
+      "user.email": email,
+      "usermetadata.first_name": firstName,
+      "usermetadata.last_name": lastName,
+      "usermetadata.email": email,
+      "lead_address": leadAddress,
+      "property_address": leadAddress,
+      "lead.address_line1": lead?.address_street ?? "",
+      "lead.address_city": lead?.address_city ?? "",
+      "lead.address_province": lead?.address_province ?? "",
+      "lead.file_number": fileNumber,
+      "file_number": fileNumber,
+      "lead_type": leadType,
+      "side_suffix": sideSuffix,
+      "stage_name": "",
+      "stage_status": "",
+    };
+
+    // Auth/login links are system-generated URLs (Supabase action link / the
+    // login page), never user data — substitute them RAW so a URL's "&" isn't
+    // turned into "&amp;". Same catch-all the old code used (any
+    // confirmation/activation/reset/… url|link, optional leading dot). Login is
+    // matched first because it is NOT an auth link.
+    const LOGIN_LINK_RE = /^login[_\s.]*(url|link)$/i;
+    const AUTH_LINK_RE =
+      /^\.?(confirmation|activation|activate|action|invite|invitation|reset|recovery|password|verification|verify|button)[_\s.]*(url|link)$/i;
+
+    const resolve = (name: string): TemplateValue | null => {
+      const key = name.toLowerCase().replace(/^\.+/, "");
+      if (Object.prototype.hasOwnProperty.call(values, key)) {
+        return { value: values[key] };
+      }
+      if (LOGIN_LINK_RE.test(key)) return { value: loginUrl, raw: true };
+      if (AUTH_LINK_RE.test(key)) return { value: actionLink, raw: true };
+      return null;
     };
 
     // Pair-up pattern: "{{ lead_type }} of {{ lead_address }}" must render as
@@ -394,51 +361,16 @@ export async function sendAuthEmailViaResend(opts: {
       /\{\{\s*lead_type\s*\}\}\s+of\s+\{\{\s*(?:lead_address|property_address)\s*\}\}/gi;
 
     let processedBody = template.body
-      .replace(transactionPhrasePattern, transactionPhrase)
-      .replace(/&#123;/g, "{")
-      .replace(/&#125;/g, "}")
+      .replace(transactionPhrasePattern, () => escapeHtml(transactionPhrase))
+      .replace(/&#123;|&#x7b;|&lbrace;/gi, "{")
+      .replace(/&#125;|&#x7d;|&rbrace;/gi, "}")
       .replace(/&nbsp;/g, " ")
       .replace(/ /g, " ");
 
-    for (const [key, value] of Object.entries(placeholders)) {
-      processedBody = processedBody.replaceAll(key, value);
-    }
-
-    // Whitespace-tolerant fallbacks for the iClosed-style placeholders
-    processedBody = processedBody.replace(/\{\{\s*user\.first_name\s*\}\}/gi, firstName);
-    processedBody = processedBody.replace(/\{\{\s*user\.last_name\s*\}\}/gi, lastName);
-    processedBody = processedBody.replace(/\{\{\s*user\.full_name\s*\}\}/gi, fullName);
-    processedBody = processedBody.replace(/\{\{\s*user\.get_full_name\s*\}\}/gi, fullName);
-    processedBody = processedBody.replace(/\{\{\s*user\.email\s*\}\}/gi, email);
-    processedBody = processedBody.replace(/\{\{\s*lead_address\s*\}\}/gi, leadAddress);
-    processedBody = processedBody.replace(/\{\{\s*property_address\s*\}\}/gi, leadAddress);
-    processedBody = processedBody.replace(/\{\{\s*lead\.address_line1\s*\}\}/gi, lead?.address_street ?? "");
-    processedBody = processedBody.replace(/\{\{\s*lead\.address_city\s*\}\}/gi, lead?.address_city ?? "");
-    processedBody = processedBody.replace(/\{\{\s*lead\.address_province\s*\}\}/gi, lead?.address_province ?? "");
-    processedBody = processedBody.replace(/\{\{\s*lead\.file_number\s*\}\}/gi, fileNumber);
-    processedBody = processedBody.replace(/\{\{\s*file_number\s*\}\}/gi, fileNumber);
-    processedBody = processedBody.replace(/\{\{\s*lead_type\s*\}\}/gi, leadType);
-    processedBody = processedBody.replace(/\{\{\s*side_suffix\s*\}\}/gi, sideSuffix);
-    processedBody = processedBody.replace(/\{\{\s*confirmation_url\s*\}\}/gi, actionLink);
-    // Login-page link (resolved before the auth-link catch-all + leftover check
-    // below, which don't recognise "login" and would otherwise flag it).
-    processedBody = processedBody.replace(/\{\{\s*login_url\s*\}\}/gi, loginUrl);
-    processedBody = processedBody.replace(/\{\{\s*login_link\s*\}\}/gi, loginUrl);
-    // Supabase-style whitespace-tolerant fallbacks
-    processedBody = processedBody.replace(/\{\{\s*\.ConfirmationURL\s*\}\}/g, actionLink);
-    processedBody = processedBody.replace(/\{\{\s*\.UserMetadata\.first_name\s*\}\}/g, firstName);
-    processedBody = processedBody.replace(/\{\{\s*\.UserMetadata\.last_name\s*\}\}/g, lastName);
-    processedBody = processedBody.replace(/\{\{\s*\.UserMetadata\.email\s*\}\}/g, email);
-
-    // Regex catch-all for any remaining auth-link placeholder the admin may
-    // have typed: {{ (confirmation|activation|activate|action|invite|reset)
-    // _? (url|link) }} — case-insensitive, whitespace-tolerant, optional
-    // leading dot for Supabase-style names. This is the safety net for
-    // templates that use a placeholder name not in the explicit map above.
-    processedBody = processedBody.replace(
-      /\{\{\s*\.?\s*(confirmation|activation|activate|action|invite|invitation|reset|recovery|password|verification|verify|button)[_\s\.]*(url|link)\s*\}\}/gi,
-      actionLink,
-    );
+    // Single-pass, HTML-escaped substitution (SEC-009): a lead field whose value
+    // contains "{{ … }}" or HTML can no longer be re-interpreted or inject markup.
+    // Auth/login links stay raw via resolve(). stage_* resolve to "".
+    processedBody = renderTemplateSafe(processedBody, resolve, { escape: true });
 
     // Integrity check — if any {{ ... }} placeholder containing url|link
     // survives we have a bug. Log it so the next failure is one grep away
@@ -449,28 +381,15 @@ export async function sendAuthEmailViaResend(opts: {
         `[Auth Email] Unreplaced auth-link placeholder in body: "${leftover[0]}". email=${email} type=${type}`,
       );
     }
-    // Strip any leftover stage placeholders that don't apply to auth emails
-    processedBody = processedBody.replace(/\{\{\s*stage_name\s*\}\}/gi, "");
-    processedBody = processedBody.replace(/\{\{\s*stage_status\s*\}\}/gi, "");
 
-    let rawSubject = template.subject || template.name;
-    rawSubject = rawSubject
-      .replace(/&#123;/g, "{")
-      .replace(/&#125;/g, "}")
-      .replace(transactionPhrasePattern, transactionPhrase);
-    for (const [key, value] of Object.entries(placeholders)) {
-      rawSubject = rawSubject.replaceAll(key, value);
-    }
-    rawSubject = rawSubject.replace(/\{\{\s*user\.first_name\s*\}\}/gi, firstName);
-    rawSubject = rawSubject.replace(/\{\{\s*user\.full_name\s*\}\}/gi, fullName);
-    rawSubject = rawSubject.replace(/\{\{\s*user\.get_full_name\s*\}\}/gi, fullName);
-    rawSubject = rawSubject.replace(/\{\{\s*lead_address\s*\}\}/gi, leadAddress);
-    rawSubject = rawSubject.replace(/\{\{\s*property_address\s*\}\}/gi, leadAddress);
-    rawSubject = rawSubject.replace(/\{\{\s*lead\.file_number\s*\}\}/gi, fileNumber);
-    rawSubject = rawSubject.replace(/\{\{\s*file_number\s*\}\}/gi, fileNumber);
-    rawSubject = rawSubject.replace(/\{\{\s*side_suffix\s*\}\}/gi, sideSuffix);
+    // Subject is plain text — same resolver, but WITHOUT HTML-escaping so entities
+    // don't show literally (single-pass reflective-injection safety still applies).
+    const decodedSubject = (template.subject || template.name)
+      .replace(transactionPhrasePattern, transactionPhrase)
+      .replace(/&#123;|&#x7b;|&lbrace;/gi, "{")
+      .replace(/&#125;|&#x7d;|&rbrace;/gi, "}");
+    subject = renderTemplateSafe(decodedSubject, resolve, { escape: false });
 
-    subject = rawSubject;
     // No HTML wrapper / logo injection — the DB template owns its layout.
     bodyHtml = processedBody;
   } else {

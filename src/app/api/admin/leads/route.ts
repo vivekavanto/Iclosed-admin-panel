@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import supabaseAdmin from '@/lib/supabaseAdmin';
+import { isUuid } from '@/lib/isUuid';
+import { recordAudit } from '@/lib/recordAudit';
+import { getActingAdmin } from '@/lib/getActingAdmin';
 
 // Admin data must always be live — never serve a cached leads list, otherwise
 // an edited phone/name/etc. can keep showing the old value after a refresh.
@@ -145,6 +148,23 @@ export async function PUT(req: NextRequest) {
         updateData[column] = norm(rest[key]);
       }
     }
+
+    // GAP-016: validate email format before writing it. (We intentionally do NOT
+    // reject "duplicate" emails: the same person legitimately has multiple leads
+    // sharing one email — co-client cascades key off exactly that — so a
+    // uniqueness check would break normal editing. Format is the safe guard.)
+    if (updateData.email != null) {
+      const email = String(updateData.email).trim();
+      const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!EMAIL_RE.test(email)) {
+        return NextResponse.json(
+          { success: false, error: 'Invalid email address' },
+          { status: 400 },
+        );
+      }
+      updateData.email = email;
+    }
+
     const clientData: Record<string, any> = {};
     for (const [key, column] of Object.entries(CLIENT_FIELD_MAP)) {
       if (rest[key] !== undefined) clientData[column] = norm(rest[key]);
@@ -275,6 +295,11 @@ export async function DELETE(req: Request) {
   if (!id) {
     return NextResponse.json({ error: "id is required" }, { status: 400 });
   }
+  // SEC-013: `id` is spliced into the .or() filter below, so reject anything
+  // that isn't a UUID instead of interpolating it into the query.
+  if (!isUuid(id)) {
+    return NextResponse.json({ error: "Invalid lead id" }, { status: 400 });
+  }
 
   // Soft-delete the primary lead and every co-lead in the same family in one
   // call. The OR predicate matches the lead itself plus any row whose
@@ -291,6 +316,17 @@ export async function DELETE(req: Request) {
       { status: 500 },
     );
   }
+
+  // SEC-006 / CMP-004: record who deleted which lead (and its family).
+  const actor = await getActingAdmin();
+  await recordAudit({
+    action: "lead.delete",
+    actorEmail: actor.email,
+    actorUserId: actor.id,
+    resourceType: "lead",
+    resourceId: id,
+    req,
+  });
 
   return NextResponse.json({ success: true });
 }

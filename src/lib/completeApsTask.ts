@@ -95,13 +95,25 @@ export async function completeApsTask(
       if (familyLeadIdsForDetect.length > 0) {
         const { data: docs } = await supabaseAdmin
           .from("lead_corporate_docs")
-          .select("doc_type")
+          .select("doc_type, custom_type")
           .in("lead_id", familyLeadIdsForDetect);
         const detected = new Set<string>();
         for (const d of docs ?? []) {
           const t = (d.doc_type ?? "").toLowerCase().trim();
-          if (t === "aps_purchase") detected.add("purchase");
-          else if (t === "aps_sale") detected.add("sale");
+          if (t === "aps_purchase") {
+            detected.add("purchase");
+          } else if (t === "aps_sale") {
+            detected.add("sale");
+          } else {
+            // GAP-019: legacy APS rows were stored as doc_type='document' (or
+            // 'aps') with the side carried in custom_type ("APS Purchase
+            // Document" / "APS Sale Document"). Detect the side from there too.
+            const c = (d.custom_type ?? "").toLowerCase();
+            if (c.includes("aps")) {
+              if (c.includes("purchase")) detected.add("purchase");
+              if (c.includes("sale")) detected.add("sale");
+            }
+          }
         }
         if (detected.size > 0) {
           allowLeadTypes = detected;

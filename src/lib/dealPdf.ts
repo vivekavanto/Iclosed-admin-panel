@@ -16,6 +16,8 @@
 // Both heavy libraries are dynamically imported inside the handlers so they stay
 // out of the initial page bundle and only load when a download is triggered.
 
+import { docDownloadHref, docFetchCredentials } from "@/lib/blobPrivacy";
+
 export interface PdfResponse {
   field_label?: string | null;
   field_id?: string | null;
@@ -271,7 +273,11 @@ async function fetchFile(
   url: string,
 ): Promise<{ bytes: Uint8Array; contentType: string | null } | null> {
   try {
-    const res = await fetch(url, { credentials: "omit" });
+    // Private docs stream through the same-origin auth-gated proxy (session
+    // cookie required); public/legacy blobs are fetched directly, no creds.
+    const res = await fetch(docDownloadHref(url), {
+      credentials: docFetchCredentials(url),
+    });
     if (!res.ok) return null;
     const buf = await res.arrayBuffer();
     return { bytes: new Uint8Array(buf), contentType: res.headers.get("content-type") };

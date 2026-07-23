@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { Deal, DealType, DealStatus } from '../types';
+import { toDeal } from '@/lib/dealMapper';
 import { Search, Trash2, Users, AlertTriangle, Upload, ChevronDown, LogIn } from 'lucide-react';
 import {
   isNonCitizenFlagged,
@@ -104,24 +105,12 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
       .then(res => res.json())
       .then((data: any[]) => {
         const mapped: Deal[] = (data || []).map((d: any) => ({
-          id: d.id,
-          fileNumber: d.fileNumber ?? d.file_number ?? '',
+          // ARC-005: core fields via the shared mapper; list-only extras below.
+          ...toDeal(d),
+          // List keeps the lead email in the client fallback.
           client: d.client ?? { id: '', firstName: '', lastName: d.client_last_name ?? '', email: d.lead_email ?? '', phone: '' },
-          type: d.type,
-          status: d.status,
-          propertyAddress: d.propertyAddress ?? d.property_address ?? '',
-          sellingPropertyAddress: d.sellingPropertyAddress ?? d.selling_property_address ?? '',
-          closingDate: d.closingDate ?? d.closing_date ?? '',
-          openingDate: d.openingDate ?? d.opening_date,
-          requisitionDate: d.requisitionDate ?? d.requisition_date,
-          price: d.price ?? 0,
-          progress: d.progress ?? 0,
           completedTasks: d.completedTasks ?? 0,
           totalTasks: d.totalTasks ?? 0,
-          tasks: d.tasks ?? [],
-          milestones: d.milestones ?? [],
-          documents: d.documents ?? [],
-          notes: d.notes ?? [],
           authUserId: d.auth_user_id ?? null,
           isCoPurchaser: d.is_co_purchaser ?? false,
           hasCoPurchasers: d.has_co_purchasers ?? false,
@@ -408,12 +397,17 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
       alert("This client has not signed into the portal yet — cannot log into their view.");
       return;
     }
+    // SEC-006 step-up: re-confirm the admin's own password before impersonating.
+    const stepUpPassword = window.prompt(
+      "Security check: re-enter YOUR admin password to log in as this client.",
+    );
+    if (!stepUpPassword) return;
     setImpersonatingId(deal.id);
     try {
       const res = await fetch("/api/admin/impersonate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ authUserId: d.authUserId }),
+        body: JSON.stringify({ authUserId: d.authUserId, stepUpPassword }),
       });
       const json = await res.json();
       if (!res.ok || !json.url) throw new Error(json.error || "Failed to generate link");

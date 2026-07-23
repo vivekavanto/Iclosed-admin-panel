@@ -79,6 +79,9 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
   // The client name loaded from the server, so a save only hits the leads
   // endpoint when the admin actually changed it.
   const initialNameRef = useRef<{ first: string; last: string }>({ first: "", last: "" });
+  // GAP-001: the deal's updated_at when we loaded it, sent back on save so the
+  // API can reject the write if someone else changed the deal in between.
+  const loadedUpdatedAtRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -89,6 +92,7 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
         const deal = await dealRes.json();
         if (cancelled) return;
         if (deal && !deal.error) {
+          loadedUpdatedAtRef.current = deal.updated_at ?? null;
           setForm({
             id: deal.id,
             lead_id: deal.lead_id ?? null,
@@ -164,6 +168,8 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
         price: Number(form.price) || 0,
         outstanding_undertakings: Number(form.outstanding_undertakings) || 0,
         outstanding_requisitions: Number(form.outstanding_requisitions) || 0,
+        // GAP-001: optimistic concurrency guard.
+        expected_updated_at: loadedUpdatedAtRef.current,
       };
       const res = await fetch(`/api/admin/deals/${dealId}`, {
         method: "PATCH",
@@ -171,6 +177,12 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
         body: JSON.stringify(payload),
       });
       const data = await res.json();
+      if (res.status === 409 || data.conflict) {
+        throw new Error(
+          data.error ||
+            "This deal was changed by someone else. Please reload and re-apply your changes.",
+        );
+      }
       if (!res.ok || !data.success) {
         throw new Error(data.error || "Save failed");
       }

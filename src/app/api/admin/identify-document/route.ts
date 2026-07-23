@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { rateLimitOk, requestIp } from "@/lib/rateLimit";
+import { getActingAdmin } from "@/lib/getActingAdmin";
 
 const GEMINI_MODEL = "gemini-3.1-flash-lite";
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
@@ -242,6 +244,17 @@ export async function POST(req: Request) {
     const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_GEMINI_API_KEY;
     if (!apiKey) {
       return NextResponse.json({ success: false, error: "GEMINI_API_KEY is not configured on the server." }, { status: 500 });
+    }
+
+    // SEC-011: rate-limit Gemini classification per admin (30/hr) so a
+    // compromised admin session can't drive unbounded Gemini API spend.
+    const actor = await getActingAdmin();
+    const rlKey = `gemini:${actor.id ?? requestIp(req)}`;
+    if (!(await rateLimitOk(rlKey, 30, 3600))) {
+      return NextResponse.json(
+        { success: false, error: "Too many identification requests. Please try again later." },
+        { status: 429 },
+      );
     }
 
     const formData = await req.formData();

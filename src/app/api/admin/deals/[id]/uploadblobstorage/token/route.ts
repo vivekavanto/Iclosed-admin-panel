@@ -55,6 +55,9 @@ export async function POST(
           maximumSizeInBytes: MAX_SIZE_BYTES,
           tokenPayload: JSON.stringify({ dealId, leadId: deal.lead_id }),
           addRandomSuffix: false,
+          // SEC-024: the browser uses this token immediately after issuance, so
+          // cap its life at 2 minutes to shrink the replay window if it leaks.
+          validUntil: Date.now() + 2 * 60 * 1000,
         };
       },
       onUploadCompleted: async () => {

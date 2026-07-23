@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { completeApsTask } from "@/lib/completeApsTask";
+import { isBlobUrl } from "@/lib/blobPrivacy";
 
 /**
  * POST /api/admin/deals/[id]/uploadblobstorage
@@ -76,17 +77,10 @@ export async function POST(
         );
       }
       // Defense in depth: only accept Vercel Blob URLs so a caller can't
-      // smuggle arbitrary URLs into lead_corporate_docs.
-      let host: string;
-      try {
-        host = new URL(fileUrl).hostname;
-      } catch {
-        return NextResponse.json(
-          { success: false, error: "file_url is not a valid URL" },
-          { status: 400 },
-        );
-      }
-      if (!host.endsWith(".public.blob.vercel-storage.com")) {
+      // smuggle arbitrary URLs into lead_corporate_docs. Accepts both public
+      // and private ("<store>.private.blob.vercel-storage.com") hosts so this
+      // keeps working once uploads flip to private (SEC-003).
+      if (!isBlobUrl(fileUrl)) {
         return NextResponse.json(
           { success: false, error: "file_url must be a Vercel Blob URL" },
           { status: 400 },
