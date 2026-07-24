@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { get } from "@vercel/blob";
-import { isBlobUrl } from "@/lib/blobPrivacy";
+import { isBlobUrl, blobTokenForUrl } from "@/lib/blobPrivacy";
 
 /**
  * GET /api/admin/documents/download?u=<private-blob-url>
@@ -9,7 +9,7 @@ import { isBlobUrl } from "@/lib/blobPrivacy";
  *
  * src/middleware.ts already requires an authenticated admin session for every
  * /api/admin/* path, so reaching this handler means the caller is an admin.
- * We fetch the private blob's bytes SERVER-SIDE using BLOB_READ_WRITE_TOKEN and
+ * We fetch the private blob's bytes SERVER-SIDE using the private store token and
  * stream them back; the private blob URL is never usable by the browser on its
  * own, so a leaked URL (browser history, screenshot, referrer) no longer exposes
  * the document — access always goes through this auth check.
@@ -41,7 +41,8 @@ export async function GET(req: Request) {
   try {
     const result = await get(u, {
       access: "private",
-      token: process.env.BLOB_READ_WRITE_TOKEN,
+      // Pick the token by the URL's store so this survives a flag rollback.
+      token: blobTokenForUrl(u),
     });
 
     if (!result || !result.stream) {

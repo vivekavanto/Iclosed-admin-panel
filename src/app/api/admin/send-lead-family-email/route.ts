@@ -6,7 +6,7 @@ import { sendAuthEmailViaResend } from "@/lib/sendAuthEmail";
 import { formatLeadTypeLabel, buildLeadAddressPartsForEmail } from "@/lib/leadEmailAddress";
 import { guardServiceRequest } from "@/lib/verifyServiceSignature";
 import { get } from "@vercel/blob";
-import { isPrivateBlobUrl } from "@/lib/blobPrivacy";
+import { isPrivateBlobUrl, blobTokenForUrl } from "@/lib/blobPrivacy";
 
 /**
  * POST /api/admin/send-lead-family-email
@@ -138,7 +138,7 @@ async function sendRetainerEmail(
       if (isPrivateBlobUrl(doc.file_url as string)) {
         const result = await get(doc.file_url as string, {
           access: "private",
-          token: process.env.BLOB_READ_WRITE_TOKEN,
+          token: blobTokenForUrl(doc.file_url as string),
         });
         if (!result || !result.stream) {
           return {

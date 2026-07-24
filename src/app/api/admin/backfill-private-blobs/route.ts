@@ -35,13 +35,24 @@ export async function POST(req: Request) {
   const limit =
     Number.isFinite(body?.limit) && body.limit > 0 ? Math.min(body.limit, 1000) : 100;
 
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+  // This tool reads PUBLIC bytes, re-uploads them PRIVATE, then deletes the
+  // public original — so it needs BOTH store tokens (2-token setup, SEC-003):
+  // publicToken to delete the old blob, privateToken to write the new one.
+  if (
+    !process.env.BLOB_PUBLIC_READ_WRITE_TOKEN ||
+    !process.env.BLOB_PRIVATE_READ_WRITE_TOKEN
+  ) {
     return NextResponse.json(
-      { success: false, error: "BLOB_READ_WRITE_TOKEN not configured" },
+      {
+        success: false,
+        error:
+          "Both BLOB_PUBLIC_READ_WRITE_TOKEN and BLOB_PRIVATE_READ_WRITE_TOKEN must be configured",
+      },
       { status: 500 },
     );
   }
-  const token = process.env.BLOB_READ_WRITE_TOKEN;
+  const publicToken = process.env.BLOB_PUBLIC_READ_WRITE_TOKEN;
+  const privateToken = process.env.BLOB_PRIVATE_READ_WRITE_TOKEN;
 
   // 1. Collect every distinct PUBLIC blob URL referenced by either table, and
   //    remember which rows point at it so we can repoint them all together.
@@ -110,7 +121,7 @@ export async function POST(req: Request) {
       const pathname = new URL(url).pathname.replace(/^\/+/, "");
       const uploaded = await put(pathname, bytes, {
         access: "private",
-        token,
+        token: privateToken,
         contentType,
         addRandomSuffix: false,
         allowOverwrite: true,
@@ -132,7 +143,7 @@ export async function POST(req: Request) {
       }
 
       // d. Delete the public original only after the DB is safely repointed.
-      await del(url, { token });
+      await del(url, { token: publicToken });
 
       result.migrated++;
     } catch (err: any) {

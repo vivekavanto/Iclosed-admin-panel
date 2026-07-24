@@ -33,6 +33,38 @@ export const BLOB_ACCESS: "public" | "private" = PRIVATE_BLOB_ENABLED
   ? "private"
   : "public";
 
+/**
+ * The read-write token to use for NEW uploads (SEC-003).
+ *
+ * Vercel Blob privacy is a property of the STORE, not the individual blob, so
+ * private blobs live in a SEPARATE private store with its own token. When the
+ * flag is on we must talk to that private store (BLOB_PRIVATE_READ_WRITE_TOKEN);
+ * otherwise the public store (BLOB_PUBLIC_READ_WRITE_TOKEN). The public store is
+ * kept forever, so old public URLs (read directly by the browser) never break.
+ *
+ * Server-only: BLOB_PRIVATE_READ_WRITE_TOKEN is not a NEXT_PUBLIC_ var, so it is
+ * `undefined` in any client bundle — call this only from route handlers.
+ */
+export function blobToken(): string | undefined {
+  return PRIVATE_BLOB_ENABLED
+    ? process.env.BLOB_PRIVATE_READ_WRITE_TOKEN
+    : process.env.BLOB_PUBLIC_READ_WRITE_TOKEN;
+}
+
+/**
+ * The token for an EXISTING blob, chosen by which store its URL lives in — NOT
+ * by the current flag. Use this for reads/deletes of a stored URL (download
+ * proxy, cleanup) so a private blob stays readable even after a rollback flips
+ * the flag back off. `blobToken()` (flag-based) is only for NEW writes.
+ */
+export function blobTokenForUrl(
+  url: string | null | undefined,
+): string | undefined {
+  return isPrivateBlobUrl(url)
+    ? process.env.BLOB_PRIVATE_READ_WRITE_TOKEN
+    : process.env.BLOB_PUBLIC_READ_WRITE_TOKEN;
+}
+
 const BLOB_HOST_SUFFIX = ".blob.vercel-storage.com";
 
 /** True for any Vercel Blob URL (public OR private). Used as an SSRF guard. */

@@ -1,7 +1,7 @@
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { NextResponse } from "next/server";
 import { put, del } from "@vercel/blob";
-import { BLOB_ACCESS } from "@/lib/blobPrivacy";
+import { BLOB_ACCESS, blobToken } from "@/lib/blobPrivacy";
 import { validateUpload } from "@/lib/uploadValidation";
 
 export async function POST(req: Request) {
@@ -46,7 +46,8 @@ export async function POST(req: Request) {
         // "public" today; "private" once NEXT_PUBLIC_PRIVATE_BLOB is flipped on
         // (SEC-003). Private uploads are served via /api/admin/documents/download.
         access: BLOB_ACCESS,
-        token: process.env.BLOB_READ_WRITE_TOKEN!,
+        // Private uploads go to the separate private store's token (SEC-003).
+        token: blobToken()!,
       },
     );
 
@@ -70,7 +71,8 @@ export async function POST(req: Request) {
       // GAP-008: the bytes are already in Blob storage but the DB row failed —
       // delete the blob so it doesn't orphan (and keep costing) forever.
       try {
-        await del(blob.url, { token: process.env.BLOB_READ_WRITE_TOKEN });
+        // Same store the blob was just written to (public or private).
+        await del(blob.url, { token: blobToken() });
       } catch (delErr) {
         console.error("Upload error: failed to clean up orphan blob:", delErr);
       }

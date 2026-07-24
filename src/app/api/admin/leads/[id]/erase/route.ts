@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { del } from "@vercel/blob";
 import supabaseAdmin from "@/lib/supabaseAdmin";
+import { isPrivateBlobUrl } from "@/lib/blobPrivacy";
 import { isUuid } from "@/lib/isUuid";
 import { recordAudit } from "@/lib/recordAudit";
 import { getActingAdmin } from "@/lib/getActingAdmin";
@@ -108,13 +109,27 @@ export async function POST(
   const errors: string[] = [];
 
   // ── 3. Delete blob bytes (best-effort) ──────────────────────────────────
-  if (blobUrls.size && process.env.BLOB_READ_WRITE_TOKEN) {
-    try {
-      await del(Array.from(blobUrls), {
-        token: process.env.BLOB_READ_WRITE_TOKEN,
-      });
-    } catch (err: any) {
-      errors.push(`blob del: ${err?.message ?? "failed"}`);
+  // Docs may live in EITHER store — old PUBLIC or new PRIVATE (SEC-003) — so
+  // delete each group with the token for its own store.
+  if (blobUrls.size) {
+    const allUrls = Array.from(blobUrls);
+    const groups: Array<[string[], string | undefined]> = [
+      [
+        allUrls.filter((u) => !isPrivateBlobUrl(u)),
+        process.env.BLOB_PUBLIC_READ_WRITE_TOKEN,
+      ],
+      [
+        allUrls.filter((u) => isPrivateBlobUrl(u)),
+        process.env.BLOB_PRIVATE_READ_WRITE_TOKEN,
+      ],
+    ];
+    for (const [urls, token] of groups) {
+      if (!urls.length || !token) continue;
+      try {
+        await del(urls, { token });
+      } catch (err: any) {
+        errors.push(`blob del: ${err?.message ?? "failed"}`);
+      }
     }
   }
 
