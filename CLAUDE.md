@@ -33,6 +33,11 @@ the admin repo but flags the portal where it matters.
 - `supabaseAdmin` (`src/lib/supabaseAdmin.ts`) is the **service-role** client — it
   bypasses RLS and must NEVER be imported into client code (guarded to throw in
   the browser).
+- **Access model (SEC-004, accepted decision):** every authenticated admin can
+  see and edit **every** deal/lead — there is intentionally NO per-deal or
+  per-team scoping. All admins are trusted staff. If teams/brokers who should
+  only see their own files are ever introduced, per-deal authorization must be
+  added (and Supabase RLS enabled as defence in depth).
 
 ## The family-deal model (important)
 

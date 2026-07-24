@@ -20,11 +20,13 @@ In plain terms:
 
 | Category | Total IDs | ✅ Done | 🟡 In progress | ⬜ Not started |
 | --- | :---: | :---: | :---: | :---: |
-| Security (SEC) | 28 | 23 | 1 | 4 |
+| Security (SEC) | 28 | 24 | 1 | 3 |
 | Functional gaps (GAP) | 22 | 22 | 0 | 0 |
 | Architecture (ARC) | 12 | 7 | 0 | 5 |
-| Compliance (CMP) | 8 | 5 | 1 | 2 |
+| Compliance (CMP) | 8 | 4 | 1 | 3 |
 | **Total** | **70** | **57** | **2** | **11** |
+
+*(CMP-002 privacy-consent capture was **removed at the user's request** — reverted to no consent step.)*
 
 **All 22 functional gaps (GAP) are now done.** The 14 "not started" = 9 you deferred
 + 5 that genuinely can't be completed cleanly in code (see below).
@@ -54,7 +56,7 @@ secret MUST match in both projects (both redeployed) or `activate-deal` will 401
 | **SEC-027** | Key-rotation runbook (`docs/key-rotation.md`) | Follow the cadence |
 | **SEC-028** | CI workflow (lint / type-check / build / npm audit) | Enable Actions on GitHub |
 | **SEC-022** | Recipient emails masked in logs; PII subject dropped | — |
-| **CMP-002** | Privacy-consent checkbox at intake (portal); stores version + timestamp | **Run migration** `iclosed_dev_web/migrations/2026-07-23-privacy-consent.sql` (before deploy); set real Privacy Policy URL |
+| ~~**CMP-002**~~ | ~~Privacy-consent checkbox at intake~~ — **removed at user request** (reverted; no consent step) | — |
 | **CMP-005** *(erase part)* | Right-to-be-forgotten endpoint `POST /api/admin/leads/[id]/erase` (hard-deletes family + docs + blobs, audited) | Retention schedule + scheduled purge job still to define (needs your retention periods) |
 | **GAP-009** | Upload validation (25 MB cap + JPG/PNG/WEBP/HEIC/PDF only), both repos | — |
 | **GAP-008** | Compensating blob delete when the DB insert fails (no orphaned files), both repos | — |
@@ -85,6 +87,7 @@ secret MUST match in both projects (both redeployed) or `activate-deal` will 401
 | **ARC-002** | Auth `listUsers` scan cached (60s TTL) — no per-request full scan | — |
 | **ARC-012** | CI release-gate exists (SEC-028 workflow) + now runs the test suite | Enable Actions on GitHub |
 | **SEC-007 / SEC-011 / SEC-023** | Rate limiting via **Supabase** (no Redis) — password reset (5/hr email, 30/hr IP), Gemini (30/hr per admin), activate (30/10min per IP) | **Run migration** `2026-07-23-rate-limits.sql` |
+| **SEC-004** | Per-deal access — **accepted decision:** all admins see all deals (all staff trusted); documented in `CLAUDE.md`. Revisit if teams/brokers are added | — |
 | **SEC-012** *(partial)* | Public webhook no longer leaks internal error text | Decide whether to sweep the 84 authenticated-admin sites too |
 | **SEC-006** *(partial)* | Impersonation now audit-logged | Decide on step-up auth + notify-customer-on-impersonation |
 

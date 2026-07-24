@@ -124,7 +124,18 @@ export async function buildLeadAddressPartsForEmail(
   if (lead.parent_lead_id) {
     const recipientSide = inferCoLeadSide(lead, rawType, purchase, selling);
 
-    if ((!purchase && recipientSide === "purchase") || (!selling && recipientSide === "sale")) {
+    // Co-leads frequently don't carry the property address on their own row —
+    // it lives on the root lead — so pull the family's addresses to backfill.
+    // NOTE: for a Sale-ONLY family the sold property is stored in the generic
+    // address_* columns; selling_address_* is only populated for the Sale side
+    // of a *combined* Purchase & Sale file. So the Sale side must fall back to
+    // address_* when NO selling_address_* exists anywhere in the family —
+    // otherwise a co-seller's email renders a blank address (and a blank
+    // "Sale of …" phrase) even though the primary renders fine via the same
+    // address_* fallback used in the non-co-lead branch below.
+    let familyPurchase = "";
+    let familySelling = "";
+    {
       const rootLeadId = lead.parent_lead_id;
       const { data: family } = await supabaseAdmin
         .from("leads")
@@ -134,38 +145,49 @@ export async function buildLeadAddressPartsForEmail(
         .or(`id.eq.${rootLeadId},parent_lead_id.eq.${rootLeadId}`);
 
       for (const sib of family ?? []) {
-        if (!purchase && recipientSide === "purchase") {
+        if (!familyPurchase) {
           const candidate = joinAddress([
             sib.address_street,
             sib.address_city,
             sib.address_province,
             sib.address_postal_code,
           ]);
-          if (candidate) purchase = candidate;
+          if (candidate) familyPurchase = candidate;
         }
-        if (!selling && recipientSide === "sale") {
+        if (!familySelling) {
           const candidate = joinAddress([
             sib.selling_address_street,
             sib.selling_address_city,
             sib.selling_address_province,
             sib.selling_address_postal_code,
           ]);
-          if (candidate) selling = candidate;
+          if (candidate) familySelling = candidate;
         }
-        if (
-          (recipientSide === "purchase" && purchase) ||
-          (recipientSide === "sale" && selling)
-        ) {
-          break;
-        }
+        if (familyPurchase && familySelling) break;
       }
     }
 
+    if (recipientSide === "purchase") {
+      return {
+        purchase: purchase || familyPurchase,
+        selling: "",
+        treatAsCombined: false,
+        typeIsSaleOnly: false,
+        recipientSide,
+      };
+    }
+
+    // recipientSide === "sale": prefer a dedicated selling_address_* (own, then
+    // family); only when the whole family has none (a pure Sale file) does the
+    // sold property live in the generic address_* columns, so fall back to
+    // those last. familySelling being present on a *combined* file means the
+    // address_* fallback never fires there (address_* is the purchase side).
+    const saleAddr = selling || familySelling || purchase || familyPurchase;
     return {
-      purchase: recipientSide === "purchase" ? purchase : "",
-      selling: recipientSide === "sale" ? selling : "",
+      purchase: "",
+      selling: saleAddr,
       treatAsCombined: false,
-      typeIsSaleOnly: recipientSide === "sale",
+      typeIsSaleOnly: true,
       recipientSide,
     };
   }
