@@ -8,7 +8,7 @@ export async function activateClientDeals(opts: {
   leadId?: string | null;
   clientId?: string | null;
   email?: string | null;
-}): Promise<{ activated: number; error?: string }> {
+}): Promise<{ activated: number; leadId?: string | null; error?: string }> {
   const { leadId, clientId, email } = opts;
   let resolvedClientId = clientId ?? null;
   let resolvedLeadId = leadId ?? null;
@@ -49,8 +49,10 @@ export async function activateClientDeals(opts: {
     .select("id");
 
   if (error) {
-    return { activated: 0, error: error.message };
+    return { activated: 0, leadId: resolvedLeadId, error: error.message };
   }
 
-  return { activated: data?.length ?? 0 };
+  // Surface the lead we resolved so activation callbacks can chain follow-up
+  // work (e.g. the "Signup email to agents" notification) without re-resolving.
+  return { activated: data?.length ?? 0, leadId: resolvedLeadId };
 }

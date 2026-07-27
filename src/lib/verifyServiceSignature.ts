@@ -20,7 +20,36 @@ import { NextResponse } from "next/server";
 //       with 401. Flip this only once the logs show every real caller signs.
 
 const SECRET = process.env.SERVICE_WEBHOOK_SECRET ?? "";
-const ENFORCE = process.env.SERVICE_WEBHOOK_ENFORCE === "true";
+
+// Enforcement is opt-in and can be turned on globally OR per endpoint, so you
+// can enforce only the routes whose callers already sign (e.g. activate-deal)
+// and leave the rest in warn-only until their callers are updated — no
+// big-bang flip that risks breaking an endpoint whose caller doesn't sign yet.
+//
+//   SERVICE_WEBHOOK_ENFORCE = "true"                 -> enforce EVERY guarded route
+//   SERVICE_WEBHOOK_ENFORCE_ROUTES = "new-lead,..."  -> also enforce these
+//                                                       (comma-separated routeKeys)
+//
+// `activate-deal` is ENFORCED BY DEFAULT — it's the route the portal already
+// signs, so once the shared secret is deployed it is protected automatically
+// with no env flag needed. The other routes stay warn-only until you add them
+// above (their callers don't sign yet). Enforcement also fails OPEN whenever the
+// server has no secret configured (see guardServiceRequest), so a missing or
+// not-yet-deployed secret can never block real traffic like deal activation.
+const DEFAULT_ENFORCED_ROUTES = new Set(["activate-deal"]);
+const ENFORCE_ALL = process.env.SERVICE_WEBHOOK_ENFORCE === "true";
+const ENFORCE_ROUTES = new Set(
+  (process.env.SERVICE_WEBHOOK_ENFORCE_ROUTES ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
+);
+
+function shouldEnforce(routeKey?: string): boolean {
+  if (ENFORCE_ALL) return true;
+  if (!routeKey) return false;
+  return ENFORCE_ROUTES.has(routeKey) || DEFAULT_ENFORCED_ROUTES.has(routeKey);
+}
 
 // Reject signatures whose timestamp is older/newer than this, to blunt replay
 // of a captured request. The portal must send X-iClosed-Timestamp (ms epoch)
@@ -110,6 +139,7 @@ export function verifyServiceSignature(
 export function guardServiceRequest(
   req: Request,
   rawBody: string,
+  options?: { routeKey?: string },
 ): NextResponse | null {
   const result = verifyServiceSignature(req, rawBody);
   if (result.ok) return null;
@@ -117,15 +147,24 @@ export function guardServiceRequest(
   const path =
     (req as { nextUrl?: { pathname?: string } }).nextUrl?.pathname ??
     new URL(req.url).pathname;
+  const routeKey = options?.routeKey;
 
-  if (!ENFORCE) {
+  // FAIL OPEN when the server has no secret configured. A missing secret is a
+  // deployment/config gap, not an attack — blocking here would break real
+  // traffic (e.g. deal activation) the moment this ships. So we only ever
+  // reject a request that carried a PRESENT-but-WRONG signature.
+  const serverHasNoSecret = result.reason.includes("missing SERVICE_WEBHOOK_SECRET");
+
+  if (serverHasNoSecret || !shouldEnforce(routeKey)) {
     console.warn(
-      `[service-sig] Phase 1 (warn-only): would reject ${path} — ${result.reason}`,
+      `[service-sig] warn-only: would reject ${path} (route=${routeKey ?? "?"}) — ${result.reason}`,
     );
     return null;
   }
 
-  console.warn(`[service-sig] rejected ${path} — ${result.reason}`);
+  console.warn(
+    `[service-sig] rejected ${path} (route=${routeKey ?? "?"}) — ${result.reason}`,
+  );
   return NextResponse.json(
     { success: false, error: "Unauthorized" },
     { status: 401 },

@@ -279,6 +279,19 @@ export async function convertSingleLead(
       .single();
 
     if (dealError || !deal) {
+      // GAP-002: a concurrent conversion of the SAME lead won the race and the
+      // deals_one_active_per_lead unique index rejected this duplicate insert.
+      // Treat it as "already converted" (409) rather than a 500 — the winner's
+      // conversion already created the deal and seeded everything.
+      if ((dealError as { code?: string } | null)?.code === "23505") {
+        return {
+          success: false,
+          created: false,
+          lead_id: leadId,
+          statusCode: 409,
+          error: "Lead already converted (a concurrent conversion won the race)",
+        };
+      }
       return {
         success: false,
         created: false,

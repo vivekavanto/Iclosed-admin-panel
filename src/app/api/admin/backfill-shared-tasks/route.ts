@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
+import { migrationAlreadyRan, recordMigrationRun } from "@/lib/migrationRun";
+import { getActingAdmin } from "@/lib/getActingAdmin";
+
+const MIGRATION_KEY = "backfill-shared-tasks";
 
 /**
  * POST /api/admin/backfill-shared-tasks
@@ -9,9 +13,25 @@ import supabaseAdmin from "@/lib/supabaseAdmin";
  *
  * This fixes tasks that were created before `is_shared` was being
  * copied from the template during deal conversion.
+ *
+ * GAP-003: idempotency-guarded — once it has run successfully it refuses to run
+ * again (returns alreadyRan) unless the body carries { force: true }.
  */
-export async function POST() {
+export async function POST(req: Request) {
   try {
+    const body = await req.json().catch(() => ({} as any));
+    const force = body?.force === true;
+
+    if (!force && (await migrationAlreadyRan(MIGRATION_KEY))) {
+      return NextResponse.json({
+        success: true,
+        alreadyRan: true,
+        message:
+          "backfill-shared-tasks has already been run. Pass { force: true } to run it again.",
+        updated: 0,
+      });
+    }
+
     // Step 1: Find all task_templates that are shared
     const { data: sharedTemplates, error: tplError } = await supabaseAdmin
       .from("task_templates")
@@ -43,6 +63,13 @@ export async function POST() {
     if (updateError) {
       return NextResponse.json({ success: false, error: updateError.message }, { status: 500 });
     }
+
+    // GAP-003: record the run so a later invocation is refused (unless forced).
+    const actor = await getActingAdmin();
+    await recordMigrationRun(MIGRATION_KEY, {
+      ranBy: actor.email,
+      result: { updated: updated?.length ?? 0 },
+    });
 
     return NextResponse.json({
       success: true,

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { activateClientDeals } from "@/lib/activateClientDeals";
+import { sendAgentSignupEmail } from "@/lib/sendAgentSignupEmail";
 import { guardServiceRequest } from "@/lib/verifyServiceSignature";
 
 /**
@@ -10,10 +11,18 @@ import { guardServiceRequest } from "@/lib/verifyServiceSignature";
  *
  * Body: { email: string } | { lead_id: string } | { client_id: string }
  */
+// SEC-017: this webhook is server-to-server only. It exposes NO CORS grant (no
+// Access-Control-Allow-Origin), so a browser on another origin cannot call it.
+// Answer preflight with 405 to make the "no cross-origin browser access" policy
+// explicit rather than relying on the framework default.
+export function OPTIONS() {
+  return new NextResponse(null, { status: 405 });
+}
+
 export async function POST(req: NextRequest) {
   try {
     const raw = await req.text();
-    const blocked = guardServiceRequest(req, raw);
+    const blocked = guardServiceRequest(req, raw, { routeKey: "activate-deal" });
     if (blocked) return blocked;
     const body = JSON.parse(raw);
     const { email, lead_id, client_id } = body as {
@@ -40,6 +49,30 @@ export async function POST(req: NextRequest) {
         { success: false, error: result.error },
         { status: 500 },
       );
+    }
+
+    // Account is now activated (deal flipped to Active) — notify the client's
+    // referral agent/broker. Non-blocking and idempotent (guarded by
+    // leads.agent_signup_email_sent), and it internally re-checks the deal is
+    // no longer Inactive, so a retry can't misfire. Silently no-ops when the
+    // lead has no agent on file.
+    const activatedLeadId = result.leadId ?? lead_id ?? null;
+    if (activatedLeadId) {
+      try {
+        const agentResult = await sendAgentSignupEmail(activatedLeadId, {
+          source: "first_login",
+        });
+        if (!agentResult.success) {
+          console.warn(
+            `[activate-deal webhook] agent signup email failed (non-blocking): ${agentResult.error}`,
+          );
+        }
+      } catch (agentErr: unknown) {
+        const m = agentErr instanceof Error ? agentErr.message : String(agentErr);
+        console.warn(
+          `[activate-deal webhook] agent signup email threw (non-blocking): ${m}`,
+        );
+      }
     }
 
     return NextResponse.json({

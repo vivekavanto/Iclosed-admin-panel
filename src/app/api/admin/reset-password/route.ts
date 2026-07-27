@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { sendAuthEmailViaResend } from "@/lib/sendAuthEmail";
 import { guardServiceRequest } from "@/lib/verifyServiceSignature";
+import { rateLimitOk, requestIp } from "@/lib/rateLimit";
 
 const ALLOWED_ORIGINS = [
   "https://iclosed.ca",
@@ -43,7 +44,7 @@ export async function POST(req: Request) {
 
   try {
     const raw = await req.text();
-    const blocked = guardServiceRequest(req, raw);
+    const blocked = guardServiceRequest(req, raw, { routeKey: "reset-password" });
     if (blocked) return blocked;
     const body = JSON.parse(raw);
     const { email } = body as { email: string };
@@ -53,6 +54,21 @@ export async function POST(req: Request) {
         { success: false, error: "email is required" },
         { status: 400, headers },
       );
+    }
+
+    // SEC-007: throttle reset requests (5/hr per email, 30/hr per IP). On limit
+    // we return the SAME generic message as a normal request, so the throttle
+    // itself never reveals whether an account exists.
+    const genericOk = NextResponse.json(
+      { success: true, message: "If an account exists with this email, a reset link has been sent." },
+      { headers },
+    );
+    const [emailOk, ipOk] = await Promise.all([
+      rateLimitOk(`reset-pw:email:${email.toLowerCase()}`, 5, 3600),
+      rateLimitOk(`reset-pw:ip:${requestIp(req)}`, 30, 3600),
+    ]);
+    if (!emailOk || !ipOk) {
+      return genericOk;
     }
 
     const customerPortalUrl = (

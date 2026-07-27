@@ -1,0 +1,50 @@
+# SEC-028 — CI gate: lint, type-check, build, and dependency audit on every PR.
+# Takes effect once this repo is on GitHub with Actions enabled. To make it a
+# required check, add it under Settings → Branches → branch protection.
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # Reports known-vulnerable dependencies. Starts non-blocking so it doesn't
+      # break existing PRs on day one — remove `continue-on-error` to make a
+      # high/critical vulnerability fail the check.
+      - name: npm audit (high+)
+        continue-on-error: true
+        run: npm audit --audit-level=high

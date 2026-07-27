@@ -5,6 +5,8 @@ import { sendWelcomeEmail } from "@/lib/sendWelcomeEmail";
 import { sendAuthEmailViaResend } from "@/lib/sendAuthEmail";
 import { formatLeadTypeLabel, buildLeadAddressPartsForEmail } from "@/lib/leadEmailAddress";
 import { guardServiceRequest } from "@/lib/verifyServiceSignature";
+import { get } from "@vercel/blob";
+import { isPrivateBlobUrl, blobTokenForUrl } from "@/lib/blobPrivacy";
 
 /**
  * POST /api/admin/send-lead-family-email
@@ -126,18 +128,35 @@ async function sendRetainerEmail(
     };
   }
 
-  // 2. Download each PDF so Resend can carry it as an attachment.
+  // 2. Download each PDF so Resend can carry it as an attachment. Private blobs
+  //    (SEC-003) can't be fetched by URL alone, so pull them server-side with a
+  //    blob token via get(); public/legacy URLs use a plain fetch as before.
   const attachments: { filename: string; content: Buffer }[] = [];
   for (const doc of validDocs) {
     try {
-      const res = await fetch(doc.file_url as string);
-      if (!res.ok) {
-        return {
-          success: false,
-          error: `Failed to download retainer PDF (status ${res.status})`,
-        };
+      let bytes: Buffer;
+      if (isPrivateBlobUrl(doc.file_url as string)) {
+        const result = await get(doc.file_url as string, {
+          access: "private",
+          token: blobTokenForUrl(doc.file_url as string),
+        });
+        if (!result || !result.stream) {
+          return {
+            success: false,
+            error: "Failed to download retainer PDF (private blob not found)",
+          };
+        }
+        bytes = Buffer.from(await new Response(result.stream).arrayBuffer());
+      } else {
+        const res = await fetch(doc.file_url as string);
+        if (!res.ok) {
+          return {
+            success: false,
+            error: `Failed to download retainer PDF (status ${res.status})`,
+          };
+        }
+        bytes = Buffer.from(await res.arrayBuffer());
       }
-      const bytes = Buffer.from(await res.arrayBuffer());
       attachments.push({
         filename: doc.file_name || "retainer-agreement.pdf",
         content: bytes,
@@ -366,7 +385,7 @@ function detectAuthType(
 export async function POST(req: NextRequest) {
   try {
     const raw = await req.text();
-    const blocked = guardServiceRequest(req, raw);
+    const blocked = guardServiceRequest(req, raw, { routeKey: "send-lead-family-email" });
     if (blocked) return blocked;
     const body = JSON.parse(raw);
     const { lead_id, template_id, lead_ids } = body as {

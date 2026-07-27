@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { getFamilyDealIds } from "@/lib/familyDeals";
+import { isUuid } from "@/lib/isUuid";
+import { recordAudit } from "@/lib/recordAudit";
+import { getActingAdmin } from "@/lib/getActingAdmin";
+import { FILE_NUMBER_REGEX, FILE_NUMBER_HINT } from "@/lib/fileNumber";
 
 const supabase = supabaseAdmin;
 
@@ -9,6 +13,9 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
+  if (!isUuid(id)) {
+    return NextResponse.json({ error: "Invalid deal id" }, { status: 400 });
+  }
   const { data, error } = await supabase
     .from("deals")
     .select("*")
@@ -129,13 +136,17 @@ export async function GET(
           .join(", ");
         const rootLeadId = lead.parent_lead_id ?? lead.id;
 
-        // Step 2: Find all leads in the family
-        const { data: familyLeads } = await supabase
-          .from("leads")
-          .select(
-            "id, parent_lead_id, first_name, last_name, corporate_name, email, phone, lead_type, co_person_role, upload_mode, upload_consent_uploader_lead_id, address_street, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code, client_id",
-          )
-          .or(`id.eq.${rootLeadId},parent_lead_id.eq.${rootLeadId}`);
+        // Step 2: Find all leads in the family. rootLeadId is spliced into an
+        // .or() filter string, so guard it as a UUID (SEC-013) — it comes from a
+        // DB row here, but never interpolate an unvalidated id into a filter.
+        const { data: familyLeads } = isUuid(rootLeadId)
+          ? await supabase
+              .from("leads")
+              .select(
+                "id, parent_lead_id, first_name, last_name, corporate_name, email, phone, lead_type, co_person_role, upload_mode, upload_consent_uploader_lead_id, address_street, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code, client_id",
+              )
+              .or(`id.eq.${rootLeadId},parent_lead_id.eq.${rootLeadId}`)
+          : { data: null };
 
         // Resolve the family's designated uploader from the PRIMARY lead's
         // upload_mode (set from the client portal's post-retainer popup →
@@ -441,6 +452,9 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
+  if (!isUuid(id)) {
+    return NextResponse.json({ error: "Invalid deal id" }, { status: 400 });
+  }
 
   let body: Record<string, any>;
   try {
@@ -499,6 +513,36 @@ export async function PATCH(
     );
   }
 
+  // GAP-006: enforce the deal-status state machine on manual status edits —
+  // Active ↔ Inactive, either → Closed; Closed is terminal. Rejects illegal
+  // transitions (e.g. reopening a Closed deal) instead of silently allowing them.
+  // Unknown/legacy current statuses are left editable (not blocked).
+  if (typeof updates.status === "string") {
+    const STATUS_TRANSITIONS: Record<string, string[]> = {
+      Active: ["Inactive", "Closed"],
+      Inactive: ["Active", "Closed"],
+      Closed: [],
+    };
+    const { data: current } = await supabase
+      .from("deals")
+      .select("status")
+      .eq("id", id)
+      .maybeSingle();
+    const from = (current?.status as string | null) ?? null;
+    const to = updates.status;
+    if (
+      from &&
+      from !== to &&
+      from in STATUS_TRANSITIONS &&
+      !STATUS_TRANSITIONS[from].includes(to)
+    ) {
+      return NextResponse.json(
+        { success: false, error: `Cannot change deal status from ${from} to ${to}` },
+        { status: 400 },
+      );
+    }
+  }
+
   // file_number has a UNIQUE index — surface a friendly error for duplicates.
   if (typeof updates.file_number === "string") {
     const trimmed = updates.file_number.trim();
@@ -509,16 +553,55 @@ export async function PATCH(
       );
     }
     updates.file_number = trimmed;
+    // GAP-017: enforce the same format bulk import uses. Tolerate an UNCHANGED
+    // legacy value so editing other fields on an older deal isn't blocked — only
+    // a new/changed file number must match.
+    if (!FILE_NUMBER_REGEX.test(trimmed)) {
+      const { data: cur } = await supabase
+        .from("deals")
+        .select("file_number")
+        .eq("id", id)
+        .maybeSingle();
+      if (cur?.file_number !== trimmed) {
+        return NextResponse.json(
+          { success: false, error: FILE_NUMBER_HINT },
+          { status: 400 },
+        );
+      }
+    }
   }
 
-  const { data, error } = await supabase
-    .from("deals")
-    .update(updates)
-    .eq("id", id)
-    .select()
-    .single();
+  // GAP-001: optimistic concurrency. The client may send `expected_updated_at`
+  // (the deal's updated_at when it was loaded). We stamp a fresh updated_at on
+  // every edit and, when the client supplied one, only update the row if its
+  // updated_at still matches — so if someone else saved in the meantime, this
+  // update matches 0 rows and we return 409 instead of silently overwriting.
+  // Omitting the field keeps the old last-write-wins behaviour (backward-compat).
+  const expectedUpdatedAt =
+    typeof (body as any).expected_updated_at === "string"
+      ? (body as any).expected_updated_at
+      : null;
+  updates.updated_at = new Date().toISOString();
+
+  let updateQuery = supabase.from("deals").update(updates).eq("id", id);
+  if (expectedUpdatedAt) {
+    updateQuery = updateQuery.eq("updated_at", expectedUpdatedAt);
+  }
+  const { data, error } = await updateQuery.select().single();
 
   if (error) {
+    // 0 rows with an expected_updated_at set == a concurrent edit moved it.
+    if (expectedUpdatedAt && error.code === "PGRST116") {
+      return NextResponse.json(
+        {
+          success: false,
+          conflict: true,
+          error:
+            "This deal was changed by someone else since you opened it. Reload and re-apply your changes.",
+        },
+        { status: 409 },
+      );
+    }
     const friendly =
       error.code === "23505"
         ? "File number already in use"
@@ -559,10 +642,13 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
+  if (!isUuid(id)) {
+    return NextResponse.json({ error: "Invalid deal id" }, { status: 400 });
+  }
 
   // Soft delete: flag the deal as is_deleted so it disappears from the admin
   // lists and every customer access gate, but the row (and all its tasks,
@@ -576,6 +662,17 @@ export async function DELETE(
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
+
+  // SEC-006 / CMP-004: record who deleted which deal.
+  const actor = await getActingAdmin();
+  await recordAudit({
+    action: "deal.delete",
+    actorEmail: actor.email,
+    actorUserId: actor.id,
+    resourceType: "deal",
+    resourceId: id,
+    req,
+  });
 
   return NextResponse.json({ success: true });
 }

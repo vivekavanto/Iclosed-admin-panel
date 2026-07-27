@@ -2,6 +2,7 @@
 import React, { use, useCallback, useEffect, useState } from 'react';
 import DealDetail from '@/components/DealDetail';
 import { Deal } from '@/types';
+import { toDeal } from '@/lib/dealMapper';
 
 interface Props { params: Promise<{ id: string }> }
 
@@ -20,25 +21,7 @@ export default function Page({ params }: Props) {
       const d: any = await res.json();
       if (!d || d.error) return;
       setRawDeal(d);
-      const mapped: Deal = {
-        id: d.id,
-        fileNumber: d.fileNumber ?? d.file_number ?? '',
-        client: d.client ?? { id: '', firstName: '', lastName: d.client_last_name ?? '', email: '', phone: '' },
-        type: d.type,
-        status: d.status,
-        propertyAddress: d.propertyAddress ?? d.property_address ?? '',
-        sellingPropertyAddress: d.sellingPropertyAddress ?? d.selling_property_address ?? '',
-        closingDate: d.closingDate ?? d.closing_date ?? '',
-        openingDate: d.openingDate ?? d.opening_date,
-        requisitionDate: d.requisitionDate ?? d.requisition_date,
-        price: d.price ?? 0,
-        progress: d.progress ?? 0,
-        tasks: d.tasks ?? [],
-        milestones: d.milestones ?? [],
-        documents: d.documents ?? [],
-        notes: d.notes ?? [],
-      };
-      setDeal(mapped);
+      setDeal(toDeal(d));
     } catch {
       // Non-blocking — on a refresh failure the page keeps the values it has.
     }

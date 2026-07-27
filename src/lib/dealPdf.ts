@@ -16,6 +16,8 @@
 // Both heavy libraries are dynamically imported inside the handlers so they stay
 // out of the initial page bundle and only load when a download is triggered.
 
+import { docDownloadHref, docFetchCredentials } from "@/lib/blobPrivacy";
+
 export interface PdfResponse {
   field_label?: string | null;
   field_id?: string | null;
@@ -271,7 +273,11 @@ async function fetchFile(
   url: string,
 ): Promise<{ bytes: Uint8Array; contentType: string | null } | null> {
   try {
-    const res = await fetch(url, { credentials: "omit" });
+    // Private docs stream through the same-origin auth-gated proxy (session
+    // cookie required); public/legacy blobs are fetched directly, no creds.
+    const res = await fetch(docDownloadHref(url), {
+      credentials: docFetchCredentials(url),
+    });
     if (!res.ok) return null;
     const buf = await res.arrayBuffer();
     return { bytes: new Uint8Array(buf), contentType: res.headers.get("content-type") };
@@ -627,6 +633,48 @@ async function downloadBrandedTaskPdf(
   const textResponses = (task.responses ?? []).filter((r) => r.field_type !== "file");
   const fileResponses = (task.responses ?? []).filter((r) => r.field_type === "file" && r.file_url);
 
+  // Collect the info block (heading band + key/value rows) up front so we can
+  // size the spacing to fit it all onto a single page before drawing anything.
+  const bandTitle = task.ownerName || task.title || (textResponses.length > 0 ? "Details" : "Task");
+  const bandLabel = task.ownerName ? task.title ?? undefined : undefined;
+  const rowData: Array<{ label: string; value: string }> = [];
+  if (task.ownerName) rowData.push({ label: "Name", value: task.ownerName });
+  if (textResponses.length > 0) {
+    for (const r of textResponses) {
+      const label = (r.field_label || r.field_id || "Field").toString();
+      const val = (r.value ?? "").toString().trim() || "—";
+      rowData.push({ label, value: val });
+    }
+  } else if (!task.ownerName) {
+    rowData.push({ label: "No client responses submitted.", value: "—" });
+  }
+
+  // Metric ladder from comfortable to compact. Pick the roomiest one whose band
+  // + rows fit within a single page's content height; fall back to the tightest
+  // if even that overflows (then the flow below page-breaks as a last resort).
+  type Metric = KvMetric & { bandH: number; bandGap: number; titleSize: number; labelW: number };
+  const LADDER: Metric[] = [
+    { bandH: 42, bandGap: 18, titleSize: 13, labelW: 180, size: 10.5, lhFactor: 1.35, padTop: 12, padBot: 12 },
+    { bandH: 40, bandGap: 16, titleSize: 13, labelW: 180, size: 10.5, lhFactor: 1.32, padTop: 9, padBot: 9 },
+    { bandH: 38, bandGap: 14, titleSize: 12.5, labelW: 176, size: 10, lhFactor: 1.3, padTop: 7, padBot: 7 },
+    { bandH: 36, bandGap: 12, titleSize: 12, labelW: 172, size: 9.5, lhFactor: 1.28, padTop: 6, padBot: 6 },
+    { bandH: 34, bandGap: 10, titleSize: 11.5, labelW: 168, size: 9, lhFactor: 1.24, padTop: 5, padBot: 5 },
+    { bandH: 32, bandGap: 8, titleSize: 11, labelW: 164, size: 8.5, lhFactor: 1.2, padTop: 4, padBot: 4 },
+    { bandH: 30, bandGap: 6, titleSize: 10.5, labelW: 160, size: 8, lhFactor: 1.16, padTop: 3, padBot: 3 },
+  ];
+  const availH = g.bottom - g.top;
+  const blockHeight = (mm: Metric) =>
+    mm.bandH +
+    mm.bandGap +
+    rowData.reduce((sum, r) => sum + kvRowHeight(doc, r.label, r.value, mm.labelW, g.contentW, mm), 0);
+  let m = LADDER[LADDER.length - 1];
+  for (const cand of LADDER) {
+    if (blockHeight(cand) <= availH) {
+      m = cand;
+      break;
+    }
+  }
+
   let y = g.top;
   const flow = {
     page() {
@@ -634,39 +682,21 @@ async function downloadBrandedTaskPdf(
       y = g.top;
     },
     band(title: string, label?: string) {
-      if (y + 62 > g.bottom) {
-        doc.addPage();
-        y = g.top;
-      }
-      y = drawBand(doc, g, y, title, label);
+      if (y + m.bandH + m.bandGap > g.bottom) this.page();
+      y = drawBand(doc, g, y, title, label, { h: m.bandH, gap: m.bandGap, titleSize: m.titleSize });
     },
     kv(label: string, value: string) {
-      const h = kvRowHeight(doc, label, value, 180, g.contentW);
-      if (y + h > g.bottom) {
-        doc.addPage();
-        y = g.top;
-      }
-      y = drawKvRow(doc, g.M, y, g.contentW, label, value, 180);
+      const h = kvRowHeight(doc, label, value, m.labelW, g.contentW, m);
+      if (y + h > g.bottom) this.page();
+      y = drawKvRow(doc, g.M, y, g.contentW, label, value, m.labelW, m);
     },
   };
 
   const inserts: Array<{ afterPage: number; bytes: Uint8Array }> = [];
 
-  if (textResponses.length > 0 || !!task.ownerName) {
-    const bandTitle = task.ownerName || task.title || "Details";
-    const bandLabel = task.ownerName ? task.title : undefined;
-    flow.band(bandTitle, bandLabel);
-    if (task.ownerName) {
-      flow.kv("Name", task.ownerName);
-    }
-    for (const r of textResponses) {
-      const label = (r.field_label || r.field_id || "Field").toString();
-      const val = (r.value ?? "").toString().trim() || "—";
-      flow.kv(label, val);
-    }
-  } else {
-    flow.band(task.title || "Task", undefined);
-    flow.kv("No client responses submitted.", "—");
+  flow.band(bandTitle, bandLabel);
+  for (const r of rowData) {
+    flow.kv(r.label, r.value);
   }
 
   let docIdx = 0;
@@ -812,16 +842,34 @@ async function loadImageEl(bytes: Uint8Array, kind: "jpg" | "png"): Promise<HTML
   }
 }
 
+// Vertical sizing for a key/value row. Defaults reproduce the original
+// comfortable spacing; the single-task report overrides them to compact the
+// Personal Information table onto one page (see downloadBrandedTaskPdf).
+interface KvMetric {
+  size?: number;
+  lhFactor?: number;
+  padTop?: number;
+  padBot?: number;
+}
+
 // A key/value row: gray label column, bold value column, hairline underneath.
-function kvRowHeight(doc: JsPdfDoc, label: string, value: string, labelW: number, tableW: number): number {
-  doc.setFontSize(10.5);
+function kvRowHeight(
+  doc: JsPdfDoc,
+  label: string,
+  value: string,
+  labelW: number,
+  tableW: number,
+  m: KvMetric = {},
+): number {
+  const { size = 10.5, lhFactor = 1.35, padTop = 12, padBot = 12 } = m;
+  doc.setFontSize(size);
   doc.setFont("helvetica", "normal");
   const labelLines: string[] = doc.splitTextToSize(String(label ?? ""), labelW - 10);
   doc.setFont("helvetica", "bold");
   const valueLines: string[] = doc.splitTextToSize(String(value ?? "—"), tableW - labelW);
-  const lh = 10.5 * 1.35;
+  const lh = size * lhFactor;
   const rows = Math.max(labelLines.length, valueLines.length, 1);
-  return 12 + rows * lh + 12;
+  return padTop + rows * lh + padBot;
 }
 
 function drawKvRow(
@@ -832,16 +880,18 @@ function drawKvRow(
   label: string,
   value: string,
   labelW: number,
+  m: KvMetric = {},
 ): number {
-  doc.setFontSize(10.5);
-  const lh = 10.5 * 1.35;
+  const { size = 10.5, lhFactor = 1.35, padTop = 12, padBot = 12 } = m;
+  doc.setFontSize(size);
+  const lh = size * lhFactor;
   doc.setFont("helvetica", "normal");
   const labelLines: string[] = doc.splitTextToSize(String(label ?? ""), labelW - 10);
   doc.setFont("helvetica", "bold");
   const valueLines: string[] = doc.splitTextToSize(String(value ?? "—"), tableW - labelW);
   const rows = Math.max(labelLines.length, valueLines.length, 1);
-  const h = 12 + rows * lh + 12;
-  const baseY = y + 12 + lh * 0.8;
+  const h = padTop + rows * lh + padBot;
+  const baseY = y + padTop + lh * 0.8;
 
   doc.setFont("helvetica", "normal");
   doc.setTextColor(...PKG.sub);
@@ -858,8 +908,17 @@ function drawKvRow(
 }
 
 // Gray band with a red left bar: bold title + optional letter-spaced label.
-function drawBand(doc: JsPdfDoc, g: ReturnType<typeof pkgGeom>, y: number, title: string, label?: string): number {
-  const h = 42;
+// h/gap/titleSize default to the roomy layout; the single-task report shrinks
+// them to help fit Personal Information onto one page.
+function drawBand(
+  doc: JsPdfDoc,
+  g: ReturnType<typeof pkgGeom>,
+  y: number,
+  title: string,
+  label?: string,
+  m: { h?: number; gap?: number; titleSize?: number } = {},
+): number {
+  const { h = 42, gap = 18, titleSize = 13 } = m;
   doc.setFillColor(...PKG.panel);
   doc.rect(g.M, y, g.contentW, h, "F");
   doc.setFillColor(...PKG.brand);
@@ -868,7 +927,7 @@ function drawBand(doc: JsPdfDoc, g: ReturnType<typeof pkgGeom>, y: number, title
   const tx = g.M + 18;
   const cy = y + h / 2 + 4;
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(13);
+  doc.setFontSize(titleSize);
   doc.setTextColor(...PKG.ink);
   const t = String(title ?? "");
   doc.text(t, tx, cy);
@@ -879,7 +938,7 @@ function drawBand(doc: JsPdfDoc, g: ReturnType<typeof pkgGeom>, y: number, title
     doc.setTextColor(...PKG.faint);
     doc.text(String(label).toUpperCase(), tx + tw + 12, cy, { charSpace: 1.4 } as any);
   }
-  return y + h + 18;
+  return y + h + gap;
 }
 
 function pkgCover(doc: JsPdfDoc, deal: PdfDealMeta) {

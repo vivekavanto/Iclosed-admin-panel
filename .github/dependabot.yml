@@ -1,0 +1,25 @@
+# SEC-019 — automated dependency update PRs.
+# Takes effect once this repo is on GitHub with Dependabot enabled
+# (Settings → Code security → Dependabot). No local setup needed.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    groups:
+      # Batch low-risk minor/patch bumps into one PR to cut noise.
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"

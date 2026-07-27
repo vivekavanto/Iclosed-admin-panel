@@ -1,6 +1,7 @@
 import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
 import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
+import { blobToken } from "@/lib/blobPrivacy";
 
 const ALLOWED_CONTENT_TYPES = [
   "application/pdf",
@@ -35,6 +36,9 @@ export async function POST(
     const jsonResponse = await handleUpload({
       body,
       request,
+      // Client sends access: BLOB_ACCESS; the generated token must target the
+      // matching store — private store's token once the flag is on (SEC-003).
+      token: blobToken(),
       onBeforeGenerateToken: async (_pathname, _clientPayload) => {
         const { data: deal, error: dealError } = await supabaseAdmin
           .from("deals")
@@ -55,6 +59,9 @@ export async function POST(
           maximumSizeInBytes: MAX_SIZE_BYTES,
           tokenPayload: JSON.stringify({ dealId, leadId: deal.lead_id }),
           addRandomSuffix: false,
+          // SEC-024: the browser uses this token immediately after issuance, so
+          // cap its life at 2 minutes to shrink the replay window if it leaks.
+          validUntil: Date.now() + 2 * 60 * 1000,
         };
       },
       onUploadCompleted: async () => {

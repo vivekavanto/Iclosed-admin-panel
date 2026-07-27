@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { consumeInvitationToken } from "@/lib/invitationToken";
+import { rateLimitOk, requestIp } from "@/lib/rateLimit";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +32,12 @@ function expiredRedirect(reason: string) {
  */
 export async function GET(req: NextRequest) {
   const token = req.nextUrl.searchParams.get("token") ?? "";
+
+  // SEC-023: throttle activation attempts per IP (30 / 10 min) to blunt token
+  // brute-forcing. Generous enough for legit clicks + email-scanner pre-fetches.
+  if (!(await rateLimitOk(`activate:ip:${requestIp(req)}`, 30, 600))) {
+    return expiredRedirect("too_many_attempts");
+  }
 
   const consumed = await consumeInvitationToken(token);
   if (!consumed.ok) {

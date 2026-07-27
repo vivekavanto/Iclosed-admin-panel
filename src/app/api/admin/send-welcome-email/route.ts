@@ -20,7 +20,7 @@ import { guardServiceRequest } from "@/lib/verifyServiceSignature";
 export async function POST(req: NextRequest) {
   try {
     const raw = await req.text();
-    const blocked = guardServiceRequest(req, raw);
+    const blocked = guardServiceRequest(req, raw, { routeKey: "send-welcome-email" });
     if (blocked) return blocked;
     const body = JSON.parse(raw);
     const { lead_id, template_id, template_name, source } = body as {

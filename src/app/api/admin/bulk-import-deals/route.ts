@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
+import { FILE_NUMBER_REGEX } from "@/lib/fileNumber";
 
 export async function GET() {
   const { data, error } = await supabaseAdmin
@@ -47,7 +48,6 @@ type ImportOutcome = {
   reason?: string;
 };
 
-const FILE_NUMBER_REGEX = /^[0-9]{2}[A-Z]{1,3}-[0-9]{3,5}$/;
 const ALLOWED_TYPES = new Set(["Purchase", "Sale", "Refinance", "Purchase & Sale"]);
 const ALLOWED_STATUSES = new Set(["Active", "Closed"]);
 
@@ -114,6 +114,19 @@ export async function POST(req: Request) {
   const rows = Array.isArray(body.rows) ? body.rows : [];
   if (rows.length === 0) {
     return NextResponse.json({ success: true, results: [] });
+  }
+  // GAP-015: bound the import size. The CSV is parsed client-side and posted as
+  // JSON rows, so there's no file to size-check — but cap the row count so a
+  // single request can't submit an unbounded batch (memory / DB-write abuse).
+  const MAX_IMPORT_ROWS = 1000;
+  if (rows.length > MAX_IMPORT_ROWS) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: `Too many rows (${rows.length}). Import at most ${MAX_IMPORT_ROWS} at a time.`,
+      },
+      { status: 413 },
+    );
   }
 
   const fileNumbers = rows.map((r) => r.fileNumber).filter(Boolean);

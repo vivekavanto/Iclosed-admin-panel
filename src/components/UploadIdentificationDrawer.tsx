@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { useIsLargeScreen } from "@/hooks/useMediaQuery";
+import { docDownloadHref } from "@/lib/blobPrivacy";
 
 interface UploadIdentificationDrawerProps {
   open: boolean;
@@ -1668,7 +1669,7 @@ export default function UploadIdentificationDrawer({
                       <div className="min-w-0 flex-1">
                         {doc.file_url ? (
                           <a
-                            href={doc.file_url}
+                            href={docDownloadHref(doc.file_url)}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="text-xs font-semibold text-green-800 hover:underline truncate block"

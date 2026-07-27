@@ -1,0 +1,138 @@
+{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0\froman Calibri;}{\f1\fmodern Consolas;}{\f2\fswiss Arial;}}{\colortbl;\red0\green0\blue0;\red31\green78\blue121;\red180\green180\blue180;}\viewkind4\uc1\fs22\sa120 {\pard\sa160\sb120\keepn\fs44\b\cf2 Security Considerations in iClosed\par}
+\par
+{\pard\sa120 {\b How the iClosed platform protects client and transaction data.}\par}
+\par
+{\pard\sa120 {\i Last updated: 2026-07-24}\par}
+\par
+{\pard\brdrb\brdrs\brdrw10\brdrcf3 \par}
+\par
+{\pard\sa100\sb220\keepn\fs30\b\cf2 Overview\par}
+\par
+{\pard\sa120 iClosed handles sensitive real-estate transaction data \u8212? personal information,\par}
+{\pard\sa120 government identification, and legal documents. Security and privacy are built\par}
+{\pard\sa120 into the platform at every layer: authentication, data handling, document\par}
+{\pard\sa120 storage, auditing, and our development process.\par}
+\par
+{\pard\sa120 This document summarises the security measures currently in place. It is intended\par}
+{\pard\sa120 to answer the common question: {\i "What are the security considerations in iClosed?"}\par}
+\par
+{\pard\brdrb\brdrs\brdrw10\brdrcf3 \par}
+\par
+{\pard\sa100\sb220\keepn\fs30\b\cf2 1. Authentication & Access Control\par}
+\par
+{\pard\fi-260\li420\sa60 {\f2\fs20 \u8226?}\tab {\b Authenticated admin access only.} Every administrative page and API endpoint\par}
+{\pard\sa120   requires a valid, logged-in session with an explicit administrator role.\par}
+{\pard\sa120   Unauthenticated requests are rejected before any data is touched.\par}
+{\pard\fi-260\li420\sa60 {\f2\fs20 \u8226?}\tab {\b Server-only privileged access.} The high-privilege database client (which can\par}
+{\pard\sa120   bypass row-level security) is guarded so it can never be loaded into a browser\par}
+{\pard\sa120   or exposed to the client side.\par}
+{\pard\fi-260\li420\sa60 {\f2\fs20 \u8226?}\tab {\b Protected impersonation.} When staff need to view the platform as a customer\par}
+{\pard\sa120   for support, the action requires an additional password re-entry (step-up\par}
+{\pard\sa120   authentication), notifies the customer, and is written to the audit log.\par}
+{\pard\fi-260\li420\sa60 {\f2\fs20 \u8226?}\tab {\b Trusted-staff access model.} Administrative access is limited to trusted\par}
+{\pard\sa120   internal staff. The access model is explicitly documented so that stricter\par}
+{\pard\sa120   per-team scoping can be introduced if external brokers or teams are ever added.\par}
+\par
+{\pard\brdrb\brdrs\brdrw10\brdrcf3 \par}
+\par
+{\pard\sa100\sb220\keepn\fs30\b\cf2 2. Data Protection & Privacy\par}
+\par
+{\pard\fi-260\li420\sa60 {\f2\fs20 \u8226?}\tab {\b Email content is injection-safe.} Transactional emails are rendered through a\par}
+{\pard\sa120   single-pass, HTML-escaping template engine, so user-supplied data cannot inject\par}
+{\pard\sa120   markup or content into outgoing messages.\par}
+{\pard\fi-260\li420\sa60 {\f2\fs20 \u8226?}\tab {\b Personal data kept out of logs.} Recipient email addresses are masked and\par}
+{\pard\sa120   personally identifiable information is dropped from application logs.\par}
+{\pard\fi-260\li420\sa60 {\f2\fs20 \u8226?}\tab {\b Right to be forgotten.} A dedicated erase capability permanently removes a\par}
+{\pard\sa120   person's records, their family-linked records, and their uploaded documents\par}
+{\pard\sa120   from both the database and file storage \u8212? with the action audited.\par}
+{\pard\fi-260\li420\sa60 {\f2\fs20 \u8226?}\tab {\b Controlled document access.} Uploaded documents are accessed only through the\par}
+{\pard\sa120   authenticated application. The platform includes private-storage capability with\par}
+{\pard\sa120   an authentication-gated download proxy, so document access can be tightened to\par}
+{\pard\sa120   logged-in, authorised users.\par}
+\par
+{\pard\brdrb\brdrs\brdrw10\brdrcf3 \par}
+\par
+{\pard\sa100\sb220\keepn\fs30\b\cf2 3. Document & Upload Security\par}
+\par
+{\pard\fi-260\li420\sa60 {\f2\fs20 \u8226?}\tab {\b Strict upload validation.} Uploads are limited by size (25 MB) and restricted\par}
+{\pard\sa120   to a safe set of file types (JPG, PNG, WEBP, HEIC, PDF).\par}
+{\pard\fi-260\li420\sa60 {\f2\fs20 \u8226?}\tab {\b No orphaned files.} If a database record fails to save after a file is\par}
+{\pard\sa120   uploaded, the uploaded file is automatically cleaned up \u8212? no stray, unreferenced\par}
+{\pard\sa120   files are left in storage.\par}
+{\pard\fi-260\li420\sa60 {\f2\fs20 \u8226?}\tab {\b Time-limited upload links.} Upload tokens issued for client document uploads\par}
+{\pard\sa120   carry a short, explicit expiry.\par}
+{\pard\fi-260\li420\sa60 {\f2\fs20 \u8226?}\tab {\b Validated identifiers and inputs.} Record identifiers are validated as proper\par}
+{\pard\sa120   UUIDs before use in queries, and structured inputs (file numbers, field types,\par}
+{\pard\sa120   email formats) are validated against strict formats and allow-lists.\par}
+\par
+{\pard\brdrb\brdrs\brdrw10\brdrcf3 \par}
+\par
+{\pard\sa100\sb220\keepn\fs30\b\cf2 4. Auditing & Monitoring\par}
+\par
+{\pard\fi-260\li420\sa60 {\f2\fs20 \u8226?}\tab {\b Audit logging.} Sensitive actions \u8212? impersonation, deal deletion, and record\par}
+{\pard\sa120   deletion \u8212? are recorded to a dedicated audit log with the acting administrator's\par}
+{\pard\sa120   identity.\par}
+{\pard\fi-260\li420\sa60 {\f2\fs20 \u8226?}\tab {\b Structured, level-controlled logging.} Application logging is structured and\par}
+{\pard\sa120   gated by log level, so production logging can be tuned and kept free of noise\par}
+{\pard\sa120   and sensitive detail.\par}
+\par
+{\pard\brdrb\brdrs\brdrw10\brdrcf3 \par}
+\par
+{\pard\sa100\sb220\keepn\fs30\b\cf2 5. Rate Limiting & Abuse Prevention\par}
+\par
+{\pard\fi-260\li420\sa60 {\f2\fs20 \u8226?}\tab {\b Rate-limited sensitive endpoints.} Password reset, document-classification,\par}
+{\pard\sa120   and account-activation endpoints are rate limited (per email, per IP, and per\par}
+{\pard\sa120   administrator) to prevent brute-force and abuse.\par}
+{\pard\fi-260\li420\sa60 {\f2\fs20 \u8226?}\tab {\b Capped invitation tokens.} Invitation/activation tokens have a maximum\par}
+{\pard\sa120   consumption limit, so a single token cannot be reused indefinitely.\par}
+\par
+{\pard\brdrb\brdrs\brdrw10\brdrcf3 \par}
+\par
+{\pard\sa100\sb220\keepn\fs30\b\cf2 6. Web & Network Security\par}
+\par
+{\pard\fi-260\li420\sa60 {\f2\fs20 \u8226?}\tab {\b Security response headers.} The platform sends a set of hardening HTTP\par}
+{\pard\sa120   headers (including frame, content-type, and transport-security protections).\par}
+{\pard\fi-260\li420\sa60 {\f2\fs20 \u8226?}\tab {\b Signed service-to-service requests.} Internal system-to-system calls are\par}
+{\pard\sa120   cryptographically signed (HMAC) so the platform can verify a request genuinely\par}
+{\pard\sa120   originated from a trusted service.\par}
+{\pard\fi-260\li420\sa60 {\f2\fs20 \u8226?}\tab {\b Explicit cross-origin policy.} Webhook and service endpoints have a defined,\par}
+{\pard\sa120   restrictive cross-origin policy.\par}
+\par
+{\pard\brdrb\brdrs\brdrw10\brdrcf3 \par}
+\par
+{\pard\sa100\sb220\keepn\fs30\b\cf2 7. Secure Development & Supply Chain\par}
+\par
+{\pard\fi-260\li420\sa60 {\f2\fs20 \u8226?}\tab {\b Secret scanning.} Automated scanning checks the codebase for accidentally\par}
+{\pard\sa120   committed secrets.\par}
+{\pard\fi-260\li420\sa60 {\f2\fs20 \u8226?}\tab {\b Dependency monitoring.} Automated dependency scanning and update tooling\par}
+{\pard\sa120   watch for vulnerable third-party packages.\par}
+{\pard\fi-260\li420\sa60 {\f2\fs20 \u8226?}\tab {\b Continuous integration checks.} Every change runs linting, type-checking,\par}
+{\pard\sa120   builds, a security audit of dependencies, and an automated test suite before it\par}
+{\pard\sa120   can ship.\par}
+{\pard\fi-260\li420\sa60 {\f2\fs20 \u8226?}\tab {\b Key-rotation runbook.} A documented process and cadence exists for rotating\par}
+{\pard\sa120   API keys and secrets.\par}
+\par
+{\pard\brdrb\brdrs\brdrw10\brdrcf3 \par}
+\par
+{\pard\sa100\sb220\keepn\fs30\b\cf2 8. Reliability & Data Integrity\par}
+\par
+{\pard\fi-260\li420\sa60 {\f2\fs20 \u8226?}\tab {\b Safe concurrent edits.} Deal edits use optimistic concurrency control, so two\par}
+{\pard\sa120   simultaneous edits cannot silently overwrite one another.\par}
+{\pard\fi-260\li420\sa60 {\f2\fs20 \u8226?}\tab {\b Enforced data constraints.} Database-level constraints (such as one active\par}
+{\pard\sa120   deal per person) prevent duplicate or conflicting records from race conditions.\par}
+{\pard\fi-260\li420\sa60 {\f2\fs20 \u8226?}\tab {\b Graceful error handling.} The application has global error boundaries that\par}
+{\pard\sa120   present a safe fallback instead of exposing internal errors to users.\par}
+\par
+{\pard\brdrb\brdrs\brdrw10\brdrcf3 \par}
+\par
+{\pard\sa100\sb220\keepn\fs30\b\cf2 Summary\par}
+\par
+{\pard\sa120 Security in iClosed is layered: strong authentication gates every administrative\par}
+{\pard\sa120 action, sensitive data is protected in transit and in logs, documents and uploads\par}
+{\pard\sa120 are validated and access-controlled, and all privileged actions are audited. The\par}
+{\pard\sa120 development process itself is guarded by secret scanning, dependency monitoring,\par}
+{\pard\sa120 and automated CI checks.\par}
+\par
+{\pard\sa120 *This document describes the platform's current security posture and is reviewed\par}
+{\pard\sa120 as the platform evolves.*\par}
+\par}

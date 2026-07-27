@@ -1,4 +1,5 @@
 import supabaseAdmin from "./supabaseAdmin";
+import { logger } from "./logger";
 
 /**
  * Recalculates milestone statuses for a co-purchaser/co-seller family, treating
@@ -138,7 +139,7 @@ export async function recalcMilestonesForFamily(
           const baseUrl = process.env.VERCEL_URL
             ? `https://${process.env.VERCEL_URL}`
             : "http://localhost:3000";
-          await fetch(`${baseUrl}/api/admin/send-milestone-email`, {
+          const res = await fetch(`${baseUrl}/api/admin/send-milestone-email`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -147,8 +148,20 @@ export async function recalcMilestonesForFamily(
               sendToLinkedDeals: true,
             }),
           });
-        } catch {
-          // Non-blocking — email send failure should not break recalc
+          // GAP-014: fetch only throws on a network error, so a 4xx/5xx from the
+          // email route would otherwise be swallowed. Surface it (non-blocking).
+          if (!res.ok) {
+            logger.warn(
+              `[recalcMilestones] milestone email returned HTTP ${res.status} — milestone=${primaryInstance.id} deal=${primaryDealId}`,
+            );
+          }
+        } catch (err) {
+          // Non-blocking — a send failure must not break recalc — but GAP-014:
+          // log it with IDs so a family silently missing its email is visible.
+          logger.warn(
+            `[recalcMilestones] milestone email failed — milestone=${primaryInstance.id} deal=${primaryDealId}:`,
+            err,
+          );
         }
       }
     }

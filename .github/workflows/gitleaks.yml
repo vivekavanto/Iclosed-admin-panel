@@ -1,0 +1,20 @@
+# SEC-016 — scan every push/PR for committed secrets (API keys, tokens).
+# CI-based so there's nothing to install locally. Takes effect once this repo is
+# on GitHub with Actions enabled. Fails the check if a secret is detected.
+name: Secret scan
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

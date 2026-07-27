@@ -183,7 +183,10 @@ export async function POST(
     childInsert.address_city = rootLead.address_city ?? null;
     childInsert.address_province = rootLead.address_province ?? null;
     childInsert.address_postal_code = rootLead.address_postal_code ?? null;
-  } else {
+  } else if (rootLead.selling_address_street) {
+    // Combined Purchase & Sale file: the Sale side is stored in the root's
+    // selling_address_* columns. Copy those, and mirror onto address_* so the
+    // Sale deal's property_address (derived from address_street) resolves.
     const sStreet = rootLead.selling_address_street ?? null;
     const sUnit = rootLead.selling_address_unit ?? null;
     const sCity = rootLead.selling_address_city ?? null;
@@ -194,12 +197,23 @@ export async function POST(
     childInsert.selling_address_city = sCity;
     childInsert.selling_address_province = sProvince;
     childInsert.selling_address_postal_code = sPostal;
-    // Mirror onto address_* so the Sale deal's property_address resolves.
     childInsert.address_street = sStreet;
     childInsert.address_unit = sUnit;
     childInsert.address_city = sCity;
     childInsert.address_province = sProvince;
     childInsert.address_postal_code = sPostal;
+  } else {
+    // Sale-ONLY file: the sold property lives in the root's GENERIC address_*
+    // columns (selling_address_* is only populated for the Sale side of a
+    // *combined* P&S file). Copying the empty selling_address_* here left the
+    // co-seller — and its Sale deal's property_address — with no address at
+    // all. Seed address_* the same way the primary is stored, leaving
+    // selling_address_* empty so the whole family stays consistent.
+    childInsert.address_street = rootLead.address_street ?? null;
+    childInsert.address_unit = rootLead.address_unit ?? null;
+    childInsert.address_city = rootLead.address_city ?? null;
+    childInsert.address_province = rootLead.address_province ?? null;
+    childInsert.address_postal_code = rootLead.address_postal_code ?? null;
   }
 
   const { data: childLead, error: childError } = await supabaseAdmin
