@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { completeApsTask } from "@/lib/completeApsTask";
-import { isBlobUrl, BLOB_ACCESS, PRIVATE_BLOB_ENABLED } from "@/lib/blobPrivacy";
+import { isBlobUrl, BLOB_ACCESS } from "@/lib/blobPrivacy";
 
 /**
  * POST /api/admin/deals/[id]/uploadblobstorage
@@ -184,14 +184,6 @@ export async function POST(
       uploaded_count: files.length,
       already_completed: result.already_completed ?? false,
       completed_lead_types: result.completed_lead_types ?? [],
-      // TEMP DEBUG (SEC-003): surfaces what THIS deployment sees for the
-      // private-blob flag so we can confirm the env var is reaching the build.
-      // Remove once private uploads are verified working.
-      _debug_private_blob: {
-        env_raw: process.env.NEXT_PUBLIC_PRIVATE_BLOB ?? null,
-        enabled: PRIVATE_BLOB_ENABLED,
-        access: BLOB_ACCESS,
-      },
     });
   } catch (err: any) {
     console.error("POST /api/admin/deals/[id]/uploadblobstorage error:", err);
