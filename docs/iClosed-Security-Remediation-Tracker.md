@@ -75,7 +75,7 @@ secret MUST match in both projects (both redeployed) or `activate-deal` will 401
 | **ARC-004** | Removed duplicate route stubs; legacy URLs handled via `next.config` redirects | — |
 | **ARC-011** | Structured `logger` gated by `LOG_LEVEL`; adopted in session code (legacy `console.*` migrates incrementally) | Optionally set `LOG_LEVEL=warn` in prod |
 | **ARC-005** | Shared `toDeal` mapper — used by deal list + detail page | — |
-| **SEC-006** | Impersonation now requires admin password re-entry (step-up) + notifies the customer + audit | (optional: `IMPERSONATE_NOTIFY_CUSTOMER=false` to disable the email) |
+| **SEC-006** | Impersonation now requires admin password re-entry (step-up) + audit | Customer notification email removed by business decision — clients are not told when staff view their portal; the `audit_logs` trail is the sole record |
 | **SEC-012 / CMP-008** | Public routes sanitized; admin-only routes keep detail as a documented, accepted posture for an internal tool | — |
 | **GAP-021** | Zero-task milestones kept at their manual status (no auto-derive possible) — resolved by design | — |
 | **SEC-002** | Webhook signatures: `activate-deal` auto-enforces when secret is set (fail-open if missing); other routes warn-only until their callers sign | Set `SERVICE_WEBHOOK_SECRET` (same) in both Vercel projects + redeploy both |
