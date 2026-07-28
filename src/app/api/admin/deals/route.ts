@@ -4,11 +4,7 @@ import { logger } from "@/lib/logger";
 
 const supabase = supabaseAdmin;
 
-// ARC-002: cache auth_user_id → last_sign_in_at so we don't re-scan the ENTIRE
-// Supabase Auth user table on every deal-list load (an N+1-style full scan that
-// gets worse as the customer base grows). Refreshed at most once per TTL per warm
-// instance. (A materialised table synced on login would scale better still; this
-// removes the per-request full scan with no new infra.)
+
 let authSignInCache: { at: number; map: Map<string, string> } | null = null;
 const AUTH_CACHE_TTL_MS = 60_000;
 
