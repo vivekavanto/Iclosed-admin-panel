@@ -11,7 +11,6 @@ const supabase = supabaseAdmin;
 // removes the per-request full scan with no new infra.)
 let authSignInCache: { at: number; map: Map<string, string> } | null = null;
 const AUTH_CACHE_TTL_MS = 60_000;
-
 async function getAuthSignInMap(): Promise<Map<string, string>> {
   if (authSignInCache && Date.now() - authSignInCache.at < AUTH_CACHE_TTL_MS) {
     return authSignInCache.map;
