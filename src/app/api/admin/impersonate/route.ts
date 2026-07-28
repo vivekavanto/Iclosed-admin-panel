@@ -1,15 +1,13 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { Resend } from "resend";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { recordAudit } from "@/lib/recordAudit";
 import { getActingAdmin } from "@/lib/getActingAdmin";
-import { logger } from "@/lib/logger";
 
 // Admin-only impersonation (SEC-006). Requires the acting admin to re-confirm
-// their password (step-up), records an audit row, and notifies the customer
-// that their account was accessed. Uses supabaseAdmin.auth.admin.generateLink to
-// mint the magic link server-side.
+// their password (step-up) and records an audit row. The customer is NOT
+// notified. Uses supabaseAdmin.auth.admin.generateLink to mint the magic link
+// server-side.
 export async function POST(req: Request) {
   try {
     const body = (await req.json()) as {
@@ -95,25 +93,9 @@ export async function POST(req: Request) {
       );
     }
 
-    // SEC-006: notify the customer that their account was accessed, for
-    // transparency. Best-effort — a send failure must not block the admin.
-    // Set IMPERSONATE_NOTIFY_CUSTOMER=false to turn this off.
-    if (
-      process.env.IMPERSONATE_NOTIFY_CUSTOMER !== "false" &&
-      process.env.RESEND_API_KEY
-    ) {
-      try {
-        const resend = new Resend(process.env.RESEND_API_KEY);
-        await resend.emails.send({
-          from: process.env.RESEND_FROM_EMAIL || "iClosed <support@iclosed.ca>",
-          to: [email],
-          subject: "Your iClosed account was accessed by our team",
-          html: `<p>Hello,</p><p>A member of the iClosed team securely accessed your account to help with your file. If this wasn't expected, please reply to this email and let us know.</p><p>— iClosed</p>`,
-        });
-      } catch (notifyErr) {
-        logger.error("[impersonate] customer notification failed:", notifyErr);
-      }
-    }
+    // No customer-facing notification is sent on impersonation (business
+    // decision): clients must not be told when staff view their portal.
+    // Transparency is covered by the audit trail below instead.
 
     // SEC-006 / CMP-004: record WHO impersonated WHOM, when, from where.
     await recordAudit({

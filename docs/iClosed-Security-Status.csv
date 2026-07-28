@@ -3,7 +3,7 @@ SEC-001,Security,P0,Done,Admin auth + role gate on all admin routes,middleware.t
 SEC-002,Security,P0,Done,Webhook HMAC signatures,activate-deal auto-enforces when secret set; fail-open if missing,Set SERVICE_WEBHOOK_SECRET (same) in both Vercel projects + redeploy
 SEC-004,Security,P1,Done,Per-deal ownership (IDOR),'All admins see all' kept as intended,Accepted decision: all admins see all deals (documented in CLAUDE.md)
 SEC-005,Security,P1,Done,Blob URL allow-list is hostname-based,new URL().hostname check,
-SEC-006,Security,P1,Done,Impersonation step-up + notify + audit,Admin re-enters password; customer emailed; audited,Optional: IMPERSONATE_NOTIFY_CUSTOMER=false
+SEC-006,Security,P1,Done,Impersonation step-up + audit,Admin re-enters password; audited,Customer notification email removed by business decision; audit log is the sole record
 SEC-007,Security,P1,Done,Password-reset rate limit,Rate-limited via Supabase (no Redis),Run 2026-07-23-rate-limits.sql
 SEC-008,Security,P1,Done,Invitation token consumption cap (max 10),+ migration,Run 2026-07-23-invitation-token-consumption-cap.sql
 SEC-009,Security,P1,Done,Email template injection fixed,Single-pass + HTML-escape renderer; 7/7 tests,
