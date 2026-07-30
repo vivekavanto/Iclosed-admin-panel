@@ -1,0 +1,25 @@
+{
+  // Editor-only TS project for the test files.
+  //
+  // The root tsconfig deliberately EXCLUDES "tests" so `npx tsc --noEmit` stays
+  // cheap and only checks shipped code. The side effect is that an open test file
+  // belongs to no project, so the language server falls back to its defaults —
+  // which have no `node` types, and report "Cannot find name 'node:test'" on
+  // every `import { test } from "node:test"`.
+  //
+  // This config exists purely to give the editor a project for tests/**. It does
+  // not change what the root type-check or the build looks at.
+  //
+  // allowImportingTsExtensions: the tests import source with an explicit ".ts"
+  // extension (e.g. "../src/lib/closingCosts.ts") because they run under
+  // `node --experimental-strip-types`, whose ESM resolver does not guess
+  // extensions. Safe here — this project is noEmit.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  "include": ["**/*.ts"],
+  "exclude": []
+}

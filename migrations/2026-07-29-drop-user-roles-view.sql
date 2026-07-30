@@ -1,0 +1,53 @@
+-- Supabase Security Advisor: `auth_users_exposed` (CRITICAL) — public.user_roles.
+--
+-- The view was created by hand in the Supabase SQL editor (it has never existed
+-- in this repo's migrations) and reads straight from auth.users:
+--
+--   CREATE VIEW public.user_roles AS
+--     SELECT id AS user_id,
+--            email,
+--            COALESCE(raw_app_meta_data ->> 'role', 'customer') AS role,
+--            created_at,
+--            last_sign_in_at
+--       FROM auth.users;
+--
+-- Two problems compound:
+--   1. A plain view runs with its OWNER's rights (security_invoker is off by
+--      default), so it reads auth.users even though the caller has no grant on
+--      that table.
+--   2. It lives in `public`, which PostgREST auto-exposes, and SELECT is granted
+--      to both `anon` and `authenticated`. The anon key ships in the browser
+--      bundle (NEXT_PUBLIC_SUPABASE_ANON_KEY), so
+--      GET /rest/v1/user_roles returns every account's email plus a role flag
+--      marking exactly which of them are admins — with no login at all.
+--
+-- Neither repo reads it: `user_roles` appears nowhere in iclosed_dev_admin or
+-- iclosed_dev_web. Admin role checks go through the JWT
+-- (app_metadata.role === 'admin', see src/middleware.ts); the staff registry is
+-- public.admin_users. So the view has no callers and is dropped outright.
+--
+-- Run this on BOTH projects: iclosed (prod) and iclosed-dev.
+
+DROP VIEW IF EXISTS public.user_roles;
+-- Verification — expects zero rows afterwards. Any view or matview in an
+-- API-exposed schema that still reads auth.users will show up here.
+--
+-- SELECT n.nspname  AS schema,
+--        c.relname  AS view_name,
+--        has_table_privilege('anon',          c.oid, 'SELECT') AS anon_can_read,
+--        has_table_privilege('authenticated', c.oid, 'SELECT') AS authed_can_read
+--   FROM pg_class c
+--   JOIN pg_namespace n ON n.oid = c.relnamespace
+--  WHERE c.relkind IN ('v', 'm')
+--    AND n.nspname IN ('public', 'graphql_public')
+--    AND EXISTS (
+--          SELECT 1
+--            FROM pg_depend d
+--            JOIN pg_rewrite r   ON r.oid   = d.objid
+--            JOIN pg_class  src  ON src.oid = d.refobjid
+--            JOIN pg_namespace sn ON sn.oid = src.relnamespace
+--           WHERE d.classid  = 'pg_rewrite'::regclass
+--             AND r.ev_class = c.oid
+--             AND sn.nspname = 'auth'
+--             AND src.relname = 'users'
+--        );

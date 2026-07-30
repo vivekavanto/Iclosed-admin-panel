@@ -47,6 +47,7 @@ const ROUTE_MAP: Record<string, string> = {
   staff: "/admin/users",
   settings: "/admin/settings",
   "default-tasks": "/admin/settings/default-tasks",
+  "closing-cost-settings": "/admin/settings/closing-costs",
   "account-settings": "/admin/account-settings",
 };
 

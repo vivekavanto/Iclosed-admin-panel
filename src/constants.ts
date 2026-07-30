@@ -261,6 +261,7 @@ export const NAV_ITEMS = [
     icon: 'Settings',
     children: [
       { label: 'Default Tasks', id: 'default-tasks' },
+      { label: 'Closing Costs', id: 'closing-cost-settings' },
       { label: 'Account Settings', id: 'account-settings' },
     ]
   },

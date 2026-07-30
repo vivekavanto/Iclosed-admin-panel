@@ -332,6 +332,61 @@ erDiagram
         timestamptz created_at
     }
 
+    closing_cost_config {
+        uuid id PK
+        text label
+        numeric reg_transfer
+        numeric reg_mortgage
+        numeric teraview
+        numeric sheriff
+        numeric legal_transfer
+        numeric legal_mortgage
+        numeric legal_title_submission
+        numeric admin_fee
+        numeric hst_rate
+        numeric rebate_ontario_max
+        numeric rebate_toronto_max
+        numeric title_premium_base
+        numeric title_premium_rate
+        numeric title_premium_min
+        jsonb ltt_tiers
+        jsonb mltt_tiers
+        text firm_name
+        text firm_subtitle
+        text firm_address
+        text firm_phone
+        text firm_fax
+        text firm_hst_number
+        bool is_active
+        bool is_deleted
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    deal_closing_estimates {
+        uuid id PK
+        uuid deal_id FK
+        numeric purchase_price
+        numeric deposit_paid
+        numeric mortgage_amount
+        bool is_toronto
+        bool is_first_time_buyer
+        numeric title_premium_override
+        text file_no_display
+        jsonb rates_used
+        jsonb line_items
+        numeric total_closing_costs
+        numeric balance_due
+        text status
+        timestamptz issued_at
+        text pdf_url
+        timestamptz pdf_generated_at
+        text created_by_email
+        bool is_deleted
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
     clients ||--o{ clients : "merged_into_client_id"
     clients ||--o{ deals : "client_id"
     clients ||--o{ deals_duplicate : "client_id"
@@ -344,6 +399,7 @@ erDiagram
     leads ||--o{ lead_identification_docs : "lead_id"
     leads ||--o{ retainer_signatures : "lead_id"
 
+    deals ||--o{ deal_closing_estimates : "deal_id"
     deals ||--o{ deal_co_purchasers : "deal_id"
     deals ||--o{ deal_documents : "deal_id"
     deals ||--o{ deal_notes : "deal_id"
