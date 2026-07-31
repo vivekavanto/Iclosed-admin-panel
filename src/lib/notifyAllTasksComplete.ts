@@ -25,10 +25,11 @@ import { withRetry } from "./retry";
  *     must hold the alert back. Shared tasks live once on the primary deal;
  *     personal tasks live one-per-person, so we pool both (same rule as
  *     recalcMilestones).
- *   • Only tasks the CLIENT can see. `hidden_from_client` tasks are internal
- *     back-office steps the client has no way to complete, so counting them
- *     would mean the alert never fires on any file that has one.
- *   • Soft-deleted tasks (`is_deleted`) are excluded everywhere, as usual.
+ *   • Every non-deleted task, which is exactly the set the client sees. There
+ *     is a `hidden_from_client` flag in the repo's 2026-06-04 migration, but it
+ *     was never applied and nothing reads it — the portal serves the client
+ *     every non-deleted task. Filtering on it would ignore tasks still on the
+ *     client's screen and fire this alert early, so we deliberately don't.
  *
  * Idempotency: `deals.all_tasks_notified_at` on the family's PRIMARY deal is
  * claimed with a conditional UPDATE (NULL → now()), so two task completions
@@ -125,15 +126,13 @@ export async function maybeNotifyAllTasksComplete(
         .select("id, status")
         .eq("deal_id", primaryDealId)
         .eq("is_shared", true)
-        .eq("is_deleted", false)
-        .eq("hidden_from_client", false),
+        .eq("is_deleted", false),
       supabaseAdmin
         .from("tasks")
         .select("id, status")
         .in("deal_id", dealIds)
         .or("is_shared.is.null,is_shared.eq.false")
-        .eq("is_deleted", false)
-        .eq("hidden_from_client", false),
+        .eq("is_deleted", false),
     ]);
 
     const pooled = [...(sharedTasks ?? []), ...(personalTasks ?? [])];

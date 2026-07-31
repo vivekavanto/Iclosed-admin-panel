@@ -88,6 +88,13 @@ COMMENT ON COLUMN deals.all_tasks_notified_at IS
 -- in a complete family is marked, not just the primary — only the primary's
 -- value is ever read, and marking the rest is harmless if primary resolution
 -- ever shifts.
+--
+-- Only `is_deleted` is filtered, deliberately. There is a `hidden_from_client`
+-- flag in 2026-06-04-add-hidden-from-client-to-tasks.sql, but that migration was
+-- never applied and no shipped code reads the column — in particular the portal
+-- serves the client EVERY non-deleted task. So filtering on it here would ignore
+-- tasks the client can still see and be asked to complete, and fire the alert
+-- early. The set below is exactly what the client sees.
 WITH deal_root AS (
   SELECT d.id AS deal_id,
          COALESCE(l.parent_lead_id, l.id) AS root_lead_id
@@ -102,7 +109,6 @@ family_tasks AS (
   FROM deal_root dr
   JOIN tasks t ON t.deal_id = dr.deal_id
   WHERE t.is_deleted = false
-    AND t.hidden_from_client = false
   GROUP BY dr.root_lead_id
 )
 UPDATE deals d
