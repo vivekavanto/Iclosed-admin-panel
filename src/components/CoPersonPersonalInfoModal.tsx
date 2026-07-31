@@ -187,6 +187,13 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
+  // Full Name. NOT a task_form_fields row — it lives on the person's
+  // lead/client record, so it loads from the deal payload and saves through
+  // /api/admin/leads. Without this the co-person form had no name field at all,
+  // so a co-purchaser's name could not be corrected anywhere in the admin app.
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const initialName = useRef<{ first: string; last: string }>({ first: "", last: "" });
 
   // Resolve the existing response for a field — match on field_id, falling
   // back to field_label for legacy rows where field_id is null.
@@ -211,6 +218,9 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
     setValues({});
     setExisting({});
     setTaskId(null);
+    setFirstName("");
+    setLastName("");
+    initialName.current = { first: "", last: "" };
 
     (async () => {
       try {
@@ -237,14 +247,26 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
           return;
         }
 
-        // 2. Fetch the form-field definitions + any existing responses.
-        const [fieldsRes, respRes] = await Promise.all([
+        // 2. Fetch the form-field definitions + any existing responses, plus the
+        //    deal (which carries this person's lead_first_name / lead_last_name
+        //    — the tasks endpoint only annotates owner names in family mode).
+        const [fieldsRes, respRes, dealRes] = await Promise.all([
           fetch(`/api/admin/task-form-fields?task_template_id=${encodeURIComponent(piTask.task_template_id)}`),
           fetch(`/api/admin/task-responses?task_id=${encodeURIComponent(piTask.id)}`),
+          fetch(`/api/admin/deals/${encodeURIComponent(coPerson.dealId)}`),
         ]);
         const fieldsData = fieldsRes.ok ? await fieldsRes.json() : [];
         const respData = respRes.ok ? await respRes.json() : [];
+        const dealData = dealRes.ok ? await dealRes.json() : null;
         if (cancelled) return;
+
+        // Non-blocking: a failed deal fetch just leaves the name blank rather
+        // than breaking the whole form.
+        const loadedFirst = String(dealData?.lead_first_name ?? "");
+        const loadedLast = String(dealData?.lead_last_name ?? "");
+        setFirstName(loadedFirst);
+        setLastName(loadedLast);
+        initialName.current = { first: loadedFirst, last: loadedLast };
 
         const loadedFields: FormField[] = (Array.isArray(fieldsData) ? fieldsData : [])
           .map((f: any) => ({
@@ -351,6 +373,37 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
     setSaving(true);
     setGlobalError(null);
     try {
+      // Full Name first: it is not a task response, so it goes through the leads
+      // endpoint, which also mirrors it to `clients` and cascades to this
+      // person's other files. Keyed on coPerson.leadId, so it renames THIS
+      // co-purchaser/co-seller and never the primary.
+      const nextFirst = firstName.trim();
+      const nextLast = lastName.trim();
+      if (
+        coPerson?.leadId &&
+        (nextFirst !== initialName.current.first || nextLast !== initialName.current.last)
+      ) {
+        const nameRes = await fetch("/api/admin/leads", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: coPerson.leadId,
+            firstName: nextFirst,
+            lastName: nextLast,
+          }),
+        });
+        const nameJson = await nameRes.json();
+        if (!nameRes.ok || !nameJson.success) {
+          throw new Error(nameJson.error || "Failed to save the name");
+        }
+        initialName.current = { first: nextFirst, last: nextLast };
+        // The name saved on the file even if the customer record lagged behind —
+        // show that rather than claiming a clean save.
+        if (Array.isArray(nameJson.warnings) && nameJson.warnings.length > 0) {
+          setGlobalError(nameJson.warnings[0]);
+        }
+      }
+
       for (const field of fields) {
         const value =
           field.field_type === "checkbox"
@@ -495,9 +548,42 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
             </div>
           )}
 
+          {/* Full Name — rendered above the template fields, mirroring where the
+              customer portal shows it. It is not a task_form_fields row, so it
+              is not part of `fields` and saves separately (see handleSave). */}
+          {!loading && !loadError && !saved && (
+            <div>
+              <label className="text-sm font-semibold text-gray-800 mb-2 block">
+                Full Name
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <input
+                  type="text"
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                  placeholder="First name"
+                  aria-label="First name"
+                  className="w-full px-4 py-3 text-sm border border-gray-200 rounded-xl bg-white focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007]"
+                />
+                <input
+                  type="text"
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                  placeholder="Last name"
+                  aria-label="Last name"
+                  className="w-full px-4 py-3 text-sm border border-gray-200 rounded-xl bg-white focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007]"
+                />
+              </div>
+              <p className="text-[11px] text-gray-400 mt-1.5">
+                Saving updates this person everywhere — their other files, the client
+                portal, and emails.
+              </p>
+            </div>
+          )}
+
           {!loading && !loadError && !saved && fields.length === 0 && (
             <div className="flex flex-col items-center justify-center py-12 gap-2 text-center">
-              <p className="text-sm text-gray-500 font-medium">No form fields to fill.</p>
+              <p className="text-sm text-gray-500 font-medium">No other form fields to fill.</p>
             </div>
           )}
 

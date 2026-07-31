@@ -191,7 +191,15 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
       const nameChanged =
         (form.lead_first_name ?? "") !== initialNameRef.current.first ||
         (form.lead_last_name ?? "") !== initialNameRef.current.last;
-      if (nameChanged && form.lead_id) {
+      let nameWarnings: string[] = [];
+      if (nameChanged) {
+        // A missing lead_id used to skip the name save entirely and still show
+        // "Deal updated" — so a rename silently did nothing. Fail loudly instead.
+        if (!form.lead_id) {
+          throw new Error(
+            "This deal has no linked client record, so the name could not be saved.",
+          );
+        }
         const leadRes = await fetch(`/api/admin/leads`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -205,17 +213,25 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
         if (!leadRes.ok || !leadData.success) {
           throw new Error(leadData.error || "Client name save failed");
         }
+        // The rename can succeed on the file but fail to reach the customer
+        // record (or the person's other files). That is not an error, but the
+        // admin must not be told everything synced when it didn't.
+        nameWarnings = Array.isArray(leadData.warnings) ? leadData.warnings : [];
         initialNameRef.current = {
           first: form.lead_first_name ?? "",
           last: form.lead_last_name ?? "",
         };
       }
       const mirrored = Number(data.mirrored) || 0;
-      showToast(
-        mirrored > 0
-          ? `Deal updated — synced to ${mirrored} linked ${mirrored === 1 ? "deal" : "deals"}`
-          : "Deal updated",
-      );
+      if (nameWarnings.length > 0) {
+        showToast(nameWarnings[0], "error");
+      } else {
+        showToast(
+          mirrored > 0
+            ? `Deal updated — synced to ${mirrored} linked ${mirrored === 1 ? "deal" : "deals"}`
+            : "Deal updated",
+        );
+      }
       onSaved?.();
     } catch (err: any) {
       showToast(err?.message ?? "Save failed", "error");

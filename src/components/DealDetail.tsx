@@ -715,6 +715,18 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
       return;
     }
     setEditingTask(task);
+    // The Personal Information task shows a Full Name that is NOT a
+    // task_form_fields row — it lives on the person's lead/client record. Seed
+    // the editable inputs from whoever this task belongs to (its own owner
+    // first, else this deal's lead) so an admin can correct a misspelled name
+    // here instead of only from Edit Deal.
+    const nameTarget = personalInfoNameTarget(task);
+    setEditTaskFirstName(nameTarget?.first ?? "");
+    setEditTaskLastName(nameTarget?.last ?? "");
+    editTaskInitialName.current = {
+      first: nameTarget?.first ?? "",
+      last: nameTarget?.last ?? "",
+    };
     if (isIdentificationTask(task)) {
       void fetchEditTaskIdDocs();
     }
@@ -857,6 +869,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
     setEditTaskFormFields([]);
     setEditTaskFieldErrors({});
     setEditTaskIdDocs([]);
+    setEditTaskFirstName("");
+    setEditTaskLastName("");
+    editTaskInitialName.current = { first: "", last: "" };
   };
 
   // Refetch just the task_responses for the currently-edited task. Called
@@ -1353,12 +1368,64 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
         }
       }
 
+      // Full Name on the Personal Information task. It is not a task response —
+      // it lives on the person's lead/client record — so it saves through the
+      // leads endpoint, which also mirrors it to `clients` and cascades to that
+      // person's other files. personalInfoNameTarget() resolves the task's OWN
+      // owner, so renaming here on a co-purchaser's task renames that person and
+      // never the primary.
+      if (isPersonalInfoTask(editingTask)) {
+        const first = editTaskFirstName.trim();
+        const last = editTaskLastName.trim();
+        const nameChanged =
+          first !== editTaskInitialName.current.first ||
+          last !== editTaskInitialName.current.last;
+        if (nameChanged) {
+          const target = personalInfoNameTarget(editingTask);
+          if (!target) {
+            showToast(
+              "Task saved, but the name could not be saved — no client record is linked to this file.",
+              "error",
+            );
+          } else {
+            try {
+              const nres = await fetch("/api/admin/leads", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  id: target.leadId,
+                  firstName: first,
+                  lastName: last,
+                }),
+              });
+              const nj = await nres.json();
+              if (!nres.ok || !nj.success) {
+                showToast(
+                  `Task saved, but the name change failed: ${nj.error ?? "unknown"}`,
+                  "error",
+                );
+              } else if (Array.isArray(nj.warnings) && nj.warnings.length > 0) {
+                showToast(nj.warnings[0], "error");
+              }
+            } catch (err: any) {
+              showToast(
+                `Task saved, but the name change failed: ${err?.message ?? "network error"}`,
+                "error",
+              );
+            }
+          }
+        }
+      }
+
       showToast("Task updated");
       closeEditTask();
       await Promise.all([
         refetchData(),
         fetchTaskFileDocs(),
         fetchDealDocuments(),
+        // The rename lands on `leads`, which the deal payload (and therefore
+        // "People involved" + every task's owner name) reads — so pull it too.
+        onDealChanged?.(),
       ]);
     } catch (err: any) {
       showToast(err?.message ?? "Failed to save task", "error");
@@ -5636,18 +5703,35 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                   // filled with any existing response (matched by field_id).
                   // Empty rows let the admin fill in on the client's behalf.
                   <div className="space-y-3">
-                    {/* Full Name — read-only, mirroring the portal. It lives on
-                        the client record, not this template, so it is not
-                        editable here; name changes go through the client's
-                        name-change request. */}
-                    {editingTask && isPersonalInfoTask(editingTask) && personalInfoFullName(editingTask) && (
-                      <div className="bg-gray-50 rounded-lg px-4 py-3 opacity-90">
-                        <p className="text-xs font-semibold text-gray-800">
-                          Full Name
-                          <span className="ml-2 font-medium text-gray-400">(read-only)</span>
-                        </p>
-                        <p className="text-sm text-gray-700 mt-1 break-words">
-                          {personalInfoFullName(editingTask)}
+                    {/* Full Name. Not a task_form_fields row — it lives on the
+                        person's lead/client record, so it saves through
+                        /api/admin/leads in saveEditTask rather than the
+                        task-response path. Editable here so an admin can fix a
+                        misspelled name without going via Edit Deal. */}
+                    {editingTask && isPersonalInfoTask(editingTask) && (
+                      <div className="bg-gray-50 rounded-lg px-4 py-3">
+                        <p className="text-xs font-semibold text-gray-800">Full Name</p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
+                          <input
+                            type="text"
+                            value={editTaskFirstName}
+                            onChange={(e) => setEditTaskFirstName(e.target.value)}
+                            placeholder="First name"
+                            aria-label="First name"
+                            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007]"
+                          />
+                          <input
+                            type="text"
+                            value={editTaskLastName}
+                            onChange={(e) => setEditTaskLastName(e.target.value)}
+                            placeholder="Last name"
+                            aria-label="Last name"
+                            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007]"
+                          />
+                        </div>
+                        <p className="text-[11px] text-gray-400 mt-1.5">
+                          Saving updates this person everywhere — their other files, the
+                          client portal, and emails.
                         </p>
                       </div>
                     )}
@@ -6076,6 +6160,22 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
               {/* Client-submitted responses */}
               <div className="border-t border-gray-100 pt-5">
                 <p className="text-sm font-semibold text-gray-800 mb-3">Client Responses</p>
+                {/* Full Name — shown by the portal at the top of this task but
+                    sourced from the client record, so it has no response row of
+                    its own. Rendered OUTSIDE the responses branch below: it used
+                    to sit inside it, so a task the client hadn't submitted yet
+                    showed no name at all. */}
+                {!loadingTaskResponses &&
+                  viewingTask &&
+                  isPersonalInfoTask(viewingTask) &&
+                  personalInfoFullName(viewingTask) && (
+                    <div className="bg-gray-50 rounded-lg px-4 py-3 mb-3">
+                      <p className="text-xs font-semibold text-gray-800">Full Name</p>
+                      <p className="text-sm text-gray-700 mt-1 break-words">
+                        {personalInfoFullName(viewingTask)}
+                      </p>
+                    </div>
+                  )}
                 {loadingTaskResponses ? (
                   <div className="flex items-center gap-2 py-4">
                     <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-[#C10007]"></div>
@@ -6083,17 +6183,6 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                   </div>
                 ) : viewTaskResponses.length > 0 ? (
                   <div className="space-y-3">
-                    {/* Full Name — shown by the portal at the top of this task
-                        but sourced from the client record, so it has no
-                        response row of its own. */}
-                    {viewingTask && isPersonalInfoTask(viewingTask) && personalInfoFullName(viewingTask) && (
-                      <div className="bg-gray-50 rounded-lg px-4 py-3">
-                        <p className="text-xs font-semibold text-gray-800">Full Name</p>
-                        <p className="text-sm text-gray-700 mt-1 break-words">
-                          {personalInfoFullName(viewingTask)}
-                        </p>
-                      </div>
-                    )}
                     {viewTaskResponses.map((resp: any, i: number) => {
                       const isMailForwardingStart =
                         (resp.field_label || "").trim().toLowerCase() === "street address";

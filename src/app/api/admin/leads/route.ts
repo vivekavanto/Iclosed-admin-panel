@@ -218,7 +218,48 @@ export async function PUT(req: NextRequest) {
       lead = data;
     }
 
-    // Write personal/corporate fields to the linked customer record.
+    // Non-blocking problems worth telling the admin about. Anything in here is
+    // returned alongside success:true so the UI can warn instead of pretending
+    // the save was complete — see the ordering note below.
+    const warnings: string[] = [];
+
+    // Phone and name are personal attributes of the PERSON, not of one deal. A
+    // client can have several deals — each is its own leads row, but they all
+    // share the same email — so an edit must update every one of that person's
+    // leads (keyed by email), not just the deal being viewed. Co-purchasers /
+    // co-sellers have their OWN distinct emails, so matching by email touches
+    // only this person's rows.
+    //
+    // ORDERING: this runs BEFORE the clients write. It used to run after, and a
+    // failing clients update returned 500 straight out of the handler — which
+    // left `leads` already renamed, `clients` stale, and this cascade never
+    // executed at all. Doing the leads-side work first means a clients problem
+    // can only ever cost us the clients mirror, never a half-applied rename.
+    const personCascade: Record<string, any> = {};
+    if (rest.phone !== undefined) personCascade.phone = norm(rest.phone);
+    if (updateData.first_name !== undefined)
+      personCascade.first_name = updateData.first_name;
+    if (updateData.last_name !== undefined)
+      personCascade.last_name = updateData.last_name;
+    if (Object.keys(personCascade).length > 0 && lead?.email) {
+      const emailPattern = String(lead.email).replace(/[\\%_]/g, '\\$&');
+      const { error: cascadeErr } = await supabaseAdmin
+        .from('leads')
+        .update(personCascade)
+        .ilike('email', emailPattern);
+      if (cascadeErr) {
+        console.error('PUT /api/admin/leads person cascade error:', cascadeErr);
+        warnings.push(
+          "Saved on this file, but syncing to the person's other files failed.",
+        );
+      }
+    }
+
+    // Write personal/corporate fields (and the name mirror) to the linked
+    // customer record. `clients` is what the customer portal and milestone
+    // emails read, so a failure here means the client keeps seeing the old
+    // value — but the lead itself is already saved, so this must NOT roll the
+    // request back into an error. Report it as a warning instead.
     if (Object.keys(clientData).length > 0 && lead) {
       let clientId: string | null = lead.client_id ?? null;
       if (!clientId && lead.email) {
@@ -237,40 +278,31 @@ export async function PUT(req: NextRequest) {
           .eq('id', clientId);
         if (clientErr) {
           console.error('PUT /api/admin/leads client update error:', clientErr);
-          return NextResponse.json({ success: false, error: clientErr.message }, { status: 500 });
+          warnings.push(
+            'Saved on the file, but the customer record could not be updated — the client portal may still show the old details.',
+          );
+        } else {
+          // Reflect the saved personal fields back onto the returned lead object
+          // so the UI (which reads lead.*) shows the new values immediately.
+          Object.assign(lead, clientData);
         }
-        // Reflect the saved personal fields back onto the returned lead object
-        // so the UI (which reads lead.*) shows the new values immediately.
-        Object.assign(lead, clientData);
+      } else {
+        // Leads created before the clients registry (2026-06-03) can have no
+        // customer record at all. Deliberately NOT auto-created here: a clients
+        // row drives portal login resolution and merge behaviour, so it should
+        // not appear as a side effect of a rename. Surface it instead.
+        console.error(
+          'PUT /api/admin/leads: no customer record for lead',
+          id,
+          '- clients fields not written',
+        );
+        warnings.push(
+          'This person has no customer record, so the client portal will still show the old details.',
+        );
       }
     }
 
-    // Phone and name are personal attributes of the PERSON, not of one deal. A
-    // client can have several deals — each is its own leads row, but they all
-    // share the same email — so an edit must update every one of that person's
-    // leads (keyed by email), not just the deal being viewed. Co-purchasers /
-    // co-sellers have their OWN distinct emails, so matching by email touches
-    // only this person's rows. The single customer record (clients.*) was
-    // already updated above. Non-fatal: this lead + clients are saved even if
-    // the cross-deal cascade fails.
-    const personCascade: Record<string, any> = {};
-    if (rest.phone !== undefined) personCascade.phone = norm(rest.phone);
-    if (updateData.first_name !== undefined)
-      personCascade.first_name = updateData.first_name;
-    if (updateData.last_name !== undefined)
-      personCascade.last_name = updateData.last_name;
-    if (Object.keys(personCascade).length > 0 && lead?.email) {
-      const emailPattern = String(lead.email).replace(/[\\%_]/g, '\\$&');
-      const { error: cascadeErr } = await supabaseAdmin
-        .from('leads')
-        .update(personCascade)
-        .ilike('email', emailPattern);
-      if (cascadeErr) {
-        console.error('PUT /api/admin/leads person cascade error:', cascadeErr);
-      }
-    }
-
-    return NextResponse.json({ success: true, lead });
+    return NextResponse.json({ success: true, lead, warnings });
   } catch (err: any) {
     console.error('PUT /api/admin/leads exception:', err);
     return NextResponse.json(
