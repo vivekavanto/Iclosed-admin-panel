@@ -5,6 +5,12 @@ import { getFamilyDealIds } from "@/lib/familyDeals"
 import { formatLeadTypeLabel, buildLeadAddressForEmail } from "@/lib/leadEmailAddress"
 import { guardServiceRequest } from "@/lib/verifyServiceSignature"
 import { maybeNotifyAllTasksComplete } from "@/lib/notifyAllTasksComplete"
+import {
+    resolveMilestoneSide,
+    resolveDealRecipientSide,
+    shouldEmailForSide,
+    type Side,
+} from "@/lib/milestoneSide"
 
 /**
  * Sends a milestone email to the client of a single deal.
@@ -339,12 +345,41 @@ async function handlePortalRequest(body: Record<string, any>) {
         allDealIds = await getFamilyDealIds(deal_id)
     }
 
+    // On a Purchase & Sale file every family deal carries BOTH sides' milestones,
+    // so a purchase-side stage would otherwise email the co-sellers as well.
+    // Scope the fan-out to the side this milestone belongs to. See milestoneSide.ts.
+    let milestoneSide: Side | null = null
+    if (milestone_id) {
+        const { data: ms } = await supabaseAdmin
+            .from("milestones")
+            .select("side, stage_template_id")
+            .eq("id", milestone_id)
+            .maybeSingle()
+        if (ms) milestoneSide = await resolveMilestoneSide(ms)
+    }
+
     // Send email to each deal's client
     const results: { email?: string; success: boolean; error?: string }[] = []
 
     for (const did of allDealIds) {
-        const result = await sendEmailForDeal(did, { title: milestone_title }, template, resend, fromEmail)
-        results.push(result)
+        // Gate only the SEND, not the email_sent bookkeeping below: the wrong-side
+        // client is intentionally not being emailed, so the milestone should still
+        // be marked done rather than left looking un-sent and retried forever.
+        let sendToThisDeal = true
+        if (milestoneSide) {
+            const recipientSide = await resolveDealRecipientSide(did)
+            sendToThisDeal = shouldEmailForSide(milestoneSide, recipientSide)
+            if (!sendToThisDeal) {
+                console.log(
+                    `[MilestoneEmail Portal] Skipped deal ${did} — ${recipientSide}-side client, ${milestoneSide}-side milestone "${milestone_title}"`,
+                )
+            }
+        }
+
+        if (sendToThisDeal) {
+            const result = await sendEmailForDeal(did, { title: milestone_title }, template, resend, fromEmail)
+            results.push(result)
+        }
 
         // Mark milestone email_sent on each linked deal's matching milestone
         if (milestone_id) {
@@ -488,13 +523,33 @@ export async function POST(req: Request) {
         const resend = new Resend(process.env.RESEND_API_KEY)
         const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <support@iclosed.ca>"
 
-        // 6. Send email to primary deal's client
-        const primaryResult = await sendEmailForDeal(dealId, milestone, template, resend, fromEmail)
+        // On a Purchase & Sale file every family deal carries BOTH sides'
+        // milestones, so a purchase-side stage ("Title Search", "Financing Firm ->
+        // Mortgage Instructions") would otherwise email the co-sellers too. The
+        // completion mirror below is already side-safe because it matches on
+        // stage_template_id, but the sends were outside that guard. See
+        // milestoneSide.ts — an unknown side on either end still sends.
+        const milestoneSide = await resolveMilestoneSide(milestone)
 
-        if (!primaryResult.success) {
-            return NextResponse.json(
-                { success: false, error: `Email send failed: ${primaryResult.error}` },
-                { status: 500 }
+        // 6. Send email to primary deal's client
+        const primarySide = milestoneSide ? await resolveDealRecipientSide(dealId) : null
+        const emailPrimary = shouldEmailForSide(milestoneSide, primarySide)
+
+        let primaryResult: { success: boolean; email?: string; error?: string } = { success: true }
+        if (emailPrimary) {
+            primaryResult = await sendEmailForDeal(dealId, milestone, template, resend, fromEmail)
+
+            if (!primaryResult.success) {
+                return NextResponse.json(
+                    { success: false, error: `Email send failed: ${primaryResult.error}` },
+                    { status: 500 }
+                )
+            }
+        } else {
+            // Not a failure — this client is on the other side of the file, so the
+            // milestone genuinely isn't theirs. Bookkeeping below still runs.
+            console.log(
+                `[MilestoneEmail] Skipped deal ${dealId} — ${primarySide}-side client, ${milestoneSide}-side milestone "${milestone.title}"`,
             )
         }
 
@@ -534,6 +589,19 @@ export async function POST(req: Request) {
                     // Non-blocking
                 }
 
+                // Same side gate as the primary. The completion mirror above is
+                // keyed on stage_template_id so it's already side-correct; this
+                // send was the leak.
+                if (milestoneSide) {
+                    const linkedSide = await resolveDealRecipientSide(linkedDealId)
+                    if (!shouldEmailForSide(milestoneSide, linkedSide)) {
+                        console.log(
+                            `[MilestoneEmail] Skipped linked deal ${linkedDealId} — ${linkedSide}-side client, ${milestoneSide}-side milestone "${milestone.title}"`,
+                        )
+                        continue
+                    }
+                }
+
                 const result = await sendEmailForDeal(linkedDealId, milestone, template, resend, fromEmail)
                 linkedResults.push(result)
             }
@@ -571,14 +639,17 @@ export async function POST(req: Request) {
             }
         }
 
-        const totalSent = 1 + linkedResults.filter((r) => r.success).length
+        const linkedSent = linkedResults.filter((r) => r.success).length
         const totalFailed = linkedResults.filter((r) => !r.success).length
 
         return NextResponse.json({
             success: true,
+            // Undefined when the primary is on the other side of the file and was
+            // deliberately skipped.
             email_sent_to: primaryResult.email,
-            linked_emails_sent: totalSent - 1,
+            linked_emails_sent: linkedSent,
             linked_emails_failed: totalFailed,
+            ...(milestoneSide ? { milestone_side: milestoneSide } : {}),
         })
 
     } catch (error: any) {
