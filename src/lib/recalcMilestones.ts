@@ -1,5 +1,6 @@
 import supabaseAdmin from "./supabaseAdmin";
 import { logger } from "./logger";
+import { maybeNotifyAllTasksComplete } from "./notifyAllTasksComplete";
 
 /**
  * Recalculates milestone statuses for a co-purchaser/co-seller family, treating
@@ -164,6 +165,24 @@ export async function recalcMilestonesForFamily(
           );
         }
       }
+    }
+  }
+
+  // Every genuine task-completion path funnels through here, so this is the one
+  // place that can tell when a client AND their co-party have finished
+  // everything. The helper owns its own family resolution, idempotency claim and
+  // error handling; it re-checks the family from scratch rather than trusting
+  // the pooled milestone view above (which only sees tasks that are linked to a
+  // milestone). Template-edit cascades pass { sendEmails: false } and are
+  // skipped, same as the milestone emails.
+  if (sendEmails) {
+    try {
+      await maybeNotifyAllTasksComplete(primaryDealId);
+    } catch (err) {
+      logger.warn(
+        `[recalcMilestones] all-tasks-complete alert failed — deal=${primaryDealId}:`,
+        err,
+      );
     }
   }
 }

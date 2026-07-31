@@ -4,6 +4,7 @@ import { Resend } from "resend"
 import { getFamilyDealIds } from "@/lib/familyDeals"
 import { formatLeadTypeLabel, buildLeadAddressForEmail } from "@/lib/leadEmailAddress"
 import { guardServiceRequest } from "@/lib/verifyServiceSignature"
+import { maybeNotifyAllTasksComplete } from "@/lib/notifyAllTasksComplete"
 
 /**
  * Sends a milestone email to the client of a single deal.
@@ -555,6 +556,18 @@ export async function POST(req: Request) {
                     .in("deal_id", allFamilyDealIds)
             } catch {
                 // Non-blocking
+            }
+        }
+
+        // This route bulk-completes every task under the milestone (steps 2 and
+        // 7) without going through recalcMilestonesForFamily, so it's the one
+        // completion path the alert hook in recalcMilestones can't see. Fire it
+        // here too — the helper's claim makes a double call a no-op.
+        if (dealId) {
+            try {
+                await maybeNotifyAllTasksComplete(dealId)
+            } catch (err) {
+                console.warn("[MilestoneEmail] all-tasks-complete alert failed:", err)
             }
         }
 
