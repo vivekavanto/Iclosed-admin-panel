@@ -1,7 +1,48 @@
 import { NextRequest, NextResponse } from "next/server";
+import supabaseAdmin from "@/lib/supabaseAdmin";
 import { activateClientDeals } from "@/lib/activateClientDeals";
 import { sendAgentSignupEmail } from "@/lib/sendAgentSignupEmail";
 import { guardServiceRequest } from "@/lib/verifyServiceSignature";
+
+/**
+ * Every lead row this activation refers to.
+ *
+ * activateClientDeals() resolves at most ONE lead, and only via a deal that
+ * already carries client_id — so on a file where the deal was created before
+ * the client existed (or where the person has several leads) the agent
+ * notification used to be skipped entirely. Widen the lookup: the resolved
+ * lead, the caller-supplied lead_id, every lead linked to the client, and every
+ * lead with this login email. sendAgentSignupEmail is idempotent per lead, so
+ * covering more rows can't produce duplicate emails.
+ */
+async function resolveLeadsToNotify(opts: {
+  leadId?: string | null;
+  clientId?: string | null;
+  email?: string | null;
+}): Promise<string[]> {
+  const ids = new Set<string>();
+  if (opts.leadId) ids.add(opts.leadId);
+
+  if (opts.clientId) {
+    const { data } = await supabaseAdmin
+      .from("leads")
+      .select("id")
+      .eq("client_id", opts.clientId)
+      .limit(20);
+    for (const row of data ?? []) ids.add(row.id);
+  }
+
+  if (opts.email) {
+    const { data } = await supabaseAdmin
+      .from("leads")
+      .select("id")
+      .ilike("email", opts.email.trim())
+      .limit(20);
+    for (const row of data ?? []) ids.add(row.id);
+  }
+
+  return [...ids];
+}
 
 /**
  * POST /api/webhooks/activate-deal
@@ -51,15 +92,23 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Account is now activated (deal flipped to Active) — notify the client's
-    // referral agent/broker. Non-blocking and idempotent (guarded by
-    // leads.agent_signup_email_sent), and it internally re-checks the deal is
-    // no longer Inactive, so a retry can't misfire. Silently no-ops when the
-    // lead has no agent on file.
-    const activatedLeadId = result.leadId ?? lead_id ?? null;
-    if (activatedLeadId) {
+    // Account is now activated — notify the client's referral agent/broker.
+    // Non-blocking and idempotent (guarded by leads.agent_signup_email_sent),
+    // and it internally re-checks the deal is no longer Inactive, so a retry
+    // can't misfire. Silently no-ops when the lead has no agent on file.
+    //
+    // Note this runs even when `activated === 0`: a deal is often already
+    // Active by the time we get here (the activate_deals_on_first_signin
+    // trigger flips it the moment the client's auth session is created), and
+    // "nothing left to flip" must not mean "don't tell the agent".
+    const leadsToNotify = await resolveLeadsToNotify({
+      leadId: result.leadId ?? lead_id ?? null,
+      clientId: result.clientId ?? client_id ?? null,
+      email: email ?? null,
+    });
+    for (const notifyLeadId of leadsToNotify) {
       try {
-        const agentResult = await sendAgentSignupEmail(activatedLeadId, {
+        const agentResult = await sendAgentSignupEmail(notifyLeadId, {
           source: "first_login",
         });
         if (!agentResult.success) {

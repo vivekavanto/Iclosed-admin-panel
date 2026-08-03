@@ -8,7 +8,12 @@ export async function activateClientDeals(opts: {
   leadId?: string | null;
   clientId?: string | null;
   email?: string | null;
-}): Promise<{ activated: number; leadId?: string | null; error?: string }> {
+}): Promise<{
+  activated: number;
+  leadId?: string | null;
+  clientId?: string | null;
+  error?: string;
+}> {
   const { leadId, clientId, email } = opts;
   let resolvedClientId = clientId ?? null;
   let resolvedLeadId = leadId ?? null;
@@ -49,10 +54,22 @@ export async function activateClientDeals(opts: {
     .select("id");
 
   if (error) {
-    return { activated: 0, leadId: resolvedLeadId, error: error.message };
+    return {
+      activated: 0,
+      leadId: resolvedLeadId,
+      clientId: resolvedClientId,
+      error: error.message,
+    };
   }
 
-  // Surface the lead we resolved so activation callbacks can chain follow-up
-  // work (e.g. the "Signup email to agents" notification) without re-resolving.
-  return { activated: data?.length ?? 0, leadId: resolvedLeadId };
+  // Surface the lead AND client we resolved so activation callbacks can chain
+  // follow-up work (e.g. the "Signup email to agents" notification) without
+  // re-resolving. The client id matters on its own: a lead is only found here
+  // when a deal already carries client_id, so callers that must reach every
+  // lead of this person fall back to the client id (or the email).
+  return {
+    activated: data?.length ?? 0,
+    leadId: resolvedLeadId,
+    clientId: resolvedClientId,
+  };
 }
