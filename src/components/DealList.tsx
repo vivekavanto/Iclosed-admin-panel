@@ -9,8 +9,6 @@ import {
 } from '@/lib/isNonCitizenFlagged';
 import { formatLocalDate, parseLocalDate } from '@/lib/formatDate';
 import { computeDealDisplayStatus } from '@/lib/dealDisplayStatus';
-import { requestImpersonationLink, StepUpCancelled } from '@/lib/requestImpersonationLink';
-import { useStepUp } from '@/components/StepUpProvider';
 
 interface DealListProps {
   onSelectDeal?: (dealId: string) => void;
@@ -57,7 +55,6 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   // Deal id currently being logged into (client-view impersonation in flight),
   // so the row's button can show a disabled/loading state.
   const [impersonatingId, setImpersonatingId] = useState<string | null>(null);
-  const requestStepUp = useStepUp();
   const [deals, setDeals] = useState<Deal[]>([]);
   // Closing-date column sort. null = no sort (API order), 'asc' = earliest
   // first, 'desc' = latest first. Clicking the header cycles asc → desc.
@@ -400,21 +397,20 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
       alert("This client has not signed into the portal yet — cannot log into their view.");
       return;
     }
+    // No password prompt: an authenticated admin session is enough (the
+    // SEC-006 step-up was removed by business decision). The server still
+    // audits every impersonation.
     setImpersonatingId(deal.id);
     try {
-      // SEC-006 step-up. Try without a password first: if this admin ticked
-      // "don't ask me again" earlier in the session, no dialog appears.
-      const json = await requestImpersonationLink(
-        { authUserId: d.authUserId },
-        requestStepUp,
-        [deal.client?.firstName, deal.client?.lastName]
-          .filter(Boolean)
-          .join(" ")
-          .trim() || undefined,
-      );
+      const res = await fetch("/api/admin/impersonate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ authUserId: d.authUserId }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.url) throw new Error(json.error || "Failed to generate link");
       window.open(json.url, "_blank", "noopener,noreferrer");
     } catch (err: any) {
-      if (err instanceof StepUpCancelled) return;
       console.error("Login as client error:", err);
       alert(`Failed to log into client view: ${err?.message ?? "unknown error"}`);
     } finally {

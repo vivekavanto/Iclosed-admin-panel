@@ -6,7 +6,6 @@ import SearchDrawer from "../components/SearchDrawer";
 import { useNavigation } from "./providers";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuth } from "@/lib/AuthProvider";
-import { StepUpProvider } from "@/components/StepUpProvider";
 
 export default function ClientLayout({
   children,
@@ -43,35 +42,31 @@ export default function ClientLayout({
   // horizontal scrolling. Other admin pages keep the centered max-w-7xl column.
   const isFullWidth = pathname === "/admin/deals";
 
-  // StepUpProvider hosts the SEC-006 password dialog for sensitive actions
-  // (impersonation), so any admin page can request it without its own modal.
   return (
-    <StepUpProvider>
-      <div
-        className="bg-slate-50 min-h-screen font-sans text-slate-900 flex"
-        // Exposed so fixed-position overlays (Add Task / Add Stage modals, etc.)
-        // can offset themselves past the sidebar instead of covering it.
-        style={{ ["--sidebar-w" as any]: sidebarCollapsed ? "72px" : "256px" }}
+    <div
+      className="bg-slate-50 min-h-screen font-sans text-slate-900 flex"
+      // Exposed so fixed-position overlays (Add Task / Add Stage modals, etc.)
+      // can offset themselves past the sidebar instead of covering it.
+      style={{ ["--sidebar-w" as any]: sidebarCollapsed ? "72px" : "256px" }}
+    >
+      <Sidebar
+        onSearchClick={openSearch}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+      />
+      <SearchDrawer
+        isOpen={isSearchOpen}
+        onClose={closeSearch}
+        onNavigateToDeal={(id) => {
+          router.push(`/admin/deals/${id}`);
+          closeSearch();
+        }}
+      />
+      <main
+        className={`ml-0 ${sidebarCollapsed ? "md:ml-[72px]" : "md:ml-64"} flex-1 p-4 sm:p-6 md:p-8 pt-16 md:pt-8 h-screen overflow-y-auto transition-all duration-300`}
       >
-        <Sidebar
-          onSearchClick={openSearch}
-          collapsed={sidebarCollapsed}
-          onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
-        />
-        <SearchDrawer
-          isOpen={isSearchOpen}
-          onClose={closeSearch}
-          onNavigateToDeal={(id) => {
-            router.push(`/admin/deals/${id}`);
-            closeSearch();
-          }}
-        />
-        <main
-          className={`ml-0 ${sidebarCollapsed ? "md:ml-[72px]" : "md:ml-64"} flex-1 p-4 sm:p-6 md:p-8 pt-16 md:pt-8 h-screen overflow-y-auto transition-all duration-300`}
-        >
-          <div className={`${isFullWidth ? "w-full" : "max-w-7xl mx-auto"} h-full`}>{children}</div>
-        </main>
-      </div>
-    </StepUpProvider>
+        <div className={`${isFullWidth ? "w-full" : "max-w-7xl mx-auto"} h-full`}>{children}</div>
+      </main>
+    </div>
   );
 }

@@ -8,13 +8,6 @@ import { cookies } from "next/headers";
 export async function getActingAdmin(): Promise<{
   email: string | null;
   id: string | null;
-  /**
-   * Supabase session id (the `session_id` claim on the access token), i.e. THIS
-   * login rather than this user. Used to tie a step-up confirmation to the
-   * current login session so it dies when the admin signs out or the session
-   * ends. Null when the claim isn't present.
-   */
-  sessionId: string | null;
 }> {
   try {
     const cookieStore = await cookies();
@@ -31,38 +24,11 @@ export async function getActingAdmin(): Promise<{
         },
       },
     );
-    // getUser() is the authoritative identity check — it validates the token
-    // with the auth server. getSession() only reads the cookie, which is fine
-    // for pulling the session id back OUT of the token we just validated.
     const {
       data: { user },
     } = await supabase.auth.getUser();
-
-    let sessionId: string | null = null;
-    if (user) {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      sessionId = readSessionId(session?.access_token);
-    }
-
-    return { email: user?.email ?? null, id: user?.id ?? null, sessionId };
+    return { email: user?.email ?? null, id: user?.id ?? null };
   } catch {
-    return { email: null, id: null, sessionId: null };
-  }
-}
-
-/** Pulls the `session_id` claim out of a Supabase access token (a JWT). */
-function readSessionId(accessToken: string | undefined): string | null {
-  if (!accessToken) return null;
-  try {
-    const payload = accessToken.split(".")[1];
-    if (!payload) return null;
-    const json = JSON.parse(
-      Buffer.from(payload, "base64").toString("utf8"),
-    ) as { session_id?: string };
-    return json.session_id ?? null;
-  } catch {
-    return null;
+    return { email: null, id: null };
   }
 }

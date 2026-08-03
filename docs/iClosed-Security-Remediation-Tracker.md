@@ -75,7 +75,7 @@ secret MUST match in both projects (both redeployed) or `activate-deal` will 401
 | **ARC-004** | Removed duplicate route stubs; legacy URLs handled via `next.config` redirects | — |
 | **ARC-011** | Structured `logger` gated by `LOG_LEVEL`; adopted in session code (legacy `console.*` migrates incrementally) | Optionally set `LOG_LEVEL=warn` in prod |
 | **ARC-005** | Shared `toDeal` mapper — used by deal list + detail page | — |
-| **SEC-006** | Impersonation now requires admin password re-entry (step-up) + audit | Customer notification email removed by business decision — clients are not told when staff view their portal; the `audit_logs` trail is the sole record |
+| **SEC-006** | Impersonation is audit-logged (`audit_logs`, `action = "impersonate"`) | **Password step-up REMOVED by business decision (2026-08-03)** — staff open client portals constantly and the per-action prompt blocked day-to-day work. Accepted risk: anyone with a live admin session (unlocked machine, stolen session cookie) can open any client portal without knowing the admin's password. Customer notification was likewise removed earlier by business decision, so the `audit_logs` trail is now the **sole** control on impersonation — it must never be weakened or made best-effort. Compensating controls to consider: shorter admin session lifetime, enforced device lock, periodic review of `impersonate` audit rows |
 | **SEC-012 / CMP-008** | Public routes sanitized; admin-only routes keep detail as a documented, accepted posture for an internal tool | — |
 | **GAP-021** | Zero-task milestones kept at their manual status (no auto-derive possible) — resolved by design | — |
 | **SEC-002** | Webhook signatures: `activate-deal` auto-enforces when secret is set (fail-open if missing); other routes warn-only until their callers sign | Set `SERVICE_WEBHOOK_SECRET` (same) in both Vercel projects + redeploy both |
@@ -89,7 +89,7 @@ secret MUST match in both projects (both redeployed) or `activate-deal` will 401
 | **SEC-007 / SEC-011 / SEC-023** | Rate limiting via **Supabase** (no Redis) — password reset (5/hr email, 30/hr IP), Gemini (30/hr per admin), activate (30/10min per IP) | **Run migration** `2026-07-23-rate-limits.sql` |
 | **SEC-004** | Per-deal access — **accepted decision:** all admins see all deals (all staff trusted); documented in `CLAUDE.md`. Revisit if teams/brokers are added | — |
 | **SEC-012** *(partial)* | Public webhook no longer leaks internal error text | Decide whether to sweep the 84 authenticated-admin sites too |
-| **SEC-006** *(partial)* | Impersonation now audit-logged | Decide on step-up auth + notify-customer-on-impersonation |
+| **SEC-006** *(partial)* | Impersonation now audit-logged | Decided (2026-08-03): **no** step-up auth, **no** customer notification — audit trail only. See the note in section 1 |
 
 ---
 

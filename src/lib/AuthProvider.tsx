@@ -80,14 +80,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [loading, user, pathname, router]);
 
   const signOut = async () => {
-    // Close the SEC-006 step-up window as well, so logging out really does drop
-    // every elevated state — the cookie is httpOnly, so only the server can
-    // clear it. Best-effort: never let this hold up the sign-out itself.
-    try {
-      await fetch("/api/admin/impersonate", { method: "DELETE" });
-    } catch {
-      // ignore — the window expires on its own anyway
-    }
     await supabase.auth.signOut();
     router.push("/admin/login");
   };

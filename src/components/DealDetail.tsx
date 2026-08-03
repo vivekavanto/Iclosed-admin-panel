@@ -37,11 +37,6 @@ import {
 } from "@/lib/isNonCitizenFlagged";
 import { formatLocalDate, formatLocalDateTime } from "@/lib/formatDate";
 import {
-  requestImpersonationLink,
-  StepUpCancelled,
-} from "@/lib/requestImpersonationLink";
-import { useStepUp } from "@/components/StepUpProvider";
-import {
   downloadTaskPdf,
   downloadDealPdf,
   type PdfDealMeta,
@@ -2572,26 +2567,27 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
   // Gated on accountCreated at the call site — generateLink only works once the
   // person has an auth account.
   const [impersonatingId, setImpersonatingId] = useState<string | null>(null);
-  const requestStepUp = useStepUp();
   const handleImpersonate = async (person: FamilyPerson) => {
     if (!person.accountCreated || !person.lead_email) {
       showToast("This client has not signed in yet — cannot impersonate.", "error");
       return;
     }
+    // No password prompt: an authenticated admin session is enough (the
+    // SEC-006 step-up was removed by business decision). The server still
+    // audits every impersonation.
     setImpersonatingId(person.id);
     try {
-      // SEC-006 step-up. Try without a password first — if this admin ticked
-      // "don't ask me again" earlier in the session, the server recognises it
-      // and no dialog appears. Otherwise it answers 401 + stepUpRequired and
-      // we prompt.
-      const json = await requestImpersonationLink(
-        { email: person.lead_email },
-        requestStepUp,
-        person.lead_name || person.lead_email || undefined,
-      );
+      const res = await fetch("/api/admin/impersonate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: person.lead_email }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.url) {
+        throw new Error(json.error || "Failed to generate link");
+      }
       window.open(json.url, "_blank", "noopener,noreferrer");
     } catch (err: any) {
-      if (err instanceof StepUpCancelled) return;
       console.error("Impersonate error:", err);
       showToast(`Failed to impersonate: ${err?.message ?? "unknown error"}`, "error");
     } finally {
