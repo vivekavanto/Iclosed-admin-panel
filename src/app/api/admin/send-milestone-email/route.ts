@@ -4,6 +4,7 @@ import { Resend } from "resend"
 import { getFamilyDealIds } from "@/lib/familyDeals"
 import { formatLeadTypeLabel, buildLeadAddressForEmail } from "@/lib/leadEmailAddress"
 import { guardServiceRequest } from "@/lib/verifyServiceSignature"
+import { EMAIL_REPLY_TO } from "@/lib/emailConfig"
 
 /**
  * Sends a milestone email to the client of a single deal.
@@ -236,7 +237,7 @@ async function sendEmailForDeal(
 
         const { data: sendResult, error: sendError } = await resend.emails.send({
             from: fromEmail,
-            replyTo: "testing@iclosed.ca",
+            replyTo: EMAIL_REPLY_TO,
             to: [client.email],
             ...(cc ? { cc } : {}),
             subject: processedSubject,

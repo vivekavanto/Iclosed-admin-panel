@@ -7,6 +7,7 @@ import { formatLeadTypeLabel, buildLeadAddressPartsForEmail } from "@/lib/leadEm
 import { guardServiceRequest } from "@/lib/verifyServiceSignature";
 import { get } from "@vercel/blob";
 import { isPrivateBlobUrl, blobTokenForUrl } from "@/lib/blobPrivacy";
+import { EMAIL_REPLY_TO } from "@/lib/emailConfig";
 
 /**
  * POST /api/admin/send-lead-family-email
@@ -321,7 +322,7 @@ async function sendRetainerEmail(
 
   const { data: sendResult, error: sendError } = await resend.emails.send({
     from: fromEmail,
-    replyTo: "testing@iclosed.ca",
+    replyTo: EMAIL_REPLY_TO,
     to: [lead.email],
     subject: processedSubject,
     html: processedBody,

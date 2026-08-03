@@ -6,6 +6,7 @@ import {
   buildLeadAddressPartsForEmail,
   renderTransactionPhrase,
 } from "./leadEmailAddress";
+import { EMAIL_REPLY_TO } from "./emailConfig";
 
 /**
  * Sends the "review and sign your retainer" email — the DocuSign-style link a
@@ -265,7 +266,7 @@ export async function sendRetainerLinkEmail(opts: {
 
   const { error: sendError } = await resend.emails.send({
     from: fromEmail,
-    replyTo: "testing@iclosed.ca",
+    replyTo: EMAIL_REPLY_TO,
     to: [email],
     subject,
     html,
