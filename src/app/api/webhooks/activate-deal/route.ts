@@ -85,10 +85,14 @@ export async function POST(req: NextRequest) {
       clientId: client_id ?? null,
     });
 
+    // A failed activation is logged but must NOT short-circuit the rest of this
+    // handler. It used to return 500 right here, which meant one broken UPDATE
+    // silently took the agent notification down with it — the two are
+    // independent, and the deal is usually Active already anyway (the
+    // activate_deals_on_first_signin trigger).
     if (result.error) {
-      return NextResponse.json(
-        { success: false, error: result.error },
-        { status: 500 },
+      console.warn(
+        `[activate-deal webhook] deal activation failed (non-blocking): ${result.error}`,
       );
     }
 
@@ -127,6 +131,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       activated: result.activated,
+      notified: leadsToNotify.length,
+      ...(result.error ? { activation_error: result.error } : {}),
       message:
         result.activated > 0
           ? `Activated ${result.activated} deal(s)`

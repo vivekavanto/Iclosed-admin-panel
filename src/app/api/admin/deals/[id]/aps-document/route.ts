@@ -69,15 +69,33 @@ export async function DELETE(
     ];
 
     if (familyLeadIds.length > 0) {
-      let docDelete = supabaseAdmin
-        .from("lead_corporate_docs")
-        .delete()
-        .in("lead_id", familyLeadIds)
-        .or(
-          "doc_type.eq.aps,doc_type.eq.aps_purchase,doc_type.eq.aps_sale,custom_type.ilike.%APS%",
-        );
-      if (fileUrl) docDelete = docDelete.eq("file_url", fileUrl);
-      await docDelete;
+      // Two passes instead of one `.or(doc_type.eq.…,custom_type.ilike.…)`: an
+      // OR filter on a DELETE fails on the production Supabase project with
+      // `42703: column lead_corporate_docs.doc_type does not exist` (older
+      // PostgREST than dev), so in prod this deleted nothing — and the result
+      // was never checked, so it failed silently. OR filters are read-only.
+      const passes = [
+        (q: ReturnType<typeof buildDocDelete>) =>
+          q.in("doc_type", ["aps", "aps_purchase", "aps_sale"]),
+        (q: ReturnType<typeof buildDocDelete>) => q.ilike("custom_type", "%APS%"),
+      ];
+
+      function buildDocDelete() {
+        const q = supabaseAdmin
+          .from("lead_corporate_docs")
+          .delete()
+          .in("lead_id", familyLeadIds);
+        return fileUrl ? q.eq("file_url", fileUrl) : q;
+      }
+
+      for (const applyFilter of passes) {
+        const { error: deleteError } = await applyFilter(buildDocDelete());
+        if (deleteError) {
+          console.warn(
+            `[aps-document DELETE] failed to clear APS docs: ${deleteError.message}`,
+          );
+        }
+      }
     }
 
     return NextResponse.json({ success: true });

@@ -52,17 +52,39 @@ export async function POST(req: Request) {
 
     const sharedTemplateIds = sharedTemplates.map((t) => t.id);
 
-    // Step 2: Update all tasks that reference these templates but don't have is_shared set
-    const { data: updated, error: updateError } = await supabaseAdmin
-      .from("tasks")
-      .update({ is_shared: true })
-      .in("task_template_id", sharedTemplateIds)
-      .or("is_shared.is.null,is_shared.eq.false")
-      .select("id");
+    // Step 2: Update all tasks that reference these templates but don't have
+    // is_shared set. Run the two "not yet shared" cases as separate statements
+    // rather than `.or(is_shared.is.null,is_shared.eq.false)` — an OR filter on
+    // a WRITE fails on the production Supabase project with
+    // `42703: column tasks.is_shared does not exist` (older PostgREST than
+    // dev). OR filters are safe on reads only.
+    const updatedIds = new Set<string>();
+    let updateError: { message: string } | null = null;
+
+    for (const applyFilter of [
+      (q: ReturnType<typeof buildTaskUpdate>) => q.is("is_shared", null),
+      (q: ReturnType<typeof buildTaskUpdate>) => q.eq("is_shared", false),
+    ]) {
+      const { data, error } = await applyFilter(buildTaskUpdate()).select("id");
+      if (error) {
+        updateError = error;
+        break;
+      }
+      for (const row of data ?? []) updatedIds.add(row.id);
+    }
+
+    function buildTaskUpdate() {
+      return supabaseAdmin
+        .from("tasks")
+        .update({ is_shared: true })
+        .in("task_template_id", sharedTemplateIds);
+    }
 
     if (updateError) {
       return NextResponse.json({ success: false, error: updateError.message }, { status: 500 });
     }
+
+    const updated = [...updatedIds].map((id) => ({ id }));
 
     // GAP-003: record the run so a later invocation is refused (unless forced).
     const actor = await getActingAdmin();

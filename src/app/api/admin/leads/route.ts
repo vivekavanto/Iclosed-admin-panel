@@ -301,14 +301,29 @@ export async function DELETE(req: Request) {
     return NextResponse.json({ error: "Invalid lead id" }, { status: 400 });
   }
 
-  // Soft-delete the primary lead and every co-lead in the same family in one
-  // call. The OR predicate matches the lead itself plus any row whose
-  // parent_lead_id points at it, so deleting a primary lead hides the whole
-  // co-purchaser/co-seller group from the listing in one shot.
-  const { error } = await supabaseAdmin
-    .from("leads")
-    .update({ is_deleted: true })
-    .or(`id.eq.${id},parent_lead_id.eq.${id}`);
+  // Soft-delete the primary lead and every co-lead in the same family: the lead
+  // itself, plus any row whose parent_lead_id points at it, so deleting a
+  // primary hides the whole co-purchaser/co-seller group from the listing.
+  //
+  // Two statements, NOT one `.or(id.eq.X,parent_lead_id.eq.X)`: an OR filter on
+  // a WRITE fails on the production Supabase project with
+  // `42703: column leads.parent_lead_id does not exist` (older PostgREST there
+  // than on dev), so the combined form deleted nothing in prod and returned a
+  // 500. Keep OR filters to reads.
+  let error: { message: string } | null = null;
+  for (const [column, value] of [
+    ["id", id],
+    ["parent_lead_id", id],
+  ] as const) {
+    const { error: updateError } = await supabaseAdmin
+      .from("leads")
+      .update({ is_deleted: true })
+      .eq(column, value);
+    if (updateError) {
+      error = updateError;
+      break;
+    }
+  }
 
   if (error) {
     return NextResponse.json(

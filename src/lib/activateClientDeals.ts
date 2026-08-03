@@ -38,27 +38,52 @@ export async function activateClientDeals(opts: {
     resolvedLeadId = deal?.lead_id ?? null;
   }
 
-  const filters: string[] = [];
-  if (resolvedLeadId) filters.push(`lead_id.eq.${resolvedLeadId}`);
-  if (resolvedClientId) filters.push(`client_id.eq.${resolvedClientId}`);
-
-  if (filters.length === 0) {
+  if (!resolvedLeadId && !resolvedClientId) {
     return { activated: 0, error: "No lead_id, client_id, or email to resolve" };
   }
 
-  const { data, error } = await supabaseAdmin
-    .from("deals")
-    .update({ status: "Active" })
-    .eq("status", "Inactive")
-    .or(filters.join(","))
-    .select("id");
+  // Two single-column updates instead of one `.or(lead_id.eq.X,client_id.eq.Y)`.
+  //
+  // The combined form is NOT portable: on the production Supabase project that
+  // exact PATCH fails with `42703: column deals.lead_id does not exist`, while
+  // the identical query succeeds on dev and the same `.or()` works fine on a
+  // SELECT — the two projects run different PostgREST versions, and the older
+  // one renders an OR filter on UPDATE against a relation where the column
+  // isn't in scope. That error made activateClientDeals return early with
+  // `error` set on EVERY production call, so the activate-deal webhook 500'd
+  // before it could notify the referral agent. Hence: no `.or()` on writes.
+  //
+  // Running both updates cannot double count — the first one flips the row off
+  // "Inactive", so the second no longer matches it.
+  const updatedIds = new Set<string>();
+  const errors: string[] = [];
 
-  if (error) {
+  for (const [column, value] of [
+    ["lead_id", resolvedLeadId],
+    ["client_id", resolvedClientId],
+  ] as const) {
+    if (!value) continue;
+    const { data, error } = await supabaseAdmin
+      .from("deals")
+      .update({ status: "Active" })
+      .eq("status", "Inactive")
+      .eq(column, value)
+      .select("id");
+    if (error) {
+      errors.push(`${column}: ${error.message}`);
+      continue;
+    }
+    for (const row of data ?? []) updatedIds.add(row.id);
+  }
+
+  // Only a total failure is an error. If one column's update worked, the
+  // activation happened and callers should carry on.
+  if (errors.length > 0 && updatedIds.size === 0) {
     return {
       activated: 0,
       leadId: resolvedLeadId,
       clientId: resolvedClientId,
-      error: error.message,
+      error: errors.join("; "),
     };
   }
 
@@ -68,7 +93,7 @@ export async function activateClientDeals(opts: {
   // when a deal already carries client_id, so callers that must reach every
   // lead of this person fall back to the client id (or the email).
   return {
-    activated: data?.length ?? 0,
+    activated: updatedIds.size,
     leadId: resolvedLeadId,
     clientId: resolvedClientId,
   };
