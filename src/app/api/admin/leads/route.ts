@@ -29,10 +29,17 @@ const LEAD_FIELD_MAP: Record<string, string> = {
   apsSigned: 'aps_signed',
   referralSource: 'referral_source',
   sellingAddressStreet: 'selling_address_street',
+  sellingAddressUnit: 'selling_address_unit',
   sellingAddressCity: 'selling_address_city',
   sellingAddressPostalCode: 'selling_address_postal_code',
   sellingAddressProvince: 'selling_address_province',
+  sellingPrice: 'selling_price',
 };
+
+// leads.selling_price is a NUMERIC column (leads.price is plain text), so a
+// value typed as "$720,000" has to be stripped to digits before it goes to
+// Postgres or the update fails with an invalid-input-syntax error.
+const NUMERIC_COLUMNS = new Set(['selling_price']);
 
 // camelCase payload key → DB column for the CLIENTS table (the person's
 // personal/corporate fields). These now live on clients (source of truth),
@@ -144,6 +151,18 @@ export async function PUT(req: NextRequest) {
         const raw = rest[key];
         updateData[column] =
           typeof raw === 'string' && raw.trim() === '' ? '' : raw;
+      } else if (NUMERIC_COLUMNS.has(column)) {
+        const raw = norm(rest[key]);
+        if (raw === null) {
+          updateData[column] = null;
+        } else {
+          const digits = String(raw).replace(/[^0-9.]/g, '');
+          const parsed = Number(digits);
+          // A field cleared to "—" / "TBD" leaves no digits: store NULL rather
+          // than writing NaN into a numeric column.
+          updateData[column] =
+            digits === '' || !Number.isFinite(parsed) ? null : parsed;
+        }
       } else {
         updateData[column] = norm(rest[key]);
       }

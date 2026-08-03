@@ -60,13 +60,18 @@ interface LeadUser {
   employerPhone?: string;
   status?: string;
   lead_type?: string;
+  // Transaction amounts captured at intake. `price` is the PURCHASE price
+  // (text column on leads); `sellingPrice` is the SALE price (numeric column),
+  // only populated on combined Purchase & Sale files.
   price?: string;
+  sellingPrice?: string;
   created_at?: string;
   service?: string;
   subService?: string;
   apsSigned?: boolean;
   referralSource?: string;
   sellingAddressStreet?: string;
+  sellingAddressUnit?: string;
   sellingAddressCity?: string;
   sellingAddressPostalCode?: string;
   sellingAddressProvince?: string;
@@ -190,13 +195,17 @@ const Leads: React.FC = () => {
     | "email"
     | "phone"
     | "addressStreet"
+    | "addressUnit"
     | "addressCity"
     | "addressPostalCode"
     | "addressProvince"
+    | "price"
     | "sellingAddressStreet"
+    | "sellingAddressUnit"
     | "sellingAddressCity"
     | "sellingAddressProvince"
     | "sellingAddressPostalCode"
+    | "sellingPrice"
   >;
   const buildEditForm = (l: LeadUser): LeadEditForm => ({
     firstName: l.firstName ?? "",
@@ -204,13 +213,17 @@ const Leads: React.FC = () => {
     email: l.email ?? "",
     phone: l.phone ?? "",
     addressStreet: l.addressStreet ?? "",
+    addressUnit: l.addressUnit ?? "",
     addressCity: l.addressCity ?? "",
     addressPostalCode: l.addressPostalCode ?? "",
     addressProvince: l.addressProvince ?? "",
+    price: l.price ?? "",
     sellingAddressStreet: l.sellingAddressStreet ?? "",
+    sellingAddressUnit: l.sellingAddressUnit ?? "",
     sellingAddressCity: l.sellingAddressCity ?? "",
     sellingAddressProvince: l.sellingAddressProvince ?? "",
     sellingAddressPostalCode: l.sellingAddressPostalCode ?? "",
+    sellingPrice: l.sellingPrice ?? "",
   });
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<LeadEditForm>({
@@ -219,13 +232,17 @@ const Leads: React.FC = () => {
     email: "",
     phone: "",
     addressStreet: "",
+    addressUnit: "",
     addressCity: "",
     addressPostalCode: "",
     addressProvince: "",
+    price: "",
     sellingAddressStreet: "",
+    sellingAddressUnit: "",
     sellingAddressCity: "",
     sellingAddressProvince: "",
     sellingAddressPostalCode: "",
+    sellingPrice: "",
   });
   const [savingEdit, setSavingEdit] = useState(false);
   const [editResult, setEditResult] = useState<{
@@ -318,6 +335,9 @@ const Leads: React.FC = () => {
     status: l.status ?? "New",
     lead_type: l.lead_type,
     price: l.price,
+    // selling_price is numeric in the DB — stringify so the edit form (all text
+    // inputs) can round-trip it without a type mismatch.
+    sellingPrice: l.selling_price != null ? String(l.selling_price) : undefined,
     created_at: l.created_at,
     service: l.service,
     subService: l.sub_service,
@@ -328,6 +348,7 @@ const Leads: React.FC = () => {
     referralAgentCompany: l.referral_agent_company ?? null,
     referralAgentEmail: l.referral_agent_email ?? null,
     sellingAddressStreet: l.selling_address_street,
+    sellingAddressUnit: l.selling_address_unit,
     sellingAddressCity: l.selling_address_city,
     sellingAddressPostalCode: l.selling_address_postal_code,
     sellingAddressProvince: l.selling_address_province,
@@ -870,6 +891,25 @@ const Leads: React.FC = () => {
     const lt = (selectedLead?.lead_type ?? "").toLowerCase();
     return lt.includes("purchase") && lt.includes("sale");
   })();
+  // A Sale-only lead still renders under the "Purchase Property Address"
+  // heading, but its single `price` IS the sale price — label it accordingly so
+  // the amount isn't read as a purchase figure.
+  const isSaleOnly = (() => {
+    const lt = (selectedLead?.lead_type ?? "").toLowerCase();
+    return lt.includes("sale") && !lt.includes("purchase");
+  })();
+
+  // Prices arrive from intake as free text ("850000", "$850,000", "TBD"), and
+  // leads.price is a text column. Format only when the value is actually
+  // numeric; otherwise pass it through untouched so nothing an admin typed is
+  // silently mangled.
+  const formatPriceDisplay = (raw?: string | null) => {
+    const value = (raw ?? "").trim();
+    if (!value) return "";
+    const numeric = Number(value.replace(/[^0-9.]/g, ""));
+    if (!Number.isFinite(numeric) || numeric <= 0) return value;
+    return `$${numeric.toLocaleString("en-CA")}`;
+  };
 
   // Family of related clients to receive the email when admin hits Send Email.
   // Walks up to the primary if the admin is viewing a co-lead, then includes
@@ -1275,18 +1315,35 @@ const Leads: React.FC = () => {
           />
           {expandedSections.includes("current-address") && (
             <div className="p-8 space-y-6 animate-in slide-in-from-top-2 duration-300 border-t border-slate-50">
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                  Street Address
-                </label>
-                <input
-                  type="text"
-                  className={inputClasses}
-                  value={isEditing ? editForm.addressStreet : (selectedLead.addressStreet ?? "")}
-                  onChange={(e) => updateEditField("addressStreet", e.target.value)}
-                  readOnly={!isEditing}
-                  placeholder="e.g. 10 Milner Business Court"
-                />
+              {/* Street + unit share a row: intake captures a unit/suite for
+                  condos and it has to be visible here, not just on the deal. */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="space-y-2 md:col-span-2">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                    Street Address
+                  </label>
+                  <input
+                    type="text"
+                    className={inputClasses}
+                    value={isEditing ? editForm.addressStreet : (selectedLead.addressStreet ?? "")}
+                    onChange={(e) => updateEditField("addressStreet", e.target.value)}
+                    readOnly={!isEditing}
+                    placeholder="e.g. 10 Milner Business Court"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                    Unit / Suite
+                  </label>
+                  <input
+                    type="text"
+                    className={inputClasses}
+                    value={isEditing ? (editForm.addressUnit ?? "") : (selectedLead.addressUnit ?? "")}
+                    onChange={(e) => updateEditField("addressUnit", e.target.value)}
+                    readOnly={!isEditing}
+                    placeholder="e.g. 210"
+                  />
+                </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div className="space-y-2">
@@ -1329,6 +1386,21 @@ const Leads: React.FC = () => {
                   />
                 </div>
               </div>
+              {/* Transaction amount for this property (leads.price). Formatted
+                  for reading, raw for editing so the admin edits the digits. */}
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  {isSaleOnly ? "Sale Price" : "Purchase Price"}
+                </label>
+                <input
+                  type="text"
+                  className={inputClasses}
+                  value={isEditing ? (editForm.price ?? "") : formatPriceDisplay(selectedLead.price)}
+                  onChange={(e) => updateEditField("price", e.target.value)}
+                  readOnly={!isEditing}
+                  placeholder="e.g. 850000"
+                />
+              </div>
             </div>
           )}
 
@@ -1342,18 +1414,33 @@ const Leads: React.FC = () => {
               />
               {expandedSections.includes("selling-address") && (
                 <div className="p-8 space-y-6 animate-in slide-in-from-top-2 duration-300 border-t border-slate-50">
-                  <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                      Street Address
-                    </label>
-                    <input
-                      type="text"
-                      className={inputClasses}
-                      value={isEditing ? editForm.sellingAddressStreet : (selectedLead.sellingAddressStreet ?? "")}
-                      onChange={(e) => updateEditField("sellingAddressStreet", e.target.value)}
-                      readOnly={!isEditing}
-                      placeholder="e.g. 10 Milner Business Court"
-                    />
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div className="space-y-2 md:col-span-2">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                        Street Address
+                      </label>
+                      <input
+                        type="text"
+                        className={inputClasses}
+                        value={isEditing ? editForm.sellingAddressStreet : (selectedLead.sellingAddressStreet ?? "")}
+                        onChange={(e) => updateEditField("sellingAddressStreet", e.target.value)}
+                        readOnly={!isEditing}
+                        placeholder="e.g. 10 Milner Business Court"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                        Unit / Suite
+                      </label>
+                      <input
+                        type="text"
+                        className={inputClasses}
+                        value={isEditing ? (editForm.sellingAddressUnit ?? "") : (selectedLead.sellingAddressUnit ?? "")}
+                        onChange={(e) => updateEditField("sellingAddressUnit", e.target.value)}
+                        readOnly={!isEditing}
+                        placeholder="e.g. 210"
+                      />
+                    </div>
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                     <div className="space-y-2">
@@ -1395,6 +1482,22 @@ const Leads: React.FC = () => {
                         placeholder="e.g. M1B 3C6"
                       />
                     </div>
+                  </div>
+                  {/* Sale side amount (leads.selling_price) — only combined
+                      Purchase & Sale files carry one, which is why it lives in
+                      this section rather than alongside the purchase price. */}
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                      Sale Price
+                    </label>
+                    <input
+                      type="text"
+                      className={inputClasses}
+                      value={isEditing ? (editForm.sellingPrice ?? "") : formatPriceDisplay(selectedLead.sellingPrice)}
+                      onChange={(e) => updateEditField("sellingPrice", e.target.value)}
+                      readOnly={!isEditing}
+                      placeholder="e.g. 720000"
+                    />
                   </div>
                 </div>
               )}

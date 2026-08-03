@@ -58,3 +58,4 @@ WHERE l.parent_lead_id IS NOT NULL
   AND l.co_person_role IS NULL
   AND coalesce(l.is_deleted, false) = false
 ORDER BY (d.type = 'Purchase & Sale') DESC, d.file_number;
+
