@@ -13,6 +13,7 @@ import {
   escapeHtml,
   type TemplateValue,
 } from "./renderEmailTemplate";
+import { emailFrom, emailReplyTo } from "./emailIdentity";
 
 /**
  * For each action type, list the template names we'll accept (in priority
@@ -417,11 +418,11 @@ export async function sendAuthEmailViaResend(opts: {
   }
 
   const resend = new Resend(process.env.RESEND_API_KEY);
-  const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <support@iclosed.ca>";
+  const fromEmail = emailFrom();
 
   const { error: sendError } = await resend.emails.send({
     from: fromEmail,
-    replyTo: "testing@iclosed.ca",
+    replyTo: emailReplyTo(),
     to: [email],
     subject,
     html: bodyHtml,

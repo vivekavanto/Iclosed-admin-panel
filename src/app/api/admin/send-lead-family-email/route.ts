@@ -7,6 +7,7 @@ import { formatLeadTypeLabel, buildLeadAddressPartsForEmail } from "@/lib/leadEm
 import { guardServiceRequest } from "@/lib/verifyServiceSignature";
 import { get } from "@vercel/blob";
 import { isPrivateBlobUrl, blobTokenForUrl } from "@/lib/blobPrivacy";
+import { emailFrom, emailReplyTo } from "@/lib/emailIdentity";
 
 /**
  * POST /api/admin/send-lead-family-email
@@ -321,7 +322,7 @@ async function sendRetainerEmail(
 
   const { data: sendResult, error: sendError } = await resend.emails.send({
     from: fromEmail,
-    replyTo: "testing@iclosed.ca",
+    replyTo: emailReplyTo(),
     to: [lead.email],
     subject: processedSubject,
     html: processedBody,
@@ -529,7 +530,7 @@ export async function POST(req: NextRequest) {
     // Lazy Resend client — only initialized when the retainer path actually
     // needs it. Skips the env-var requirement for non-retainer sends.
     let resendClient: Resend | null = null;
-    const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <support@iclosed.ca>";
+    const fromEmail = emailFrom();
     if (retainerMode) {
       if (!process.env.RESEND_API_KEY) {
         return NextResponse.json(

@@ -4,6 +4,7 @@ import { Resend } from "resend"
 import { getFamilyDealIds } from "@/lib/familyDeals"
 import { formatLeadTypeLabel, buildLeadAddressForEmail } from "@/lib/leadEmailAddress"
 import { guardServiceRequest } from "@/lib/verifyServiceSignature"
+import { emailFrom, emailReplyTo } from "@/lib/emailIdentity"
 
 /**
  * Sends a milestone email to the client of a single deal.
@@ -236,7 +237,7 @@ async function sendEmailForDeal(
 
         const { data: sendResult, error: sendError } = await resend.emails.send({
             from: fromEmail,
-            replyTo: "testing@iclosed.ca",
+            replyTo: emailReplyTo(),
             to: [client.email],
             ...(cc ? { cc } : {}),
             subject: processedSubject,
@@ -330,7 +331,7 @@ async function handlePortalRequest(body: Record<string, any>) {
     }
 
     const resend = new Resend(process.env.RESEND_API_KEY)
-    const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <support@iclosed.ca>"
+    const fromEmail = emailFrom();
 
     // Find all deals in the family (purchaser + co-purchasers)
     let allDealIds: string[] = deal_id ? [deal_id] : []
@@ -485,7 +486,7 @@ export async function POST(req: Request) {
         }
 
         const resend = new Resend(process.env.RESEND_API_KEY)
-        const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <support@iclosed.ca>"
+        const fromEmail = emailFrom();
 
         // 6. Send email to primary deal's client
         const primaryResult = await sendEmailForDeal(dealId, milestone, template, resend, fromEmail)

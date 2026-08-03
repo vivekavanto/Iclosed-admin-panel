@@ -14,6 +14,7 @@ import {
 import { maskEmail } from "./maskEmail";
 import { logger } from "./logger";
 import { withRetry } from "./retry";
+import { emailFrom, emailReplyTo } from "./emailIdentity";
 
 export type WelcomeEmailResult = {
   success: boolean;
@@ -338,7 +339,7 @@ export async function sendWelcomeEmail(
   }
 
   const resend = new Resend(process.env.RESEND_API_KEY);
-  const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <support@iclosed.ca>";
+  const fromEmail = emailFrom();
 
   // GAP-012: retry the send a few times with backoff so a transient Resend/API
   // blip doesn't drop the welcome email. Resend returns { error } instead of
@@ -349,7 +350,7 @@ export async function sendWelcomeEmail(
       async () => {
         const { data, error } = await resend.emails.send({
           from: fromEmail,
-          replyTo: "testing@iclosed.ca",
+          replyTo: emailReplyTo(),
           to: [lead.email],
           subject,
           html: htmlBody,
