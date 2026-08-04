@@ -189,14 +189,18 @@ test("computeStatement: the reference file matches the mock-up exactly", () => {
 
   assert.equal(l.ltt_provincial, 18_075);
   assert.equal(l.title_premium, 1097.8);
+  // Billed separately from the legal fee, under Title Insurance.
+  assert.equal(l.title_submission, 150);
   assert.equal(l.reg_transfer, 85);
   assert.equal(l.reg_mortgage, 85);
   assert.equal(l.teraview, 54.8);
   assert.equal(l.sheriff, 133.6);
-  assert.equal(l.legal_fees, 1350);
+  assert.equal(l.legal_fees, 1200);
   assert.equal(l.admin_fee, 250);
 
-  // HST on legal + admin + Teraview + Sheriff only: 13% × 1,788.40
+  // HST on the firm's own supplies only — legal + title submission + admin +
+  // Teraview + Sheriff: 13% × 1,788.40. Splitting the title-submission charge
+  // out of the legal-fees LINE did not take it out of the BASE.
   assert.equal(s.detail.taxableBase, 1788.4);
   assert.equal(s.hst.amount, 232.49);
 
@@ -236,10 +240,12 @@ test("computeStatement: cash purchase drops both mortgage items", () => {
 
   // "Registration of Mortgage" is gone entirely, not zeroed
   assert.ok(!lineKeys(s).includes("reg_mortgage"));
-  // Legal fees fall to transfer + title submission
-  assert.equal(l.legal_fees, 800);
-  assert.equal(findLine(s, "legal_fees")?.sublabel, "purchase & title submission");
-  // HST base = 800 + 250 + 54.80 + 133.60 = 1,238.40 → 13% = 160.992
+  // Legal fees fall to the transfer alone
+  assert.equal(l.legal_fees, 650);
+  assert.equal(findLine(s, "legal_fees")?.sublabel, "purchase");
+  // Title submission is unaffected by there being no mortgage
+  assert.equal(l.title_submission, 150);
+  // HST base = 650 + 150 + 250 + 54.80 + 133.60 = 1,238.40 → 13% = 160.992
   assert.equal(s.detail.taxableBase, 1238.4);
   assert.equal(s.hst.amount, 160.99);
   // 18,075 + 1,097.80 + 85 + 54.80 + 133.60 + 800 + 250 + 160.99
@@ -303,6 +309,46 @@ test("computeStatement: four groups in the required order", () => {
   assert.equal(s.hst.label, "HST @ 13% on taxable fees & disbursements");
 });
 
+// ── Property tax adjustment (Statement of Adjustments) ────────────────
+// It is NOT a fee, so it must stay out of "Total closing costs" and be added to
+// the balance on its own. Getting this backwards overstates the firm's account.
+test("propertyTaxAdjustment: omitted entirely when zero or absent", () => {
+  for (const value of [undefined, null, 0]) {
+    const s = computeStatement({ ...REFERENCE, propertyTaxAdjustment: value });
+    assert.equal(s.propertyTax, null);
+    assert.equal(s.balance.propertyTaxAdjustment, 0);
+    assert.equal(
+      s.groups.length,
+      4,
+      "an estimate without an adjustment keeps the original four groups",
+    );
+  }
+});
+
+test("propertyTaxAdjustment: excluded from the total, added to the balance", () => {
+  const base = computeStatement(REFERENCE);
+  const withTax = computeStatement({ ...REFERENCE, propertyTaxAdjustment: 1_250 });
+
+  assert.equal(withTax.total, base.total, "the printed total must not move");
+  assert.deepEqual(
+    withTax.groups.map((g) => g.key),
+    base.groups.map((g) => g.key),
+    "it is not a group — it renders after the total bar",
+  );
+  assert.equal(withTax.propertyTax?.amount, 1_250);
+  assert.equal(withTax.balance.propertyTaxAdjustment, 1_250);
+  assert.equal(withTax.balance.balanceDue, base.balance.balanceDue + 1_250);
+});
+
+test("propertyTaxAdjustment: a negative figure credits the buyer", () => {
+  const base = computeStatement(REFERENCE);
+  const credited = computeStatement({ ...REFERENCE, propertyTaxAdjustment: -400 });
+
+  assert.equal(credited.propertyTax?.amount, -400);
+  assert.equal(credited.balance.balanceDue, base.balance.balanceDue - 400);
+  assert.equal(credited.total, base.total);
+});
+
 test("computeStatement: zero price yields a zero-ish statement, not NaN", () => {
   const s = computeStatement({
     price: 0,
@@ -314,7 +360,8 @@ test("computeStatement: zero price yields a zero-ish statement, not NaN", () => 
   assert.equal(s.detail.provincialLTT, 0);
   assert.equal(s.detail.titlePremium, 0);
   // The firm's own fees still apply
-  assert.equal(lines(s).legal_fees, 800);
+  assert.equal(lines(s).legal_fees, 650);
+  assert.equal(lines(s).title_submission, 150);
   assert.ok(Number.isFinite(s.total));
   assert.ok(Number.isFinite(s.balance.balanceDue));
 });

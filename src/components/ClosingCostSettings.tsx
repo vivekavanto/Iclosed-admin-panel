@@ -1,7 +1,10 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Loader2, Plus, RotateCcw, Save, TriangleAlert, X } from "lucide-react";
+import { Loader2, TriangleAlert } from "lucide-react";
+import ClosingCostFirmCard from "./ClosingCostFirmCard";
+import ClosingCostSharedRatesCard from "./ClosingCostSharedRatesCard";
+import ClosingCostStatementTypesCard from "./ClosingCostStatementTypesCard";
 import {
   DEFAULT_LTT_TIERS,
   DEFAULT_MLTT_TIERS,
@@ -9,148 +12,137 @@ import {
   ratesFromConfigRow,
   type Tier,
 } from "@/lib/closingCosts";
+import {
+  FIRM_KEYS,
+  STATEMENT_TYPE_KEYS,
+  type FirmKey,
+  type StatementTypeKey,
+} from "@/lib/closingCostSettings";
+import {
+  BRAND,
+  FIRM_NUMERIC_FIELDS,
+  LETTERHEAD_FIELDS,
+  SHARED_NUMERIC_FIELDS,
+  STATEMENT_TEXT_FIELDS,
+  draftToNumericBody,
+  rowToDraft,
+  type Draft,
+} from "@/lib/closingCostSettingsFields";
 import { formatCurrency, parseAmountInput } from "@/lib/formatCurrency";
 
-// Firm-standard closing-cost fees, rates, land-transfer-tax brackets and PDF
-// letterhead — the single active `closing_cost_config` row.
+// Closing-cost settings — firm profiles, the shared statutory rates and the
+// statement-type wording behind every purchase closing-cost estimate.
 //
 // Editing here changes what FUTURE estimates are calculated with. Estimates
 // already issued keep their own frozen snapshot and are never rewritten, which
 // is why this page can be edited freely without auditing every open file.
+//
+// Three independent Saves rather than one, because the blast radii differ: a
+// shared-rate change alters what BOTH firms quote, while a firm's fee change
+// affects only its own files.
 
-const BRAND = "#C10007";
+type Section = "firms" | "shared" | "statements";
 
-const inputClass =
-  "w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white";
-
-type Draft = Record<string, string>;
-
-interface NumericField {
-  key: string;
-  label: string;
-  hint?: string;
-  prefix?: "$" | "%";
-  /** Stored as a rate (0.13) but edited as a percentage (13). */
-  asPercent?: boolean;
-  /** Edited at full precision — a rate like 0.000785. */
-  raw?: boolean;
+interface Bundle {
+  schema_ready: boolean;
+  firms: Record<string, unknown>[];
+  shared: Record<string, unknown>;
+  statement_types: Record<string, unknown>[];
+  is_default: { firms: boolean; shared: boolean; statement_types: boolean };
 }
 
-const SECTIONS: Array<{ title: string; note?: string; fields: NumericField[] }> = [
-  {
-    title: "Third-Party Disbursements",
-    note: "Government and search costs the firm pays on the client's behalf. The mortgage registration only applies when there is a mortgage.",
-    fields: [
-      { key: "reg_transfer", label: "Registration of Transfer", prefix: "$" },
-      { key: "reg_mortgage", label: "Registration of Mortgage", prefix: "$" },
-      { key: "teraview", label: "Teraview — searches & review", prefix: "$" },
-      { key: "sheriff", label: "Sheriff's Certificates", prefix: "$" },
-    ],
-  },
-  {
-    title: "Legal & Admin Fees",
-    note: "The client sees one combined \"Legal fees\" line — transfer + mortgage + title submission. A cash purchase drops the mortgage portion.",
-    fields: [
-      { key: "legal_transfer", label: "Legal fee — transfer", prefix: "$" },
-      { key: "legal_mortgage", label: "Legal fee — mortgage", prefix: "$" },
-      { key: "legal_title_submission", label: "Legal — title submission", prefix: "$" },
-      { key: "admin_fee", label: "Admin fee", prefix: "$" },
-    ],
-  },
-  {
-    title: "Rates & Caps",
-    fields: [
-      {
-        key: "hst_rate",
-        label: "HST rate",
-        hint: "charged on legal fees, admin fee, Teraview and Sheriff's only",
-        prefix: "%",
-        asPercent: true,
-      },
-      {
-        key: "rebate_ontario_max",
-        label: "First-time buyer rebate — Ontario (max)",
-        prefix: "$",
-      },
-      {
-        key: "rebate_toronto_max",
-        label: "First-time buyer rebate — Toronto (max)",
-        prefix: "$",
-      },
-    ],
-  },
-  {
-    title: "Title Insurance Premium Estimate",
-    note: "A firm approximation, not FCT's official rate table: max(minimum, base + price × rate). Staff can override it per file with the exact quote.",
-    fields: [
-      { key: "title_premium_base", label: "Base amount", prefix: "$" },
-      {
-        key: "title_premium_rate",
-        label: "Rate on purchase price",
-        hint: "0.000785 = 0.0785%",
-        raw: true,
-      },
-      { key: "title_premium_min", label: "Minimum premium", prefix: "$" },
-    ],
-  },
+const LETTERHEAD_KEYS = LETTERHEAD_FIELDS.map((f) => f.key);
+const STATEMENT_TEXT_KEYS = ["label", ...STATEMENT_TEXT_FIELDS.map((f) => f.key)];
+
+const TABS: Array<{ id: Section; label: string }> = [
+  { id: "firms", label: "Firms" },
+  { id: "shared", label: "Shared rates" },
+  { id: "statements", label: "Statement types" },
 ];
 
-const LETTERHEAD_FIELDS: Array<{ key: string; label: string; wide?: boolean }> = [
-  { key: "firm_name", label: "Firm name", wide: true },
-  { key: "firm_subtitle", label: "Subtitle" },
-  { key: "firm_hst_number", label: "HST number" },
-  { key: "firm_address", label: "Address", wide: true },
-  { key: "firm_phone", label: "Telephone" },
-  { key: "firm_fax", label: "Fax" },
-];
+function firmRowToDraft(row: Record<string, unknown>): Draft {
+  return {
+    ...rowToDraft(row, FIRM_NUMERIC_FIELDS, [...LETTERHEAD_KEYS, "brand_color", "label"]),
+  };
+}
 
-const ALL_NUMERIC = SECTIONS.flatMap((s) => s.fields);
+function sharedRowToDraft(row: Record<string, unknown>): Draft {
+  return rowToDraft(row, SHARED_NUMERIC_FIELDS, [
+    "default_firm_key",
+    "default_statement_type",
+  ]);
+}
 
-/** DB row → editable text draft. */
-function rowToDraft(row: Record<string, unknown>): Draft {
-  const draft: Draft = {};
-  for (const field of ALL_NUMERIC) {
-    const n = Number(row[field.key] ?? 0);
-    if (!Number.isFinite(n)) {
-      draft[field.key] = "";
-      continue;
-    }
-    draft[field.key] = field.asPercent ? String(Number((n * 100).toFixed(6))) : String(n);
-  }
-  for (const field of LETTERHEAD_FIELDS) {
-    draft[field.key] = String(row[field.key] ?? "");
-  }
+function statementRowToDraft(row: Record<string, unknown>): Draft {
+  const draft = rowToDraft(row, [], [...STATEMENT_TEXT_KEYS, "watermark_text"]);
+  // Checkboxes ride in the same string-keyed draft as everything else.
+  draft.show_watermark = row.show_watermark === true ? "true" : "false";
   return draft;
 }
 
-function rowToTiers(value: unknown, fallback: Tier[]): Tier[] {
+function tiersOf(value: unknown, fallback: Tier[]): Tier[] {
   return Array.isArray(value) && value.length > 0 ? (value as Tier[]) : fallback;
-}
-
-/** "$0 – $55,000" / "$2,000,000 and above" */
-function bandLabel(prevCap: number, cap: number | null): string {
-  const from = formatCurrency(prevCap, { cents: false });
-  if (cap === null) return `${from} and above`;
-  return `${from} – ${formatCurrency(cap, { cents: false })}`;
 }
 
 const ClosingCostSettings: React.FC = () => {
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(
     null,
   );
-  const [isDefault, setIsDefault] = useState(false);
 
-  const [draft, setDraft] = useState<Draft>({});
+  const [bundle, setBundle] = useState<Bundle | null>(null);
+  const [tab, setTab] = useState<Section>("firms");
+  const [activeFirm, setActiveFirm] = useState<FirmKey>(FIRM_KEYS[0]);
+  const [activeType, setActiveType] = useState<StatementTypeKey>(STATEMENT_TYPE_KEYS[0]);
+  const [saving, setSaving] = useState<string | null>(null);
+
+  // Drafts are keyed so switching a tab never discards unsaved edits.
+  const [firmDrafts, setFirmDrafts] = useState<Record<string, Draft>>({});
+  const [firmActive, setFirmActive] = useState<Record<string, boolean>>({});
+  // Held apart from the drafts: the logo is written by its own upload route, so
+  // it must never ride along in the Save payload or be reverted by a discard.
+  const [firmLogos, setFirmLogos] = useState<Record<string, string>>({});
+  const [sharedDraft, setSharedDraft] = useState<Draft>({});
+  const [statementDrafts, setStatementDrafts] = useState<Record<string, Draft>>({});
   const [lttTiers, setLttTiers] = useState<Tier[]>(DEFAULT_LTT_TIERS);
   const [mlttTiers, setMlttTiers] = useState<Tier[]>(DEFAULT_MLTT_TIERS);
+  const [dirty, setDirty] = useState<Record<string, boolean>>({});
 
   const showToast = (message: string, type: "success" | "error" = "success") => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
   };
+
+  const hydrate = useCallback((data: Bundle) => {
+    setBundle(data);
+
+    const firms: Record<string, Draft> = {};
+    const active: Record<string, boolean> = {};
+    const logos: Record<string, string> = {};
+    for (const row of data.firms ?? []) {
+      const key = String(row.firm_key ?? "");
+      if (!key) continue;
+      firms[key] = firmRowToDraft(row);
+      active[key] = row.is_active === true;
+      logos[key] = String(row.logo_url ?? "");
+    }
+    setFirmDrafts(firms);
+    setFirmActive(active);
+    setFirmLogos(logos);
+
+    setSharedDraft(sharedRowToDraft(data.shared ?? {}));
+    setLttTiers(tiersOf(data.shared?.ltt_tiers, DEFAULT_LTT_TIERS));
+    setMlttTiers(tiersOf(data.shared?.mltt_tiers, DEFAULT_MLTT_TIERS));
+
+    const statements: Record<string, Draft> = {};
+    for (const row of data.statement_types ?? []) {
+      const key = String(row.type_key ?? "");
+      if (key) statements[key] = statementRowToDraft(row);
+    }
+    setStatementDrafts(statements);
+    setDirty({});
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -161,10 +153,7 @@ const ClosingCostSettings: React.FC = () => {
       if (!res.ok || !data?.success) {
         throw new Error(data?.error || "Could not load the configuration");
       }
-      setDraft(rowToDraft(data.data ?? {}));
-      setLttTiers(rowToTiers(data.data?.ltt_tiers, DEFAULT_LTT_TIERS));
-      setMlttTiers(rowToTiers(data.data?.mltt_tiers, DEFAULT_MLTT_TIERS));
-      setIsDefault(Boolean(data.is_default));
+      hydrate(data as Bundle);
     } catch (err) {
       setLoadError(
         err instanceof Error ? err.message : "Could not load the configuration",
@@ -172,22 +161,57 @@ const ClosingCostSettings: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [hydrate]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  /** Live sample so a fee edit's effect is visible before saving. */
+  const locked = bundle ? !bundle.schema_ready : false;
+
+  // ── edit handlers ───────────────────────────────────────────────────
+  const markDirty = (key: string) => setDirty((prev) => ({ ...prev, [key]: true }));
+
+  const editFirm = (firmKey: string) => (key: string, value: string) => {
+    setFirmDrafts((prev) => ({
+      ...prev,
+      [firmKey]: { ...(prev[firmKey] ?? {}), [key]: value },
+    }));
+    markDirty(`firm:${firmKey}`);
+  };
+
+  const editShared = (key: string, value: string) => {
+    setSharedDraft((prev) => ({ ...prev, [key]: value }));
+    markDirty("shared");
+  };
+
+  const editStatement = (typeKey: string) => (key: string, value: string) => {
+    setStatementDrafts((prev) => ({
+      ...prev,
+      [typeKey]: { ...(prev[typeKey] ?? {}), [key]: value },
+    }));
+    markDirty(`statement:${typeKey}`);
+  };
+
+  // ── live sample ─────────────────────────────────────────────────────
+  /** The reference file from the requirements document, priced with the firm on screen. */
   const preview = useMemo(() => {
     const row: Record<string, unknown> = {};
-    for (const field of ALL_NUMERIC) {
-      const parsed = parseAmountInput(draft[field.key] ?? "");
+    const firmDraft = firmDrafts[activeFirm] ?? {};
+
+    for (const field of SHARED_NUMERIC_FIELDS) {
+      const parsed = parseAmountInput(sharedDraft[field.key] ?? "");
+      if (parsed === null) continue;
+      row[field.key] = field.asPercent ? parsed / 100 : parsed;
+    }
+    for (const field of FIRM_NUMERIC_FIELDS) {
+      const parsed = parseAmountInput(firmDraft[field.key] ?? "");
       if (parsed === null) continue;
       row[field.key] = field.asPercent ? parsed / 100 : parsed;
     }
     row.ltt_tiers = lttTiers;
     row.mltt_tiers = mlttTiers;
+
     return computeStatement(
       {
         price: 1_080_000,
@@ -198,66 +222,145 @@ const ClosingCostSettings: React.FC = () => {
       },
       ratesFromConfigRow(row),
     );
-  }, [draft, lttTiers, mlttTiers]);
+  }, [sharedDraft, firmDrafts, activeFirm, lttTiers, mlttTiers]);
 
-  const handleSave = async () => {
-    // Validate locally first so a typo doesn't need a round trip.
-    const body: Record<string, unknown> = {};
-    for (const field of ALL_NUMERIC) {
-      const parsed = parseAmountInput(draft[field.key] ?? "");
-      if (parsed === null) {
-        showToast(`${field.label} must be a number`, "error");
-        return;
-      }
-      if (parsed < 0) {
-        showToast(`${field.label} cannot be negative`, "error");
-        return;
-      }
-      body[field.key] = field.asPercent ? parsed / 100 : parsed;
-    }
-    for (const field of LETTERHEAD_FIELDS) {
-      const value = (draft[field.key] ?? "").trim();
-      if (!value) {
-        showToast(`${field.label} cannot be empty`, "error");
-        return;
-      }
-      body[field.key] = value;
-    }
-    for (const [tiers, label] of [
-      [lttTiers, "Ontario LTT brackets"],
-      [mlttTiers, "Toronto MLTT brackets"],
-    ] as Array<[Tier[], string]>) {
-      if (tiers[tiers.length - 1]?.[0] !== null) {
-        showToast(`${label}: the last band must be open-ended`, "error");
-        return;
-      }
-    }
-    body.ltt_tiers = lttTiers;
-    body.mltt_tiers = mlttTiers;
-
-    setSaving(true);
+  // ── saves ───────────────────────────────────────────────────────────
+  async function put(url: string, body: Record<string, unknown>, savingKey: string) {
+    setSaving(savingKey);
     try {
-      const res = await fetch("/api/admin/closing-cost-config", {
+      const res = await fetch(url, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       const data = await res.json();
-      if (!res.ok || !data?.success) {
-        throw new Error(data?.error || "Save failed");
-      }
-      setDraft(rowToDraft(data.data ?? {}));
-      setLttTiers(rowToTiers(data.data?.ltt_tiers, DEFAULT_LTT_TIERS));
-      setMlttTiers(rowToTiers(data.data?.mltt_tiers, DEFAULT_MLTT_TIERS));
-      setIsDefault(false);
-      showToast("Closing cost configuration saved");
+      if (!res.ok || !data?.success) throw new Error(data?.error || "Save failed");
+      await load();
+      showToast("Saved");
+      return true;
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Save failed", "error");
+      return false;
     } finally {
-      setSaving(false);
+      setSaving(null);
+    }
+  }
+
+  const saveFirm = async (firmKey: string) => {
+    const draft = firmDrafts[firmKey] ?? {};
+    const { error, body } = draftToNumericBody(
+      draft,
+      FIRM_NUMERIC_FIELDS,
+      parseAmountInput,
+    );
+    if (error) return showToast(error, "error");
+
+    for (const field of LETTERHEAD_FIELDS) {
+      const value = (draft[field.key] ?? "").trim();
+      if (!value) return showToast(`${field.label} cannot be empty`, "error");
+      body[field.key] = value;
+    }
+    const label = (draft.label ?? "").trim();
+    if (!label) return showToast("The firm label cannot be empty", "error");
+    body.label = label;
+
+    const color = (draft.brand_color ?? "").trim();
+    if (!/^#[0-9a-fA-F]{6}$/.test(color)) {
+      return showToast("Brand colour must be a 6-digit hex such as #C10007", "error");
+    }
+    body.brand_color = color;
+    body.is_active = firmActive[firmKey] === true;
+
+    await put(
+      `/api/admin/closing-cost-config/firms/${firmKey}`,
+      body,
+      `firm:${firmKey}`,
+    );
+  };
+
+  const saveShared = async () => {
+    const { error, body } = draftToNumericBody(
+      sharedDraft,
+      SHARED_NUMERIC_FIELDS,
+      parseAmountInput,
+    );
+    if (error) return showToast(error, "error");
+
+    for (const [tiers, label] of [
+      [lttTiers, "Ontario LTT brackets"],
+      [mlttTiers, "Toronto MLTT brackets"],
+    ] as Array<[Tier[], string]>) {
+      if (tiers[tiers.length - 1]?.[0] !== null) {
+        return showToast(`${label}: the last band must be open-ended`, "error");
+      }
+    }
+    body.ltt_tiers = lttTiers;
+    body.mltt_tiers = mlttTiers;
+    body.default_firm_key = sharedDraft.default_firm_key;
+    body.default_statement_type = sharedDraft.default_statement_type;
+
+    await put("/api/admin/closing-cost-config/shared", body, "shared");
+  };
+
+  /**
+   * The logo is uploaded immediately rather than joining the Save payload: it
+   * is multipart, it replaces a blob server-side, and batching it into a JSON
+   * PUT would mean a failed image silently rolling back a fee change too.
+   */
+  const uploadLogo = async (firmKey: string, file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    try {
+      const res = await fetch(
+        `/api/admin/closing-cost-config/firms/${firmKey}/logo`,
+        { method: "POST", body },
+      );
+      const data = await res.json();
+      if (!res.ok || !data?.success) throw new Error(data?.error || "Upload failed");
+      await load();
+      showToast("Logo updated");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Upload failed", "error");
     }
   };
 
+  const removeLogo = async (firmKey: string) => {
+    try {
+      const res = await fetch(
+        `/api/admin/closing-cost-config/firms/${firmKey}/logo`,
+        { method: "DELETE" },
+      );
+      const data = await res.json();
+      if (!res.ok || !data?.success) throw new Error(data?.error || "Could not remove");
+      await load();
+      showToast("Logo removed");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Could not remove", "error");
+    }
+  };
+
+  const saveStatementType = async (typeKey: string) => {
+    const draft = statementDrafts[typeKey] ?? {};
+    const body: Record<string, unknown> = {};
+    for (const key of [...STATEMENT_TEXT_KEYS, "watermark_text"]) {
+      body[key] = (draft[key] ?? "").trim();
+    }
+    // Only the footer note may legitimately be blank.
+    for (const key of [...STATEMENT_TEXT_KEYS, "watermark_text"]) {
+      if (key !== "footer_note" && !body[key]) {
+        return showToast(`${key.replace(/_/g, " ")} cannot be empty`, "error");
+      }
+    }
+    body.show_watermark = draft.show_watermark === "true";
+
+    await put(
+      `/api/admin/closing-cost-config/statement-types/${typeKey}`,
+      body,
+      `statement:${typeKey}`,
+    );
+  };
+
+  // ── render ──────────────────────────────────────────────────────────
   if (loading) {
     return (
       <div className="flex items-center justify-center gap-2 py-24 text-sm text-gray-500">
@@ -283,6 +386,12 @@ const ClosingCostSettings: React.FC = () => {
     );
   }
 
+  const firmOptions = FIRM_KEYS.map((key) => ({
+    key,
+    label: firmDrafts[key]?.label || key,
+    isActive: firmActive[key] === true,
+  }));
+
   return (
     <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:px-8">
       {toast && (
@@ -296,151 +405,185 @@ const ClosingCostSettings: React.FC = () => {
         </div>
       )}
 
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-bold text-gray-900">Closing cost settings</h1>
-          <p className="mt-1 max-w-2xl text-xs text-gray-500">
-            The firm-standard fees and rates behind every purchase closing-cost estimate.
-            Changing them affects new estimates only — an estimate already issued keeps the
-            figures the client was sent.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={handleSave}
-          disabled={saving}
-          className="inline-flex items-center gap-1.5 rounded-lg px-4 py-2.5 text-xs font-semibold text-white disabled:opacity-50"
-          style={{ backgroundColor: BRAND }}
-        >
-          {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
-          Save configuration
-        </button>
+      <div className="mb-5">
+        <h1 className="text-xl font-bold text-gray-900">Closing cost settings</h1>
+        <p className="mt-1 max-w-2xl text-xs text-gray-500">
+          The firm profiles, statutory rates and statement wording behind every purchase
+          closing-cost estimate. Changing them affects new estimates only — an estimate
+          already issued keeps the figures the client was sent.
+        </p>
       </div>
 
-      {isDefault && (
-        <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-900">
+      {locked && (
+        <div className="mb-4 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-xs text-red-900">
           <TriangleAlert size={14} className="mt-0.5 shrink-0" />
           <span>
-            No configuration row exists yet — these are the built-in defaults. Save once to
-            store them. (If you expected a saved row, check that the
-            <code className="mx-1 rounded bg-amber-100 px-1">
-              2026-07-30-closing-cost-calculator
+            The firm and statement-type tables do not exist yet. Run the
+            <code className="mx-1 rounded bg-red-100 px-1">
+              2026-08-03-closing-cost-firms-and-statement-types
             </code>
-            migration has been run.)
+            migration in the Supabase SQL editor and reload — saving is disabled until
+            then. Existing estimates and PDFs are unaffected.
           </span>
         </div>
       )}
 
-      <div className="mb-5 flex items-start gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-xs text-gray-600">
-        <TriangleAlert size={14} className="mt-0.5 shrink-0 text-gray-400" />
-        <span>
-          Statutory rates change. Confirm the Ontario LTT brackets, the Toronto MLTT
-          brackets (including the tiers above $2M) and both rebate maximums against the
-          Ontario Ministry of Finance and the City of Toronto before relying on them.
-        </span>
+      {!locked && bundle?.is_default.firms && (
+        <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-900">
+          <TriangleAlert size={14} className="mt-0.5 shrink-0" />
+          <span>
+            No firm rows exist yet — these are the built-in defaults. Save each firm once
+            to store them.
+          </span>
+        </div>
+      )}
+
+      <div className="mb-5 flex gap-1 border-b border-gray-200">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => setTab(t.id)}
+            className="relative px-4 py-2.5 text-xs font-semibold transition-colors"
+            style={{ color: tab === t.id ? BRAND : "#6b7280" }}
+          >
+            {t.label}
+            {tab === t.id && (
+              <span
+                className="absolute inset-x-2 -bottom-px h-0.5 rounded-full"
+                style={{ backgroundColor: BRAND }}
+              />
+            )}
+          </button>
+        ))}
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,300px)]">
-        <div className="space-y-5">
-          {SECTIONS.map((section) => (
-            <section
-              key={section.title}
-              className="rounded-xl border border-gray-200 bg-white p-5"
-            >
-              <h2 className="text-[11px] font-bold tracking-wide" style={{ color: BRAND }}>
-                {section.title.toUpperCase()}
-              </h2>
-              {section.note && (
-                <p className="mt-1 text-[11px] leading-relaxed text-gray-400">
-                  {section.note}
-                </p>
-              )}
-              <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                {section.fields.map((field) => (
-                  <div key={field.key}>
-                    <label className="block text-[12px] font-semibold text-gray-800">
-                      {field.label}
-                      {field.hint && (
-                        <span className="ml-1 font-normal text-gray-400">
-                          — {field.hint}
-                        </span>
-                      )}
-                    </label>
-                    <div className="relative mt-1.5">
-                      {field.prefix && (
-                        <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">
-                          {field.prefix}
-                        </span>
-                      )}
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={draft[field.key] ?? ""}
-                        onChange={(e) =>
-                          setDraft((prev) => ({ ...prev, [field.key]: e.target.value }))
-                        }
-                        className={`${inputClass} tabular-nums ${field.prefix ? "pl-7" : ""}`}
-                      />
-                    </div>
-                  </div>
+        <div>
+          {tab === "firms" && (
+            <div className="space-y-5">
+              <div className="flex flex-wrap gap-2">
+                {firmOptions.map((firm) => (
+                  <button
+                    key={firm.key}
+                    type="button"
+                    onClick={() => setActiveFirm(firm.key)}
+                    className={`inline-flex items-center gap-2 rounded-lg border px-3.5 py-2 text-xs font-semibold ${
+                      activeFirm === firm.key
+                        ? "border-transparent text-white"
+                        : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+                    }`}
+                    style={
+                      activeFirm === firm.key ? { backgroundColor: BRAND } : undefined
+                    }
+                  >
+                    {firm.label}
+                    {dirty[`firm:${firm.key}`] && (
+                      <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                    )}
+                    {!firm.isActive && (
+                      <span className="text-[10px] font-normal opacity-70">inactive</span>
+                    )}
+                  </button>
                 ))}
               </div>
-            </section>
-          ))}
 
-          <TierEditor
-            title="Ontario LTT Brackets"
-            note="Marginal bands — each rate applies only to the portion of the price inside that band. The last band must be open-ended."
-            tiers={lttTiers}
-            onChange={setLttTiers}
-            onReset={() => setLttTiers(DEFAULT_LTT_TIERS)}
-          />
-
-          <TierEditor
-            title="Toronto MLTT Brackets"
-            note="Applied in addition to the provincial tax when the property is in the City of Toronto."
-            tiers={mlttTiers}
-            onChange={setMlttTiers}
-            onReset={() => setMlttTiers(DEFAULT_MLTT_TIERS)}
-          />
-
-          <section className="rounded-xl border border-gray-200 bg-white p-5">
-            <h2 className="text-[11px] font-bold tracking-wide" style={{ color: BRAND }}>
-              PDF LETTERHEAD
-            </h2>
-            <p className="mt-1 text-[11px] leading-relaxed text-gray-400">
-              Printed at the top of every generated estimate PDF.
-            </p>
-            <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {LETTERHEAD_FIELDS.map((field) => (
-                <div key={field.key} className={field.wide ? "sm:col-span-2" : undefined}>
-                  <label className="block text-[12px] font-semibold text-gray-800">
-                    {field.label}
-                  </label>
-                  <input
-                    type="text"
-                    value={draft[field.key] ?? ""}
-                    onChange={(e) =>
-                      setDraft((prev) => ({ ...prev, [field.key]: e.target.value }))
-                    }
-                    className={`${inputClass} mt-1.5`}
-                  />
-                </div>
-              ))}
+              <ClosingCostFirmCard
+                label={firmDrafts[activeFirm]?.label || activeFirm}
+                draft={firmDrafts[activeFirm] ?? {}}
+                logoUrl={firmLogos[activeFirm] ?? ""}
+                onLogoUpload={(file) => uploadLogo(activeFirm, file)}
+                onLogoRemove={() => removeLogo(activeFirm)}
+                isActive={firmActive[activeFirm] === true}
+                isDivision={activeFirm !== FIRM_KEYS[0]}
+                dirty={Boolean(dirty[`firm:${activeFirm}`])}
+                saving={saving === `firm:${activeFirm}`}
+                disabled={locked}
+                onChange={editFirm(activeFirm)}
+                onToggleActive={(next) => {
+                  setFirmActive((prev) => ({ ...prev, [activeFirm]: next }));
+                  markDirty(`firm:${activeFirm}`);
+                }}
+                onSave={() => void saveFirm(activeFirm)}
+              />
             </div>
-          </section>
+          )}
+
+          {tab === "shared" && (
+            <ClosingCostSharedRatesCard
+              draft={sharedDraft}
+              lttTiers={lttTiers}
+              mlttTiers={mlttTiers}
+              firmOptions={firmOptions}
+              dirty={Boolean(dirty.shared)}
+              saving={saving === "shared"}
+              disabled={locked}
+              onChange={editShared}
+              onLttChange={(t) => {
+                setLttTiers(t);
+                markDirty("shared");
+              }}
+              onMlttChange={(t) => {
+                setMlttTiers(t);
+                markDirty("shared");
+              }}
+              onSave={() => void saveShared()}
+            />
+          )}
+
+          {tab === "statements" && (
+            <div className="space-y-5">
+              <div className="flex flex-wrap gap-2">
+                {STATEMENT_TYPE_KEYS.map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setActiveType(key)}
+                    className={`inline-flex items-center gap-2 rounded-lg border px-3.5 py-2 text-xs font-semibold ${
+                      activeType === key
+                        ? "border-transparent text-white"
+                        : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+                    }`}
+                    style={activeType === key ? { backgroundColor: BRAND } : undefined}
+                  >
+                    {statementDrafts[key]?.label || key}
+                    {dirty[`statement:${key}`] && (
+                      <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                    )}
+                  </button>
+                ))}
+              </div>
+
+              <ClosingCostStatementTypesCard
+                typeKey={activeType}
+                label={statementDrafts[activeType]?.label || activeType}
+                draft={statementDrafts[activeType] ?? {}}
+                dirty={Boolean(dirty[`statement:${activeType}`])}
+                saving={saving === `statement:${activeType}`}
+                disabled={locked}
+                onChange={editStatement(activeType)}
+                onToggleWatermark={(next) =>
+                  editStatement(activeType)("show_watermark", next ? "true" : "false")
+                }
+                onSave={() => void saveStatementType(activeType)}
+              />
+            </div>
+          )}
         </div>
 
         {/* Live sample — the reference file from the requirements document, so a
-            change to any fee shows up immediately in a familiar total. */}
+            change to any fee shows up immediately in a familiar total. Priced
+            with the firm currently on screen, so switching tabs shows the
+            difference between the two fee schedules. */}
         <aside className="lg:sticky lg:top-6 lg:self-start">
           <div className="rounded-xl border border-gray-200 bg-white p-5">
             <h2 className="text-[11px] font-bold tracking-wide" style={{ color: BRAND }}>
               SAMPLE ESTIMATE
             </h2>
             <p className="mt-1 text-[11px] leading-relaxed text-gray-400">
-              A $1,080,000 purchase outside Toronto, $50,000 deposit, $399,700 mortgage, not
-              a first-time buyer.
+              A $1,080,000 purchase outside Toronto, $50,000 deposit, $399,700 mortgage,
+              not a first-time buyer — priced as{" "}
+              <strong>{firmDrafts[activeFirm]?.label || activeFirm}</strong>.
             </p>
             <dl className="mt-4 space-y-2 text-[12px]">
               {[
@@ -473,129 +616,6 @@ const ClosingCostSettings: React.FC = () => {
         </aside>
       </div>
     </div>
-  );
-};
-
-/** Add/remove/edit rows of a marginal bracket table. */
-const TierEditor: React.FC<{
-  title: string;
-  note: string;
-  tiers: Tier[];
-  onChange: (tiers: Tier[]) => void;
-  onReset: () => void;
-}> = ({ title, note, tiers, onChange, onReset }) => {
-  const setCap = (index: number, raw: string) => {
-    const next = tiers.map((t) => [...t] as Tier);
-    const parsed = parseAmountInput(raw);
-    next[index][0] = parsed;
-    onChange(next);
-  };
-
-  const setRate = (index: number, raw: string) => {
-    const next = tiers.map((t) => [...t] as Tier);
-    const parsed = parseAmountInput(raw);
-    next[index][1] = parsed === null ? 0 : parsed / 100;
-    onChange(next);
-  };
-
-  const addBand = () => {
-    // Insert above the open-ended band so it always stays last.
-    const next = tiers.map((t) => [...t] as Tier);
-    const lastCapped = next.length >= 2 ? next[next.length - 2][0] : null;
-    const suggestedCap = typeof lastCapped === "number" ? lastCapped * 2 : 100_000;
-    next.splice(next.length - 1, 0, [suggestedCap, next[next.length - 1][1]]);
-    onChange(next);
-  };
-
-  const removeBand = (index: number) => {
-    if (tiers.length <= 1) return;
-    onChange(tiers.filter((_, i) => i !== index));
-  };
-
-  return (
-    <section className="rounded-xl border border-gray-200 bg-white p-5">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h2 className="text-[11px] font-bold tracking-wide" style={{ color: BRAND }}>
-            {title.toUpperCase()}
-          </h2>
-          <p className="mt-1 max-w-xl text-[11px] leading-relaxed text-gray-400">{note}</p>
-        </div>
-        <button
-          type="button"
-          onClick={onReset}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-gray-200 px-2.5 py-1.5 text-[11px] font-semibold text-gray-600 hover:bg-gray-50"
-        >
-          <RotateCcw size={12} /> Reset
-        </button>
-      </div>
-
-      <div className="mt-4 space-y-2">
-        <div className="grid grid-cols-[1fr_120px_110px_32px] gap-2 px-1 text-[10px] font-bold tracking-wide text-gray-400">
-          <span>PORTION OF PRICE</span>
-          <span>UP TO</span>
-          <span>RATE</span>
-          <span />
-        </div>
-        {tiers.map((tier, index) => {
-          const prevCap = index === 0 ? 0 : (tiers[index - 1][0] ?? 0);
-          const isLast = index === tiers.length - 1;
-          return (
-            <div
-              key={index}
-              className="grid grid-cols-[1fr_120px_110px_32px] items-center gap-2"
-            >
-              <span className="text-[12px] text-gray-600 tabular-nums">
-                {bandLabel(prevCap, tier[0])}
-              </span>
-              {isLast ? (
-                <span className="px-2 text-[11px] italic text-gray-400">and above</span>
-              ) : (
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={tier[0] === null ? "" : String(tier[0])}
-                  onChange={(e) => setCap(index, e.target.value)}
-                  className="w-full rounded-md border border-gray-200 px-2 py-1.5 text-[12px] tabular-nums focus:border-[#C10007] focus:outline-none focus:ring-1 focus:ring-[#C10007]"
-                />
-              )}
-              <div className="relative">
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={String(Number((tier[1] * 100).toFixed(6)))}
-                  onChange={(e) => setRate(index, e.target.value)}
-                  className="w-full rounded-md border border-gray-200 pl-2 pr-5 py-1.5 text-[12px] tabular-nums focus:border-[#C10007] focus:outline-none focus:ring-1 focus:ring-[#C10007]"
-                />
-                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[11px] text-gray-400">
-                  %
-                </span>
-              </div>
-              {isLast ? (
-                <span />
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => removeBand(index)}
-                  aria-label="Remove band"
-                  className="justify-self-center text-gray-300 hover:text-red-600"
-                >
-                  <X size={14} />
-                </button>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      <button
-        type="button"
-        onClick={addBand}
-        className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-2 text-[11px] font-semibold text-gray-600 hover:bg-gray-50"
-      >
-        <Plus size={12} /> Add band
-      </button>
-    </section>
   );
 };
 

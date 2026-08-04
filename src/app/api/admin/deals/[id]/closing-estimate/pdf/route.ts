@@ -4,7 +4,7 @@ import { isUuid } from "@/lib/isUuid";
 import { logger } from "@/lib/logger";
 import { rateLimitOk } from "@/lib/rateLimit";
 import { blobTokenForUrl, isBlobUrl, isPrivateBlobUrl } from "@/lib/blobPrivacy";
-import { readActiveConfig } from "@/lib/closingCostConfig";
+import { readActiveConfig, readStatementType } from "@/lib/closingCostConfig";
 import { snapshotToStatement } from "@/lib/closingEstimate";
 import { closingCostPdfFileName, generateClosingCostPdf } from "@/lib/closingCostPdf";
 import { formatLocalDate } from "@/lib/formatDate";
@@ -33,6 +33,14 @@ interface EstimateRow {
   pdf_url: string | null;
   issued_at: string | null;
   updated_at: string | null;
+  // Added by 2026-08-03 / 2026-08-04. Optional because a row read before those
+  // migrations simply will not carry them, and a historic estimate must stay
+  // printable either way.
+  firm_key?: string | null;
+  statement_type?: string | null;
+  purchasers?: string | null;
+  property_address?: string | null;
+  closing_date?: string | null;
 }
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -161,8 +169,15 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
 
   // The letterhead comes from the CURRENT config even for a historic estimate —
   // the firm's address changing shouldn't reprint an old one, whereas the
-  // figures themselves come from the frozen snapshot and never move.
-  const { row: config } = await readActiveConfig();
+  // figures themselves come from the frozen snapshot and never move. The FIRM,
+  // though, is whichever one the estimate was written under.
+  const { row: config } = await readActiveConfig(row.firm_key as string | null);
+
+  // An estimate saved before statement types existed has no stored flavour;
+  // fall back to the workflow status, which reproduces the old watermark rule.
+  const statementType = await readStatementType(
+    (row.statement_type as string | null) ?? (isDraft ? "draft" : "final"),
+  );
 
   try {
     const preparedSource: string =
@@ -170,8 +185,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     const pdfBytes = await generateClosingCostPdf({
       statement,
       config,
+      statementType,
       fileNo: row.file_no_display ?? deal?.file_number ?? null,
-      propertyAddress: deal?.property_address ?? null,
+      propertyAddress:
+        (row.property_address as string | null) ?? deal?.property_address ?? null,
+      clientName: (row.purchasers as string | null) ?? null,
+      closingDate: (row.closing_date as string | null) ?? null,
       preparedOn: formatLocalDate(preparedSource) || preparedSource.slice(0, 10),
       draft: isDraft,
     });

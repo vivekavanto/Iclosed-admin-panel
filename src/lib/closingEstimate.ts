@@ -16,6 +16,12 @@ import {
   type ClosingCostRates,
   type Statement,
 } from "./closingCosts";
+import {
+  isFirmKey,
+  isStatementTypeKey,
+  type FirmKey,
+  type StatementTypeKey,
+} from "./closingCostSettings";
 
 /** The per-file fee/rate overrides staff may set in "Adjust fixed fees & rates". */
 export const OVERRIDABLE_RATE_KEYS = [
@@ -41,11 +47,26 @@ export interface EstimateInputPayload {
   is_toronto: boolean;
   is_first_time_buyer: boolean;
   title_premium_override: number | null;
+  /** A Statement of Adjustments figure; may be negative. Null = none entered. */
+  property_tax_adjustment: number | null;
   file_no_display: string | null;
+  /** Printed on the statement header. */
+  purchasers: string | null;
+  property_address: string | null;
+  /** ISO date (YYYY-MM-DD) or null. */
+  closing_date: string | null;
+  /** Which firm's letterhead and fee schedule this estimate uses. */
+  firm_key: FirmKey | null;
+  /** The client-facing document flavour — NOT the workflow status. */
+  statement_type: StatementTypeKey | null;
   rate_overrides: RateOverrides;
 }
 
 const MAX_AMOUNT = 1_000_000_000; // $1B — well past any residential purchase
+
+/** Long enough for "Firstname Lastname and Firstname Lastname" plus a third. */
+const MAX_NAME_LENGTH = 200;
+const MAX_ADDRESS_LENGTH = 300;
 
 /** Bounds for a per-file override, mirroring the settings route's ceilings. */
 const OVERRIDE_BOUNDS: Record<string, { min: number; max: number }> = {
@@ -100,9 +121,60 @@ export function parseEstimatePayload(
     titleOverride = value;
   }
 
+  // Property tax adjustment: blank means none. A NEGATIVE value is legitimate —
+  // a seller in arrears credits the buyer — so this is not bounded below at 0.
+  const rawPropertyTax = body.property_tax_adjustment;
+  let propertyTax: number | null = null;
+  if (rawPropertyTax !== null && rawPropertyTax !== undefined && rawPropertyTax !== "") {
+    const value = Number(rawPropertyTax);
+    if (!Number.isFinite(value) || Math.abs(value) > MAX_AMOUNT) {
+      return { error: "Property tax adjustment must be a number, or left blank" };
+    }
+    propertyTax = value;
+  }
+
   const fileNo = String(body.file_no_display ?? "").trim();
   if (fileNo.length > 60) {
     return { error: "File No. must be 60 characters or fewer" };
+  }
+
+  const purchasers = String(body.purchasers ?? "").trim();
+  if (purchasers.length > MAX_NAME_LENGTH) {
+    return { error: `Purchaser(s) must be ${MAX_NAME_LENGTH} characters or fewer` };
+  }
+
+  const propertyAddress = String(body.property_address ?? "").trim();
+  if (propertyAddress.length > MAX_ADDRESS_LENGTH) {
+    return {
+      error: `Property address must be ${MAX_ADDRESS_LENGTH} characters or fewer`,
+    };
+  }
+
+  // Stored as a plain date string — the statement prints it, never arithmetics
+  // with it, and a timestamptz would drift across timezones on the boundary.
+  const closingDateRaw = String(body.closing_date ?? "").trim();
+  let closingDate: string | null = null;
+  if (closingDateRaw) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(closingDateRaw)) {
+      return { error: "Closing date must be a YYYY-MM-DD date" };
+    }
+    closingDate = closingDateRaw;
+  }
+
+  // Absent means "use the configured default" — resolved server-side, not here,
+  // so this module stays free of database access.
+  const rawFirm = body.firm_key;
+  if (rawFirm !== null && rawFirm !== undefined && rawFirm !== "" && !isFirmKey(rawFirm)) {
+    return { error: "Unknown firm" };
+  }
+  const rawType = body.statement_type;
+  if (
+    rawType !== null &&
+    rawType !== undefined &&
+    rawType !== "" &&
+    !isStatementTypeKey(rawType)
+  ) {
+    return { error: "Unknown statement type" };
   }
 
   // Per-file fee overrides. Unknown keys are dropped silently, matching the
@@ -130,7 +202,13 @@ export function parseEstimatePayload(
       is_toronto: body.is_toronto === true,
       is_first_time_buyer: body.is_first_time_buyer === true,
       title_premium_override: titleOverride,
+      property_tax_adjustment: propertyTax,
       file_no_display: fileNo || null,
+      purchasers: purchasers || null,
+      property_address: propertyAddress || null,
+      closing_date: closingDate,
+      firm_key: isFirmKey(rawFirm) ? rawFirm : null,
+      statement_type: isStatementTypeKey(rawType) ? rawType : null,
       rate_overrides: overrides,
     },
   };
@@ -166,6 +244,7 @@ export function buildEstimateRow(
     isToronto: payload.is_toronto,
     isFirstTimeBuyer: payload.is_first_time_buyer,
     titlePremiumOverride: payload.title_premium_override,
+    propertyTaxAdjustment: payload.property_tax_adjustment,
   };
 
   const statement = computeStatement(inputs, rates);
@@ -180,7 +259,13 @@ export function buildEstimateRow(
       is_toronto: payload.is_toronto,
       is_first_time_buyer: payload.is_first_time_buyer,
       title_premium_override: payload.title_premium_override,
+      property_tax_adjustment: payload.property_tax_adjustment,
       file_no_display: payload.file_no_display,
+      purchasers: payload.purchasers,
+      property_address: payload.property_address,
+      closing_date: payload.closing_date,
+      firm_key: payload.firm_key,
+      statement_type: payload.statement_type,
       // Frozen snapshots. `rate_overrides` is kept alongside the effective rates
       // so the settings page's values and the per-file deviations stay
       // distinguishable when re-opening an estimate.
@@ -212,11 +297,20 @@ export function statementToSnapshot(s: Statement): Record<string, unknown> {
     })),
     hst: { label: s.hst.label, amount: s.hst.amount },
     total: s.total,
+    property_tax: s.propertyTax
+      ? {
+          key: s.propertyTax.key,
+          label: s.propertyTax.label,
+          amount: s.propertyTax.amount,
+          ...(s.propertyTax.sublabel ? { sublabel: s.propertyTax.sublabel } : {}),
+        }
+      : null,
     balance: {
       purchase_price: s.balance.purchasePrice,
       deposit_paid: s.balance.depositPaid,
       mortgage_amount: s.balance.mortgageAmount,
       closing_costs: s.balance.closingCosts,
+      property_tax_adjustment: s.balance.propertyTaxAdjustment,
       balance_due: s.balance.balanceDue,
     },
     detail: {
@@ -230,6 +324,7 @@ export function statementToSnapshot(s: Statement): Record<string, unknown> {
       legal_fees: s.detail.legalFees,
       registrations: s.detail.registrations,
       taxable_base: s.detail.taxableBase,
+      property_tax_adjustment: s.detail.propertyTaxAdjustment,
     },
   };
 }
@@ -283,11 +378,24 @@ export function snapshotToStatement(snapshot: unknown): Statement | null {
       amount: num(hst.amount),
     },
     total: num(s.total),
+    // Absent in a CALC_VERSION 1 snapshot, which had no adjustment at all.
+    propertyTax: s.property_tax
+      ? (() => {
+          const p = bag(s.property_tax);
+          return {
+            key: String(p.key ?? "property_tax_adjustment"),
+            label: String(p.label ?? "Property tax adjustment"),
+            amount: num(p.amount),
+            ...(p.sublabel ? { sublabel: String(p.sublabel) } : {}),
+          };
+        })()
+      : null,
     balance: {
       purchasePrice: num(balance.purchase_price),
       depositPaid: num(balance.deposit_paid),
       mortgageAmount: num(balance.mortgage_amount),
       closingCosts: num(balance.closing_costs, num(s.total)),
+      propertyTaxAdjustment: num(balance.property_tax_adjustment),
       balanceDue: num(balance.balance_due),
     },
     detail: {
@@ -301,6 +409,8 @@ export function snapshotToStatement(snapshot: unknown): Statement | null {
       legalFees: num(detail.legal_fees),
       registrations: num(detail.registrations),
       taxableBase: num(detail.taxable_base),
+      // Absent in a CALC_VERSION 1 snapshot, which simply had no adjustment.
+      propertyTaxAdjustment: num(detail.property_tax_adjustment),
     },
   };
 }

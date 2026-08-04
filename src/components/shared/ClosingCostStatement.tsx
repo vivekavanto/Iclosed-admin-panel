@@ -91,8 +91,20 @@ export interface ClosingCostStatementProps {
   statement: Statement;
   /** Small caption under the heading, e.g. "Draft — not yet issued". */
   caption?: string;
-  /** Shown as a chip on the "Legal & Admin Fees" group heading. */
+  /**
+   * Shown as a chip on the "Legal & Admin Fees" group heading — the acting
+   * firm's `firm_badge`. Null hides the chip.
+   */
   firmBadge?: string | null;
+  /** From the statement type; defaults to the draft wording. */
+  heading?: string;
+  /**
+   * The bolded lead line above the standing legal text, from the statement
+   * type. Without this a "final account" would still print the draft's
+   * "this is an estimate" wording. DISCLAIMERS[1..] applies to both and is
+   * never overridden.
+   */
+  disclaimerIntro?: string;
   /** Set false to hide the disclaimer block (e.g. when it is rendered elsewhere). */
   showDisclaimers?: boolean;
 }
@@ -100,16 +112,16 @@ export interface ClosingCostStatementProps {
 const ClosingCostStatement: React.FC<ClosingCostStatementProps> = ({
   statement,
   caption,
-  firmBadge = "NAVA WILSON PC",
+  firmBadge = null,
+  heading = "ESTIMATED STATEMENT OF ACCOUNT",
+  disclaimerIntro,
   showDisclaimers = true,
 }) => {
   const b = statement.balance;
 
   return (
     <div>
-      <h2 className="text-sm font-bold tracking-wide text-gray-900">
-        ESTIMATED STATEMENT OF ACCOUNT
-      </h2>
+      <h2 className="text-sm font-bold tracking-wide text-gray-900">{heading}</h2>
       {caption && <p className="mt-1 text-[11px] text-gray-400">{caption}</p>}
 
       <div className="mt-5 space-y-5">
@@ -152,12 +164,25 @@ const ClosingCostStatement: React.FC<ClosingCostStatementProps> = ({
         style={{ backgroundColor: BRAND }}
       >
         <span className="text-[13px] font-bold">
-          Total Closing Costs (fees, taxes &amp; disbursements)
+          Total legal fees, taxes &amp; disbursements
         </span>
         <span className="shrink-0 text-lg font-bold tabular-nums">
           {formatCurrency(statement.total)}
         </span>
       </div>
+
+      {/* Property tax adjustment — a Statement of Adjustments item, so it sits
+          outside the total above and is added to the balance separately. */}
+      {statement.propertyTax && (
+        <div className="mt-5">
+          <h3 className="text-[11px] font-bold tracking-wide" style={{ color: BRAND }}>
+            PROPERTY TAX
+          </h3>
+          <div className="mt-2 border-t border-gray-100 pt-2">
+            <Line line={statement.propertyTax} />
+          </div>
+        </div>
+      )}
 
       {/* Balance due on closing */}
       <div
@@ -165,7 +190,7 @@ const ClosingCostStatement: React.FC<ClosingCostStatementProps> = ({
         style={{ borderColor: BRAND }}
       >
         <p className="text-[10px] font-bold tracking-wide" style={{ color: BRAND }}>
-          FUNDS YOU&rsquo;LL NEED ON CLOSING
+          FUNDS REQUIRED ON CLOSING
         </p>
         <dl className="mt-2.5 space-y-1.5 text-[12px]">
           <div className="flex justify-between gap-4">
@@ -175,19 +200,32 @@ const ClosingCostStatement: React.FC<ClosingCostStatementProps> = ({
             </dd>
           </div>
           <div className="flex justify-between gap-4">
-            <dt className="text-gray-500">less deposit paid</dt>
+            <dt className="text-gray-500">less deposit already paid</dt>
             <dd className="tabular-nums text-gray-700">
               {formatCurrency(-b.depositPaid)}
             </dd>
           </div>
           <div className="flex justify-between gap-4">
-            <dt className="text-gray-500">less mortgage advance</dt>
+            <dt className="text-gray-500">less mortgage advance from your lender</dt>
             <dd className="tabular-nums text-gray-700">
               {formatCurrency(-b.mortgageAmount)}
             </dd>
           </div>
+          {b.propertyTaxAdjustment !== 0 && (
+            <div className="flex justify-between gap-4">
+              {/* Signed, so a seller in arrears reads as a credit, not a charge. */}
+              <dt className="text-gray-500">
+                {b.propertyTaxAdjustment > 0
+                  ? "plus property tax adjustment"
+                  : "less property tax credit"}
+              </dt>
+              <dd className="tabular-nums text-gray-700">
+                {formatCurrency(b.propertyTaxAdjustment)}
+              </dd>
+            </div>
+          )}
           <div className="flex justify-between gap-4">
-            <dt className="text-gray-500">plus closing costs (above)</dt>
+            <dt className="text-gray-500">plus total closing costs</dt>
             <dd className="tabular-nums text-gray-700">
               + {formatCurrency(b.closingCosts)}
             </dd>
@@ -195,7 +233,7 @@ const ClosingCostStatement: React.FC<ClosingCostStatementProps> = ({
         </dl>
         <div className="mt-3 flex items-center justify-between gap-4 border-t border-gray-100 pt-3">
           <span className="flex items-center text-[13px] font-bold" style={{ color: BRAND }}>
-            Estimated Balance Due on Closing
+            Estimated balance due on closing
             <InfoTip
               text={LINE_TOOLTIPS.balance_due}
               label="the estimated balance due on closing"
@@ -212,7 +250,9 @@ const ClosingCostStatement: React.FC<ClosingCostStatementProps> = ({
 
       {showDisclaimers && (
         <div className="mt-4 space-y-1.5 text-[10px] leading-relaxed text-gray-400">
-          <p className="font-bold text-gray-600">{DISCLAIMERS[0]}</p>
+          <p className="font-bold text-gray-600">
+            {disclaimerIntro ?? DISCLAIMERS[0]}
+          </p>
           {DISCLAIMERS.slice(1).map((item) => (
             <p key={item}>{item}</p>
           ))}

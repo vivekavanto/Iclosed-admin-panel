@@ -18,8 +18,16 @@
 // SQL column defaults, so the calculator still works if the config row is
 // missing or unreachable.
 
-/** Bumped whenever the shape of a Statement or the maths changes. */
-export const CALC_VERSION = 1;
+/**
+ * Bumped whenever the shape of a Statement or the maths changes.
+ *
+ * 2 — added the optional "Property Tax" group (propertyTaxAdjustment). Purely
+ *     additive: with no adjustment the statement is identical to a v1 one.
+ * 3 — "FCT — submission & review" became its own line under Title Insurance
+ *     instead of being folded into "Legal fees". Presentation only: the HST
+ *     base, the total and the balance are all unchanged.
+ */
+export const CALC_VERSION = 3;
 
 /**
  * One marginal tax band: `[cap, rate]`. The rate applies only to the portion of
@@ -62,6 +70,14 @@ export interface ClosingCostInputs {
   isFirstTimeBuyer: boolean;
   /** Non-null = the exact FCT quote, used verbatim; the estimate is skipped. */
   titlePremiumOverride?: number | null;
+  /**
+   * The buyer's share of property tax the seller has already paid, from the
+   * Statement of Adjustments. Adds a "Property Tax" group when non-zero and is
+   * otherwise omitted entirely, so an estimate without one is unchanged.
+   *
+   * May be negative — a seller who is in arrears credits the buyer instead.
+   */
+  propertyTaxAdjustment?: number | null;
 }
 
 export interface StatementLine {
@@ -85,11 +101,23 @@ export interface Statement {
   groups: StatementGroup[];
   hst: { label: string; amount: number };
   total: number;
+  /**
+   * The Statement of Adjustments property-tax line, or null when none was
+   * entered.
+   *
+   * Deliberately NOT a member of `groups`: it is not a fee, a tax or a
+   * disbursement of the firm, so it must stay out of "Total closing costs" —
+   * which is exactly the sum of the group lines plus HST. It is added to the
+   * balance separately, after that total.
+   */
+  propertyTax: StatementLine | null;
   balance: {
     purchasePrice: number;
     depositPaid: number;
     mortgageAmount: number;
     closingCosts: number;
+    /** Signed; 0 when no adjustment was entered. */
+    propertyTaxAdjustment: number;
     balanceDue: number;
   };
   /** Component figures, handy for the PDF and for assertions. */
@@ -104,6 +132,8 @@ export interface Statement {
     legalFees: number;
     registrations: number;
     taxableBase: number;
+    /** 0 when no Statement of Adjustments figure has been entered. */
+    propertyTaxAdjustment: number;
   };
 }
 
@@ -376,12 +406,23 @@ export function computeStatement(
 
   const titleLine: StatementLine = {
     key: "title_premium",
-    label: "Title insurance premium (FCT)",
+    label: "First Canadian Title Insurance — premium",
     amount: titlePremium,
   };
   // The badge is what tells the client this figure is not yet the real quote —
   // so it must disappear the moment a staff member pastes the actual one.
   if (!hasOverride) titleLine.badge = "ESTIMATE";
+
+  // The firm's charge for preparing and submitting the title insurance
+  // application. Shown under Title Insurance rather than inside the legal fee
+  // so the client can see what the title work costs on its own. It is still a
+  // supply BY THE FIRM, so it stays in the HST base below.
+  const titleSubmission = round2(rates.legalTitleSubmission);
+  const titleSubmissionLine: StatementLine = {
+    key: "title_submission",
+    label: "First Canadian Title Insurance — submission & review",
+    amount: titleSubmission,
+  };
 
   // ── Third-party disbursements ──
   const regTransfer = round2(rates.regTransfer);
@@ -400,17 +441,16 @@ export function computeStatement(
     });
   }
   thirdPartyLines.push(
-    { key: "teraview", label: "Teraview — searches & review", amount: teraview },
+    { key: "teraview", label: "Teraview — title searches & review", amount: teraview },
     { key: "sheriff", label: "Sheriff's Certificates", amount: sheriff },
   );
 
   // ── Legal & admin fees ──
-  // One client-facing "Legal fees" line: transfer + mortgage + title submission.
-  // A cash purchase drops the mortgage portion.
+  // The client-facing "Legal fees" line: transfer + mortgage. A cash purchase
+  // drops the mortgage portion. Title submission is billed separately, under
+  // Title Insurance above.
   const legalFees = round2(
-    rates.legalTransfer +
-      (hasMortgage ? rates.legalMortgage : 0) +
-      rates.legalTitleSubmission,
+    rates.legalTransfer + (hasMortgage ? rates.legalMortgage : 0),
   );
   const adminFee = round2(rates.adminFee);
 
@@ -419,11 +459,14 @@ export function computeStatement(
       key: "legal_fees",
       label: "Legal fees",
       amount: legalFees,
-      sublabel: hasMortgage
-        ? "purchase, mortgage & title submission"
-        : "purchase & title submission",
+      sublabel: hasMortgage ? "purchase & mortgage" : "purchase",
     },
-    { key: "admin_fee", label: "Admin fee", amount: adminFee },
+    {
+      key: "admin_fee",
+      label: "Admin fee",
+      amount: adminFee,
+      sublabel: "software, storage, banking, courier & administrative charges",
+    },
   ];
 
   // ── HST ──
@@ -431,15 +474,37 @@ export function computeStatement(
   // registration fees, NOT the title insurance premium. Computed from the
   // already-rounded line amounts so the arithmetic is reproducible from the
   // printed statement.
-  const taxableBase = round2(legalFees + adminFee + teraview + sheriff);
+  //
+  // The title-submission charge is in here even though it prints under Title
+  // Insurance: what decides HST is who supplies the service, and that is the
+  // firm. Moving it out of the legal-fees LINE did not move it out of the BASE.
+  const taxableBase = round2(
+    legalFees + titleSubmission + adminFee + teraview + sheriff,
+  );
   const hstAmount = round2(rates.hstRate * taxableBase);
 
   const groups: StatementGroup[] = [
     { key: "ltt", title: "Land Transfer Tax", lines: lttLines },
-    { key: "title", title: "Title Insurance", lines: [titleLine] },
+    { key: "title", title: "Title Insurance", lines: [titleLine, titleSubmissionLine] },
     { key: "third_party", title: "Third-Party Disbursements", lines: thirdPartyLines },
     { key: "legal", title: "Legal & Admin Fees", lines: legalLines },
   ];
+
+  // ── Property tax adjustment ──
+  // A Statement of Adjustments item, not a fee: it reimburses the seller for
+  // tax already paid past the closing date. It carries no HST and is NOT part
+  // of "Total closing costs" — it is added to the balance on its own line, so
+  // the printed total stays exactly "fees, taxes & disbursements".
+  const propertyTax = round2(num(inputs.propertyTaxAdjustment));
+  const propertyTaxLine: StatementLine | null =
+    propertyTax === 0
+      ? null
+      : {
+          key: "property_tax_adjustment",
+          label: "Property tax adjustment",
+          amount: propertyTax,
+          sublabel: "per the Statement of Adjustments",
+        };
 
   // ── Totals ──
   const lineSum = groups.reduce(
@@ -447,7 +512,7 @@ export function computeStatement(
     0,
   );
   const total = round2(lineSum + hstAmount);
-  const balanceDue = round2(price - deposit - mortgage + total);
+  const balanceDue = round2(price - deposit - mortgage + total + propertyTax);
 
   return {
     calcVersion: CALC_VERSION,
@@ -457,11 +522,13 @@ export function computeStatement(
       amount: hstAmount,
     },
     total,
+    propertyTax: propertyTaxLine,
     balance: {
       purchasePrice: round2(price),
       depositPaid: round2(deposit),
       mortgageAmount: round2(mortgage),
       closingCosts: total,
+      propertyTaxAdjustment: propertyTax,
       balanceDue,
     },
     detail: {
@@ -475,6 +542,7 @@ export function computeStatement(
       legalFees,
       registrations: round2(regTransfer + regMortgage),
       taxableBase,
+      propertyTaxAdjustment: propertyTax,
     },
   };
 }
@@ -494,6 +562,8 @@ export const LINE_TOOLTIPS: Record<string, string> = {
     "Toronto's first-time home buyer rebate, applied against the municipal land transfer tax. Eligibility must be confirmed.",
   title_premium:
     "A one-time First Canadian Title insurance premium that protects your ownership (and your lender) against title defects, fraud, judgments, liens and survey issues. Estimated from the purchase price; replaced with the exact First Canadian Title quote once available.",
+  title_submission:
+    "Our charge for preparing and submitting the title insurance application to First Canadian Title, and reviewing the policy issued for your file.",
   reg_transfer:
     "The government fee to electronically register the transfer of title into your name.",
   reg_mortgage:
@@ -503,9 +573,11 @@ export const LINE_TOOLTIPS: Record<string, string> = {
   sheriff:
     "Execution (Sheriff's) searches confirming there are no outstanding judgments or liens against the buyers or sellers affecting the property.",
   legal_fees:
-    "Our professional fee for the purchase: completing and registering the transfer into your name, handling your lender's mortgage instructions, and submitting the title insurance application.",
+    "Our professional fee for the purchase: completing and registering the transfer into your name, and handling your lender's mortgage instructions.",
   admin_fee:
     "Office and administrative charges: legal software, secure file storage, banking, courier and postage.",
+  property_tax_adjustment:
+    "Your share of the property tax the seller has already paid for the part of the year you will own the home. Taken from the Statement of Adjustments, not from our fees.",
   hst: "Ontario HST, charged only on the taxable legal fees and disbursements. It does not apply to land transfer tax, government registration fees, or the title insurance premium.",
   total:
     "The estimated total of all taxes, disbursements and fees payable in connection with your purchase.",

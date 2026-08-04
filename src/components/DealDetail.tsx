@@ -57,6 +57,7 @@ import SubmitOnBehalfSection, { OnBehalfCoPerson } from "./SubmitOnBehalfSection
 import CoPersonPersonalInfoModal from "./CoPersonPersonalInfoModal";
 import ClonePreviousDealDrawer from "./ClonePreviousDealDrawer";
 import EditDealModal from "./EditDealModal";
+import PostClosureDocuments from "./PostClosureDocuments";
 import AddCoClientModal from "./AddCoClientModal";
 
 interface DealDetailProps {
@@ -4565,6 +4566,11 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
               </div>
             </div>
           </div>
+
+          {/* Post Closure Documents — the final reporting package, uploaded
+              after closing and emailed to the client(s). Sits directly under
+              Milestones because it is the step that follows them. */}
+          <PostClosureDocuments dealId={deal.id} />
 
           {/* Lock Box Code — Purchase files only. Sits under Milestones and
               above Partner Details. Editable inline; saves to the deal via PATCH

@@ -334,15 +334,34 @@ erDiagram
 
     closing_cost_config {
         uuid id PK
+        text firm_key
         text label
-        numeric reg_transfer
-        numeric reg_mortgage
         numeric teraview
         numeric sheriff
         numeric legal_transfer
         numeric legal_mortgage
         numeric legal_title_submission
         numeric admin_fee
+        text firm_name
+        text firm_subtitle
+        text firm_address
+        text firm_phone
+        text firm_fax
+        text firm_hst_number
+        text firm_badge
+        text brand_color
+        int sort_order
+        bool is_active
+        bool is_deleted
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    closing_cost_shared_rates {
+        uuid id PK
+        text label
+        numeric reg_transfer
+        numeric reg_mortgage
         numeric hst_rate
         numeric rebate_ontario_max
         numeric rebate_toronto_max
@@ -351,13 +370,25 @@ erDiagram
         numeric title_premium_min
         jsonb ltt_tiers
         jsonb mltt_tiers
-        text firm_name
-        text firm_subtitle
-        text firm_address
-        text firm_phone
-        text firm_fax
-        text firm_hst_number
+        text default_firm_key
+        text default_statement_type
         bool is_active
+        bool is_deleted
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    closing_cost_statement_types {
+        uuid id PK
+        text type_key
+        text label
+        text title
+        text screen_heading
+        text disclaimer_intro
+        text footer_note
+        bool show_watermark
+        text watermark_text
+        int sort_order
         bool is_deleted
         timestamptz created_at
         timestamptz updated_at
@@ -372,15 +403,23 @@ erDiagram
         bool is_toronto
         bool is_first_time_buyer
         numeric title_premium_override
+        numeric property_tax_adjustment
         text file_no_display
+        text purchasers
+        text property_address
+        date closing_date
         jsonb rates_used
         jsonb line_items
         numeric total_closing_costs
         numeric balance_due
+        text firm_key
+        text statement_type
         text status
         timestamptz issued_at
         text pdf_url
         timestamptz pdf_generated_at
+        timestamptz last_emailed_at
+        text last_emailed_to
         text created_by_email
         bool is_deleted
         timestamptz created_at

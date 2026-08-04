@@ -4,7 +4,8 @@ import { isUuid } from "@/lib/isUuid";
 import { logger } from "@/lib/logger";
 import { recordAudit } from "@/lib/recordAudit";
 import { getActingAdmin } from "@/lib/getActingAdmin";
-import { readActiveConfig } from "@/lib/closingCostConfig";
+import { readActiveConfig, readFirms, readStatementTypes } from "@/lib/closingCostConfig";
+import { STATEMENT_TYPE_KEYS } from "@/lib/closingCostSettings";
 import { buildEstimateRow, parseEstimatePayload } from "@/lib/closingEstimate";
 
 // The purchase closing-cost estimate for one deal.
@@ -17,12 +18,16 @@ import { buildEstimateRow, parseEstimatePayload } from "@/lib/closingEstimate";
 
 const supabase = supabaseAdmin;
 
-/** Columns selected for both draft and issued rows. */
-const ESTIMATE_COLUMNS =
-  "id, deal_id, purchase_price, deposit_paid, mortgage_amount, is_toronto, " +
-  "is_first_time_buyer, title_premium_override, file_no_display, rates_used, " +
-  "line_items, total_closing_costs, balance_due, status, issued_at, pdf_url, " +
-  "pdf_generated_at, created_by_email, created_at, updated_at";
+/**
+ * Columns selected for both draft and issued rows.
+ *
+ * Deliberately `*` rather than an explicit list: the statement-detail columns
+ * arrive in a manually-applied migration, and naming a column PostgREST has not
+ * seen yet is a hard error — which would make this route stop working if the
+ * code were deployed before the SQL was run. The table holds no column that
+ * must be withheld from an admin.
+ */
+const ESTIMATE_COLUMNS = "*";
 
 /**
  * GET — everything the calculator page needs in one round trip:
@@ -37,7 +42,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 
   const { data: deal, error: dealErr } = await supabase
     .from("deals")
-    .select("id, file_number, type, status, price, property_address, lead_id, is_deleted")
+    .select(
+      "id, file_number, type, status, price, property_address, closing_date, lead_id, is_deleted",
+    )
     .eq("id", id)
     .maybeSingle();
 
@@ -52,40 +59,70 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     return NextResponse.json({ success: false, error: "File not found" }, { status: 404 });
   }
 
-  const [{ data: draft }, { data: issuedRows }, { row: config, isDefault }] =
-    await Promise.all([
-      supabase
-        .from("deal_closing_estimates")
-        .select(ESTIMATE_COLUMNS)
-        .eq("deal_id", id)
-        .eq("status", "draft")
-        .eq("is_deleted", false)
-        .maybeSingle(),
-      supabase
-        .from("deal_closing_estimates")
-        .select(ESTIMATE_COLUMNS)
-        .eq("deal_id", id)
-        .eq("status", "issued")
-        .eq("is_deleted", false)
-        .order("issued_at", { ascending: false })
-        .limit(5),
-      readActiveConfig(),
-    ]);
+  const [
+    { data: draft },
+    { data: issuedRows },
+    { row: config, isDefault, firmKey: defaultFirmKey },
+    firms,
+    statementTypes,
+  ] = await Promise.all([
+    supabase
+      .from("deal_closing_estimates")
+      .select(ESTIMATE_COLUMNS)
+      .eq("deal_id", id)
+      .eq("status", "draft")
+      .eq("is_deleted", false)
+      .maybeSingle(),
+    supabase
+      .from("deal_closing_estimates")
+      .select(ESTIMATE_COLUMNS)
+      .eq("deal_id", id)
+      .eq("status", "issued")
+      .eq("is_deleted", false)
+      .order("issued_at", { ascending: false })
+      .limit(5),
+    readActiveConfig(),
+    readFirms(),
+    readStatementTypes(),
+  ]);
 
   // ── Prefill hints ──
   // Purely advisory: staff always confirm them. Nothing is written back to the
   // lead, and a wrong guess only costs one click.
   let leadOwnershipHistory: string | null = null;
   let leadCity: string | null = null;
+  let purchasersHint: string | null = null;
+  let clientEmail: string | null = null;
   if (deal.lead_id && isUuid(deal.lead_id)) {
     try {
       const { data: lead } = await supabase
         .from("leads")
-        .select("ownership_history, address_city")
+        .select(
+          "id, first_name, last_name, email, ownership_history, address_city, parent_lead_id",
+        )
         .eq("id", deal.lead_id)
         .maybeSingle();
       leadOwnershipHistory = lead?.ownership_history ?? null;
       leadCity = lead?.address_city ?? null;
+      clientEmail = lead?.email ?? null;
+
+      if (lead) {
+        // A statement is addressed to everyone buying, so the hint covers the
+        // whole family: the root lead plus its co-purchasers.
+        const rootId = lead.parent_lead_id ?? lead.id;
+        const { data: family } = await supabase
+          .from("leads")
+          .select("id, first_name, last_name, parent_lead_id, co_person_role")
+          .or(`id.eq.${rootId},parent_lead_id.eq.${rootId}`)
+          .eq("is_deleted", false);
+
+        const names = (family ?? [])
+          // Co-sellers belong to the Sale side and are not purchasing.
+          .filter((p) => p.co_person_role !== "co-seller")
+          .map((p) => `${p.first_name ?? ""} ${p.last_name ?? ""}`.trim())
+          .filter(Boolean);
+        purchasersHint = names.length > 0 ? names.join(" and ") : null;
+      }
     } catch (err) {
       // Non-blocking: the hints are a convenience, not the payload.
       logger.error("[ClosingEstimate GET] lead hint lookup failed:", err);
@@ -111,6 +148,10 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     issued_history: issuedRows ?? [],
     config,
     config_is_default: isDefault,
+    // Everything the firm / statement-type pickers need to render.
+    firms: firms.rows.filter((row) => row.is_active === true),
+    statement_types: STATEMENT_TYPE_KEYS.map((key) => statementTypes.types[key]),
+    default_firm_key: defaultFirmKey,
     prefill: {
       purchase_price: deal.price ?? 0,
       is_toronto: torontoHint,
@@ -118,6 +159,10 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       // the only answer that suggests first-time-buyer status.
       is_first_time_buyer: leadOwnershipHistory === "No (first time)",
       file_no_display: deal.file_number ?? null,
+      purchasers: purchasersHint,
+      property_address: deal.property_address ?? null,
+      closing_date: deal.closing_date ?? null,
+      client_email: clientEmail,
       lead_ownership_history: leadOwnershipHistory,
       lead_address_city: leadCity,
     },
@@ -164,8 +209,14 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
     return NextResponse.json({ success: false, error: "File not found" }, { status: 404 });
   }
 
-  const { row: config } = await readActiveConfig();
-  const { columns, statement } = buildEstimateRow(parsed.payload, config);
+  // The chosen firm decides both the letterhead AND the fee schedule, so it has
+  // to be resolved before the statement is computed. A null firm_key falls back
+  // to the configured default.
+  const { row: config, firmKey } = await readActiveConfig(parsed.payload.firm_key);
+  const { columns, statement } = buildEstimateRow(
+    { ...parsed.payload, firm_key: firmKey },
+    config,
+  );
 
   const { data: existing } = await supabase
     .from("deal_closing_estimates")

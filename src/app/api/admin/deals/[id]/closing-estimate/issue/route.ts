@@ -7,7 +7,7 @@ import { recordAudit } from "@/lib/recordAudit";
 import { getActingAdmin } from "@/lib/getActingAdmin";
 import { rateLimitOk } from "@/lib/rateLimit";
 import { BLOB_ACCESS, blobToken } from "@/lib/blobPrivacy";
-import { readActiveConfig } from "@/lib/closingCostConfig";
+import { readActiveConfig, readStatementType } from "@/lib/closingCostConfig";
 import { buildEstimateRow, parseEstimatePayload } from "@/lib/closingEstimate";
 import { generateClosingCostPdf } from "@/lib/closingCostPdf";
 import { formatLocalDate } from "@/lib/formatDate";
@@ -104,8 +104,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     );
   }
 
-  const { row: config } = await readActiveConfig();
-  const { columns, statement } = buildEstimateRow(parsed.payload, config);
+  // The firm decides the letterhead AND the fee schedule; the statement type
+  // decides the title, the disclaimer and the watermark. Both fall back to the
+  // configured defaults when the estimate does not name one.
+  const { row: config, firmKey } = await readActiveConfig(parsed.payload.firm_key);
+  const statementType = await readStatementType(parsed.payload.statement_type);
+  const { columns, statement } = buildEstimateRow(
+    { ...parsed.payload, firm_key: firmKey, statement_type: statementType.type_key },
+    config,
+  );
 
   const actor = await getActingAdmin();
   const now = new Date().toISOString();
@@ -145,8 +152,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const pdfBytes = await generateClosingCostPdf({
       statement,
       config,
+      statementType,
       fileNo,
-      propertyAddress: deal.property_address ?? null,
+      propertyAddress: parsed.payload.property_address ?? deal.property_address ?? null,
+      clientName: parsed.payload.purchasers ?? null,
+      closingDate: parsed.payload.closing_date ?? null,
       preparedOn: formatLocalDate(now) || now.slice(0, 10),
     });
 
