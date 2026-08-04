@@ -29,10 +29,8 @@ import {
   UserPlus,
   LogIn,
   FileSignature,
-  Calculator,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import {
   isNonCitizenFlagged,
   NON_CITIZEN_FLAG_TOOLTIP,
@@ -3439,19 +3437,6 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
           >
             <FileText size={16} /> View Documents
           </button>
-          {/* Purchase closing-cost estimator. Its own route rather than another
-              modal in this file — see src/components/ClosingCostCalculator.tsx.
-              Purchase-side files only: it estimates land transfer tax, the title
-              premium and the buyer's balance due, none of which apply to a
-              sale-only or refinance file. */}
-          {dealTypePartsLower.includes("purchase") && (
-            <Link
-              href={`/admin/deals/${deal.id}/closing-costs`}
-              className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm flex items-center gap-2"
-            >
-              <Calculator size={16} /> Closing Costs
-            </Link>
-          )}
         </div>
       </div>
 
