@@ -42,7 +42,7 @@ async function getAuthSignInMap(): Promise<Map<string, string>> {
 export async function GET() {
   const { data, error } = await supabase
     .from("deals")
-    .select("*, tasks(id, status, is_deleted), leads(id, parent_lead_id, first_name, last_name, email, co_person_role, address_street, address_unit, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code, clients(id, auth_user_id, citizenship_status))")
+    .select("*, tasks(id, status, is_deleted, role_type), leads(id, parent_lead_id, first_name, last_name, email, co_person_role, address_street, address_unit, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code, clients(id, auth_user_id, citizenship_status))")
     .or("source.is.null,source.neq.bulk_import")
     .eq("is_deleted", false)
     .order("created_at", { ascending: false });
@@ -100,7 +100,14 @@ export async function GET() {
     // page, the customer portal, and the pending-tasks panel — all of which
     // filter is_deleted=false. Without this, a soft-deleted (never-completed)
     // task inflates totalTasks, so a fully-completed file shows e.g. 9/11.
-    const tasks = (deal.tasks ?? []).filter((t: any) => !t.is_deleted);
+    //
+    // Admin-role rows are excluded for the same reason: they are the office's
+    // own records (the client's mirrored closing-cost estimate among them), not
+    // steps the client has to work through, and counting them as a finished
+    // step would flatter every file's progress.
+    const tasks = (deal.tasks ?? []).filter(
+      (t: any) => !t.is_deleted && (t.role_type ?? "").toLowerCase() !== "admin",
+    );
     const totalTasks = tasks.length;
     const completedTasks = tasks.filter((t: any) => t.status === "Completed").length;
     const lead = deal.leads as any;
