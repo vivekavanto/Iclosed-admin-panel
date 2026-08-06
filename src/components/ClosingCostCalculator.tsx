@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
@@ -14,9 +14,12 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import {
+  DISCLAIMERS,
+  LINE_TOOLTIPS,
   computeStatement,
   ratesFromConfigRow,
   type ClosingCostInputs,
+  type StatementLine,
 } from "@/lib/closingCosts";
 import {
   FIRM_FEE_COLUMNS,
@@ -24,7 +27,7 @@ import {
   type StatementTypeConfig,
 } from "@/lib/closingCostSettings";
 import { formatCurrency, parseAmountInput } from "@/lib/formatCurrency";
-import ClosingCostStatement from "@/components/shared/ClosingCostStatement";
+import { docDownloadHref } from "@/lib/blobPrivacy";
 
 // Staff-facing purchase closing-cost calculator for one file.
 //
@@ -32,7 +35,7 @@ import ClosingCostStatement from "@/components/shared/ClosingCostStatement";
 // ~6k lines); that file only gains a link to here.
 //
 // The statement recalculates locally on every keystroke via computeStatement,
-// which is the same pure module the server uses when saving — so the preview and
+// which is the same pure module the server uses when saving â€” so the preview and
 // the stored snapshot can never disagree.
 
 const BRAND = "#C10007";
@@ -40,32 +43,40 @@ const BRAND = "#C10007";
 const inputClass =
   "w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white";
 
-const feeInputClass =
-  "w-full pl-6 pr-2 py-2 text-[13px] border border-gray-200 rounded-md focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white tabular-nums";
+/**
+ * Per-file rate overrides shown in the "Adjust fees" panel.
+ *
+ * Only the firm's own charges: these are deviations from the firm's standard
+ * SCHEDULE, so they ride in `rate_overrides` and are frozen alongside the
+ * effective rates. The land transfer tax, title premium and Statement of
+ * Adjustments figure are also adjustable in the same panel, but they are
+ * per-file INPUTS rather than rates, so they live on the estimate row itself â€”
+ * see ADJUST_INPUTS below.
+ *
+ * The HST rate and the rebate caps are deliberately absent: they are statutory,
+ * and a per-file "adjustment" to them produces a figure that is simply wrong
+ * rather than merely different. They remain editable in Settings for everyone.
+ */
+const OVERRIDE_FIELDS: Array<{ key: string; label: string }> = [
+  { key: "legal_title_submission", label: "FCT submission & review" },
+  { key: "reg_transfer", label: "Registration of transfer" },
+  { key: "reg_mortgage", label: "Registration of mortgage" },
+  { key: "teraview", label: "Teraview searches" },
+  { key: "sheriff", label: "Sheriff's certificates" },
+  { key: "legal_fees", label: "Legal fees" },
+  { key: "admin_fee", label: "Admin fee" },
+];
 
-/** Per-file overridable rates, in the order they appear in the panel. */
-const OVERRIDE_FIELDS: Array<{
-  key: string;
-  label: string;
-  prefix: "$" | "%";
-  /** Stored as a rate (0.13) but typed as a percentage (13). */
-  asPercent?: boolean;
-}> = [
-  { key: "legal_transfer", label: "Legal fee — Transfer", prefix: "$" },
-  { key: "legal_mortgage", label: "Legal fee — Mortgage", prefix: "$" },
-  { key: "reg_transfer", label: "Registration — Transfer", prefix: "$" },
-  { key: "reg_mortgage", label: "Registration — Mortgage", prefix: "$" },
-  {
-    key: "legal_title_submission",
-    label: "Legal — title submission (part of legal fee)",
-    prefix: "$",
-  },
-  { key: "teraview", label: "Teraview — searches & review", prefix: "$" },
-  { key: "sheriff", label: "Sheriff's Certificates", prefix: "$" },
-  { key: "admin_fee", label: "Admin fees", prefix: "$" },
-  { key: "rebate_ontario_max", label: "First-time buyer rebate — Ontario (max)", prefix: "$" },
-  { key: "rebate_toronto_max", label: "First-time buyer rebate — Toronto (max)", prefix: "$" },
-  { key: "hst_rate", label: "HST rate", prefix: "%", asPercent: true },
+/**
+ * The adjustable per-file inputs, keyed by their FormState field. Rendered in
+ * the same grid as the rate overrides so staff see one list of adjustable
+ * numbers rather than an internal distinction they have no reason to care
+ * about.
+ */
+const ADJUST_INPUTS: Array<{ key: FormNumberKey; label: string }> = [
+  { key: "provincialLttOverride", label: "Ontario provincial LTT" },
+  { key: "municipalLttOverride", label: "Toronto municipal LTT" },
+  { key: "titlePremiumOverride", label: "Title insurance premium" },
 ];
 
 type ConfigRow = Record<string, unknown>;
@@ -78,6 +89,8 @@ interface EstimateRow {
   is_toronto: boolean;
   is_first_time_buyer: boolean;
   title_premium_override: number | string | null;
+  provincial_ltt_override?: number | string | null;
+  municipal_ltt_override?: number | string | null;
   property_tax_adjustment?: number | string | null;
   file_no_display: string | null;
   purchasers?: string | null;
@@ -125,20 +138,30 @@ interface FormState {
   isToronto: boolean;
   isFirstTimeBuyer: boolean;
   /**
-   * Not persisted — a cash deal IS simply a zero mortgage. Kept in form state
+   * Not persisted â€” a cash deal IS simply a zero mortgage. Kept in form state
    * only so the mortgage field can be disabled while the box is ticked; on
    * reload it is derived back from the saved amount.
    */
   isCashDeal: boolean;
   titlePremiumOverride: string;
+  /** Dollar figures that replace the bracket calculation. Blank = use it. */
+  provincialLttOverride: string;
+  municipalLttOverride: string;
   propertyTaxAdjustment: string;
   fileNo: string;
   purchasers: string;
   propertyAddress: string;
   closingDate: string;
-  /** key → typed text; blank means "use the firm standard". */
+  /** key â†’ typed text; blank means "use the firm standard". */
   overrides: Record<string, string>;
 }
+
+/** The FormState fields the "Adjust fees" panel edits as plain dollar figures. */
+type FormNumberKey =
+  | "titlePremiumOverride"
+  | "provincialLttOverride"
+  | "municipalLttOverride"
+  | "propertyTaxAdjustment";
 
 const EMPTY_FORM: FormState = {
   firmKey: "",
@@ -150,6 +173,8 @@ const EMPTY_FORM: FormState = {
   isFirstTimeBuyer: false,
   isCashDeal: false,
   titlePremiumOverride: "",
+  provincialLttOverride: "",
+  municipalLttOverride: "",
   propertyTaxAdjustment: "",
   fileNo: "",
   purchasers: "",
@@ -171,7 +196,11 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
   const [downloading, setDownloading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast>(null);
-  const [panelOpen, setPanelOpen] = useState(true);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [fileDetailsOpen, setFileDetailsOpen] = useState(false);
+  const [emailOpen, setEmailOpen] = useState(false);
+  /** Key of the statement line whose tooltip is showing; only ever one. */
+  const [tip, setTip] = useState<string | null>(null);
 
   const [deal, setDeal] = useState<DealSummary | null>(null);
   const [config, setConfig] = useState<ConfigRow | null>(null);
@@ -196,7 +225,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
     [],
   );
 
-  // ─────────────────────────────── load ───────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ load â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -220,7 +249,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
 
       // A saved draft wins; otherwise fall back to the issued figures; otherwise
       // seed from the file itself. The Toronto / first-time flags from `prefill`
-      // are hints only — a clerk always confirms them.
+      // are hints only â€” a clerk always confirms them.
       const seed: EstimateRow | null = draft ?? data.latest_issued ?? null;
       const prefill = data.prefill ?? {};
 
@@ -232,10 +261,18 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
         if (raw === null || raw === undefined || raw === "") continue;
         const n = Number(raw);
         if (!Number.isFinite(n)) continue;
-        overrides[field.key] = String(field.asPercent ? n * 100 : n);
+        overrides[field.key] = String(n);
       }
 
       const mortgageText = seed ? amountText(seed.mortgage_amount) : "";
+
+      // The firm's planning figure for the Statement of Adjustments, from
+      // Settings â†’ Closing costs. It seeds a NEW estimate only: once an estimate
+      // exists its own figure wins, including a deliberately-cleared one, so
+      // raising the default never silently re-adds an adjustment a clerk removed.
+      const adjustmentDefault = amountText(
+        (data.config as ConfigRow | null)?.property_tax_default,
+      );
 
       setForm({
         firmKey: seed?.firm_key || data.default_firm_key || "",
@@ -247,11 +284,15 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
         isFirstTimeBuyer: seed
           ? Boolean(seed.is_first_time_buyer)
           : Boolean(prefill.is_first_time_buyer),
-        // A saved estimate with no mortgage IS a cash deal — derive rather than
+        // A saved estimate with no mortgage IS a cash deal â€” derive rather than
         // store, so the two can never disagree.
         isCashDeal: Boolean(seed) && (parseAmountInput(mortgageText) ?? 0) === 0,
         titlePremiumOverride: seed ? amountText(seed.title_premium_override) : "",
-        propertyTaxAdjustment: seed ? amountText(seed.property_tax_adjustment) : "",
+        provincialLttOverride: seed ? amountText(seed.provincial_ltt_override) : "",
+        municipalLttOverride: seed ? amountText(seed.municipal_ltt_override) : "",
+        propertyTaxAdjustment: seed
+          ? amountText(seed.property_tax_adjustment)
+          : adjustmentDefault,
         fileNo: (seed?.file_no_display ?? prefill.file_no_display ?? "") || "",
         purchasers: (seed?.purchasers ?? prefill.purchasers ?? "") || "",
         propertyAddress:
@@ -274,7 +315,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
     void load();
   }, [load]);
 
-  // ──────────────────────────── computation ───────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ computation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -286,13 +327,13 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
     setDirty(true);
   };
 
-  /** Numeric overrides, ready for the API (percentages converted back to rates). */
+  /** Numeric rate overrides, ready for the API. */
   const rateOverrides = useMemo(() => {
     const out: Record<string, number> = {};
     for (const field of OVERRIDE_FIELDS) {
       const parsed = parseAmountInput(form.overrides[field.key] ?? "");
       if (parsed === null) continue;
-      out[field.key] = field.asPercent ? parsed / 100 : parsed;
+      out[field.key] = parsed;
     }
     return out;
   }, [form.overrides]);
@@ -302,7 +343,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
    *
    * `config` from the API is the merged row for the DEFAULT firm, so it already
    * carries the shared statutory values. Picking a different firm overlays only
-   * that firm's own columns — deliberately by key rather than by spreading the
+   * that firm's own columns â€” deliberately by key rather than by spreading the
    * whole row, because before the legacy columns are dropped a firm row still
    * carries stale copies of the statutory ones, which must not win.
    */
@@ -341,6 +382,8 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
       isToronto: form.isToronto,
       isFirstTimeBuyer: form.isFirstTimeBuyer,
       titlePremiumOverride: parseAmountInput(form.titlePremiumOverride),
+      provincialLttOverride: parseAmountInput(form.provincialLttOverride),
+      municipalLttOverride: parseAmountInput(form.municipalLttOverride),
       propertyTaxAdjustment: parseAmountInput(form.propertyTaxAdjustment),
     }),
     [form],
@@ -359,6 +402,8 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
       is_toronto: inputs.isToronto,
       is_first_time_buyer: inputs.isFirstTimeBuyer,
       title_premium_override: inputs.titlePremiumOverride,
+      provincial_ltt_override: inputs.provincialLttOverride,
+      municipal_ltt_override: inputs.municipalLttOverride,
       property_tax_adjustment: inputs.propertyTaxAdjustment,
       file_no_display: form.fileNo || null,
       purchasers: form.purchasers || null,
@@ -369,7 +414,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
     [inputs, form, rateOverrides],
   );
 
-  // ───────────────────────────── actions ─────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ actions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const handleSave = async () => {
     setSaving(true);
@@ -439,7 +484,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
       showToast(
         data.pdf_attached
           ? `Estimate sent to ${data.sent_to}`
-          : `Estimate sent to ${data.sent_to} — the PDF could not be attached`,
+          : `Estimate sent to ${data.sent_to} â€” the PDF could not be attached`,
         data.pdf_attached ? "success" : "error",
       );
       await load();
@@ -478,7 +523,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
       }
       showToast(
         data.pdf_error
-          ? "Estimate issued — the PDF will be generated on download"
+          ? "Estimate issued â€” the PDF will be generated on download"
           : "Estimate issued to the client",
       );
       await load();
@@ -528,22 +573,30 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
     }
   };
 
-  /** Clear per-file deviations, returning every fee to the firm standard. */
+  /** Clear per-file deviations, returning every figure to the calculated one. */
   const handleResetFees = () => {
-    setForm((prev) => ({ ...prev, overrides: {}, titlePremiumOverride: "" }));
+    setForm((prev) => ({
+      ...prev,
+      overrides: {},
+      titlePremiumOverride: "",
+      provincialLttOverride: "",
+      municipalLttOverride: "",
+    }));
     setDirty(true);
-    showToast("Fees reset to the firm standard");
+    showToast("Adjustments cleared â€” back to the calculated figures");
   };
 
-  const overrideCount = Object.keys(rateOverrides).length;
+  const overrideCount =
+    Object.keys(rateOverrides).length +
+    ADJUST_INPUTS.filter((f) => parseAmountInput(form[f.key]) !== null).length;
   const busy = saving || issuing;
 
-  // ────────────────────────────── render ──────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   if (loading) {
     return (
       <div className="flex items-center justify-center gap-2 py-24 text-sm text-gray-500">
-        <Loader2 size={16} className="animate-spin" /> Loading estimate…
+        <Loader2 size={16} className="animate-spin" /> Loading estimateâ€¦
       </div>
     );
   }
@@ -564,8 +617,80 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
     );
   }
 
+  // The firm's own colour drives the accent, so switching firm re-skins the
+  // page the same way it re-skins the PDF letterhead.
+  const accent = String(activeConfig.brand_color || BRAND);
+  const isDraft = form.statementType !== "final";
+  const firmName = String(activeConfig.firm_name || activeConfig.label || "");
+  const logoUrl = String(activeConfig.logo_url || "");
+  const todayStr = new Date().toLocaleDateString("en-CA", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+
+  /** A line's tooltip copy, or null when it has none. */
+  const tipFor = (key: string) => LINE_TOOLTIPS[key] ?? null;
+
+  const tipHandlers = (key: string) => ({
+    onMouseEnter: () => setTip(key),
+    onMouseLeave: () => setTip((k) => (k === key ? null : k)),
+    onFocus: () => setTip(key),
+    onBlur: () => setTip((k) => (k === key ? null : k)),
+  });
+
+  /** One "label â€¦ amount" row, with its info bubble. */
+  const renderLine = (line: StatementLine, muted = false) => {
+    const copy = tipFor(line.key);
+    // A "not final yet" marker. The title premium carries its own badge from
+    // the calculation (it disappears the moment the real FCT quote is pasted in);
+    // the rest are only provisional while the statement is still a draft.
+    const badge =
+      line.badge ?? (isDraft && DRAFT_ESTIMATE_KEYS.has(line.key) ? "ESTIMATE" : null);
+
+    return (
+      <div
+        key={line.key}
+        className={`flex items-baseline justify-between gap-3.5 py-1.5 text-[13.5px] ${
+          muted ? "text-gray-500" : "text-gray-900"
+        }`}
+      >
+        <span className="inline-flex max-w-[76%] flex-wrap items-center">
+          {line.label}
+          {badge && (
+            <span className="ml-1.5 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-amber-700">
+              {badge}
+            </span>
+          )}
+          {copy && (
+            <span className="relative ml-1.5 inline-flex">
+              <span
+                tabIndex={0}
+                role="note"
+                aria-label={copy}
+                {...tipHandlers(line.key)}
+                className="flex h-[15px] w-[15px] cursor-help items-center justify-center rounded-full text-[10px] font-bold"
+                style={{ backgroundColor: `${accent}1a`, color: accent }}
+              >
+                i
+              </span>
+              {tip === line.key && (
+                <span className="absolute bottom-6 left-1/2 z-20 w-[250px] -translate-x-1/2 rounded-[10px] bg-gray-900 px-3 py-2.5 text-[11.5px] font-normal leading-relaxed text-white shadow-xl">
+                  {copy}
+                </span>
+              )}
+            </span>
+          )}
+        </span>
+        <span className="whitespace-nowrap tabular-nums">
+          {formatCurrency(line.amount)}
+        </span>
+      </div>
+    );
+  };
+
   return (
-    <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
+    <div className="mx-auto max-w-[1120px] px-4 py-7 sm:px-6 lg:px-8">
       {toast && (
         <div
           role="status"
@@ -577,46 +702,32 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
         </div>
       )}
 
-      {/* Header */}
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0">
-          <Link
-            href={`/admin/deals/${dealId}`}
-            className="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-gray-800"
-          >
-            <ArrowLeft size={13} /> Back to file
-          </Link>
-          <h1 className="mt-2 text-xl font-bold text-gray-900">Closing cost estimate</h1>
-          <p className="mt-1 text-xs text-gray-500">
-            {deal?.file_number ? `File ${deal.file_number}` : "Purchase"}
-            {deal?.property_address ? ` · ${deal.property_address}` : ""}
-          </p>
-        </div>
-
+      {/* Admin chrome â€” the workflow actions that have no place on the client's
+          statement, kept above the letterhead so the document below reads as the
+          document. */}
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <Link
+          href={`/admin/deals/${dealId}`}
+          className="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-gray-800"
+        >
+          <ArrowLeft size={13} /> Back to file
+        </Link>
         <div className="flex flex-wrap items-center gap-2">
           {issued && (
             <span className="rounded-full bg-green-50 px-2.5 py-1 text-[11px] font-semibold text-green-700 ring-1 ring-green-200">
-              Issued · {formatCurrency(Number(issued.total_closing_costs))}
+              Issued Â· {formatCurrency(Number(issued.total_closing_costs))}
+            </span>
+          )}
+          {dirty && (
+            <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700 ring-1 ring-amber-200">
+              Unsaved changes
             </span>
           )}
           <button
             type="button"
-            onClick={() => handleDownload(issued && !dirty ? "issued" : "draft")}
-            disabled={downloading}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-          >
-            {downloading ? (
-              <Loader2 size={13} className="animate-spin" />
-            ) : (
-              <Download size={13} />
-            )}
-            Download PDF
-          </button>
-          <button
-            type="button"
             onClick={handleSave}
             disabled={busy}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50"
           >
             {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
             Save draft
@@ -626,7 +737,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
             onClick={handleIssue}
             disabled={busy}
             className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
-            style={{ backgroundColor: BRAND }}
+            style={{ backgroundColor: accent }}
           >
             {issuing ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
             Issue to client
@@ -638,474 +749,700 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
         <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-900">
           <TriangleAlert size={14} className="mt-0.5 shrink-0" />
           <span>
-            No saved fee configuration was found, so the built-in firm defaults are being
-            used. Review them under{" "}
-            <Link href="/admin/settings/closing-costs" className="font-semibold underline">
-              Settings → Closing Costs
-            </Link>
-            .
+            No closing-cost configuration has been saved yet â€” these figures use the
+            built-in defaults. Set them under Settings â†’ Closing costs.
           </span>
         </div>
       )}
 
-      {dirty && issued && (
-        <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-xs text-gray-600">
-          You have unsaved changes. The client still sees the estimate issued
-          {issued.issued_at ? ` on ${issued.issued_at.slice(0, 10)}` : ""} until you issue a
-          new one.
+      {/* â”€â”€ Letterhead â”€â”€ every value from the firm's profile in Settings. */}
+      <div className="flex flex-wrap items-start justify-between gap-5 border-b border-gray-200 pb-4">
+        <div className="flex flex-col gap-1.5">
+          {logoUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={docDownloadHref(logoUrl)}
+              alt={firmName}
+              className="h-[30px] w-auto object-contain"
+            />
+          ) : (
+            <span className="text-2xl font-bold leading-none tracking-tight text-gray-900">
+              {firmName}
+            </span>
+          )}
+          <div className="text-[12.5px] leading-relaxed text-gray-500">
+            {String(activeConfig.firm_address || "")}
+            <br />
+            Tel: {String(activeConfig.firm_phone || "â€”")} Â· Fax:{" "}
+            {String(activeConfig.firm_fax || "â€”")} Â· HST #{" "}
+            {String(activeConfig.firm_hst_number || "â€”")}
+          </div>
+        </div>
+        <div className="text-right text-xs leading-loose text-gray-500">
+          <div>
+            File No.{" "}
+            <span className="font-semibold tabular-nums text-gray-900">
+              {form.fileNo || deal?.file_number || "â€”"}
+            </span>
+          </div>
+          <div>Prepared {todayStr}</div>
+        </div>
+      </div>
+
+      <div className="mb-5 mt-6 max-w-[720px]">
+        <h1 className="text-[30px] font-bold leading-tight tracking-tight text-gray-900">
+          Closing cost estimate
+        </h1>
+        <p className="mt-2.5 text-[14.5px] leading-relaxed text-gray-600">
+          Enter your purchase price, the deposit you have already paid, and your
+          mortgage amount, and we will provide an <b>estimate</b> of how much you need
+          to bring at your closing.
+        </p>
+      </div>
+
+      {isDraft && (
+        <div className="mb-6 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3.5">
+          <span className="mt-0.5 flex h-5 w-5 flex-none items-center justify-center rounded-full bg-amber-600 text-xs font-bold text-white">
+            !
+          </span>
+          <p className="text-[13px] leading-relaxed text-amber-900">
+            <strong className="font-bold">
+              {activeStatementType?.disclaimer_intro ||
+                "This is a draft for planning only â€” please do not send us any funds yet."}
+            </strong>{" "}
+            Your final figures are calculated once we receive the mortgage instructions
+            from your bank, and we will send you a signed Statement of Account with exact
+            amounts before closing.
+          </p>
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
-        {/* ── Left: client inputs ── */}
-        <div className="space-y-4">
-          {/* Firm & statement type — these decide the letterhead, the fee
-              schedule and the wording, so they sit above the figures. */}
-          <div className="rounded-xl border border-gray-200 bg-white p-5">
-            <h2 className="text-[11px] font-bold tracking-wide" style={{ color: BRAND }}>
-              FIRM &amp; STATEMENT
+      <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
+        {/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Your numbers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        <section className="flex flex-col gap-4 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm lg:sticky lg:top-6">
+          <div>
+            <h2
+              className="text-[12px] font-bold uppercase tracking-[0.09em]"
+              style={{ color: accent }}
+            >
+              Your numbers
             </h2>
-
-            <div className="mt-3.5 space-y-3.5">
-              {firms.length > 1 && (
-                <div>
-                  <label className="block text-[13px] font-semibold text-gray-800">
-                    Firm
-                    <span className="ml-1.5 font-normal text-gray-400">
-                      — letterhead &amp; fee schedule
-                    </span>
-                  </label>
-                  <SegmentedControl
-                    options={firms.map((f) => ({ value: f.firm_key, label: f.label }))}
-                    value={form.firmKey}
-                    onChange={(v) => update("firmKey", v)}
-                  />
-                </div>
-              )}
-
-              <div>
-                <label className="block text-[13px] font-semibold text-gray-800">
-                  Statement type
-                </label>
-                <SegmentedControl
-                  options={statementTypes.map((t) => ({
-                    value: t.type_key,
-                    label: t.label,
-                  }))}
-                  value={form.statementType}
-                  onChange={(v) => update("statementType", v)}
-                />
-                {activeStatementType && (
-                  <p className="mt-1.5 text-[11px] leading-relaxed text-gray-400">
-                    {activeStatementType.disclaimer_intro}
-                  </p>
-                )}
-              </div>
-            </div>
+            <p className="mt-0.5 text-[12.5px] text-gray-500">
+              Four quick details from your purchase agreement.
+            </p>
           </div>
 
-          {/* File details — printed at the head of the statement. */}
-          <details className="group rounded-xl border border-gray-200 bg-white" open>
-            <summary className="flex cursor-pointer list-none items-center justify-between p-5">
-              <span
-                className="text-[11px] font-bold tracking-wide"
-                style={{ color: BRAND }}
-              >
-                FILE DETAILS
-                <span className="ml-1.5 font-normal text-gray-400">— optional</span>
-              </span>
-              <ChevronDown
-                size={15}
-                className="text-gray-400 transition-transform group-open:rotate-180"
+          {/* Firm + statement type â€” both lists come from Settings. */}
+          <div className="flex flex-col gap-2.5 border-b border-gray-100 pb-3.5">
+            <PickerRow
+              label="Firm"
+              options={firms.map((f) => ({ value: f.firm_key, label: f.label }))}
+              value={form.firmKey}
+              accent={accent}
+              onChange={(v) => update("firmKey", v)}
+            />
+            <PickerRow
+              label="Statement type"
+              options={statementTypes.map((t) => ({
+                value: t.type_key,
+                label: t.label,
+              }))}
+              value={form.statementType}
+              accent={accent}
+              onChange={(v) => update("statementType", v)}
+            />
+          </div>
+
+          {/* File details */}
+          <Collapsible
+            title="File details"
+            open={fileDetailsOpen}
+            onToggle={() => setFileDetailsOpen((o) => !o)}
+          >
+            <SmallText
+              label="File number"
+              value={form.fileNo}
+              placeholder="26P-0000"
+              accent={accent}
+              onChange={(v) => update("fileNo", v)}
+            />
+            <SmallText
+              label="Purchaser(s)"
+              value={form.purchasers}
+              placeholder="Full names as on the agreement"
+              accent={accent}
+              onChange={(v) => update("purchasers", v)}
+            />
+            <SmallText
+              label="Closing date"
+              value={form.closingDate}
+              placeholder="YYYY-MM-DD"
+              accent={accent}
+              onChange={(v) => update("closingDate", v)}
+            />
+            <SmallText
+              label="Property address"
+              value={form.propertyAddress}
+              placeholder="Street, City, Province, Postal Code"
+              accent={accent}
+              onChange={(v) => update("propertyAddress", v)}
+            />
+            <span className="text-[10.5px] text-gray-400">
+              Appears on the estimate and the PDF statement.
+            </span>
+          </Collapsible>
+
+          <BigMoney
+            id="cc-price"
+            label="Purchase price"
+            value={form.price}
+            accent={accent}
+            onChange={(v) => update("price", v)}
+          />
+          <BigMoney
+            id="cc-deposit"
+            label="Deposit already paid"
+            value={form.deposit}
+            accent={accent}
+            onChange={(v) => update("deposit", v)}
+          />
+          <BigMoney
+            id="cc-mortgage"
+            label="Mortgage amount"
+            value={form.isCashDeal ? "0" : form.mortgage}
+            accent={accent}
+            hint="Enter 0 if this is a cash deal."
+            onChange={(v) => {
+              update("mortgage", v);
+              // Typing a real amount takes the file back off "cash", so the two
+              // can never disagree about what the client is borrowing.
+              if ((parseAmountInput(v) ?? 0) > 0) update("isCashDeal", false);
+            }}
+          />
+
+          <div className="flex flex-col gap-2">
+            <span className="text-[13px] font-semibold text-gray-900">
+              Where is the property?
+            </span>
+            <div className="flex flex-wrap gap-2">
+              <ChoiceButton
+                label="Elsewhere in Ontario"
+                active={!form.isToronto}
+                accent={accent}
+                onClick={() => update("isToronto", false)}
               />
-            </summary>
-            <div className="space-y-3.5 px-5 pb-5">
-              <TextField
-                label="File number"
-                value={form.fileNo}
-                onChange={(v) => update("fileNo", v)}
+              <ChoiceButton
+                label="City of Toronto"
+                active={form.isToronto}
+                accent={accent}
+                onClick={() => update("isToronto", true)}
               />
-              <TextField
-                label="Purchaser(s)"
-                hint="as they should appear on the statement"
-                value={form.purchasers}
-                onChange={(v) => update("purchasers", v)}
-              />
-              <TextField
-                label="Property address"
-                value={form.propertyAddress}
-                onChange={(v) => update("propertyAddress", v)}
-              />
-              <div>
-                <label className="block text-[13px] font-semibold text-gray-800">
-                  Closing date
-                </label>
-                <input
-                  type="date"
-                  value={form.closingDate}
-                  onChange={(e) => update("closingDate", e.target.value)}
-                  className={`${inputClass} mt-1.5`}
-                />
-              </div>
-              <p className="text-[11px] leading-relaxed text-gray-400">
-                Captured on this estimate rather than read from the file, so a later
-                correction never rewrites a statement already sent.
-              </p>
             </div>
-          </details>
+            <span className="text-[11.5px] text-gray-500">
+              Toronto charges a second, municipal land transfer tax.
+            </span>
+          </div>
 
-          <div className="rounded-xl border border-gray-200 bg-white p-5">
-            <h2 className="text-[11px] font-bold tracking-wide" style={{ color: BRAND }}>
-              CLIENT INPUTS
-            </h2>
-            <p className="mt-1 text-[11px] text-gray-400">
-              The figures your client provides.
-            </p>
+          <button
+            type="button"
+            onClick={() => update("isFirstTimeBuyer", !form.isFirstTimeBuyer)}
+            className={`flex items-start gap-2.5 rounded-xl border px-3.5 py-3 text-left text-[13px] font-semibold transition ${
+              form.isFirstTimeBuyer ? "bg-red-50/40" : "border-gray-200 hover:bg-gray-50"
+            }`}
+            style={form.isFirstTimeBuyer ? { borderColor: accent } : undefined}
+            aria-pressed={form.isFirstTimeBuyer}
+          >
+            <span
+              className="mt-0.5 flex h-[18px] w-[18px] flex-none items-center justify-center rounded-md border text-[11px] font-bold text-white"
+              style={
+                form.isFirstTimeBuyer
+                  ? { backgroundColor: accent, borderColor: accent }
+                  : { borderColor: "#d1d5db" }
+              }
+            >
+              {form.isFirstTimeBuyer ? "âœ“" : ""}
+            </span>
+            <span className="leading-relaxed">
+              I am a first-time home buyer
+              <span className="block text-[11.5px] font-normal text-gray-500">
+                Applies the land transfer tax rebate â€” up to{" "}
+                {formatCurrency(rates.rebateOntarioMax, { cents: false })} in Ontario,
+                plus {formatCurrency(rates.rebateTorontoMax, { cents: false })} in
+                Toronto.
+              </span>
+            </span>
+          </button>
 
-            <div className="mt-4 space-y-3.5">
-              <MoneyField
-                label="Purchase Price"
-                hint="agreed price of the home"
-                value={form.price}
-                onChange={(v) => update("price", v)}
-              />
-              <MoneyField
-                label="Deposit Paid"
-                hint="already paid to the realtor/seller"
-                value={form.deposit}
-                onChange={(v) => update("deposit", v)}
-              />
-              <MoneyField
-                label="Mortgage Amount"
-                hint="amount advanced by the lender"
-                value={form.isCashDeal ? "" : form.mortgage}
-                disabled={form.isCashDeal}
-                placeholder={form.isCashDeal ? "0 — cash deal" : undefined}
-                onChange={(v) => update("mortgage", v)}
-              />
-
-              <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-gray-200 px-3 py-2.5">
-                <input
-                  type="checkbox"
-                  checked={form.isCashDeal}
-                  onChange={(e) => update("isCashDeal", e.target.checked)}
-                  className="mt-0.5 h-4 w-4 accent-[#C10007]"
+          {/* Adjust fees */}
+          <Collapsible
+            title="Adjust fees"
+            badge={overrideCount > 0 ? `${overrideCount} adjusted` : undefined}
+            open={panelOpen}
+            onToggle={() => setPanelOpen((o) => !o)}
+          >
+            <div className="grid grid-cols-2 gap-x-2.5 gap-y-2">
+              {ADJUST_INPUTS.map((field) => (
+                <SmallMoney
+                  key={field.key}
+                  label={field.label}
+                  value={form[field.key]}
+                  accent={accent}
+                  placeholder={ADJUST_PLACEHOLDERS[field.key](statement)}
+                  onChange={(v) => update(field.key, v)}
                 />
-                <span className="text-[13px] leading-snug text-gray-700">
-                  This is a cash deal — no mortgage
-                  <span className="mt-0.5 block text-[11px] text-gray-400">
-                    Removes the mortgage registration, the mortgage portion of the legal
-                    fee, and the lender&rsquo;s advance.
-                  </span>
-                </span>
-              </label>
-
-              <div>
-                <label className="block text-[13px] font-semibold text-gray-800">
-                  Property Location
-                  <span className="ml-1.5 font-normal text-gray-400">
-                    — Toronto adds the municipal land transfer tax
-                  </span>
-                </label>
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  {[
-                    { label: "Elsewhere in Ontario", toronto: false },
-                    { label: "City of Toronto", toronto: true },
-                  ].map((opt) => {
-                    const active = form.isToronto === opt.toronto;
-                    return (
-                      <button
-                        key={opt.label}
-                        type="button"
-                        onClick={() => update("isToronto", opt.toronto)}
-                        className={`rounded-lg border px-2 py-2 text-[12px] font-medium transition ${
-                          active
-                            ? "border-[#C10007] bg-red-50 text-[#C10007]"
-                            : "border-gray-200 text-gray-600 hover:bg-gray-50"
-                        }`}
-                      >
-                        {opt.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-gray-200 px-3 py-2.5">
-                <input
-                  type="checkbox"
-                  checked={form.isFirstTimeBuyer}
-                  onChange={(e) => update("isFirstTimeBuyer", e.target.checked)}
-                  className="mt-0.5 h-4 w-4 accent-[#C10007]"
+              ))}
+              {OVERRIDE_FIELDS.map((field) => (
+                <SmallMoney
+                  key={field.key}
+                  label={field.label}
+                  value={form.overrides[field.key] ?? ""}
+                  accent={accent}
+                  placeholder={amountText(activeConfig[field.key])}
+                  onChange={(v) => setOverride(field.key, v)}
                 />
-                <span className="text-[12px] text-gray-700">
-                  Are you a first-time home buyer?
-                  <span className="mt-0.5 block text-[11px] text-gray-400">
-                    Applies the land transfer tax rebate — up to{" "}
-                    {formatCurrency(rates.rebateOntarioMax, { cents: false })} in Ontario,{" "}
-                    {formatCurrency(rates.rebateTorontoMax, { cents: false })} in Toronto.
-                  </span>
-                </span>
-              </label>
-
-              {/* A Statement of Adjustments item, so it is kept apart from the
-                  fee overrides below — it is the client's money, not a charge. */}
-              <MoneyField
-                label="Property tax adjustment"
-                hint="from the Statement of Adjustments; negative credits the buyer"
+              ))}
+              <SmallMoney
+                label="Property tax & common expense adj."
                 value={form.propertyTaxAdjustment}
+                accent={accent}
                 allowNegative
+                placeholder="0"
                 onChange={(v) => update("propertyTaxAdjustment", v)}
               />
             </div>
-          </div>
-
-          {/* ── Adjust fixed fees & rates ── */}
-          <div className="rounded-xl border border-gray-200 bg-gray-50/60">
-            <button
-              type="button"
-              onClick={() => setPanelOpen((v) => !v)}
-              className="flex w-full items-center justify-between px-4 py-3 text-left"
-            >
-              <span className="text-[12px] font-bold" style={{ color: BRAND }}>
-                Adjust fixed fees &amp; rates
-                {overrideCount > 0 && (
-                  <span className="ml-2 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-[#C10007]">
-                    {overrideCount} changed
-                  </span>
-                )}
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10.5px] leading-snug text-gray-400">
+                Leave blank to use the calculated amount. HST recalculates on the
+                adjusted fees.
               </span>
-              <ChevronDown
-                size={15}
-                className={`shrink-0 text-gray-400 transition ${panelOpen ? "rotate-180" : ""}`}
-              />
-            </button>
+              <button
+                type="button"
+                onClick={handleResetFees}
+                className="flex-none rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-[10.5px] font-semibold text-gray-500 hover:border-gray-300 hover:text-gray-800"
+              >
+                <RotateCcw size={11} className="mr-1 inline" />
+                Reset all
+              </button>
+            </div>
+          </Collapsible>
 
-            {panelOpen && (
-              <div className="border-t border-gray-200 px-4 py-4">
-                <div className="grid grid-cols-2 gap-x-3 gap-y-3">
-                  {OVERRIDE_FIELDS.map((field) => {
-                    // The selected firm's standard, so switching firms updates
-                    // the "firm standard" placeholders too.
-                    const standardRaw = activeConfig?.[field.key];
-                    const standard = Number(standardRaw ?? 0);
-                    const placeholder = field.asPercent
-                      ? String(Number((standard * 100).toFixed(4)))
-                      : String(standard);
-                    return (
-                      <div key={field.key}>
-                        <label className="block text-[11px] font-semibold leading-snug text-gray-700">
-                          {field.label}
-                        </label>
-                        <div className="relative mt-1">
-                          <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[12px] text-gray-400">
-                            {field.prefix}
-                          </span>
-                          <input
-                            type="text"
-                            inputMode="decimal"
-                            value={form.overrides[field.key] ?? ""}
-                            onChange={(e) => setOverride(field.key, e.target.value)}
-                            placeholder={placeholder}
-                            className={feeInputClass}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
-
-                  <div className="col-span-2">
-                    <label className="block text-[11px] font-semibold leading-snug text-gray-700">
-                      Title Ins. — Premium (estimate)
-                    </label>
-                    <div className="relative mt-1">
-                      <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[12px] text-gray-400">
-                        $
-                      </span>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={form.titlePremiumOverride}
-                        onChange={(e) => update("titlePremiumOverride", e.target.value)}
-                        placeholder="auto"
-                        className={feeInputClass}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Required helper text — this is how staff know the override
-                    behaviour without reading the code. */}
-                <p className="mt-3 text-[11px] leading-relaxed text-gray-500">
-                  Leave &ldquo;Title Ins. — Premium&rdquo; blank to use the automatic
-                  estimate, or type the exact First Canadian Title quote to override it.
-                  Every field above defaults to the firm standard; a value here applies to
-                  this file only.
-                </p>
-
-                <button
-                  type="button"
-                  onClick={handleResetFees}
-                  className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50"
-                >
-                  <RotateCcw size={13} /> Reset fees
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* ── Email the estimate ── */}
-          <div className="rounded-xl border border-gray-200 bg-white p-5">
-            <h2 className="text-[11px] font-bold tracking-wide" style={{ color: BRAND }}>
-              EMAIL TO THE CLIENT
-            </h2>
-            <p className="mt-1 text-[11px] leading-relaxed text-gray-400">
-              Sends the issued figures with the statement PDF attached. What the client
-              receives is the frozen snapshot, not what is on screen.
-            </p>
-
-            <input
-              type="email"
-              value={emailTo}
-              onChange={(e) => setEmailTo(e.target.value)}
-              placeholder="client@example.com"
-              className={`${inputClass} mt-3`}
-            />
-
+          <div className="flex flex-wrap gap-2.5 pt-0.5">
             <button
               type="button"
-              onClick={handleEmail}
-              disabled={emailing || !issued || dirty}
-              className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-lg px-3 py-2.5 text-xs font-semibold text-white disabled:opacity-50"
-              style={{ backgroundColor: BRAND }}
+              onClick={() => setEmailOpen((o) => !o)}
+              className="min-w-[150px] flex-1 rounded-xl border border-gray-200 bg-white px-4 py-3 text-[13.5px] font-semibold text-gray-800 transition hover:border-gray-300"
             >
-              {emailing ? (
-                <Loader2 size={13} className="animate-spin" />
-              ) : (
-                <Mail size={13} />
-              )}
-              Send the estimate
+              <Mail size={14} className="mr-1.5 inline" />
+              Email to client
             </button>
-
-            {!issued && (
-              <p className="mt-2 text-[11px] text-gray-400">
-                Issue the estimate first — there is nothing frozen to send yet.
-              </p>
-            )}
-            {issued && dirty && (
-              <p className="mt-2 text-[11px] text-amber-700">
-                You have unsaved changes. Issue them before emailing, or the client will
-                receive the previous figures.
-              </p>
-            )}
-            {issued?.last_emailed_at && (
-              <p className="mt-2 text-[11px] text-gray-400">
-                Last sent to {issued.last_emailed_to} on{" "}
-                {issued.last_emailed_at.slice(0, 10)}.
-              </p>
-            )}
+            <button
+              type="button"
+              onClick={() => handleDownload(issued && !dirty ? "issued" : "draft")}
+              disabled={downloading}
+              className="inline-flex min-w-[150px] flex-1 items-center justify-center gap-1.5 rounded-xl px-4 py-3 text-[13.5px] font-semibold text-white transition disabled:opacity-50"
+              style={{ backgroundColor: accent }}
+            >
+              {downloading ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <Download size={14} />
+              )}
+              Download PDF
+            </button>
           </div>
-        </div>
 
-        {/* ── Right: the statement ── */}
-        <div className="rounded-xl border border-gray-200 bg-white p-5 sm:p-6">
-          <ClosingCostStatement
-            statement={statement}
-            caption={
-              issued && !dirty
-                ? `Issued${issued.issued_at ? ` ${issued.issued_at.slice(0, 10)}` : ""} — the client sees these figures.`
-                : undefined
-            }
-            firmBadge={String(activeConfig?.firm_badge ?? "").trim() || null}
-            heading={activeStatementType?.screen_heading}
-            // Follows the selected statement type, so picking "Final account"
-            // stops printing the draft's "this is an estimate" wording.
-            disclaimerIntro={activeStatementType?.disclaimer_intro}
-          />
-        </div>
+          {emailOpen && (
+            <div className="flex flex-col gap-2 rounded-xl border border-dashed border-red-200 bg-red-50/30 px-3.5 py-3">
+              <label
+                htmlFor="cc-email"
+                className="text-[12px] font-semibold text-gray-600"
+              >
+                Send the issued statement to
+              </label>
+              <input
+                id="cc-email"
+                type="email"
+                value={emailTo}
+                onChange={(e) => setEmailTo(e.target.value)}
+                placeholder="client@email.com"
+                className={`${inputClass} text-[13.5px]`}
+              />
+              <button
+                type="button"
+                onClick={handleEmail}
+                disabled={emailing}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg px-4 py-2.5 text-[13px] font-semibold text-white disabled:opacity-50"
+                style={{ backgroundColor: accent }}
+              >
+                {emailing ? (
+                  <Loader2 size={13} className="animate-spin" />
+                ) : (
+                  <Send size={13} />
+                )}
+                Send email
+              </button>
+              <span className="text-[10.5px] leading-snug text-gray-400">
+                Sends the ISSUED figures with the PDF attached â€” not what is on screen.
+                Issue your changes first.
+              </span>
+            </div>
+          )}
+        </section>
+
+        {/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ The statement â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        <section className="rounded-2xl border border-gray-200 bg-white px-7 py-6 shadow-sm">
+          <div className="flex flex-wrap items-end justify-between gap-4 border-b border-gray-200 pb-3.5">
+            <div>
+              <h2 className="text-[17px] font-bold tracking-tight text-gray-900">
+                Closing costs
+              </h2>
+              <p className="mt-0.5 text-[12.5px] text-gray-500">
+                {isDraft
+                  ? "Draft estimate â€” for planning only, before your lender's instructions arrive."
+                  : "Final account â€” figures confirmed against your lender's mortgage instructions."}
+              </p>
+            </div>
+          </div>
+
+          {/* Rendered from the computed groups, so a line that does not apply â€”
+              no mortgage registration on a cash deal, no municipal tax outside
+              Toronto â€” is absent rather than shown as zero. */}
+          {statement.groups.map((group) => (
+            <div key={group.key}>
+              <h3
+                className="mb-1 mt-5 border-b border-gray-100 pb-1.5 text-[11px] font-bold uppercase tracking-[0.11em]"
+                style={{ color: accent }}
+              >
+                {group.title}
+              </h3>
+              {group.lines.map((line) =>
+                renderLine(line, line.amount < 0 || line.key.startsWith("rebate_")),
+              )}
+              {group.key === "legal" && (
+                <div className="mt-1.5 border-t border-dashed border-gray-200 pt-2">
+                  {renderLine({
+                    key: "hst",
+                    label: "HST",
+                    amount: statement.hst.amount,
+                  })}
+                </div>
+              )}
+            </div>
+          ))}
+
+          {statement.propertyTax && (
+            <div>
+              <h3
+                className="mb-1 mt-5 border-b border-gray-100 pb-1.5 text-[11px] font-bold uppercase tracking-[0.11em]"
+                style={{ color: accent }}
+              >
+                Adjustments
+              </h3>
+              {renderLine(statement.propertyTax)}
+            </div>
+          )}
+
+          <div className="mt-2 flex items-baseline justify-between gap-3.5 border-t border-gray-900 pt-2.5">
+            <span className="text-[13.5px] font-semibold text-gray-900">
+              Total closing costs
+            </span>
+            <span className="text-[14.5px] font-semibold tabular-nums text-gray-900">
+              {formatCurrency(statement.total)}
+            </span>
+          </div>
+
+          {/* Funds needed â€” the number the client actually acts on. */}
+          <div
+            className="mt-3.5 rounded-xl border p-4.5 px-5 py-4"
+            style={{ borderColor: `${accent}33`, backgroundColor: `${accent}0a` }}
+          >
+            <div
+              className="mb-2 text-[11px] font-bold uppercase tracking-[0.11em]"
+              style={{ color: accent }}
+            >
+              Funds you&apos;ll need on closing
+            </div>
+            <BalanceRow
+              label="Purchase price"
+              value={formatCurrency(statement.balance.purchasePrice)}
+            />
+            <BalanceRow
+              muted
+              label="less deposit already paid"
+              value={signedCurrency(-statement.balance.depositPaid)}
+            />
+            <BalanceRow
+              muted
+              label="less mortgage advance from your lender"
+              value={signedCurrency(-statement.balance.mortgageAmount)}
+            />
+            {statement.balance.propertyTaxAdjustment !== 0 && (
+              <BalanceRow
+                label="plus adjustments (above)"
+                value={signedCurrency(statement.balance.propertyTaxAdjustment)}
+              />
+            )}
+            <BalanceRow
+              label="plus closing costs (above)"
+              value={signedCurrency(statement.balance.closingCosts)}
+            />
+            <div
+              className="mt-2.5 flex items-baseline justify-between border-t pt-3"
+              style={{ borderColor: `${accent}33` }}
+            >
+              <span className="text-[14px] font-bold text-gray-900">
+                Estimated balance due on closing
+              </span>
+              <span
+                className="text-[22px] font-bold tabular-nums"
+                style={{ color: accent }}
+              >
+                {formatCurrency(statement.balance.balanceDue)}
+              </span>
+            </div>
+          </div>
+
+          <p className="mt-3.5 border-t border-gray-200 pt-3.5 text-[11.5px] leading-relaxed text-gray-500">
+            <strong className="text-gray-600">
+              {activeStatementType?.disclaimer_intro || DISCLAIMERS[0]}
+            </strong>{" "}
+            {DISCLAIMERS.slice(1).join(" ")}
+            {activeStatementType?.footer_note ? ` ${activeStatementType.footer_note}` : ""}
+          </p>
+        </section>
       </div>
     </div>
   );
 };
 
-/** Labelled dollar input with a leading "$". */
-const MoneyField: React.FC<{
+/**
+ * Lines that are still provisional while the statement is a draft.
+ *
+ * The title premium is NOT here â€” it carries its own badge from the calculation,
+ * which disappears the moment the exact FCT quote is entered, and that is more
+ * precise than "is this a draft".
+ */
+const DRAFT_ESTIMATE_KEYS = new Set([
+  "teraview",
+  "sheriff",
+  "property_tax_adjustment",
+]);
+
+/** Placeholder for each adjustable input: the figure it would replace. */
+const ADJUST_PLACEHOLDERS: Record<
+  FormNumberKey,
+  (s: ReturnType<typeof computeStatement>) => string
+> = {
+  provincialLttOverride: (s) => amountText(s.detail.provincialLTT),
+  municipalLttOverride: (s) => amountText(s.detail.municipalLTT),
+  titlePremiumOverride: (s) => amountText(s.detail.titlePremium),
+  propertyTaxAdjustment: (s) => amountText(s.detail.propertyTaxAdjustment),
+};
+
+/** "+ $1,200.00" / "â€“ $50,000.00" / "â€”" for zero. */
+function signedCurrency(n: number): string {
+  const v = Math.round(n * 100) / 100;
+  if (v === 0) return "â€”";
+  return `${v < 0 ? "â€“ " : "+ "}${formatCurrency(Math.abs(v))}`;
+}
+
+const BalanceRow: React.FC<{ label: string; value: string; muted?: boolean }> = ({
+  label,
+  value,
+  muted,
+}) => (
+  <div
+    className={`flex justify-between py-1 text-[13.5px] ${
+      muted ? "text-gray-500" : "text-gray-800"
+    }`}
+  >
+    <span>{label}</span>
+    <span className="tabular-nums">{value}</span>
+  </div>
+);
+
+/** A labelled row of mutually exclusive pill buttons. */
+const PickerRow: React.FC<{
   label: string;
-  hint?: string;
+  options: Array<{ value: string; label: string }>;
   value: string;
-  disabled?: boolean;
+  accent: string;
+  onChange: (value: string) => void;
+}> = ({ label, options, value, accent, onChange }) => (
+  <div className="flex flex-col gap-1.5">
+    <span className="text-[11px] font-bold uppercase tracking-[0.09em] text-gray-400">
+      {label}
+    </span>
+    <div className="flex flex-wrap gap-1.5">
+      {options.map((opt) => (
+        <ChoiceButton
+          key={opt.value}
+          label={opt.label}
+          active={value === opt.value}
+          accent={accent}
+          onClick={() => onChange(opt.value)}
+        />
+      ))}
+    </div>
+  </div>
+);
+
+const ChoiceButton: React.FC<{
+  label: string;
+  active: boolean;
+  accent: string;
+  onClick: () => void;
+}> = ({ label, active, accent, onClick }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    aria-pressed={active}
+    className={`rounded-lg border px-3 py-2 text-[12.5px] font-semibold transition ${
+      active ? "bg-red-50/50" : "border-gray-200 text-gray-600 hover:bg-gray-50"
+    }`}
+    style={active ? { borderColor: accent, color: accent } : undefined}
+  >
+    {label}
+  </button>
+);
+
+/** A dashed "â€” optional" disclosure block. */
+const Collapsible: React.FC<{
+  title: string;
+  badge?: string;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}> = ({ title, badge, open, onToggle, children }) => (
+  <div className="flex flex-col gap-2 rounded-xl border border-dashed border-gray-200 bg-gray-50/60 px-3 py-2.5">
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={open}
+      className="flex w-full items-center justify-between gap-2 text-left"
+    >
+      <span className="text-[10px] font-bold uppercase tracking-[0.09em] text-gray-400">
+        {title}{" "}
+        <span className="font-medium normal-case tracking-normal">â€” optional</span>
+        {badge && (
+          <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold normal-case tracking-normal text-amber-700">
+            {badge}
+          </span>
+        )}
+      </span>
+      <span className="inline-flex items-center gap-1 text-[10.5px] font-semibold text-gray-500">
+        {open ? "Hide" : "Add"}
+        <ChevronDown
+          size={12}
+          className={`transition-transform ${open ? "rotate-180" : ""}`}
+        />
+      </span>
+    </button>
+    {open && <div className="flex flex-col gap-2">{children}</div>}
+  </div>
+);
+
+/** The three headline amounts. */
+const BigMoney: React.FC<{
+  id: string;
+  label: string;
+  value: string;
+  accent: string;
+  hint?: string;
+  onChange: (value: string) => void;
+}> = ({ id, label, value, accent, hint, onChange }) => (
+  <div className="flex flex-col gap-1.5">
+    <label htmlFor={id} className="text-[13px] font-semibold text-gray-900">
+      {label}
+    </label>
+    <div className="relative flex items-center">
+      <span className="pointer-events-none absolute left-3.5 font-semibold text-gray-400">
+        $
+      </span>
+      <input
+        id={id}
+        type="text"
+        inputMode="decimal"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-xl border border-gray-200 bg-gray-50/40 py-3 pl-7 pr-3.5 text-base font-semibold tabular-nums text-gray-900 outline-none transition focus:bg-white"
+        style={{ borderColor: undefined }}
+        onFocus={(e) => {
+          e.currentTarget.style.borderColor = accent;
+          e.currentTarget.style.boxShadow = `0 0 0 3px ${accent}22`;
+        }}
+        onBlur={(e) => {
+          e.currentTarget.style.borderColor = "";
+          e.currentTarget.style.boxShadow = "";
+        }}
+      />
+    </div>
+    {hint && <span className="text-[11.5px] text-gray-500">{hint}</span>}
+  </div>
+);
+
+/** A compact $ field for the Adjust fees grid. */
+const SmallMoney: React.FC<{
+  label: string;
+  value: string;
+  accent: string;
   placeholder?: string;
-  /** Property tax can credit the buyer, so its field must accept a minus sign. */
   allowNegative?: boolean;
   onChange: (value: string) => void;
-}> = ({ label, hint, value, disabled, placeholder, allowNegative, onChange }) => (
-  <div>
-    <label className="block text-[13px] font-semibold text-gray-800">
+}> = ({ label, value, accent, placeholder, allowNegative, onChange }) => (
+  <div className="flex flex-col gap-1">
+    <label className="text-[10.5px] font-semibold leading-tight text-gray-600">
       {label}
-      {hint && <span className="ml-1.5 font-normal text-gray-400">— {hint}</span>}
     </label>
-    <div className="relative mt-2">
-      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">
+    <div className="relative flex items-center">
+      <span className="pointer-events-none absolute left-2 text-[11px] text-gray-400">
         $
       </span>
       <input
         type="text"
         inputMode={allowNegative ? "text" : "decimal"}
         value={value}
-        disabled={disabled}
+        placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder ?? "0"}
-        className={`${inputClass} pl-7 tabular-nums disabled:bg-gray-50 disabled:text-gray-400`}
+        className="w-full rounded-lg border border-gray-200 bg-white py-1.5 pl-5 pr-2 text-[12px] font-semibold tabular-nums text-gray-900 outline-none placeholder:font-normal placeholder:text-gray-300"
+        onFocus={(e) => {
+          e.currentTarget.style.borderColor = accent;
+          e.currentTarget.style.boxShadow = `0 0 0 3px ${accent}22`;
+        }}
+        onBlur={(e) => {
+          e.currentTarget.style.borderColor = "";
+          e.currentTarget.style.boxShadow = "";
+        }}
       />
     </div>
   </div>
 );
 
-/** Labelled free-text input for the statement header fields. */
-const TextField: React.FC<{
+/** A compact text field for the File details block. */
+const SmallText: React.FC<{
   label: string;
-  hint?: string;
   value: string;
+  accent: string;
+  placeholder?: string;
   onChange: (value: string) => void;
-}> = ({ label, hint, value, onChange }) => (
-  <div>
-    <label className="block text-[13px] font-semibold text-gray-800">
-      {label}
-      {hint && <span className="ml-1.5 font-normal text-gray-400">— {hint}</span>}
-    </label>
+}> = ({ label, value, accent, placeholder, onChange }) => (
+  <div className="flex flex-col gap-1">
+    <label className="text-[11px] font-semibold text-gray-600">{label}</label>
     <input
       type="text"
       value={value}
+      placeholder={placeholder}
       onChange={(e) => onChange(e.target.value)}
-      className={`${inputClass} mt-1.5`}
+      className="w-full rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-[12px] text-gray-900 outline-none placeholder:text-gray-300"
+      onFocus={(e) => {
+        e.currentTarget.style.borderColor = accent;
+        e.currentTarget.style.boxShadow = `0 0 0 3px ${accent}22`;
+      }}
+      onBlur={(e) => {
+        e.currentTarget.style.borderColor = "";
+        e.currentTarget.style.boxShadow = "";
+      }}
     />
-  </div>
-);
-
-/** Two-or-more mutually exclusive choices rendered as a pill row. */
-const SegmentedControl: React.FC<{
-  options: Array<{ value: string; label: string }>;
-  value: string;
-  onChange: (value: string) => void;
-}> = ({ options, value, onChange }) => (
-  <div className="mt-2 grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.max(options.length, 1)}, minmax(0, 1fr))` }}>
-    {options.map((opt) => {
-      const active = value === opt.value;
-      return (
-        <button
-          key={opt.value}
-          type="button"
-          onClick={() => onChange(opt.value)}
-          className={`rounded-lg border px-2 py-2 text-[12px] font-medium transition ${
-            active
-              ? "border-[#C10007] bg-red-50 text-[#C10007]"
-              : "border-gray-200 text-gray-600 hover:bg-gray-50"
-          }`}
-        >
-          {opt.label}
-        </button>
-      );
-    })}
   </div>
 );
 

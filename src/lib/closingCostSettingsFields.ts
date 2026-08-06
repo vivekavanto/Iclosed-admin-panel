@@ -33,10 +33,14 @@ export const BRAND = "#C10007";
 export const FIRM_SECTIONS: FieldSection[] = [
   {
     title: "Legal & Admin Fees",
-    note: "The client sees one combined \"Legal fees\" line — transfer + mortgage + title submission. A cash purchase drops the mortgage portion.",
+    note: "One flat professional fee, charged whether or not the purchase is financed. Title submission is billed separately and prints under Title Insurance.",
     fields: [
-      { key: "legal_transfer", label: "Legal fee — transfer", prefix: "$" },
-      { key: "legal_mortgage", label: "Legal fee — mortgage", prefix: "$" },
+      {
+        key: "legal_fees",
+        label: "Legal fees",
+        hint: "the whole purchase, mortgage or not",
+        prefix: "$",
+      },
       { key: "legal_title_submission", label: "Legal — title submission", prefix: "$" },
       { key: "admin_fee", label: "Admin fee", prefix: "$" },
     ],
@@ -80,6 +84,18 @@ export const SHARED_SECTIONS: FieldSection[] = [
     fields: [
       { key: "reg_transfer", label: "Registration of Transfer", prefix: "$" },
       { key: "reg_mortgage", label: "Registration of Mortgage", prefix: "$" },
+    ],
+  },
+  {
+    title: "Statement of Adjustments",
+    note: "A planning figure only — it is not a fee, carries no HST, and stays out of \"Total closing costs\". Staff replace it per file with the real number once the seller's lawyer sends the Statement of Adjustments.",
+    fields: [
+      {
+        key: "property_tax_default",
+        label: "Property tax & common expenses",
+        hint: "what a new estimate starts with",
+        prefix: "$",
+      },
     ],
   },
   {

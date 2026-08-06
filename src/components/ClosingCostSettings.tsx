@@ -37,11 +37,15 @@ import { formatCurrency, parseAmountInput } from "@/lib/formatCurrency";
 // already issued keep their own frozen snapshot and are never rewritten, which
 // is why this page can be edited freely without auditing every open file.
 //
-// Three independent Saves rather than one, because the blast radii differ: a
-// shared-rate change alters what BOTH firms quote, while a firm's fee change
-// affects only its own files.
+// The firm profiles and the shared statutory rates sit in ONE view: pricing a
+// file reads from both at once, so splitting them across tabs meant tabbing
+// back and forth to sanity-check a single number against the sample estimate.
+//
+// They keep their own Saves rather than sharing one, because the blast radii
+// differ: a shared-rate change alters what BOTH firms quote, while a firm's fee
+// change affects only its own files.
 
-type Section = "firms" | "shared" | "statements";
+type Section = "rates" | "statements";
 
 interface Bundle {
   schema_ready: boolean;
@@ -55,8 +59,7 @@ const LETTERHEAD_KEYS = LETTERHEAD_FIELDS.map((f) => f.key);
 const STATEMENT_TEXT_KEYS = ["label", ...STATEMENT_TEXT_FIELDS.map((f) => f.key)];
 
 const TABS: Array<{ id: Section; label: string }> = [
-  { id: "firms", label: "Firms" },
-  { id: "shared", label: "Shared rates" },
+  { id: "rates", label: "Firms & rates" },
   { id: "statements", label: "Statement types" },
 ];
 
@@ -92,7 +95,7 @@ const ClosingCostSettings: React.FC = () => {
   );
 
   const [bundle, setBundle] = useState<Bundle | null>(null);
-  const [tab, setTab] = useState<Section>("firms");
+  const [tab, setTab] = useState<Section>("rates");
   const [activeFirm, setActiveFirm] = useState<FirmKey>(FIRM_KEYS[0]);
   const [activeType, setActiveType] = useState<StatementTypeKey>(STATEMENT_TYPE_KEYS[0]);
   const [saving, setSaving] = useState<string | null>(null);
@@ -460,75 +463,88 @@ const ClosingCostSettings: React.FC = () => {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,300px)]">
         <div>
-          {tab === "firms" && (
-            <div className="space-y-5">
-              <div className="flex flex-wrap gap-2">
-                {firmOptions.map((firm) => (
-                  <button
-                    key={firm.key}
-                    type="button"
-                    onClick={() => setActiveFirm(firm.key)}
-                    className={`inline-flex items-center gap-2 rounded-lg border px-3.5 py-2 text-xs font-semibold ${
-                      activeFirm === firm.key
-                        ? "border-transparent text-white"
-                        : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
-                    }`}
-                    style={
-                      activeFirm === firm.key ? { backgroundColor: BRAND } : undefined
-                    }
-                  >
-                    {firm.label}
-                    {dirty[`firm:${firm.key}`] && (
-                      <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
-                    )}
-                    {!firm.isActive && (
-                      <span className="text-[10px] font-normal opacity-70">inactive</span>
-                    )}
-                  </button>
-                ))}
+          {tab === "rates" && (
+            <div className="space-y-8">
+              <div className="space-y-5">
+                <div className="flex flex-wrap gap-2">
+                  {firmOptions.map((firm) => (
+                    <button
+                      key={firm.key}
+                      type="button"
+                      onClick={() => setActiveFirm(firm.key)}
+                      className={`inline-flex items-center gap-2 rounded-lg border px-3.5 py-2 text-xs font-semibold ${
+                        activeFirm === firm.key
+                          ? "border-transparent text-white"
+                          : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+                      }`}
+                      style={
+                        activeFirm === firm.key ? { backgroundColor: BRAND } : undefined
+                      }
+                    >
+                      {firm.label}
+                      {dirty[`firm:${firm.key}`] && (
+                        <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                      )}
+                      {!firm.isActive && (
+                        <span className="text-[10px] font-normal opacity-70">
+                          inactive
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+
+                <ClosingCostFirmCard
+                  label={firmDrafts[activeFirm]?.label || activeFirm}
+                  draft={firmDrafts[activeFirm] ?? {}}
+                  logoUrl={firmLogos[activeFirm] ?? ""}
+                  onLogoUpload={(file) => uploadLogo(activeFirm, file)}
+                  onLogoRemove={() => removeLogo(activeFirm)}
+                  isActive={firmActive[activeFirm] === true}
+                  isDivision={activeFirm !== FIRM_KEYS[0]}
+                  dirty={Boolean(dirty[`firm:${activeFirm}`])}
+                  saving={saving === `firm:${activeFirm}`}
+                  disabled={locked}
+                  onChange={editFirm(activeFirm)}
+                  onToggleActive={(next) => {
+                    setFirmActive((prev) => ({ ...prev, [activeFirm]: next }));
+                    markDirty(`firm:${activeFirm}`);
+                  }}
+                  onSave={() => void saveFirm(activeFirm)}
+                />
               </div>
 
-              <ClosingCostFirmCard
-                label={firmDrafts[activeFirm]?.label || activeFirm}
-                draft={firmDrafts[activeFirm] ?? {}}
-                logoUrl={firmLogos[activeFirm] ?? ""}
-                onLogoUpload={(file) => uploadLogo(activeFirm, file)}
-                onLogoRemove={() => removeLogo(activeFirm)}
-                isActive={firmActive[activeFirm] === true}
-                isDivision={activeFirm !== FIRM_KEYS[0]}
-                dirty={Boolean(dirty[`firm:${activeFirm}`])}
-                saving={saving === `firm:${activeFirm}`}
+              {/* The rule marks where "this firm only" stops and "every firm"
+                  begins — the one distinction the merged view could otherwise
+                  blur, and the reason these keep separate Save buttons. */}
+              <div className="flex items-center gap-3" aria-hidden>
+                <span className="h-px flex-1 bg-gray-200" />
+                <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                  Shared rates
+                </span>
+                <span className="h-px flex-1 bg-gray-200" />
+              </div>
+
+              <ClosingCostSharedRatesCard
+                draft={sharedDraft}
+                lttTiers={lttTiers}
+                mlttTiers={mlttTiers}
+                firmOptions={firmOptions}
+                dirty={Boolean(dirty.shared)}
+                saving={saving === "shared"}
                 disabled={locked}
-                onChange={editFirm(activeFirm)}
-                onToggleActive={(next) => {
-                  setFirmActive((prev) => ({ ...prev, [activeFirm]: next }));
-                  markDirty(`firm:${activeFirm}`);
+                onChange={editShared}
+                onLttChange={(t) => {
+                  setLttTiers(t);
+                  markDirty("shared");
                 }}
-                onSave={() => void saveFirm(activeFirm)}
+                onMlttChange={(t) => {
+                  setMlttTiers(t);
+                  markDirty("shared");
+                }}
+                onSave={() => void saveShared()}
               />
             </div>
-          )}
-
-          {tab === "shared" && (
-            <ClosingCostSharedRatesCard
-              draft={sharedDraft}
-              lttTiers={lttTiers}
-              mlttTiers={mlttTiers}
-              firmOptions={firmOptions}
-              dirty={Boolean(dirty.shared)}
-              saving={saving === "shared"}
-              disabled={locked}
-              onChange={editShared}
-              onLttChange={(t) => {
-                setLttTiers(t);
-                markDirty("shared");
-              }}
-              onMlttChange={(t) => {
-                setMlttTiers(t);
-                markDirty("shared");
-              }}
-              onSave={() => void saveShared()}
-            />
           )}
 
           {tab === "statements" && (
@@ -573,7 +589,7 @@ const ClosingCostSettings: React.FC = () => {
 
         {/* Live sample — the reference file from the requirements document, so a
             change to any fee shows up immediately in a familiar total. Priced
-            with the firm currently on screen, so switching tabs shows the
+            with the firm currently selected, so switching firms shows the
             difference between the two fee schedules. */}
         <aside className="lg:sticky lg:top-6 lg:self-start">
           <div className="rounded-xl border border-gray-200 bg-white p-5">

@@ -26,8 +26,15 @@
  * 3 — "FCT — submission & review" became its own line under Title Insurance
  *     instead of being folded into "Legal fees". Presentation only: the HST
  *     base, the total and the balance are all unchanged.
+ * 4 — the firm's legal fee became ONE `legal_fees` amount instead of a
+ *     transfer + mortgage pair. NOT presentation-only: a cash purchase used to
+ *     be charged the transfer portion alone and is now charged the same legal
+ *     fee as a mortgage purchase, so its total moves.
+ * 5 — land transfer tax accepts a per-file dollar override, replacing the
+ *     bracket calculation. Additive: with no override supplied a v5 statement
+ *     is identical to a v4 one.
  */
-export const CALC_VERSION = 3;
+export const CALC_VERSION = 5;
 
 /**
  * One marginal tax band: `[cap, rate]`. The rate applies only to the portion of
@@ -45,8 +52,8 @@ export interface ClosingCostRates {
   teraview: number;
   sheriff: number;
   // Legal & admin fees
-  legalTransfer: number;
-  legalMortgage: number;
+  /** One flat professional fee for the purchase, mortgage or not. */
+  legalFees: number;
   legalTitleSubmission: number;
   adminFee: number;
   // Rates & caps
@@ -70,6 +77,21 @@ export interface ClosingCostInputs {
   isFirstTimeBuyer: boolean;
   /** Non-null = the exact FCT quote, used verbatim; the estimate is skipped. */
   titlePremiumOverride?: number | null;
+  /**
+   * Non-null = the land transfer tax for this file in dollars, replacing the
+   * bracket calculation entirely.
+   *
+   * The brackets encode a standard residential purchase. Staff need a way out
+   * when a file isn't one — a partial interest, a assumed-mortgage
+   * consideration, or a ministry reassessment — without editing the bracket
+   * table that every other file is priced from.
+   *
+   * The first-time-buyer rebates cap against the OVERRIDDEN figure, since the
+   * rebate refunds the tax actually payable.
+   */
+  provincialLttOverride?: number | null;
+  /** As above, for the Toronto municipal tax. Ignored outside Toronto. */
+  municipalLttOverride?: number | null;
   /**
    * The buyer's share of property tax the seller has already paid, from the
    * Statement of Adjustments. Adds a "Property Tax" group when non-zero and is
@@ -164,8 +186,7 @@ export const DEFAULT_RATES: ClosingCostRates = {
   regMortgage: 85,
   teraview: 54.8,
   sheriff: 133.6,
-  legalTransfer: 650,
-  legalMortgage: 550,
+  legalFees: 1200,
   legalTitleSubmission: 150,
   adminFee: 250,
   hstRate: 0.13,
@@ -198,6 +219,16 @@ export function round2(n: number): number {
   if (!Number.isFinite(n)) return 0;
   const sign = n < 0 ? -1 : 1;
   return (sign * Math.round(Math.abs(n) * 100 + 1e-8)) / 100;
+}
+
+/**
+ * True when an optional override actually carries a figure.
+ *
+ * Presence, not truthiness: an explicit 0 is a legitimate override (an exempt
+ * transfer, a waived premium) and must not fall back to the calculation.
+ */
+function isSupplied(v: unknown): boolean {
+  return v !== null && v !== undefined && v !== "" && Number.isFinite(Number(v));
 }
 
 /** Coerce anything (form string, DB numeric, null) to a finite number. */
@@ -244,6 +275,42 @@ function tieredTax(price: number, tiers: Tier[]): number {
   return tax;
 }
 
+/**
+ * The legal fee split that `legal_fees` replaced, as it was configured before
+ * the merge. Only ever used to reconstitute a row written under the old shape.
+ */
+const LEGACY_LEGAL_SPLIT = { transfer: 650, mortgage: 550 } as const;
+
+/**
+ * The one legal-fee figure, from a row that may predate the merge.
+ *
+ * `legal_fees` wins whenever it is present, so a settings edit takes effect as
+ * soon as the backfill has run — even while the legacy pair is still sitting on
+ * the same row, between the add-column and drop-column migrations.
+ *
+ * Only when it is absent is the pair summed: a frozen `rates_used` snapshot on
+ * an already-issued estimate, or a config row read by a build that deployed
+ * ahead of the migration. That sum reproduces what the old row charged WITH a
+ * mortgage. It cannot reproduce what a cash purchase was charged under the old
+ * rules, and does not need to — an issued estimate renders from its own frozen
+ * `line_items`, never by recomputing.
+ */
+function legalFeesOf(row: Record<string, unknown>, d: ClosingCostRates): number {
+  const merged = row.legal_fees;
+  if (merged !== null && merged !== undefined && merged !== "") {
+    return num(merged, d.legalFees);
+  }
+  const transfer = row.legal_transfer;
+  const mortgage = row.legal_mortgage;
+  const hasLegacy =
+    (transfer !== null && transfer !== undefined) ||
+    (mortgage !== null && mortgage !== undefined);
+  if (!hasLegacy) return d.legalFees;
+  return (
+    num(transfer, LEGACY_LEGAL_SPLIT.transfer) + num(mortgage, LEGACY_LEGAL_SPLIT.mortgage)
+  );
+}
+
 /** Map a `closing_cost_config` row (snake_case, numeric-as-string) to rates. */
 export function ratesFromConfigRow(
   row: Record<string, unknown> | null | undefined,
@@ -255,8 +322,7 @@ export function ratesFromConfigRow(
     regMortgage: num(row.reg_mortgage, d.regMortgage),
     teraview: num(row.teraview, d.teraview),
     sheriff: num(row.sheriff, d.sheriff),
-    legalTransfer: num(row.legal_transfer, d.legalTransfer),
-    legalMortgage: num(row.legal_mortgage, d.legalMortgage),
+    legalFees: legalFeesOf(row, d),
     legalTitleSubmission: num(row.legal_title_submission, d.legalTitleSubmission),
     adminFee: num(row.admin_fee, d.adminFee),
     hstRate: num(row.hst_rate, d.hstRate),
@@ -278,8 +344,7 @@ export function ratesToSnapshot(r: ClosingCostRates): Record<string, unknown> {
     reg_mortgage: r.regMortgage,
     teraview: r.teraview,
     sheriff: r.sheriff,
-    legal_transfer: r.legalTransfer,
-    legal_mortgage: r.legalMortgage,
+    legal_fees: r.legalFees,
     legal_title_submission: r.legalTitleSubmission,
     admin_fee: r.adminFee,
     hst_rate: r.hstRate,
@@ -355,8 +420,19 @@ export function computeStatement(
   const hasMortgage = mortgage > 0;
 
   // ── Land transfer tax ──
-  const provincial = round2(provincialLTT(price, rates.lttTiers));
-  const municipal = isToronto ? round2(torontoMLTT(price, rates.mlttTiers)) : 0;
+  // A supplied dollar figure replaces the bracket calculation. An explicit 0 is
+  // a real override (an exempt transfer), so presence is what counts, not truth.
+  const provincial = isSupplied(inputs.provincialLttOverride)
+    ? round2(num(inputs.provincialLttOverride))
+    : round2(provincialLTT(price, rates.lttTiers));
+  // A municipal override is ignored outside Toronto: the municipal line is not
+  // printed there, so honouring one would add tax to the total with nothing on
+  // the statement to account for it.
+  const municipal = !isToronto
+    ? 0
+    : isSupplied(inputs.municipalLttOverride)
+      ? round2(num(inputs.municipalLttOverride))
+      : round2(torontoMLTT(price, rates.mlttTiers));
   // Each rebate reduces its own tax (not the price) and is capped. The Toronto
   // rebate applies only to a Toronto property.
   const ontRebate = isFirstTimeBuyer
@@ -398,8 +474,7 @@ export function computeStatement(
 
   // ── Title insurance ──
   const override = inputs.titlePremiumOverride;
-  const hasOverride =
-    override !== null && override !== undefined && Number.isFinite(Number(override));
+  const hasOverride = isSupplied(override);
   const titlePremium = hasOverride
     ? round2(num(override))
     : round2(titlePremiumEstimate(price, rates));
@@ -446,12 +521,13 @@ export function computeStatement(
   );
 
   // ── Legal & admin fees ──
-  // The client-facing "Legal fees" line: transfer + mortgage. A cash purchase
-  // drops the mortgage portion. Title submission is billed separately, under
-  // Title Insurance above.
-  const legalFees = round2(
-    rates.legalTransfer + (hasMortgage ? rates.legalMortgage : 0),
-  );
+  // One flat professional fee, charged whether or not there is a mortgage.
+  // Title submission is billed separately, under Title Insurance above.
+  //
+  // The sublabel still narrows on a cash purchase: it describes what the fee
+  // COVERS on this file, which genuinely differs, even though the amount no
+  // longer does.
+  const legalFees = round2(rates.legalFees);
   const adminFee = round2(rates.adminFee);
 
   const legalLines: StatementLine[] = [

@@ -54,8 +54,7 @@ test("a merged row carries every key ratesFromConfigRow and the PDF read", () =>
   const merged = mergeConfigRow(null, null, FALLBACK_FIRM_KEY);
   const rateColumns = [
     ...SHARED_RATE_COLUMNS,
-    "legal_transfer",
-    "legal_mortgage",
+    "legal_fees",
     "legal_title_submission",
     "admin_fee",
     "teraview",

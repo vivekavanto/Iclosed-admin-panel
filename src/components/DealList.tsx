@@ -1,8 +1,20 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { Deal, DealType, DealStatus } from '../types';
 import { toDeal } from '@/lib/dealMapper';
-import { Search, Trash2, Users, AlertTriangle, Upload, ChevronDown, LogIn } from 'lucide-react';
+import {
+  Search,
+  Trash2,
+  Users,
+  AlertTriangle,
+  Upload,
+  ChevronDown,
+  LogIn,
+  UserPlus,
+  Loader2,
+  CheckCircle2,
+} from 'lucide-react';
 import {
   isNonCitizenFlagged,
   NON_CITIZEN_FLAG_TOOLTIP,
@@ -12,6 +24,45 @@ import { computeDealDisplayStatus } from '@/lib/dealDisplayStatus';
 
 interface DealListProps {
   onSelectDeal?: (dealId: string) => void;
+}
+
+// A row from the `partners` master — the referral agent/broker on a file.
+interface ReferralPartner {
+  id: string;
+  agent_name: string | null;
+  agent_email: string | null;
+  agent_phone: string | null;
+  brokerage_type: string | null;
+  brokerage_name: string | null;
+  referral_code: string | null;
+}
+
+/**
+ * The referral fields fetchDeals attaches to each deal on top of `Deal`.
+ *
+ * `deals` is typed as Deal[] and the list casts for its other extras too; this
+ * keeps the agent ones structurally typed rather than reaching through `any`.
+ */
+type ReferralFields = {
+  referralPartner?: ReferralPartner | null;
+  referralAgentName?: string | null;
+  referralAgentCompany?: string | null;
+  leadId?: string | null;
+  leadName?: string;
+};
+
+const referralOf = (deal: Deal): ReferralFields => deal as Deal & ReferralFields;
+
+/** The agent to show for a file: the linked partner, else the intake free text. */
+function agentLabel(deal: Deal): string {
+  const r = referralOf(deal);
+  return (
+    r.referralPartner?.agent_name ||
+    r.referralAgentName ||
+    r.referralPartner?.brokerage_name ||
+    r.referralAgentCompany ||
+    ''
+  );
 }
 
 // First letter of each whitespace-separated word, max 2 letters, uppercased.
@@ -69,6 +120,103 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   const [pendingTasks, setPendingTasks] = useState<
     Record<string, { loading: boolean; error: boolean; tasks: { id: string; title: string; status: string }[] }>
   >({});
+
+  // ── Referral agent (partner) linking ───────────────────────────────────────
+  // Intake was the only place that could originally attach an agent, so a file
+  // created before the agent was known had no way back. This mirrors the Partner
+  // Details flow on the Leads page, addressed by file:
+  // /api/admin/deals/[id]/agent applies the change family-wide, exactly as the
+  // lead-level route does.
+  const [agentDeal, setAgentDeal] = useState<Deal | null>(null);
+  const [partners, setPartners] = useState<ReferralPartner[]>([]);
+  const [partnersLoading, setPartnersLoading] = useState(false);
+  const [partnersError, setPartnersError] = useState<string | null>(null);
+  const [partnerSearch, setPartnerSearch] = useState('');
+  const [pickedPartnerId, setPickedPartnerId] = useState<string | null>(null);
+  const [savingAgent, setSavingAgent] = useState(false);
+  // Success shows as a banner above the table (the modal closes); failure shows
+  // inside the modal, which stays open so the pick isn't lost.
+  const [agentResult, setAgentResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  const openAgentModal = useCallback(async (deal: Deal) => {
+    setAgentDeal(deal);
+    setPickedPartnerId(referralOf(deal).referralPartner?.id ?? null);
+    setPartnerSearch('');
+    setAgentResult(null);
+
+    // Partners rarely change during a session, so fetch once and reuse.
+    if (partners.length > 0) return;
+    setPartnersLoading(true);
+    setPartnersError(null);
+    try {
+      const res = await fetch('/api/admin/partners');
+      if (!res.ok) throw new Error('Failed to load partners.');
+      const data = await res.json();
+      setPartners(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setPartnersError(err instanceof Error ? err.message : 'Failed to load partners.');
+    } finally {
+      setPartnersLoading(false);
+    }
+  }, [partners.length]);
+
+  // partnerId null clears the agent. The server applies it to everyone on the
+  // file, so every affected row in the list is patched — not just this one —
+  // otherwise a co-client's row would still show the old agent.
+  const saveAgent = useCallback(async (deal: Deal, partnerId: string | null) => {
+    setSavingAgent(true);
+    setAgentResult(null);
+    try {
+      const res = await fetch(`/api/admin/deals/${deal.id}/agent`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ partnerId }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.error || 'Failed to update the agent.');
+      }
+
+      const partner: ReferralPartner | null = data.partner ?? null;
+      const familyLeadId = referralOf(deal).leadId ?? null;
+      setDeals((prev) =>
+        prev.map((d) => {
+          const sameFile =
+            d.id === deal.id ||
+            (!!familyLeadId && referralOf(d).leadId === familyLeadId) ||
+            (!!deal.fileNumber && d.fileNumber === deal.fileNumber);
+          if (!sameFile) return d;
+          return {
+            ...d,
+            referralPartner: partner,
+            referralAgentName: null,
+            referralAgentCompany: null,
+          } as Deal;
+        }),
+      );
+
+      const name = partner?.agent_name || 'Agent';
+      const parts = [
+        partnerId
+          ? `${name} linked to file ${deal.fileNumber || ''}`.trim() + '.'
+          : `Agent removed from file ${deal.fileNumber || ''}`.trim() + '.',
+      ];
+      if (data.notify?.eligible) {
+        parts.push('They have not had the signup email — send it from the lead’s Partner Details.');
+      }
+      if (Array.isArray(data.warnings)) parts.push(...data.warnings);
+
+      setAgentDeal(null);
+      setAgentResult({ success: true, message: parts.join(' ') });
+    } catch (err) {
+      setAgentResult({
+        success: false,
+        message: err instanceof Error ? err.message : 'Failed to update the agent.',
+      });
+    } finally {
+      setSavingAgent(false);
+    }
+  }, []);
 
   const togglePendingTasks = useCallback((dealId: string) => {
     setExpandedDealId((prev) => (prev === dealId ? null : dealId));
@@ -133,6 +281,15 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           sellingAddressCity: d.lead_selling_address_city ?? '',
           sellingAddressProvince: d.lead_selling_address_province ?? '',
           sellingAddressPostalCode: d.lead_selling_address_postal_code ?? '',
+          // Referral attribution. referralPartner is the linked `partners` row;
+          // the referralAgent* fields are the free-text agent a client could name
+          // at intake, read only as a fallback behind it.
+          referralPartner: d.referral_partner ?? null,
+          referralAgentName: d.referral_agent_name ?? null,
+          referralAgentCompany: d.referral_agent_company ?? null,
+          // Linking an agent applies to everyone on the file, so the list needs
+          // the lead id to find the sibling rows and patch them too.
+          leadId: d.lead_id ?? null,
         } as Deal & {
           authUserId: string | null;
           isCoPurchaser: boolean;
@@ -153,6 +310,10 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           sellingAddressCity: string;
           sellingAddressProvince: string;
           sellingAddressPostalCode: string;
+          referralPartner: ReferralPartner | null;
+          referralAgentName: string | null;
+          referralAgentCompany: string | null;
+          leadId: string | null;
         }));
         setDeals(mapped);
       })
@@ -648,6 +809,36 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
         </label>
       </div>
 
+      {/* Agent link/unlink outcome. Lives above the table rather than in the row
+          because the change applies to every person on the file, not just the
+          row that was clicked. */}
+      {agentResult && (
+        <div className="px-4 sm:px-6 pb-3">
+          <div
+            className={`flex items-start gap-2 px-3 py-2.5 rounded-lg border text-sm font-medium ${
+              agentResult.success
+                ? 'bg-green-50 border-green-200 text-green-800'
+                : 'bg-red-50 border-red-200 text-red-700'
+            }`}
+          >
+            {agentResult.success ? (
+              <CheckCircle2 size={16} className="flex-shrink-0 mt-0.5" />
+            ) : (
+              <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" />
+            )}
+            <span className="flex-1">{agentResult.message}</span>
+            <button
+              type="button"
+              onClick={() => setAgentResult(null)}
+              className="text-xl leading-none font-bold opacity-40 hover:opacity-100"
+              aria-label="Dismiss"
+            >
+              &times;
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="overflow-x-auto">
         {/* Responsive table (priority: responsiveness at every width):
             - table-fixed + the colgroup percentages below keep the columns
@@ -667,15 +858,16 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
               so the column collapses). Visible widths sum to 100%. */}
           <colgroup>
             <col style={{ width: '4%' }} />{/* Row number */}
-            <col style={{ width: '9%' }} />{/* Account status */}
-            <col style={{ width: '8%' }} />{/* File No. */}
-            <col style={{ width: '14%' }} />{/* Client Name */}
-            <col style={{ width: '15%' }} />{/* Address */}
-            <col style={{ width: '9%' }} />{/* Closing date */}
-            <col style={{ width: '13%' }} />{/* Progress */}
+            <col style={{ width: '8%' }} />{/* Account status */}
+            <col style={{ width: '7%' }} />{/* File No. */}
+            <col style={{ width: '13%' }} />{/* Client Name */}
+            <col style={{ width: '13%' }} />{/* Address */}
+            <col style={{ width: '8%' }} />{/* Closing date */}
+            <col style={{ width: '11%' }} />{/* Progress */}
             <col style={{ width: '6%' }} />{/* Lawyer */}
             <col style={{ width: '6%' }} />{/* Clerk */}
-            <col style={{ width: '9%' }} />{/* Account created */}
+            <col style={{ width: '9%' }} />{/* Agent */}
+            <col style={{ width: '8%' }} />{/* Account created */}
             <col style={{ width: '0%' }} />{/* Requisition date (hidden) */}
             <col style={{ width: '0%' }} />{/* File name (hidden) */}
             <col style={{ width: '7%' }} />{/* Actions */}
@@ -704,6 +896,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
               <th className="px-2 py-1.5">Progress</th>
               <th className="px-2 py-1.5">Lawyer</th>
               <th className="px-2 py-1.5">Clerk</th>
+              <th className="px-2 py-1.5">Agent</th>
               <th className="px-2 py-1.5">Account created</th>
               {/* Requisition date column hidden per request — kept (not deleted) to avoid breaking anything. */}
               <th className="px-2 py-1.5 hidden">Requisition date</th>
@@ -895,6 +1088,42 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       <span className="text-slate-300">—</span>
                     )}
                   </td>
+                  {/* Agent — the referral partner, and the entry point for
+                      attaching one after intake. Clicking must not open the file,
+                      hence stopPropagation on the row's onClick. */}
+                  <td className="px-2 py-1.5">
+                    {(() => {
+                      const label = agentLabel(deal);
+                      return (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openAgentModal(deal);
+                          }}
+                          title={
+                            label
+                              ? `${label} — click to change the referral agent`
+                              : 'Add a referral agent to this file'
+                          }
+                          className={`inline-flex max-w-full items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium transition-colors ${
+                            label
+                              ? 'text-slate-700 hover:bg-brand-light/40 hover:text-brand-primary'
+                              : 'text-slate-300 hover:bg-brand-light/40 hover:text-brand-primary'
+                          }`}
+                        >
+                          {label ? (
+                            <span className="truncate">{label}</span>
+                          ) : (
+                            <>
+                              <UserPlus size={12} className="flex-shrink-0" />
+                              <span>Add</span>
+                            </>
+                          )}
+                        </button>
+                      );
+                    })()}
+                  </td>
                   <td className="px-2 py-1.5">
                     {(deal as any).accountCreatedAt ? (
                       <span
@@ -955,7 +1184,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                 </tr>
                 {expandedDealId === deal.id && (
                   <tr className="bg-brand-light/10 border-b border-slate-100">
-                    <td colSpan={13} className="px-2 py-1.5">
+                    <td colSpan={14} className="px-2 py-1.5">
                       {(() => {
                         const entry = pendingTasks[deal.id];
                         if (!entry || entry.loading) {
@@ -993,7 +1222,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                 </React.Fragment>
               );
             }) : (
-              <tr><td colSpan={13} className="px-6 py-12 text-center text-slate-500"><p>No files found.</p></td></tr>
+              <tr><td colSpan={14} className="px-6 py-12 text-center text-slate-500"><p>No files found.</p></td></tr>
             )}
           </tbody>
         </table>
@@ -1006,6 +1235,221 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
             Showing all <span className="font-bold text-slate-900">{sortedDeals.length}</span> file{sortedDeals.length === 1 ? '' : 's'}
           </span>
         </div>
+      )}
+
+      {/* ── Link Referral Agent Modal ──
+          Portalled out of the table's overflow-x-auto wrapper, which would
+          otherwise clip and scroll it with the columns. */}
+      {agentDeal && createPortal(
+        (() => {
+          const q = partnerSearch.trim().toLowerCase();
+          // Match on anything an admin might have to hand: the person, the firm,
+          // their email, or the referral code from a business card.
+          const visiblePartners = q
+            ? partners.filter((p) =>
+                [p.agent_name, p.brokerage_name, p.agent_email, p.referral_code]
+                  .some((v) => (v ?? '').toLowerCase().includes(q)),
+              )
+            : partners;
+          const currentPartnerId = referralOf(agentDeal).referralPartner?.id ?? null;
+          const close = () => !savingAgent && setAgentDeal(null);
+
+          return (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 overflow-y-auto"
+              onClick={close}
+            >
+              <div
+                className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[85vh] flex flex-col overflow-hidden my-auto"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {/* Header */}
+                <div className="flex-shrink-0 flex items-center justify-between px-6 py-4 border-b border-slate-200">
+                  <div className="min-w-0">
+                    <h3 className="text-lg font-bold text-slate-900">
+                      {currentPartnerId ? 'Change Referral Agent' : 'Add Referral Agent'}
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5 truncate">
+                      File {agentDeal.fileNumber || '—'}
+                      {referralOf(agentDeal).leadName
+                        ? ` · ${referralOf(agentDeal).leadName}`
+                        : ''}
+                      {' · applies to everyone on this file.'}
+                    </p>
+                  </div>
+                  <button
+                    onClick={close}
+                    className="text-slate-400 hover:text-slate-600 text-xl font-bold leading-none ml-3"
+                    aria-label="Close"
+                  >
+                    &times;
+                  </button>
+                </div>
+
+                {/* Search */}
+                <div className="flex-shrink-0 px-6 py-3 border-b border-slate-100">
+                  <div className="relative">
+                    <Search
+                      size={15}
+                      className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                    />
+                    <input
+                      type="text"
+                      value={partnerSearch}
+                      onChange={(e) => setPartnerSearch(e.target.value)}
+                      placeholder="Search by name, brokerage, email or code"
+                      className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
+                    />
+                  </div>
+                </div>
+
+                {/* Partner list */}
+                <div className="flex-1 overflow-y-auto px-3 py-2 min-h-[8rem]">
+                  {partnersLoading ? (
+                    <div className="flex items-center justify-center gap-2 py-10 text-sm text-slate-500">
+                      <Loader2 size={16} className="animate-spin" />
+                      Loading partners…
+                    </div>
+                  ) : partnersError ? (
+                    <div className="flex items-start gap-2 m-3 px-3 py-2.5 rounded-lg border border-red-200 bg-red-50 text-sm text-red-700">
+                      <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" />
+                      <span>{partnersError}</span>
+                    </div>
+                  ) : visiblePartners.length === 0 ? (
+                    <div className="px-4 py-10 text-center">
+                      <p className="text-sm font-bold text-slate-700">
+                        {partners.length === 0
+                          ? 'No partners yet'
+                          : 'No partners match that search'}
+                      </p>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Only agents in the Partners list can be linked. Add them
+                        under Partners first, then come back here.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-1">
+                      {visiblePartners.map((p) => {
+                        const picked = pickedPartnerId === p.id;
+                        const isCurrent = currentPartnerId === p.id;
+                        return (
+                          <button
+                            key={p.id}
+                            type="button"
+                            onClick={() => setPickedPartnerId(p.id)}
+                            className={`w-full text-left px-3 py-2.5 rounded-lg border transition ${
+                              picked
+                                ? 'border-brand-primary bg-brand-light/40'
+                                : 'border-transparent hover:bg-slate-50'
+                            }`}
+                          >
+                            <div className="flex items-start gap-3">
+                              <div
+                                className={`mt-0.5 w-4 h-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center ${
+                                  picked ? 'border-brand-primary' : 'border-slate-300'
+                                }`}
+                              >
+                                {picked && (
+                                  <span className="w-2 h-2 rounded-full bg-brand-primary" />
+                                )}
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="text-sm font-bold text-slate-900">
+                                    {p.agent_name || 'Unnamed partner'}
+                                  </span>
+                                  {p.brokerage_type && (
+                                    <span
+                                      className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase border ${
+                                        p.brokerage_type.toLowerCase().includes('agent')
+                                          ? 'bg-blue-100 text-blue-700 border-blue-200'
+                                          : 'bg-amber-100 text-amber-700 border-amber-200'
+                                      }`}
+                                    >
+                                      {p.brokerage_type}
+                                    </span>
+                                  )}
+                                  {isCurrent && (
+                                    <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase border bg-green-100 text-green-700 border-green-200">
+                                      Current
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-xs text-slate-500 truncate">
+                                  {[p.brokerage_name, p.agent_email]
+                                    .filter(Boolean)
+                                    .join(' · ') || 'No contact details'}
+                                </p>
+                                {p.referral_code && (
+                                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wide mt-0.5">
+                                    {p.referral_code}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Save failures land here — the modal stays open so the pick
+                    isn't lost. Successes close it and report above the table. */}
+                {agentResult && !agentResult.success && (
+                  <div className="flex-shrink-0 mx-6 mb-3 flex items-start gap-2 px-3 py-2.5 rounded-lg border border-red-200 bg-red-50 text-sm text-red-700">
+                    <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" />
+                    <span>{agentResult.message}</span>
+                  </div>
+                )}
+
+                {/* Footer */}
+                <div className="flex-shrink-0 flex items-center gap-2 px-6 py-4 border-t border-slate-200 bg-slate-50/50">
+                  {currentPartnerId && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (
+                          !confirm(
+                            "Remove the referral agent from this file? They'll stop being copied on client emails.",
+                          )
+                        ) {
+                          return;
+                        }
+                        saveAgent(agentDeal, null);
+                      }}
+                      disabled={savingAgent}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-red-200 bg-white text-red-600 text-sm font-bold hover:bg-red-50 transition disabled:opacity-50"
+                    >
+                      <Trash2 size={14} />
+                      Remove
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={close}
+                    disabled={savingAgent}
+                    className="ml-auto px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm font-bold hover:bg-slate-50 transition disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => pickedPartnerId && saveAgent(agentDeal, pickedPartnerId)}
+                    disabled={
+                      savingAgent || !pickedPartnerId || pickedPartnerId === currentPartnerId
+                    }
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-primary text-white text-sm font-bold hover:opacity-90 transition disabled:opacity-50"
+                  >
+                    {savingAgent && <Loader2 size={14} className="animate-spin" />}
+                    {savingAgent ? 'Saving…' : 'Link Agent'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })(),
+        document.body,
       )}
     </div>
   );

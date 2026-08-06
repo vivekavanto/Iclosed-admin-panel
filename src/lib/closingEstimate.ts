@@ -29,8 +29,7 @@ export const OVERRIDABLE_RATE_KEYS = [
   "reg_mortgage",
   "teraview",
   "sheriff",
-  "legal_transfer",
-  "legal_mortgage",
+  "legal_fees",
   "legal_title_submission",
   "admin_fee",
   "hst_rate",
@@ -38,7 +37,24 @@ export const OVERRIDABLE_RATE_KEYS = [
   "rebate_toronto_max",
 ] as const;
 
-export type RateOverrides = Partial<Record<(typeof OVERRIDABLE_RATE_KEYS)[number], number>>;
+/**
+ * No longer offered in the UI, but still accepted: a draft saved before the
+ * legal fee merge stored this pair instead of `legal_fees`, and the issue route
+ * replays a stored draft's overrides through `parseEstimatePayload`. Dropping
+ * them here would silently return that file to the firm standard on issue.
+ *
+ * `effectiveRates` is what folds them back into one fee. Delete both once no
+ * `rate_overrides` snapshot carries them.
+ */
+export const LEGACY_RATE_OVERRIDE_KEYS = ["legal_transfer", "legal_mortgage"] as const;
+
+export type RateOverrides = Partial<
+  Record<
+    | (typeof OVERRIDABLE_RATE_KEYS)[number]
+    | (typeof LEGACY_RATE_OVERRIDE_KEYS)[number],
+    number
+  >
+>;
 
 export interface EstimateInputPayload {
   purchase_price: number;
@@ -47,6 +63,12 @@ export interface EstimateInputPayload {
   is_toronto: boolean;
   is_first_time_buyer: boolean;
   title_premium_override: number | null;
+  /**
+   * Per-file dollar overrides for the land transfer tax, replacing the bracket
+   * calculation. Null = use the brackets.
+   */
+  provincial_ltt_override: number | null;
+  municipal_ltt_override: number | null;
   /** A Statement of Adjustments figure; may be negative. Null = none entered. */
   property_tax_adjustment: number | null;
   file_no_display: string | null;
@@ -74,6 +96,7 @@ const OVERRIDE_BOUNDS: Record<string, { min: number; max: number }> = {
   reg_mortgage: { min: 0, max: 100_000 },
   teraview: { min: 0, max: 100_000 },
   sheriff: { min: 0, max: 100_000 },
+  legal_fees: { min: 0, max: 1_000_000 },
   legal_transfer: { min: 0, max: 1_000_000 },
   legal_mortgage: { min: 0, max: 1_000_000 },
   legal_title_submission: { min: 0, max: 1_000_000 },
@@ -119,6 +142,23 @@ export function parseEstimatePayload(
       return { error: "Title insurance premium must be a positive number, or left blank" };
     }
     titleOverride = value;
+  }
+
+  // Land transfer tax: blank means "use the brackets"; a value — including an
+  // explicit 0, for an exempt transfer — replaces them.
+  const lttOverrides: Record<"provincial_ltt_override" | "municipal_ltt_override", number | null> =
+    { provincial_ltt_override: null, municipal_ltt_override: null };
+  for (const [key, label] of [
+    ["provincial_ltt_override", "Ontario provincial land transfer tax"],
+    ["municipal_ltt_override", "Toronto municipal land transfer tax"],
+  ] as Array<[keyof typeof lttOverrides, string]>) {
+    const raw = body[key];
+    if (raw === null || raw === undefined || raw === "") continue;
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value < 0 || value > MAX_AMOUNT) {
+      return { error: `${label} must be a positive number, or left blank` };
+    }
+    lttOverrides[key] = value;
   }
 
   // Property tax adjustment: blank means none. A NEGATIVE value is legitimate —
@@ -182,7 +222,7 @@ export function parseEstimatePayload(
   const overrides: RateOverrides = {};
   const rawOverrides = body.rate_overrides;
   if (rawOverrides && typeof rawOverrides === "object") {
-    for (const key of OVERRIDABLE_RATE_KEYS) {
+    for (const key of [...OVERRIDABLE_RATE_KEYS, ...LEGACY_RATE_OVERRIDE_KEYS]) {
       const raw = (rawOverrides as Record<string, unknown>)[key];
       if (raw === null || raw === undefined || raw === "") continue;
       const value = Number(raw);
@@ -202,6 +242,8 @@ export function parseEstimatePayload(
       is_toronto: body.is_toronto === true,
       is_first_time_buyer: body.is_first_time_buyer === true,
       title_premium_override: titleOverride,
+      provincial_ltt_override: lttOverrides.provincial_ltt_override,
+      municipal_ltt_override: lttOverrides.municipal_ltt_override,
       property_tax_adjustment: propertyTax,
       file_no_display: fileNo || null,
       purchasers: purchasers || null,
@@ -223,7 +265,25 @@ export function effectiveRates(
   configRow: Record<string, unknown>,
   overrides: RateOverrides,
 ): ClosingCostRates {
-  return ratesFromConfigRow({ ...configRow, ...overrides });
+  const merged: Record<string, unknown> = { ...configRow, ...overrides };
+
+  // A draft saved before the legal-fee merge stored `legal_transfer` /
+  // `legal_mortgage` in `rate_overrides`. Layering those onto a migrated config
+  // row would silently lose the deviation: `ratesFromConfigRow` prefers the
+  // row's own `legal_fees` and the legacy keys would sit there doing nothing.
+  //
+  // Dropping `legal_fees` hands the row to that function's documented legacy
+  // path, which sums the pair — taking each half from the override where the
+  // clerk set one and from the config row (or the old defaults) where they
+  // didn't. Delete once no `rate_overrides` snapshot carries the old keys.
+  const bag = overrides as Record<string, unknown>;
+  const hasLegacyOverride =
+    bag.legal_transfer !== undefined || bag.legal_mortgage !== undefined;
+  if (hasLegacyOverride && bag.legal_fees === undefined) {
+    delete merged.legal_fees;
+  }
+
+  return ratesFromConfigRow(merged);
 }
 
 /** Columns to write for a save — inputs plus the frozen snapshots. */
@@ -244,6 +304,8 @@ export function buildEstimateRow(
     isToronto: payload.is_toronto,
     isFirstTimeBuyer: payload.is_first_time_buyer,
     titlePremiumOverride: payload.title_premium_override,
+    provincialLttOverride: payload.provincial_ltt_override,
+    municipalLttOverride: payload.municipal_ltt_override,
     propertyTaxAdjustment: payload.property_tax_adjustment,
   };
 
@@ -259,6 +321,8 @@ export function buildEstimateRow(
       is_toronto: payload.is_toronto,
       is_first_time_buyer: payload.is_first_time_buyer,
       title_premium_override: payload.title_premium_override,
+      provincial_ltt_override: payload.provincial_ltt_override,
+      municipal_ltt_override: payload.municipal_ltt_override,
       property_tax_adjustment: payload.property_tax_adjustment,
       file_no_display: payload.file_no_display,
       purchasers: payload.purchasers,

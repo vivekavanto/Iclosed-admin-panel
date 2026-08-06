@@ -66,6 +66,16 @@ export type StatementTypeKey = (typeof STATEMENT_TYPE_KEYS)[number];
 
 export const FALLBACK_STATEMENT_TYPE: StatementTypeKey = "draft";
 
+/**
+ * The property tax & common expense adjustment a new estimate starts with.
+ *
+ * NOT part of ClosingCostRates: it is a starting figure for the form, not an
+ * input to the maths — `computeStatement` uses whatever the clerk leaves in the
+ * field. It lives in the shared row so the firm's planning figure is edited in
+ * Settings rather than hard-coded in the calculator.
+ */
+export const DEFAULT_PROPERTY_TAX_ADJUSTMENT = 1000;
+
 export function isStatementTypeKey(v: unknown): v is StatementTypeKey {
   return (
     typeof v === "string" && (STATEMENT_TYPE_KEYS as readonly string[]).includes(v)
@@ -88,6 +98,7 @@ export function toStatementTypeKey(
 export const SHARED_RATE_COLUMNS = [
   "reg_transfer",
   "reg_mortgage",
+  "property_tax_default",
   "hst_rate",
   "rebate_ontario_max",
   "rebate_toronto_max",
@@ -100,8 +111,7 @@ export const SHARED_RATE_COLUMNS = [
 
 /** The firm's own charges — every one of them HST-taxable. */
 export const FIRM_FEE_COLUMNS = [
-  "legal_transfer",
-  "legal_mortgage",
+  "legal_fees",
   "legal_title_submission",
   "admin_fee",
   "teraview",
@@ -170,6 +180,7 @@ export function defaultSharedRow(): Record<string, unknown> {
     label: "Statutory & third-party (shared by all firms)",
     reg_transfer: d.regTransfer,
     reg_mortgage: d.regMortgage,
+    property_tax_default: DEFAULT_PROPERTY_TAX_ADJUSTMENT,
     hst_rate: d.hstRate,
     rebate_ontario_max: d.rebateOntarioMax,
     rebate_toronto_max: d.rebateTorontoMax,
@@ -196,8 +207,7 @@ export function defaultFirmRow(firmKey: FirmKey): Record<string, unknown> {
     firm_badge: identity.firm_badge,
     brand_color: identity.brand_color,
     sort_order: identity.sort_order,
-    legal_transfer: d.legalTransfer,
-    legal_mortgage: d.legalMortgage,
+    legal_fees: d.legalFees,
     legal_title_submission: d.legalTitleSubmission,
     admin_fee: d.adminFee,
     teraview: d.teraview,

@@ -24,6 +24,7 @@ export interface NumericSpec {
 export const SHARED_NUMERIC: Record<string, NumericSpec> = {
   reg_transfer: { min: 0, max: 100_000 },
   reg_mortgage: { min: 0, max: 100_000 },
+  property_tax_default: { min: 0, max: 1_000_000 },
   // A rate, not a percentage — 0.13 means 13%.
   hst_rate: { min: 0, max: 1 },
   rebate_ontario_max: { min: 0, max: 1_000_000 },
@@ -35,8 +36,7 @@ export const SHARED_NUMERIC: Record<string, NumericSpec> = {
 
 /** The firm's own charges — every one of them HST-taxable. */
 export const FIRM_NUMERIC: Record<string, NumericSpec> = {
-  legal_transfer: { min: 0, max: 1_000_000 },
-  legal_mortgage: { min: 0, max: 1_000_000 },
+  legal_fees: { min: 0, max: 1_000_000 },
   legal_title_submission: { min: 0, max: 1_000_000 },
   admin_fee: { min: 0, max: 1_000_000 },
   teraview: { min: 0, max: 100_000 },

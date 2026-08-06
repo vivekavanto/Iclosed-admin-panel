@@ -234,24 +234,93 @@ test("computeStatement: printed lines sum to the printed total", () => {
 });
 
 // ── Cash purchase behaviour ────────────────────────────────────────────
-test("computeStatement: cash purchase drops both mortgage items", () => {
+test("computeStatement: cash purchase drops the mortgage registration only", () => {
   const s = computeStatement({ ...REFERENCE, mortgage: 0 });
   const l = lines(s);
 
   // "Registration of Mortgage" is gone entirely, not zeroed
   assert.ok(!lineKeys(s).includes("reg_mortgage"));
-  // Legal fees fall to the transfer alone
-  assert.equal(l.legal_fees, 650);
+  // The legal fee does NOT fall — it is one flat fee since CALC_VERSION 4.
+  // It was 650 here (the transfer portion alone) under version 3.
+  assert.equal(l.legal_fees, 1200);
+  // The sublabel still narrows: it says what the fee covers, not what it cost
   assert.equal(findLine(s, "legal_fees")?.sublabel, "purchase");
   // Title submission is unaffected by there being no mortgage
   assert.equal(l.title_submission, 150);
-  // HST base = 650 + 150 + 250 + 54.80 + 133.60 = 1,238.40 → 13% = 160.992
-  assert.equal(s.detail.taxableBase, 1238.4);
-  assert.equal(s.hst.amount, 160.99);
-  // 18,075 + 1,097.80 + 85 + 54.80 + 133.60 + 800 + 250 + 160.99
-  assert.equal(s.total, 20_657.19);
-  // 1,080,000 − 50,000 − 0 + 20,657.19
-  assert.equal(s.balance.balanceDue, 1_050_657.19);
+  // HST base = 1,200 + 150 + 250 + 54.80 + 133.60 = 1,788.40 → 13% = 232.492
+  assert.equal(s.detail.taxableBase, 1788.4);
+  assert.equal(s.hst.amount, 232.49);
+  // 18,075 + 1,097.80 + 85 + 54.80 + 133.60 + 1,350 + 250 + 232.49
+  assert.equal(s.total, 21_278.69);
+  // 1,080,000 − 50,000 − 0 + 21,278.69
+  assert.equal(s.balance.balanceDue, 1_051_278.69);
+});
+
+test("computeStatement: the legal fee is identical with and without a mortgage", () => {
+  const financed = computeStatement(REFERENCE);
+  const cash = computeStatement({ ...REFERENCE, mortgage: 0 });
+  assert.equal(lines(cash).legal_fees, lines(financed).legal_fees);
+  // The two statements now differ by the mortgage registration alone — and it
+  // carries no HST, so the gap is exactly that fee
+  assert.equal(round2(financed.total - cash.total), DEFAULT_RATES.regMortgage);
+});
+
+// ── Land transfer tax overrides (CALC_VERSION 5) ───────────────────────
+test("computeStatement: a provincial LTT override replaces the bracket figure", () => {
+  const s = computeStatement({ ...REFERENCE, provincialLttOverride: 12_000 });
+  assert.equal(lines(s).ltt_provincial, 12_000);
+  assert.equal(s.detail.provincialLTT, 12_000);
+  // 21,363.69 with the bracket figure of 18,075 → 6,075 less
+  assert.equal(s.total, 15_288.69);
+});
+
+test("computeStatement: an LTT override of 0 is honoured, not treated as blank", () => {
+  // An exempt transfer. Falling back to the brackets here would silently bill
+  // the client $18,075 of tax the file does not owe.
+  const s = computeStatement({ ...REFERENCE, provincialLttOverride: 0 });
+  assert.equal(lines(s).ltt_provincial, 0);
+  assert.equal(s.total, 3288.69);
+});
+
+test("computeStatement: the first-time buyer rebate caps against the override", () => {
+  // The rebate refunds the tax actually payable, so a $2,500 override caps the
+  // $4,000 maximum at $2,500 rather than refunding more than was charged.
+  const s = computeStatement({
+    ...REFERENCE,
+    isFirstTimeBuyer: true,
+    provincialLttOverride: 2500,
+  });
+  assert.equal(s.detail.ontarioRebate, 2500);
+  assert.equal(s.detail.netLTT, 0);
+});
+
+test("computeStatement: a municipal LTT override applies only inside Toronto", () => {
+  const inToronto = computeStatement({
+    ...REFERENCE,
+    isToronto: true,
+    municipalLttOverride: 9000,
+  });
+  assert.equal(lines(inToronto).ltt_municipal, 9000);
+
+  // Outside Toronto the municipal line is not printed, so honouring an override
+  // would put tax in the total with nothing on the statement to account for it.
+  const outside = computeStatement({ ...REFERENCE, municipalLttOverride: 9000 });
+  assert.ok(!lineKeys(outside).includes("ltt_municipal"));
+  assert.equal(outside.detail.municipalLTT, 0);
+  assert.equal(outside.total, computeStatement(REFERENCE).total);
+});
+
+test("computeStatement: no override supplied is identical to CALC_VERSION 4", () => {
+  // The v5 change is additive — this is what makes an un-overridden v5 snapshot
+  // comparable with every statement issued before it.
+  assert.deepEqual(
+    computeStatement({
+      ...REFERENCE,
+      provincialLttOverride: null,
+      municipalLttOverride: null,
+    }),
+    computeStatement(REFERENCE),
+  );
 });
 
 // ── Toronto toggle ─────────────────────────────────────────────────────
@@ -360,7 +429,7 @@ test("computeStatement: zero price yields a zero-ish statement, not NaN", () => 
   assert.equal(s.detail.provincialLTT, 0);
   assert.equal(s.detail.titlePremium, 0);
   // The firm's own fees still apply
-  assert.equal(lines(s).legal_fees, 650);
+  assert.equal(lines(s).legal_fees, 1200);
   assert.equal(lines(s).title_submission, 150);
   assert.ok(Number.isFinite(s.total));
   assert.ok(Number.isFinite(s.balance.balanceDue));
@@ -385,19 +454,48 @@ test("ratesFromConfigRow: maps a DB row, falling back per field", () => {
   const rates = ratesFromConfigRow({
     admin_fee: "300",           // numeric arrives as a string from Postgres
     hst_rate: 0.15,
-    legal_transfer: 700,
+    legal_fees: 700,
     ltt_tiers: [[100000, 0.01], [null, 0.02]],
     mltt_tiers: "not an array", // malformed → default
     teraview: null,             // null → default
   });
   assert.equal(rates.adminFee, 300);
   assert.equal(rates.hstRate, 0.15);
-  assert.equal(rates.legalTransfer, 700);
+  assert.equal(rates.legalFees, 700);
   assert.deepEqual(rates.lttTiers, [[100000, 0.01], [null, 0.02]]);
   assert.deepEqual(rates.mlttTiers, DEFAULT_RATES.mlttTiers);
   assert.equal(rates.teraview, DEFAULT_RATES.teraview);
   // A missing row falls back wholesale
   assert.deepEqual(ratesFromConfigRow(null), DEFAULT_RATES);
+});
+
+// ── Pre-merge legal fee rows (CALC_VERSION ≤ 3) ────────────────────────
+// A frozen rates_used snapshot, or a config row read between the add-column
+// and drop-column migrations, still carries the transfer/mortgage pair.
+test("ratesFromConfigRow: sums a legacy legal fee pair when legal_fees is absent", () => {
+  assert.equal(
+    ratesFromConfigRow({ legal_transfer: 700, legal_mortgage: 500 }).legalFees,
+    1200,
+  );
+  // Half the pair present — the other half falls back to its old default
+  assert.equal(ratesFromConfigRow({ legal_transfer: 700 }).legalFees, 1250);
+  assert.equal(ratesFromConfigRow({ legal_mortgage: 500 }).legalFees, 1150);
+});
+
+test("ratesFromConfigRow: legal_fees wins over a pair still on the same row", () => {
+  // The window between the two migrations, when both shapes sit on the row.
+  // Preferring the pair here would make a settings edit look like it saved and
+  // do nothing.
+  const rates = ratesFromConfigRow({
+    legal_fees: 1400,
+    legal_transfer: 650,
+    legal_mortgage: 550,
+  });
+  assert.equal(rates.legalFees, 1400);
+});
+
+test("ratesFromConfigRow: neither shape present falls back to the default", () => {
+  assert.equal(ratesFromConfigRow({ admin_fee: 250 }).legalFees, DEFAULT_RATES.legalFees);
 });
 
 test("computeStatement: honours edited config rates", () => {

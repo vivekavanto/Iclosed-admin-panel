@@ -68,6 +68,37 @@ export async function GET() {
   const authCreatedAtMap =
     authUserIds.size > 0 ? await getAuthSignInMap() : new Map<string, string>();
 
+  // ── Referral attribution ─────────────────────────────────────────────────
+  // Resolve every linked partner in ONE query rather than per row — the detail
+  // page can afford a lookup per deal, a list of every open file cannot.
+  //
+  // Soft-deleted partners are excluded, matching the detail page: a deleted
+  // partner must not resurface as the file's agent. A deal still pointing at one
+  // reads as unlinked here, which is also what the milestone-email CC does.
+  const partnerIds = Array.from(
+    new Set(
+      deals
+        .map((d) => (d as { partner_id?: unknown }).partner_id)
+        .filter((id: unknown): id is string => typeof id === "string" && !!id),
+    ),
+  );
+  const partnersById = new Map<string, Record<string, unknown>>();
+  if (partnerIds.length > 0) {
+    const { data: partners, error: partnersErr } = await supabase
+      .from("partners")
+      .select(
+        "id, agent_name, agent_email, agent_phone, brokerage_type, brokerage_name, referral_code",
+      )
+      .in("id", partnerIds)
+      .eq("is_deleted", false);
+    if (partnersErr) {
+      // Non-blocking: the Agent column falls back to the free-text intake name
+      // rather than the whole list failing to load.
+      logger.error("[admin/deals] partner lookup failed (non-blocking):", partnersErr);
+    }
+    for (const p of partners ?? []) partnersById.set(p.id, p);
+  }
+
   // Build a set of primary lead IDs that have co-purchasers pointing to them
   const primaryLeadIds = new Set<string>();
   for (const deal of deals) {
@@ -160,6 +191,11 @@ export async function GET() {
       ...rest,
       totalTasks,
       completedTasks,
+      // The linked partner, or null. `referral_agent_*` stay on `rest` as the
+      // free-text intake fallback the UI reads behind this.
+      referral_partner: deal.partner_id
+        ? (partnersById.get(deal.partner_id) ?? null)
+        : null,
       auth_user_id: authUserId,
       is_co_purchaser: isCoPurchaser,
       has_co_purchasers: hasCoPurchasers,
