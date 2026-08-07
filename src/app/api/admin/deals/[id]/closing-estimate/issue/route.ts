@@ -8,7 +8,12 @@ import { getActingAdmin } from "@/lib/getActingAdmin";
 import { rateLimitOk } from "@/lib/rateLimit";
 import { BLOB_ACCESS, blobToken } from "@/lib/blobPrivacy";
 import { readActiveConfig, readStatementType } from "@/lib/closingCostConfig";
-import { buildEstimateRow, parseEstimatePayload } from "@/lib/closingEstimate";
+import {
+  buildEstimateRow,
+  finalStatementBlocker,
+  parseEstimatePayload,
+  writeEstimateRow,
+} from "@/lib/closingEstimate";
 import { generateClosingCostPdf } from "@/lib/closingCostPdf";
 import { formatLocalDate } from "@/lib/formatDate";
 
@@ -109,9 +114,20 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // configured defaults when the estimate does not name one.
   const { row: config, firmKey } = await readActiveConfig(parsed.payload.firm_key);
   const statementType = await readStatementType(parsed.payload.statement_type);
+
+  // A final account may not go out carrying the planning placeholder.
+  const blocker = finalStatementBlocker(
+    statementType.type_key,
+    parsed.payload.property_tax_adjustment,
+  );
+  if (blocker) {
+    return NextResponse.json({ success: false, error: blocker }, { status: 400 });
+  }
+
   const { columns, statement } = buildEstimateRow(
     { ...parsed.payload, firm_key: firmKey, statement_type: statementType.type_key },
     config,
+    statementType,
   );
 
   const actor = await getActingAdmin();
@@ -120,20 +136,22 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   // 1. Insert the issued row FIRST, so a PDF failure can never lose the issue
   //    itself (the PDF is regenerable from the frozen snapshot at any time).
-  const { data: issued, error: insertErr } = await supabase
-    .from("deal_closing_estimates")
-    .insert([
-      {
-        ...columns,
-        deal_id: id,
-        status: "issued",
-        issued_at: now,
-        created_by_email: actor.email,
-        updated_at: now,
-      },
-    ])
-    .select("*")
-    .single();
+  const { data: issued, error: insertErr } = await writeEstimateRow(columns, (cols) =>
+    supabase
+      .from("deal_closing_estimates")
+      .insert([
+        {
+          ...cols,
+          deal_id: id,
+          status: "issued",
+          issued_at: now,
+          created_by_email: actor.email,
+          updated_at: now,
+        },
+      ])
+      .select("*")
+      .single(),
+  );
 
   if (insertErr) {
     logger.error("[ClosingEstimate issue] insert failed:", insertErr.message);
@@ -158,6 +176,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       clientName: parsed.payload.purchasers ?? null,
       closingDate: parsed.payload.closing_date ?? null,
       preparedOn: formatLocalDate(now) || now.slice(0, 10),
+      // `config` and `statementType` here ARE what was just frozen onto the
+      // row, so this render and any later one from the snapshot agree.
+      configVersion: (columns.config_version as string | null) ?? null,
     });
 
     const blob = await put(

@@ -172,6 +172,16 @@ export async function GET(
         data.primary_submit_on_behalf = designatedUploaderLeadId === rootLeadId;
         data.can_upload_for_all = designatedUploaderLeadId === lead.id;
 
+        // Raw values for the "Who uploads documents" reassign control
+        // (PATCH /api/admin/deals/[id]/upload-mode). Kept UNRESOLVED on purpose:
+        // a null upload_mode means the question was never answered, and the two
+        // apps disagree on what that implies (the portal treats it as 'me', this
+        // app as 'both'). Surfacing the raw null lets the UI say "not set" and
+        // prompt the admin to settle it, rather than showing a guess as fact.
+        data.upload_mode = rootLead?.upload_mode ?? null;
+        data.upload_uploader_lead_id = designatedUploaderLeadId;
+        data.root_lead_id = rootLeadId;
+
         // Determine a co-lead's role. Priority order:
         //   1. Authoritative `co_person_role` recorded at intake — the
         //      only reliable source on a Purchase & Sale parent where

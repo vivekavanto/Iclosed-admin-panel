@@ -212,6 +212,27 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
   const [emailTo, setEmailTo] = useState("");
   const [emailing, setEmailing] = useState(false);
 
+  /**
+   * True while the property-tax figure is still the firm's PLANNING placeholder
+   * from Settings, untouched by anyone.
+   *
+   * A final account may not carry it, so switching to "Final account" clears an
+   * untouched placeholder rather than letting it ride into a statement of
+   * account as if it were a settled figure. A value the clerk typed, or one
+   * loaded off a saved estimate, is a real answer and is never cleared.
+   */
+  const [propertyTaxIsPlaceholder, setPropertyTaxIsPlaceholder] = useState(false);
+
+  /**
+   * The placeholder that switching to "Final account" took away, so switching
+   * back to a draft puts it back.
+   *
+   * Without this, glancing at Final and returning would silently cost the clerk
+   * the firm's planning figure — a toggle that inspects one thing must not
+   * quietly destroy another.
+   */
+  const stashedPlaceholderRef = useRef<string | null>(null);
+
   // GAP-001: the draft's updated_at when we loaded it, sent back on save so the
   // API can reject the write if another clerk changed it in between.
   const draftUpdatedAtRef = useRef<string | null>(null);
@@ -237,8 +258,13 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
         throw new Error(data?.error || "Could not load this file");
       }
 
+      // Read once and reused below, so the config the page renders and the
+      // config the property-tax default is taken from can never be two
+      // different objects.
+      const configRow = (data.config ?? null) as ConfigRow | null;
+
       setDeal(data.deal ?? null);
-      setConfig(data.config ?? null);
+      setConfig(configRow);
       setConfigIsDefault(Boolean(data.config_is_default));
       setIssued(data.latest_issued ?? null);
       setFirms(data.firms ?? []);
@@ -270,9 +296,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
       // Settings â†’ Closing costs. It seeds a NEW estimate only: once an estimate
       // exists its own figure wins, including a deliberately-cleared one, so
       // raising the default never silently re-adds an adjustment a clerk removed.
-      const adjustmentDefault = amountText(
-        (data.config as ConfigRow | null)?.property_tax_default,
-      );
+      const adjustmentDefault = amountText(configRow?.property_tax_default);
 
       setForm({
         firmKey: seed?.firm_key || data.default_firm_key || "",
@@ -300,6 +324,10 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
         closingDate: (seed?.closing_date ?? prefill.closing_date ?? "") || "",
         overrides,
       });
+      // Only a figure nobody has chosen is a placeholder. A saved estimate's own
+      // value — including a deliberately-cleared one — is an answer.
+      setPropertyTaxIsPlaceholder(!seed && adjustmentDefault !== "");
+      stashedPlaceholderRef.current = null;
       setEmailTo(
         (data.latest_issued?.last_emailed_to ?? prefill.client_email ?? "") || "",
       );
@@ -320,6 +348,57 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
     setDirty(true);
+  };
+
+  /** Typing a figure makes it the clerk's answer, not the firm's placeholder. */
+  const updatePropertyTax = (value: string) => {
+    setPropertyTaxIsPlaceholder(false);
+    stashedPlaceholderRef.current = null;
+    update("propertyTaxAdjustment", value);
+  };
+
+  /**
+   * Switching to "Final account" drops an untouched placeholder; switching back
+   * to a draft restores it.
+   *
+   * Carrying it forward would be worse than an empty field: a final statement
+   * that silently shows $1,000 of "property tax" nobody chose reads as a
+   * settled figure and is not one. Emptying it makes the omission visible, and
+   * both the issue and the email routes refuse a final without it.
+   */
+  const updateStatementType = (value: string) => {
+    if (value === "final" && propertyTaxIsPlaceholder) {
+      stashedPlaceholderRef.current = form.propertyTaxAdjustment;
+      setPropertyTaxIsPlaceholder(false);
+      setForm((prev) => ({
+        ...prev,
+        statementType: value,
+        propertyTaxAdjustment: "",
+      }));
+      setDirty(true);
+      return;
+    }
+
+    // Back to a draft, and the field is still as Final left it — put the firm's
+    // planning figure back rather than making them retype it.
+    if (
+      value !== "final" &&
+      stashedPlaceholderRef.current !== null &&
+      form.propertyTaxAdjustment === ""
+    ) {
+      const restored = stashedPlaceholderRef.current;
+      stashedPlaceholderRef.current = null;
+      setPropertyTaxIsPlaceholder(true);
+      setForm((prev) => ({
+        ...prev,
+        statementType: value,
+        propertyTaxAdjustment: restored,
+      }));
+      setDirty(true);
+      return;
+    }
+
+    update("statementType", value);
   };
 
   const setOverride = (key: string, value: string) => {
@@ -503,6 +582,13 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
       showToast("Enter a purchase price before issuing the estimate", "error");
       return;
     }
+    if (finalNeedsPropertyTax) {
+      showToast(
+        "A final account needs the property tax & common expense adjustment",
+        "error",
+      );
+      return;
+    }
     if (
       !window.confirm(
         "Issue this estimate to the client?\n\nThe figures and the rates behind them are frozen at this point, a PDF is generated, and the client can see it in their portal.",
@@ -589,6 +675,17 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
   const overrideCount =
     Object.keys(rateOverrides).length +
     ADJUST_INPUTS.filter((f) => parseAmountInput(form[f.key]) !== null).length;
+
+  /**
+   * A final account with no Statement of Adjustments figure.
+   *
+   * Mirrors `finalStatementBlocker` on the server, which is what actually
+   * enforces this — the point of checking here is to say so before the clerk
+   * clicks, not to be the gate.
+   */
+  const finalNeedsPropertyTax =
+    form.statementType === "final" &&
+    parseAmountInput(form.propertyTaxAdjustment) === null;
   const busy = saving || issuing;
 
   // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -645,8 +742,9 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
     // A "not final yet" marker. The title premium carries its own badge from
     // the calculation (it disappears the moment the real FCT quote is pasted in);
     // the rest are only provisional while the statement is still a draft.
-    const badge =
-      line.badge ?? (isDraft && DRAFT_ESTIMATE_KEYS.has(line.key) ? "ESTIMATE" : null);
+    // The engine decides which lines are provisional, so the screen, the PDF
+    // and a frozen snapshot always agree. See CALC_VERSION 7.
+    const badge = line.badge ?? null;
 
     return (
       <div
@@ -849,7 +947,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
               }))}
               value={form.statementType}
               accent={accent}
-              onChange={(v) => update("statementType", v)}
+              onChange={updateStatementType}
             />
           </div>
 
@@ -973,6 +1071,29 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
             </span>
           </button>
 
+          {/* The Statement of Adjustments figure.
+              Out here rather than inside "Adjust fees" because it is not an
+              adjustment to the firm's charges at all — it is money the buyer
+              owes the seller, it lands on the client's balance, and on a final
+              account it is mandatory. Buried in an optional panel it was simply
+              missed. */}
+          <BigMoney
+            id="cc-property-tax"
+            label="Property tax & common expense adjustment"
+            value={form.propertyTaxAdjustment}
+            accent={accent}
+            badge={form.statementType === "final" ? "Required" : undefined}
+            invalid={finalNeedsPropertyTax}
+            hint={
+              finalNeedsPropertyTax
+                ? "A final account cannot go out carrying the planning placeholder — enter the figure from the Statement of Adjustments."
+                : isDraft
+                  ? "The buyer's share of tax the seller has prepaid. A planning figure until the Statement of Adjustments arrives; may be negative if the seller is in arrears."
+                  : "From the Statement of Adjustments. May be negative if the seller is in arrears."
+            }
+            onChange={updatePropertyTax}
+          />
+
           {/* Adjust fees */}
           <Collapsible
             title="Adjust fees"
@@ -1001,14 +1122,6 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
                   onChange={(v) => setOverride(field.key, v)}
                 />
               ))}
-              <SmallMoney
-                label="Property tax & common expense adj."
-                value={form.propertyTaxAdjustment}
-                accent={accent}
-                allowNegative
-                placeholder="0"
-                onChange={(v) => update("propertyTaxAdjustment", v)}
-              />
             </div>
             <div className="flex items-center justify-between gap-2">
               <span className="text-[10.5px] leading-snug text-gray-400">
@@ -1222,12 +1335,6 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
  * which disappears the moment the exact FCT quote is entered, and that is more
  * precise than "is this a draft".
  */
-const DRAFT_ESTIMATE_KEYS = new Set([
-  "teraview",
-  "sheriff",
-  "property_tax_adjustment",
-]);
-
 /** Placeholder for each adjustable input: the figure it would replace. */
 const ADJUST_PLACEHOLDERS: Record<
   FormNumberKey,
@@ -1349,11 +1456,26 @@ const BigMoney: React.FC<{
   value: string;
   accent: string;
   hint?: string;
+  /** Small chip beside the label, e.g. "Required" on a final account. */
+  badge?: string;
+  /** Draws the field as unanswered and reads the hint back as the reason. */
+  invalid?: boolean;
   onChange: (value: string) => void;
-}> = ({ id, label, value, accent, hint, onChange }) => (
+}> = ({ id, label, value, accent, hint, badge, invalid, onChange }) => (
   <div className="flex flex-col gap-1.5">
-    <label htmlFor={id} className="text-[13px] font-semibold text-gray-900">
+    <label
+      htmlFor={id}
+      className="flex flex-wrap items-center gap-2 text-[13px] font-semibold text-gray-900"
+    >
       {label}
+      {badge && (
+        <span
+          className="rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider"
+          style={{ backgroundColor: `${accent}18`, color: accent }}
+        >
+          {badge}
+        </span>
+      )}
     </label>
     <div className="relative flex items-center">
       <span className="pointer-events-none absolute left-3.5 font-semibold text-gray-400">
@@ -1364,9 +1486,11 @@ const BigMoney: React.FC<{
         type="text"
         inputMode="decimal"
         value={value}
+        aria-invalid={invalid || undefined}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-xl border border-gray-200 bg-gray-50/40 py-3 pl-7 pr-3.5 text-base font-semibold tabular-nums text-gray-900 outline-none transition focus:bg-white"
-        style={{ borderColor: undefined }}
+        className={`w-full rounded-xl border bg-gray-50/40 py-3 pl-7 pr-3.5 text-base font-semibold tabular-nums text-gray-900 outline-none transition focus:bg-white ${
+          invalid ? "border-amber-400 bg-amber-50/40" : "border-gray-200"
+        }`}
         onFocus={(e) => {
           e.currentTarget.style.borderColor = accent;
           e.currentTarget.style.boxShadow = `0 0 0 3px ${accent}22`;
@@ -1377,7 +1501,13 @@ const BigMoney: React.FC<{
         }}
       />
     </div>
-    {hint && <span className="text-[11.5px] text-gray-500">{hint}</span>}
+    {hint && (
+      <span
+        className={`text-[11.5px] ${invalid ? "text-amber-700" : "text-gray-500"}`}
+      >
+        {hint}
+      </span>
+    )}
   </div>
 );
 

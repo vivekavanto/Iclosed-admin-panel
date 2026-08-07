@@ -28,9 +28,12 @@ import {
   type PDFImage,
   type PDFPage,
 } from "pdf-lib";
-import { DISCLAIMERS, type Statement } from "./closingCosts";
+// Explicit `.ts` extensions: this module is reachable from the node --test
+// loader, which will not resolve an extensionless specifier. Same reason
+// closingCostConfig.ts and closingEstimate.ts write them.
+import { DISCLAIMERS, type Statement } from "./closingCosts.ts";
 import { hexToRgb01, type StatementTypeConfig } from "./closingCostSettings.ts";
-import { blobTokenForUrl, isPrivateBlobUrl } from "./blobPrivacy";
+import { blobTokenForUrl, isPrivateBlobUrl } from "./blobPrivacy.ts";
 
 export interface ClosingCostPdfParams {
   statement: Statement;
@@ -53,6 +56,12 @@ export interface ClosingCostPdfParams {
    * `draft`, which is what it did before statement types existed.
    */
   statementType?: StatementTypeConfig | null;
+  /**
+   * The configuration stamp — `v5.9f3a2c1b` — printed in the footer beside the
+   * date so a document can be traced back to the exact rates and presentation
+   * that produced it. Omitted when the estimate predates snapshots.
+   */
+  configVersion?: string | null;
 }
 
 // The red Nava Wilson statements have always been printed in — now only the
@@ -61,6 +70,12 @@ const NAVA_RED = { r: 0xce / 255, g: 0x20 / 255, b: 0x28 / 255 };
 const INK = rgb(0.1, 0.1, 0.11);
 const SUB = rgb(0.42, 0.45, 0.5);
 const HAIR = rgb(0.88, 0.89, 0.91);
+
+// The ESTIMATE chip. Deliberately NOT the firm's colour — it marks a figure as
+// provisional, which is a caution, and it must not compete with the brand.
+const BADGE_INK = rgb(0x8a / 255, 0x73 / 255, 0x28 / 255);
+const BADGE_BG = rgb(0xfb / 255, 0xf3 / 255, 0xd6 / 255);
+const BADGE_LINE = rgb(0xe8 / 255, 0xdc / 255, 0xae / 255);
 
 // US Letter, in points.
 const PAGE_W = 612;
@@ -198,6 +213,7 @@ export async function generateClosingCostPdf(
     preparedOn,
     draft,
     statementType,
+    configVersion,
   } = params;
 
   // Per-firm, so an iClosed statement is not printed in Nava Wilson's red.
@@ -269,16 +285,37 @@ export async function generateClosingCostPdf(
   }
 
   y -= 6;
-  rule(y, BRAND, 0.8);
+  rule(y, HAIR, 0.8);
 
   // ── Title ──
-  y -= 26;
+  // Set small, tracked and underlined rather than large and red: it names the
+  // document, and on a statement of account the loudest thing on the page
+  // should be the money, not the heading.
+  y -= 30;
   const title = text(
     statementType?.title,
     "ESTIMATED CLOSING COSTS — RESIDENTIAL PURCHASE (ONTARIO)",
   );
-  for (const line of wrap(title, bold, 11, CONTENT_W)) {
-    drawCentered(page, line, y, bold, 11, BRAND);
+  const TITLE_SIZE = 8;
+  const TRACKING = 1.4;
+  for (const line of wrap(title, bold, TITLE_SIZE + TRACKING, CONTENT_W)) {
+    const upper = line.toUpperCase();
+    // pdf-lib has no letter-spacing, so the glyphs are placed one at a time.
+    const width =
+      bold.widthOfTextAtSize(upper, TITLE_SIZE) +
+      TRACKING * Math.max(0, upper.length - 1);
+    let cursor = (PAGE_W - width) / 2;
+    for (const ch of upper) {
+      page.drawText(ch, { x: cursor, y, size: TITLE_SIZE, font: bold, color: INK });
+      cursor += bold.widthOfTextAtSize(ch, TITLE_SIZE) + TRACKING;
+    }
+    // Underlined to the exact width of the words, the way the template sets it.
+    page.drawLine({
+      start: { x: (PAGE_W - width) / 2, y: y - 3.5 },
+      end: { x: (PAGE_W - width) / 2 + width, y: y - 3.5 },
+      thickness: 0.6,
+      color: INK,
+    });
     y -= 14;
   }
 
@@ -298,16 +335,18 @@ export async function generateClosingCostPdf(
     ] as Array<[string, string]>
   ).filter(([, value]) => Boolean(value));
 
+  // Label quiet, value loud — the client is scanning for their own details, so
+  // the answers carry the weight and the field names step back.
   const labelW = 78;
   for (const [label, value] of detailRows) {
-    page.drawText(label, { x: M, y, size: 8, font: bold, color: BRAND });
-    const valueLines = wrap(value, regular, 8, CONTENT_W - labelW);
+    page.drawText(label, { x: M, y, size: 8, font: regular, color: SUB });
+    const valueLines = wrap(value, bold, 8, CONTENT_W - labelW);
     for (let i = 0; i < valueLines.length; i++) {
       page.drawText(valueLines[i], {
         x: M + labelW,
         y,
         size: 8,
-        font: regular,
+        font: bold,
         color: INK,
       });
       if (i < valueLines.length - 1) y -= 10;
@@ -316,7 +355,13 @@ export async function generateClosingCostPdf(
   }
 
   // ── Rows ──
-  /** One label/amount row. Amounts print in the firm's colour. */
+  /**
+   * One label/amount row.
+   *
+   * Amounts print in INK, not the brand colour: on a statement every figure
+   * matters equally, and colouring them all red leaves nothing for the one
+   * figure that is the point of the page — the balance due.
+   */
   const drawRow = (
     label: string,
     amount: number,
@@ -331,17 +376,34 @@ export async function generateClosingCostPdf(
     });
 
     if (opts.badge) {
+      // A pale chip rather than coloured text: it has to read as a marker on
+      // the line, not as part of what the line says.
       const labelWidth = regular.widthOfTextAtSize(label, 8.5);
-      page.drawText(opts.badge, {
-        x: M + labelWidth + 6,
-        y: y + 0.5,
+      const badgeText = opts.badge.toUpperCase();
+      const textW = bold.widthOfTextAtSize(badgeText, 5.5);
+      const boxX = M + labelWidth + 6;
+      const boxY = y - 1.5;
+      const boxW = textW + 6;
+      const boxH = 9;
+      page.drawRectangle({
+        x: boxX,
+        y: boxY,
+        width: boxW,
+        height: boxH,
+        color: BADGE_BG,
+        borderColor: BADGE_LINE,
+        borderWidth: 0.4,
+      });
+      page.drawText(badgeText, {
+        x: boxX + 3,
+        y: boxY + 2.6,
         size: 5.5,
         font: bold,
-        color: BRAND,
+        color: BADGE_INK,
       });
     }
 
-    drawRight(page, money(amount), amountX, y, regular, 8.5, opts.muted ? SUB : BRAND);
+    drawRight(page, money(amount), amountX, y, regular, 8.5, opts.muted ? SUB : INK);
     y -= 11;
 
     if (opts.sublabel) {
@@ -400,43 +462,47 @@ export async function generateClosingCostPdf(
   // Printed AFTER the total because it is a Statement of Adjustments item, not
   // one of the fees, taxes and disbursements that total covers.
   if (statement.propertyTax) {
-    drawSectionHeading("Property Tax");
+    drawSectionHeading("Adjustments");
     drawRow(statement.propertyTax.label, statement.propertyTax.amount, {
       sublabel: statement.propertyTax.sublabel,
+      badge: statement.propertyTax.badge,
     });
   }
 
   // ── Funds required on closing ──
   const b = statement.balance;
   drawSectionHeading("Funds Required on Closing");
-  drawRow("Purchase price", b.purchasePrice, { muted: true });
+  // Only the deductions are greyed. They are money the client has already found
+  // or that the lender is bringing, so they read as relief; everything else is
+  // money they still have to produce.
+  drawRow("Purchase price", b.purchasePrice);
   drawRow("less deposit already paid", -b.depositPaid, { muted: true });
-  drawRow("less mortgage advance from your lender", -b.mortgageAmount, { muted: true });
+  drawRow("less mortgage advance from lender", -b.mortgageAmount, { muted: true });
   if (b.propertyTaxAdjustment !== 0) {
     // Signed, so a seller in arrears reads as a credit rather than a charge.
     drawRow(
       b.propertyTaxAdjustment > 0
-        ? "plus property tax adjustment"
-        : "less property tax credit",
+        ? "plus property tax & common expense adjustments"
+        : "less property tax & common expense credit",
       b.propertyTaxAdjustment,
-      { muted: true },
     );
   }
-  drawRow("plus total closing costs", b.closingCosts, { muted: true });
+  drawRow("plus total closing costs", b.closingCosts);
 
+  // The one figure the whole page exists to give. Its label sits in INK like
+  // every other label; the AMOUNT is the only thing on the statement printed in
+  // the firm's colour, which is what makes the eye land on it.
   y -= 2;
-  rule(y, BRAND, 0.8);
+  rule(y, INK, 0.5);
   y -= 15;
   page.drawText("Estimated balance due on closing", {
     x: M,
     y,
     size: 10,
     font: bold,
-    color: BRAND,
+    color: INK,
   });
   drawRight(page, money(b.balanceDue), amountX, y, bold, 13, BRAND);
-  y -= 8;
-  rule(y, BRAND, 0.8);
 
   // ── Disclaimers ──
   // The lead line is configurable per statement type and prints in the firm's
@@ -470,13 +536,38 @@ export async function generateClosingCostPdf(
   }
 
   // ── Footer ──
-  page.drawText(`Prepared by ${firmName}`, {
+  //
+  // Left: who prepared it, and the configuration stamp that identifies WHICH
+  // version of the rates and letterhead produced it. Two statements carrying
+  // the same stamp came from the same configuration; two carrying different
+  // stamps did not — which makes "this is the document you were sent" a
+  // checkable claim rather than an assurance.
+  //
+  // Right: what kind of statement this is. It is the last thing on the page, so
+  // a printed copy that has been separated from its covering email still says
+  // whether it is a draft.
+  const stamp = text(configVersion);
+  const preparedBy = stamp
+    ? `Prepared by ${firmName}  ·  ${stamp}`
+    : `Prepared by ${firmName}`;
+  page.drawText(preparedBy, {
     x: M,
     y: 30,
     size: 6,
     font: regular,
     color: SUB,
   });
+
+  const kind = text(statementType?.label);
+  if (kind) {
+    page.drawText(kind, {
+      x: PAGE_W - M - regular.widthOfTextAtSize(kind, 6),
+      y: 30,
+      size: 6,
+      font: regular,
+      color: SUB,
+    });
+  }
 
   // ── DRAFT watermark ──
   // Only on an unissued preview, so a working copy can never be mistaken for the

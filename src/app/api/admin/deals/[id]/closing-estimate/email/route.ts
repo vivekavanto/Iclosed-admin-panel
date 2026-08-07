@@ -6,7 +6,8 @@ import { recordAudit } from "@/lib/recordAudit";
 import { getActingAdmin } from "@/lib/getActingAdmin";
 import { rateLimitOk } from "@/lib/rateLimit";
 import { readActiveConfig, readStatementType } from "@/lib/closingCostConfig";
-import { snapshotToStatement } from "@/lib/closingEstimate";
+import { configFromSnapshot } from "@/lib/closingCostConfigSnapshot";
+import { finalStatementBlocker, snapshotToStatement } from "@/lib/closingEstimate";
 import { closingCostPdfFileName, generateClosingCostPdf } from "@/lib/closingCostPdf";
 import {
   isEmailAddress,
@@ -136,10 +137,34 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   const firmKey = (row.firm_key as string | null) ?? null;
   const isDraftRow = row.status !== "issued";
-  const { row: config } = await readActiveConfig(firmKey);
-  const statementType = await readStatementType(
-    (row.statement_type as string | null) ?? (isDraftRow ? "draft" : "final"),
+
+  // The letterhead and wording come from the estimate's own FROZEN snapshot, so
+  // what lands in the client's inbox is the document as it was prepared — a
+  // settings edit between saving and sending must not alter it. Same rule, and
+  // the same pre-snapshot fallback, as the download route.
+  const frozen = configFromSnapshot(row.config_snapshot);
+  let config: Record<string, unknown>;
+  let statementType: Awaited<ReturnType<typeof readStatementType>>;
+
+  if (frozen) {
+    config = frozen.config;
+    statementType = frozen.statementType;
+  } else {
+    config = (await readActiveConfig(firmKey)).row;
+    statementType = await readStatementType(
+      (row.statement_type as string | null) ?? (isDraftRow ? "draft" : "final"),
+    );
+  }
+
+  // Issuing is not the only way a statement reaches a client, so the
+  // final-account rule is applied on this path too.
+  const blocker = finalStatementBlocker(
+    statementType.type_key,
+    row.property_tax_adjustment,
   );
+  if (blocker) {
+    return NextResponse.json({ success: false, error: blocker }, { status: 400 });
+  }
 
   const fileNo = (row.file_no_display as string | null) ?? deal.file_number ?? null;
   const propertyAddress =
@@ -164,6 +189,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       closingDate: closingDate ? formatLocalDate(closingDate) || closingDate : null,
       preparedOn: formatLocalDate(preparedSource) || preparedSource.slice(0, 10),
       draft: isDraftRow,
+      configVersion: (row.config_version as string | null) ?? null,
     });
     pdf = { fileName: closingCostPdfFileName(fileNo), bytes };
   } catch (err) {

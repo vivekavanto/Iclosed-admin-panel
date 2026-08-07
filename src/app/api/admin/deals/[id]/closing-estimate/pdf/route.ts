@@ -5,6 +5,7 @@ import { logger } from "@/lib/logger";
 import { rateLimitOk } from "@/lib/rateLimit";
 import { blobTokenForUrl, isBlobUrl, isPrivateBlobUrl } from "@/lib/blobPrivacy";
 import { readActiveConfig, readStatementType } from "@/lib/closingCostConfig";
+import { configFromSnapshot } from "@/lib/closingCostConfigSnapshot";
 import { snapshotToStatement } from "@/lib/closingEstimate";
 import { closingCostPdfFileName, generateClosingCostPdf } from "@/lib/closingCostPdf";
 import { formatLocalDate } from "@/lib/formatDate";
@@ -41,6 +42,9 @@ interface EstimateRow {
   purchasers?: string | null;
   property_address?: string | null;
   closing_date?: string | null;
+  // Added by 2026-08-08. Null on any row written before it.
+  config_snapshot?: unknown;
+  config_version?: string | null;
 }
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -167,17 +171,29 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     .eq("id", id)
     .maybeSingle();
 
-  // The letterhead comes from the CURRENT config even for a historic estimate —
-  // the firm's address changing shouldn't reprint an old one, whereas the
-  // figures themselves come from the frozen snapshot and never move. The FIRM,
-  // though, is whichever one the estimate was written under.
-  const { row: config } = await readActiveConfig(row.firm_key as string | null);
+  // The letterhead and the wording come from the estimate's own FROZEN
+  // snapshot, so a re-download reproduces the document the client received —
+  // not today's version of it. That is the promise Settings → Closing costs
+  // makes on screen ("changing these affects new estimates only"), and reading
+  // the live config here is precisely how it used to be broken.
+  //
+  // Only a row written before the snapshot column existed falls back to the
+  // live config, which is what such a row has always rendered from anyway.
+  const frozen = configFromSnapshot(row.config_snapshot);
+  let config: Record<string, unknown>;
+  let statementType: Awaited<ReturnType<typeof readStatementType>>;
 
-  // An estimate saved before statement types existed has no stored flavour;
-  // fall back to the workflow status, which reproduces the old watermark rule.
-  const statementType = await readStatementType(
-    (row.statement_type as string | null) ?? (isDraft ? "draft" : "final"),
-  );
+  if (frozen) {
+    config = frozen.config;
+    statementType = frozen.statementType;
+  } else {
+    config = (await readActiveConfig(row.firm_key as string | null)).row;
+    // An estimate saved before statement types existed has no stored flavour;
+    // fall back to the workflow status, which reproduces the old watermark rule.
+    statementType = await readStatementType(
+      (row.statement_type as string | null) ?? (isDraft ? "draft" : "final"),
+    );
+  }
 
   try {
     const preparedSource: string =
@@ -193,6 +209,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       closingDate: (row.closing_date as string | null) ?? null,
       preparedOn: formatLocalDate(preparedSource) || preparedSource.slice(0, 10),
       draft: isDraft,
+      configVersion: row.config_version ?? null,
     });
 
     return new NextResponse(pdfBytes as unknown as BodyInit, {

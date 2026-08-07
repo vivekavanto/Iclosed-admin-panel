@@ -33,8 +33,17 @@
  * 5 — land transfer tax accepts a per-file dollar override, replacing the
  *     bracket calculation. Additive: with no override supplied a v5 statement
  *     is identical to a v4 one.
+ * 6 — the Sheriff's Certificates line carries a sublabel saying what the search
+ *     is for. Presentation only, and only on the PDF — the screens do not draw
+ *     sublabels — so every figure, subtotal and total is unchanged from v5.
+ * 7 — the ESTIMATE badge is decided HERE for every provisional line, not by
+ *     each surface. Teraview, the Sheriff's searches and the Statement of
+ *     Adjustments figure now carry it exactly as the title premium already did,
+ *     and `isFinalAccount` suppresses all four. Presentation only; no figure
+ *     moves. Before this the two screens each added their own badges and the
+ *     PDF added none, so the same statement disagreed with itself.
  */
-export const CALC_VERSION = 5;
+export const CALC_VERSION = 7;
 
 /**
  * One marginal tax band: `[cap, rate]`. The rate applies only to the portion of
@@ -100,6 +109,18 @@ export interface ClosingCostInputs {
    * May be negative — a seller who is in arrears credits the buyer instead.
    */
   propertyTaxAdjustment?: number | null;
+  /**
+   * Suppresses the ESTIMATE badges.
+   *
+   * Four lines are provisional on a draft — the title premium until First
+   * Canadian Title quotes, Teraview and the Sheriff's searches until the file
+   * shows how many are needed, and the Statement of Adjustments figure until
+   * the seller's lawyer sends it. On a FINAL account those are the charges
+   * actually incurred, so calling them estimates would be wrong.
+   *
+   * Defaults to false — a statement is a draft unless it says otherwise.
+   */
+  isFinalAccount?: boolean;
 }
 
 export interface StatementLine {
@@ -419,6 +440,12 @@ export function computeStatement(
   const { isToronto, isFirstTimeBuyer } = inputs;
   const hasMortgage = mortgage > 0;
 
+  // Provisional figures are badged HERE so the screen, the PDF and a frozen
+  // snapshot all say the same thing. Each surface used to decide for itself,
+  // which is how the PDF ended up badging one line where the screens badged
+  // four.
+  const estimateBadge = inputs.isFinalAccount ? undefined : "ESTIMATE";
+
   // ── Land transfer tax ──
   // A supplied dollar figure replaces the bracket calculation. An explicit 0 is
   // a real override (an exempt transfer), so presence is what counts, not truth.
@@ -481,12 +508,13 @@ export function computeStatement(
 
   const titleLine: StatementLine = {
     key: "title_premium",
-    label: "First Canadian Title Insurance — premium",
+    label: "First Canadian Title — premium",
     amount: titlePremium,
   };
   // The badge is what tells the client this figure is not yet the real quote —
-  // so it must disappear the moment a staff member pastes the actual one.
-  if (!hasOverride) titleLine.badge = "ESTIMATE";
+  // so it must disappear the moment a staff member pastes the actual one, and
+  // on a final account where nothing is provisional.
+  if (!hasOverride && estimateBadge) titleLine.badge = estimateBadge;
 
   // The firm's charge for preparing and submitting the title insurance
   // application. Shown under Title Insurance rather than inside the legal fee
@@ -515,9 +543,24 @@ export function computeStatement(
       amount: regMortgage,
     });
   }
+  // Both are priced from a standard schedule, but the final charge depends on
+  // how many searches and certificates the file actually needs — so both are
+  // badged on a draft.
   thirdPartyLines.push(
-    { key: "teraview", label: "Teraview — title searches & review", amount: teraview },
-    { key: "sheriff", label: "Sheriff's Certificates", amount: sheriff },
+    {
+      key: "teraview",
+      label: "Teraview — title searches & review",
+      amount: teraview,
+      ...(estimateBadge ? { badge: estimateBadge } : {}),
+    },
+    {
+      key: "sheriff",
+      label: "Sheriff's Certificates",
+      sublabel:
+        "searches confirming no judgments or liens are registered against the parties",
+      amount: sheriff,
+      ...(estimateBadge ? { badge: estimateBadge } : {}),
+    },
   );
 
   // ── Legal & admin fees ──
@@ -577,9 +620,11 @@ export function computeStatement(
       ? null
       : {
           key: "property_tax_adjustment",
-          label: "Property tax adjustment",
+          label: "Property tax & common expense adjustments",
           amount: propertyTax,
-          sublabel: "per the Statement of Adjustments",
+          sublabel:
+            "confirmed once we receive the Statement of Adjustments from the seller's lawyer",
+          ...(estimateBadge ? { badge: estimateBadge } : {}),
         };
 
   // ── Totals ──

@@ -6,6 +6,9 @@
 // saving — a client-sent total is never trusted. Both sides call the same pure
 // module (src/lib/closingCosts.ts), so the numbers agree by construction.
 
+// Explicit `.ts` extensions: this module is reachable from the node --test
+// suite, whose ESM loader will not resolve an extensionless specifier. Same
+// reason closingCostConfig.ts writes them.
 import {
   CALC_VERSION,
   computeStatement,
@@ -15,13 +18,18 @@ import {
   type ClosingCostInputs,
   type ClosingCostRates,
   type Statement,
-} from "./closingCosts";
+} from "./closingCosts.ts";
 import {
   isFirmKey,
   isStatementTypeKey,
   type FirmKey,
+  type StatementTypeConfig,
   type StatementTypeKey,
-} from "./closingCostSettings";
+} from "./closingCostSettings.ts";
+import {
+  buildConfigSnapshot,
+  configVersionOf,
+} from "./closingCostConfigSnapshot.ts";
 
 /** The per-file fee/rate overrides staff may set in "Adjust fixed fees & rates". */
 export const OVERRIDABLE_RATE_KEYS = [
@@ -257,6 +265,38 @@ export function parseEstimatePayload(
 }
 
 /**
+ * Why this file may not go out as a FINAL account yet, or null when it may.
+ *
+ * A draft carries the firm's planning figure for the Statement of Adjustments —
+ * `property_tax_default`, $1,000 out of the box — so that an early estimate
+ * lands in roughly the right place. On a final account that same figure is a
+ * placeholder masquerading as a settled number, which is the one thing a
+ * statement headed "Statement of Account" must never contain.
+ *
+ * So a final requires the figure to have been ENTERED. Null is the only thing
+ * rejected: a genuine 0 (nothing owing either way) and a negative (the seller is
+ * in arrears and credits the buyer) are both real answers.
+ *
+ * Lives here, next to the payload parser, because BOTH the issue route and the
+ * email route have to apply it — issuing is not the only way a statement
+ * reaches a client.
+ */
+export function finalStatementBlocker(
+  statementType: string | null | undefined,
+  propertyTaxAdjustment: unknown,
+): string | null {
+  if (statementType !== "final") return null;
+  const raw = propertyTaxAdjustment;
+  const missing =
+    raw === null ||
+    raw === undefined ||
+    raw === "" ||
+    !Number.isFinite(Number(raw));
+  if (!missing) return null;
+  return "A final account needs the property tax & common expense adjustment from the Statement of Adjustments. Enter it before issuing or sending.";
+}
+
+/**
  * The EFFECTIVE rates for a file: the firm config with any per-file overrides
  * layered on top. This is what gets frozen into `rates_used`, so a historic
  * estimate can always be explained even after the firm's standard fees move.
@@ -286,10 +326,25 @@ export function effectiveRates(
   return ratesFromConfigRow(merged);
 }
 
-/** Columns to write for a save — inputs plus the frozen snapshots. */
+/**
+ * Columns to write for a save — inputs plus the frozen snapshots.
+ *
+ * THREE things are frozen, and all three are needed for an estimate to still
+ * mean what it meant when it was sent:
+ *
+ *   line_items      the figures
+ *   rates_used      the fee schedule that produced them
+ *   config_snapshot the letterhead and wording they were printed under
+ *
+ * `statementType` is what supplies the third. It is optional only so a caller
+ * that has not resolved one yet still writes the first two rather than
+ * throwing; omitting it snapshots the draft wording, which is the flavour a
+ * statement carries until staff choose otherwise.
+ */
 export function buildEstimateRow(
   payload: EstimateInputPayload,
   configRow: Record<string, unknown>,
+  statementType?: StatementTypeConfig | null,
 ): {
   statement: Statement;
   rates: ClosingCostRates;
@@ -307,9 +362,13 @@ export function buildEstimateRow(
     provincialLttOverride: payload.provincial_ltt_override,
     municipalLttOverride: payload.municipal_ltt_override,
     propertyTaxAdjustment: payload.property_tax_adjustment,
+    // A final account states charges actually incurred, so nothing on it is
+    // badged as an estimate.
+    isFinalAccount: payload.statement_type === "final",
   };
 
   const statement = computeStatement(inputs, rates);
+  const configSnapshot = buildConfigSnapshot(configRow, statementType);
 
   return {
     statement,
@@ -337,11 +396,63 @@ export function buildEstimateRow(
         ...ratesToSnapshot(rates),
         rate_overrides: payload.rate_overrides,
       },
+      // The letterhead and wording this statement was printed under. Without it
+      // a later settings edit would rewrite a document already sent — see
+      // migrations/2026-08-08-closing-estimate-config-snapshot.sql.
+      config_snapshot: configSnapshot,
+      config_version: configVersionOf(rates, configSnapshot),
       line_items: statementToSnapshot(statement),
       total_closing_costs: statement.total,
       balance_due: statement.balance.balanceDue,
     },
   };
+}
+
+// ───────────────── deploy-order safety for the snapshot columns ─────────────
+//
+// `config_snapshot` / `config_version` arrive in a MANUALLY applied migration.
+// Naming a column PostgREST has not seen yet is a hard error, so a build that
+// reached production ahead of the SQL would fail every save on every file — not
+// degrade, fail. The route file already keeps its SELECT as `*` for exactly
+// this reason; this is the same care applied to the writes.
+
+/** Added by migrations/2026-08-08-closing-estimate-config-snapshot.sql. */
+const CONFIG_SNAPSHOT_COLUMNS = ["config_snapshot", "config_version"] as const;
+
+/** PostgREST / Postgres codes for "that column does not exist (yet)". */
+const MISSING_COLUMN_CODES = new Set(["PGRST204", "42703"]);
+
+/** The same row without the columns the migration adds. */
+function withoutConfigSnapshot(
+  columns: Record<string, unknown>,
+): Record<string, unknown> {
+  const rest = { ...columns };
+  for (const key of CONFIG_SNAPSHOT_COLUMNS) delete rest[key];
+  return rest;
+}
+
+/**
+ * Run a write, and retry once without the snapshot columns if the database has
+ * not been migrated yet.
+ *
+ * The estimate still saves; it simply saves without the freeze, which is
+ * exactly the behaviour of every row written before this feature existed. Once
+ * the SQL is run the retry stops being reached.
+ *
+ * Generic over the callback's WHOLE result rather than over its `data`, so the
+ * supabase response type passes through untouched — a caller that returns on
+ * `error` keeps getting `data` narrowed exactly as it would from a bare call.
+ */
+export async function writeEstimateRow<R>(
+  columns: Record<string, unknown>,
+  run: (columns: Record<string, unknown>) => PromiseLike<R>,
+): Promise<R> {
+  const first = await run(columns);
+  const error = (first as { error?: { code?: string | null } | null } | null)?.error;
+  if (!error || !MISSING_COLUMN_CODES.has(String(error.code ?? ""))) {
+    return first;
+  }
+  return run(withoutConfigSnapshot(columns));
 }
 
 /** Serialise a Statement into the `line_items` jsonb shape. */

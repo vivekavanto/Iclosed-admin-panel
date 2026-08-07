@@ -247,13 +247,19 @@ export interface StatementTypeConfig {
 }
 
 /**
- * Defaults are byte-identical to the strings that are hard-coded today
- * (closingCostPdf.ts and ClosingCostStatement.tsx), so nothing a client sees
- * moves until a staff member deliberately edits it.
+ * Defaults mirror the seeded rows, so a fresh environment with no
+ * `closing_cost_statement_types` table renders exactly what a migrated one does.
  *
  * Only the lead line and an optional footer note are editable — DISCLAIMERS[1..4]
  * stay in the twin `closingCosts.ts` so the portal keeps rendering the same
  * legal text without a second source of truth.
+ *
+ * The draft's `footer_note` is the fee-scope limitation that used to be
+ * hard-coded in the customer portal's estimate modal. It lives here so both
+ * surfaces read one copy of it, and staff can edit it — the admin repo's
+ * migrations/2026-08-08-closing-cost-draft-footer-note.sql puts the same text on
+ * the seeded row. A FINAL account deliberately carries none: it states the fees
+ * actually charged, so a caveat about what the quote assumed does not belong.
  */
 const STATEMENT_TYPE_DEFAULTS: Record<StatementTypeKey, StatementTypeConfig> = {
   draft: {
@@ -263,7 +269,8 @@ const STATEMENT_TYPE_DEFAULTS: Record<StatementTypeKey, StatementTypeConfig> = {
     screen_heading: "ESTIMATED STATEMENT OF ACCOUNT",
     disclaimer_intro:
       "This is an estimate for planning purposes only. Final figures will be set out in the Statement of Account before closing.",
-    footer_note: "",
+    footer_note:
+      "Assumes a standard residential purchase with no more than one mortgage, no independent legal advice, no title-related rectification, and no gift or trust arrangements; additional fees apply where these are needed.",
     show_watermark: true,
     watermark_text: "DRAFT",
   },

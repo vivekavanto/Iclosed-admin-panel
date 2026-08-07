@@ -1,12 +1,22 @@
 import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { isUuid } from "@/lib/isUuid";
+import { isTorontoAddress } from "@/lib/isTorontoAddress";
 import { logger } from "@/lib/logger";
 import { recordAudit } from "@/lib/recordAudit";
 import { getActingAdmin } from "@/lib/getActingAdmin";
-import { readActiveConfig, readFirms, readStatementTypes } from "@/lib/closingCostConfig";
+import {
+  readActiveConfig,
+  readFirms,
+  readStatementType,
+  readStatementTypes,
+} from "@/lib/closingCostConfig";
 import { STATEMENT_TYPE_KEYS } from "@/lib/closingCostSettings";
-import { buildEstimateRow, parseEstimatePayload } from "@/lib/closingEstimate";
+import {
+  buildEstimateRow,
+  parseEstimatePayload,
+  writeEstimateRow,
+} from "@/lib/closingEstimate";
 
 // The purchase closing-cost estimate for one deal.
 //
@@ -129,9 +139,11 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     }
   }
 
-  const torontoHint = /\btoronto\b/i.test(
-    `${leadCity ?? ""} ${deal.property_address ?? ""}`,
-  );
+  // Each source is read on its own rather than concatenated: the address is
+  // parsed comma by comma, and gluing the city onto the front of it would put a
+  // street number in the same part as the municipality and defeat that.
+  const torontoHint =
+    isTorontoAddress(deal.property_address) || isTorontoAddress(leadCity);
 
   return NextResponse.json({
     success: true,
@@ -209,13 +221,22 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
     return NextResponse.json({ success: false, error: "File not found" }, { status: 404 });
   }
 
-  // The chosen firm decides both the letterhead AND the fee schedule, so it has
-  // to be resolved before the statement is computed. A null firm_key falls back
-  // to the configured default.
-  const { row: config, firmKey } = await readActiveConfig(parsed.payload.firm_key);
+  // The chosen firm decides both the letterhead AND the fee schedule, and the
+  // statement type decides the title, the disclaimer and the watermark. Both
+  // are resolved before the statement is built, because both are frozen onto
+  // the row alongside the figures. A null falls back to the configured default.
+  const [{ row: config, firmKey }, statementType] = await Promise.all([
+    readActiveConfig(parsed.payload.firm_key),
+    readStatementType(parsed.payload.statement_type),
+  ]);
   const { columns, statement } = buildEstimateRow(
-    { ...parsed.payload, firm_key: firmKey },
+    {
+      ...parsed.payload,
+      firm_key: firmKey,
+      statement_type: statementType.type_key,
+    },
     config,
+    statementType,
   );
 
   const { data: existing } = await supabase
@@ -235,13 +256,14 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
     const expectedUpdatedAt =
       typeof body.expected_updated_at === "string" ? body.expected_updated_at : null;
 
-    let query = supabase
-      .from("deal_closing_estimates")
-      .update({ ...columns, updated_at: now })
-      .eq("id", existing.id);
-    if (expectedUpdatedAt) query = query.eq("updated_at", expectedUpdatedAt);
-
-    const { data, error } = await query.select(ESTIMATE_COLUMNS).single();
+    const { data, error } = await writeEstimateRow(columns, (cols) => {
+      let query = supabase
+        .from("deal_closing_estimates")
+        .update({ ...cols, updated_at: now })
+        .eq("id", existing.id);
+      if (expectedUpdatedAt) query = query.eq("updated_at", expectedUpdatedAt);
+      return query.select(ESTIMATE_COLUMNS).single();
+    });
     if (error) {
       if (expectedUpdatedAt && error.code === "PGRST116") {
         return NextResponse.json(
@@ -259,19 +281,21 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
     return NextResponse.json({ success: true, data, statement });
   }
 
-  const { data, error } = await supabase
-    .from("deal_closing_estimates")
-    .insert([
-      {
-        ...columns,
-        deal_id: id,
-        status: "draft",
-        created_by_email: actor.email,
-        updated_at: now,
-      },
-    ])
-    .select(ESTIMATE_COLUMNS)
-    .single();
+  const { data, error } = await writeEstimateRow(columns, (cols) =>
+    supabase
+      .from("deal_closing_estimates")
+      .insert([
+        {
+          ...cols,
+          deal_id: id,
+          status: "draft",
+          created_by_email: actor.email,
+          updated_at: now,
+        },
+      ])
+      .select(ESTIMATE_COLUMNS)
+      .single(),
+  );
 
   if (error) {
     // 23505 = the one-draft-per-deal partial unique index. Two concurrent first

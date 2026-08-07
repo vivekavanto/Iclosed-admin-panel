@@ -286,6 +286,29 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
   const [phoneDraft, setPhoneDraft] = useState<string>("");
   const [savingPhoneId, setSavingPhoneId] = useState<string | null>(null);
 
+  // ── "Who uploads documents" reassignment ──────────────────────────────────
+  // The family's upload_mode lives on the PRIMARY lead. Until now it could only
+  // be answered once, at intake in the customer portal; this control lets an
+  // admin change it afterwards. `uploadModeOverride` holds the just-saved value
+  // so the card reflects the change immediately — router.refresh() re-syncs the
+  // server-rendered deal prop right after (same pattern as the lock box code).
+  const [showUploadMode, setShowUploadMode] = useState(false);
+  const [uploadModeOverride, setUploadModeOverride] = useState<{
+    mode: string | null;
+    uploaderLeadId: string | null;
+  } | null>(null);
+  /** Radio value: "me" | "both" | "co:<leadId>". */
+  const [uploadModeChoice, setUploadModeChoice] = useState<string>("");
+  const [savingUploadMode, setSavingUploadMode] = useState(false);
+  const [uploadModeError, setUploadModeError] = useState<string | null>(null);
+  // People the new mode made responsible who have no portal login yet. Returned
+  // by the PATCH; the admin sends each invite explicitly (nothing auto-emails).
+  const [inviteNeeded, setInviteNeeded] = useState<
+    { lead_id: string; name: string; email: string; is_primary: boolean; convertible: boolean }[]
+  >([]);
+  const [invitingLeadId, setInvitingLeadId] = useState<string | null>(null);
+  const [invitedLeadIds, setInvitedLeadIds] = useState<string[]>([]);
+
   // APS upload modal state — multiple files can be uploaded at once and they
   // APPEND to any existing APS docs (agreement + amendments/waivers).
   const [showApsUpload, setShowApsUpload] = useState(false);
@@ -2518,10 +2541,98 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
     return [currentEntry, ...linked].sort((a, b) => sortKey(a) - sortKey(b));
   })();
 
-  // The family's designated document uploader (the person flagged
-  // can_upload_for_all by the deals API), or null when everyone uploads their
-  // own ('both'/unset). Drives the per-person upload badge below.
-  const familyUploader = familyPeople.find((p) => p.canUploadForAll) ?? null;
+  // The family's document-upload arrangement, as it stands right now. Reads
+  // through `uploadModeOverride` so a just-saved reassignment shows immediately.
+  //
+  // `effectiveUploadMode` is deliberately the RAW column: null means the
+  // question was never answered (admin-created intakes never ask it), and the
+  // two apps disagree on what null implies — the customer portal treats it as
+  // "primary uploads for everyone", this app as "each uploads their own". So we
+  // render null as "Not set" and let the admin settle it rather than assert a
+  // guess. Once set, the three modes mean the same thing on both sides.
+  const effectiveUploadMode: string | null = uploadModeOverride
+    ? uploadModeOverride.mode
+    : ((rawDeal as any)?.upload_mode as string | null) ?? null;
+  const effectiveUploaderLeadId: string | null = uploadModeOverride
+    ? uploadModeOverride.uploaderLeadId
+    : ((rawDeal as any)?.upload_uploader_lead_id as string | null) ?? null;
+  // The designated uploader, or null when everyone uploads their own ('both')
+  // or the question is unanswered. Drives the per-person upload badge below.
+  const familyUploader =
+    familyPeople.find((p) => !!p.lead_id && p.lead_id === effectiveUploaderLeadId) ?? null;
+
+  // Current arrangement as the radio value used by the reassign modal.
+  const currentUploadChoice: string =
+    effectiveUploadMode === "both"
+      ? "both"
+      : effectiveUploadMode === "me"
+        ? "me"
+        : effectiveUploadMode === "co" && effectiveUploaderLeadId
+          ? `co:${effectiveUploaderLeadId}`
+          : "";
+
+  const openUploadModeModal = () => {
+    setUploadModeChoice(currentUploadChoice);
+    setUploadModeError(null);
+    setInviteNeeded([]);
+    setInvitedLeadIds([]);
+    setShowUploadMode(true);
+  };
+
+  const saveUploadMode = async () => {
+    if (!uploadModeChoice) {
+      setUploadModeError("Choose who will upload the documents.");
+      return;
+    }
+    const isCo = uploadModeChoice.startsWith("co:");
+    const payload = isCo
+      ? { mode: "co", uploader_lead_id: uploadModeChoice.slice(3) }
+      : { mode: uploadModeChoice };
+    setSavingUploadMode(true);
+    setUploadModeError(null);
+    try {
+      const res = await fetch(`/api/admin/deals/${deal.id}/upload-mode`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Failed to save the document-upload assignment");
+      }
+      setUploadModeOverride({
+        mode: data.upload_mode ?? null,
+        uploaderLeadId: data.uploader_lead_id ?? null,
+      });
+      setInviteNeeded(Array.isArray(data.needs_invite) ? data.needs_invite : []);
+      showToast("Document upload assignment updated");
+      router.refresh();
+      // Stay open when someone still needs a login — that follow-up is the whole
+      // reason the change can silently strand a party.
+      if (!Array.isArray(data.needs_invite) || data.needs_invite.length === 0) {
+        setShowUploadMode(false);
+      }
+    } catch (err: any) {
+      setUploadModeError(err?.message ?? "Failed to save the document-upload assignment");
+    } finally {
+      setSavingUploadMode(false);
+    }
+  };
+
+  const sendPortalInvite = async (leadId: string) => {
+    setInvitingLeadId(leadId);
+    try {
+      const res = await fetch(`/api/admin/leads/${leadId}/portal-invite`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || "Failed to send the invite");
+      setInvitedLeadIds((prev) => (prev.includes(leadId) ? prev : [...prev, leadId]));
+      showToast(data.already_had_login ? "Login email sent" : "Portal invite sent");
+    } catch (err: any) {
+      showToast(err?.message ?? "Failed to send the invite", "error");
+    } finally {
+      setInvitingLeadId(null);
+    }
+  };
 
   // Retainer-signed status per person, keyed by lead_id. Reuses the same
   // endpoint the Leads "Send Email" modal uses; `signed` there means a row
@@ -3765,6 +3876,48 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
             })()}
             */}
           </div>
+          {/* Who uploads documents — the family's upload_mode, and the control
+              to reassign it. The customer portal asks this once at intake and
+              never again; this is the only place it can be changed afterwards.
+              Only meaningful with more than one person on the file. */}
+          {familyPeople.length > 1 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-3 px-4 py-3 rounded-lg bg-slate-50 border border-slate-200">
+              <div className="flex items-start gap-2 min-w-0">
+                <Upload size={14} className="text-slate-400 shrink-0 mt-0.5" />
+                <div className="min-w-0">
+                  <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">
+                    Who uploads documents
+                  </p>
+                  {effectiveUploadMode === "both" ? (
+                    <p className="text-sm font-semibold text-slate-800">
+                      Each person uploads their own
+                    </p>
+                  ) : familyUploader ? (
+                    <p className="text-sm font-semibold text-slate-800">
+                      {familyUploader.lead_name} uploads for everyone
+                    </p>
+                  ) : effectiveUploadMode === "co" ? (
+                    <p className="text-sm font-semibold text-amber-700">
+                      A co-person was designated, but that person is no longer on this file
+                    </p>
+                  ) : (
+                    <p className="text-sm font-semibold text-amber-700">
+                      Not set — this file never answered the question
+                    </p>
+                  )}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={openUploadModeModal}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border border-slate-300 bg-white text-slate-700 hover:border-[#C10007] hover:text-[#C10007] transition-colors flex-shrink-0"
+                title="Change who uploads documents for this file"
+              >
+                <Pencil size={12} />
+                {effectiveUploadMode ? "Change" : "Set"}
+              </button>
+            </div>
+          )}
           <div className="space-y-2">
             {(() => {
               return familyPeople.map((p) => (
@@ -3925,7 +4078,15 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                           • someone else uploads for them → "Uploaded by {name}"
                           • everyone uploads their own    → "Uploads own" */}
                     {familyPeople.length > 1 && (
-                      p.canUploadForAll ? (
+                      !effectiveUploadMode ? (
+                        <span
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-300"
+                          title="Nobody has been assigned to upload documents for this file yet"
+                        >
+                          <Upload size={10} />
+                          Uploader not set
+                        </span>
+                      ) : !!p.lead_id && p.lead_id === effectiveUploaderLeadId ? (
                         <span
                           className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-50 text-green-700 border border-green-300"
                           title="This person uploads documents for everyone on this file"
@@ -5496,6 +5657,187 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
           </div>
         </div>
       )}
+
+      {/* Who-uploads-documents reassignment modal. Writes leads.upload_mode on
+          the primary via PATCH /api/admin/deals/[id]/upload-mode, which the
+          customer portal reads for on-behalf submission and per-party edit
+          rights. Changing the mode does NOT create logins, so the response
+          reports anyone left responsible without a portal account and the admin
+          sends those invites explicitly below. */}
+      {showUploadMode && (() => {
+        const rootLeadIdVal = (rawDeal as any)?.root_lead_id as string | null;
+        const primaryPerson =
+          familyPeople.find((p) => !!p.lead_id && p.lead_id === rootLeadIdVal) ??
+          familyPeople.find((p) => p.role.toLowerCase().startsWith("primary")) ??
+          null;
+        const coPeople = familyPeople.filter(
+          (p) => !!p.lead_id && p.lead_id !== (primaryPerson?.lead_id ?? rootLeadIdVal),
+        );
+        const options: { value: string; label: string; hint: string }[] = [
+          ...(primaryPerson
+            ? [{
+                value: "me",
+                label: `${primaryPerson.lead_name} uploads for everyone`,
+                hint: "Only the primary needs a portal login; co-persons stay passive.",
+              }]
+            : []),
+          ...coPeople.map((p) => ({
+            value: `co:${p.lead_id}`,
+            label: `${p.lead_name} uploads for everyone`,
+            hint: `${p.lead_name} submits on behalf of the whole file; the primary stays passive.`,
+          })),
+          {
+            value: "both",
+            label: "Each person uploads their own",
+            hint: "Everyone fills in their own personal info and ID, and needs their own login.",
+          },
+        ];
+        return (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Who uploads documents"
+            className="fixed inset-0 z-50 flex justify-end items-stretch lg:justify-center lg:items-center bg-black/30 lg:bg-black/40 lg:backdrop-blur-sm lg:p-4 xl:p-12 2xl:p-20"
+            onClick={() => { if (!savingUploadMode) setShowUploadMode(false); }}
+          >
+            <div
+              className="bg-white shadow-2xl flex flex-col w-full h-full max-w-[520px] slide-in-from-right lg:h-auto lg:max-h-[90vh] lg:rounded-2xl lg:zoom-in lg:duration-200"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between px-6 py-5 border-b border-gray-100">
+                <div className="min-w-0">
+                  <h3 className="text-base font-bold text-gray-900">Who uploads documents</h3>
+                  <p className="text-xs text-gray-400 mt-1">
+                    Applies to everyone on file {deal.fileNumber}
+                  </p>
+                </div>
+                <button
+                  onClick={() => { if (!savingUploadMode) setShowUploadMode(false); }}
+                  className="text-gray-400 hover:text-gray-700 shrink-0 ml-4"
+                  aria-label="Close"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="px-6 py-5 space-y-4 overflow-y-auto flex-1">
+                {!effectiveUploadMode && (
+                  <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200">
+                    <AlertTriangle size={14} className="text-amber-600 shrink-0 mt-0.5" />
+                    <p className="text-xs text-amber-800">
+                      This file has no answer recorded. The client portal currently
+                      treats that as <span className="font-semibold">the primary uploads for everyone</span>,
+                      while this admin app treats it as <span className="font-semibold">each uploads their own</span>.
+                      Choosing an option here settles it for both.
+                    </p>
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  {options.map((opt) => (
+                    <label
+                      key={opt.value}
+                      className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                        uploadModeChoice === opt.value
+                          ? "border-[#C10007] bg-[#FEF2F2]"
+                          : "border-slate-200 hover:border-slate-300 bg-white"
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="upload-mode"
+                        className="mt-1 accent-[#C10007]"
+                        value={opt.value}
+                        checked={uploadModeChoice === opt.value}
+                        onChange={() => { setUploadModeChoice(opt.value); setUploadModeError(null); }}
+                        disabled={savingUploadMode}
+                      />
+                      <span className="min-w-0">
+                        <span className="block text-sm font-semibold text-slate-800">{opt.label}</span>
+                        <span className="block text-[11px] text-slate-500 mt-0.5">{opt.hint}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+
+                {uploadModeError && (
+                  <p className="text-xs font-semibold text-[#C10007]">{uploadModeError}</p>
+                )}
+
+                {inviteNeeded.length > 0 && (
+                  <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 space-y-3">
+                    <div className="flex items-start gap-2">
+                      <Info size={14} className="text-blue-600 shrink-0 mt-0.5" />
+                      <p className="text-xs text-blue-900">
+                        Saved. These people are now responsible for uploading but have
+                        no portal login yet — nothing was emailed automatically.
+                      </p>
+                    </div>
+                    <ul className="space-y-2">
+                      {inviteNeeded.map((n) => {
+                        const sent = invitedLeadIds.includes(n.lead_id);
+                        return (
+                          <li
+                            key={n.lead_id}
+                            className="flex items-center justify-between gap-3 p-2 rounded-md bg-white border border-blue-100"
+                          >
+                            <div className="min-w-0">
+                              <p className="text-xs font-bold text-slate-800 truncate">{n.name}</p>
+                              <p className="text-[11px] text-slate-400 truncate">{n.email}</p>
+                            </div>
+                            {!n.convertible ? (
+                              <span className="text-[11px] text-slate-400 shrink-0" title="This person has no client record yet">
+                                Not converted
+                              </span>
+                            ) : sent ? (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-green-700 shrink-0">
+                                <CheckCircle size={12} />
+                                Sent
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => sendPortalInvite(n.lead_id)}
+                                disabled={invitingLeadId === n.lead_id}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[11px] font-bold bg-[#C10007] text-white hover:bg-[#a30006] disabled:opacity-50 shrink-0"
+                              >
+                                {invitingLeadId === n.lead_id ? (
+                                  <Loader2 size={12} className="animate-spin" />
+                                ) : (
+                                  <Mail size={12} />
+                                )}
+                                Send invite
+                              </button>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-3 px-6 py-4 border-t border-gray-100">
+                <button
+                  onClick={() => setShowUploadMode(false)}
+                  disabled={savingUploadMode}
+                  className="flex-1 py-3 border border-slate-300 bg-white text-slate-700 rounded-lg text-sm font-semibold hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {inviteNeeded.length > 0 ? "Done" : "Cancel"}
+                </button>
+                <button
+                  onClick={saveUploadMode}
+                  disabled={savingUploadMode || uploadModeChoice === currentUploadChoice}
+                  className="flex-1 py-3 bg-[#C10007] text-white rounded-lg text-sm font-semibold hover:bg-[#a30006] disabled:opacity-50 inline-flex items-center justify-center gap-2"
+                >
+                  {savingUploadMode && <Loader2 size={14} className="animate-spin" />}
+                  Save
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Edit Task Modal — hidden while a sub-drawer (identification / home
           insurance / clone-from-previous) is open so the two popups don't
