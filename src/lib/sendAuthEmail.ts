@@ -13,7 +13,7 @@ import {
   escapeHtml,
   type TemplateValue,
 } from "./renderEmailTemplate";
-import { emailFrom, emailReplyTo } from "./emailIdentity";
+import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "./emailIdentity";
 
 /**
  * For each action type, list the template names we'll accept (in priority
@@ -148,7 +148,14 @@ export async function sendAuthEmailViaResend(opts: {
    */
   actionLink?: string;
 }> {
-  const { type, email, redirectTo, userData, templateId, leadId } = opts;
+  const { type, redirectTo, userData, templateId, leadId } = opts;
+
+  // Normalise before ANY downstream use. `generateLink` below is the first
+  // consumer and the strictest: a trailing space or zero-width character on the
+  // stored address makes GoTrue reject it as "invalid format", killing the send
+  // before Resend is reached. The same cleaned value must then flow into the
+  // invitation token and the Resend `to`, so normalise once, here.
+  const email = normalizeRecipientEmail(opts.email);
 
   // A "login" email is for an existing portal user: its primary CTA is the
   // plain /login page, but it also carries a password-reset link. Supabase has

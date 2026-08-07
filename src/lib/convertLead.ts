@@ -10,7 +10,7 @@ import {
   sendRetainerLinkEmail,
   retainerSidesForLeadType,
 } from "./sendRetainerLink";
-import { emailFrom, emailReplyTo } from "./emailIdentity";
+import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "./emailIdentity";
 
 export type ConvertOneResult = {
   success: boolean;
@@ -548,7 +548,7 @@ export async function convertSingleLead(
                       await resend.emails.send({
                         from: fromEmail,
                         replyTo: emailReplyTo(),
-                        to: [clientData.email],
+                        to: [normalizeRecipientEmail(clientData.email)],
                         ...(cc ? { cc } : {}),
                         subject: processedSubject,
                         html: htmlBody,

@@ -14,7 +14,7 @@ import {
 import { maskEmail } from "./maskEmail";
 import { logger } from "./logger";
 import { withRetry } from "./retry";
-import { emailFrom, emailReplyTo } from "./emailIdentity";
+import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "./emailIdentity";
 
 export type WelcomeEmailResult = {
   success: boolean;
@@ -351,7 +351,7 @@ export async function sendWelcomeEmail(
         const { data, error } = await resend.emails.send({
           from: fromEmail,
           replyTo: emailReplyTo(),
-          to: [lead.email],
+          to: [normalizeRecipientEmail(lead.email)],
           subject,
           html: htmlBody,
         });

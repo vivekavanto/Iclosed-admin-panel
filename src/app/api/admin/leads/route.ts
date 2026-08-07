@@ -3,6 +3,7 @@ import supabaseAdmin from '@/lib/supabaseAdmin';
 import { isUuid } from '@/lib/isUuid';
 import { recordAudit } from '@/lib/recordAudit';
 import { getActingAdmin } from '@/lib/getActingAdmin';
+import { normalizeRecipientEmail } from '@/lib/emailIdentity';
 
 // Admin data must always be live — never serve a cached leads list, otherwise
 // an edited phone/name/etc. can keep showing the old value after a refresh.
@@ -154,7 +155,11 @@ export async function PUT(req: NextRequest) {
     // sharing one email — co-client cascades key off exactly that — so a
     // uniqueness check would break normal editing. Format is the safe guard.)
     if (updateData.email != null) {
-      const email = String(updateData.email).trim();
+      // normalizeRecipientEmail, not a bare trim(): `\s` in the regex below
+      // doesn't match zero-width characters, so a pasted U+200B would pass
+      // validation, save cleanly, and then blow up at send time with Supabase's
+      // opaque "invalid format" error.
+      const email = normalizeRecipientEmail(String(updateData.email));
       const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!EMAIL_RE.test(email)) {
         return NextResponse.json(

@@ -26,3 +26,29 @@ export function emailFrom(): string {
 export function emailReplyTo(): string {
   return process.env.RESEND_REPLY_TO_EMAIL?.trim() || DEFAULT_REPLY_TO_EMAIL;
 }
+
+/**
+ * Clean a recipient address read out of the database before handing it to
+ * Supabase Auth or Resend.
+ *
+ * Intake stores whatever the client typed, and a copy-pasted address routinely
+ * carries invisible padding — a trailing space, a non-breaking space, a
+ * zero-width character. These render identically on screen and survive the
+ * admin edit form's validation (JS `\s` does not match U+200B/U+FEFF), but
+ * GoTrue rejects such an address outright with "Unable to validate email
+ * address: invalid format" and the send dies before Resend is ever called.
+ * From the admin's side that is indistinguishable from a broken template or a
+ * bad API key, so normalise at every send boundary rather than trusting the
+ * column to be clean.
+ *
+ * Deliberately conservative: strip zero-width characters, fold non-breaking
+ * spaces into ordinary ones, then trim the ends. Interior characters are left
+ * alone — an address with a space in the middle is genuinely invalid and
+ * should still fail loudly instead of being silently "repaired".
+ */
+export function normalizeRecipientEmail(email: string | null | undefined): string {
+  return (email ?? "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\u00A0/g, " ")
+    .trim();
+}

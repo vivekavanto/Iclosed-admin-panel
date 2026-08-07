@@ -4,7 +4,7 @@ import { interpolate } from "./sendWelcomeEmail";
 import { maskEmail } from "./maskEmail";
 import { decodeTemplateBraces } from "./renderEmailTemplate";
 import { logger } from "./logger";
-import { emailFrom, emailReplyTo } from "./emailIdentity";
+import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "./emailIdentity";
 
 export type AgentSignupEmailResult = {
   success: boolean;
@@ -317,7 +317,7 @@ export async function sendAgentSignupEmail(
   const { data: sendResult, error: sendError } = await resend.emails.send({
     from: fromEmail,
     replyTo: emailReplyTo(),
-    to: [agentEmail],
+    to: [normalizeRecipientEmail(agentEmail)],
     subject,
     html: htmlBody,
   });

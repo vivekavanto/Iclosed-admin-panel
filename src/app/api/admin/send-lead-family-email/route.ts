@@ -7,7 +7,7 @@ import { formatLeadTypeLabel, buildLeadAddressPartsForEmail } from "@/lib/leadEm
 import { guardServiceRequest } from "@/lib/verifyServiceSignature";
 import { get } from "@vercel/blob";
 import { isPrivateBlobUrl, blobTokenForUrl } from "@/lib/blobPrivacy";
-import { emailFrom, emailReplyTo } from "@/lib/emailIdentity";
+import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "@/lib/emailIdentity";
 
 /**
  * POST /api/admin/send-lead-family-email
@@ -323,7 +323,7 @@ async function sendRetainerEmail(
   const { data: sendResult, error: sendError } = await resend.emails.send({
     from: fromEmail,
     replyTo: emailReplyTo(),
-    to: [lead.email],
+    to: [normalizeRecipientEmail(lead.email)],
     subject: processedSubject,
     html: processedBody,
     attachments,
@@ -455,14 +455,21 @@ export async function POST(req: NextRequest) {
       ...((coLeads ?? []).map((l) => ({ ...l, role: "co-lead" as const }))),
     ];
 
-    // 4. Dedupe by lowercased email; drop rows with empty email.
+    // 4. Normalise each address, then dedupe by its lowercased form; drop rows
+    //    with empty email. Normalising here (not just in the dedupe key) means
+    //    the cleaned value is what actually gets sent to and reported back —
+    //    previously the key was trimmed but the raw column value was handed to
+    //    Supabase, so an address with trailing whitespace was rejected as
+    //    "invalid format" while looking perfectly fine in the UI.
     const seen = new Set<string>();
-    let recipients = family.filter((l) => {
-      const key = (l.email ?? "").trim().toLowerCase();
-      if (!key || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+    let recipients = family
+      .map((l) => ({ ...l, email: normalizeRecipientEmail(l.email) || null }))
+      .filter((l) => {
+        const key = (l.email ?? "").toLowerCase();
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
 
     // 4b. If the caller passed an explicit subset, restrict to those IDs.
     //     Every ID must belong to the resolved family — otherwise we'd let a

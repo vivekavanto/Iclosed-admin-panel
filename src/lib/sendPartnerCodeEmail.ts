@@ -2,7 +2,7 @@
 // pattern in convertLead.ts (RESEND_API_KEY, plus the shared from/reply-to
 // addresses from emailIdentity.ts).
 
-import { emailFrom, emailReplyTo } from "./emailIdentity";
+import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "./emailIdentity";
 
 interface PartnerLike {
   agent_name?: string | null;
@@ -52,7 +52,7 @@ export async function sendPartnerCodeEmail(
     await resend.emails.send({
       from: fromEmail,
       replyTo: emailReplyTo(),
-      to: [email],
+      to: [normalizeRecipientEmail(email)],
       subject: `Your iClosed referral code: ${code}`,
       html,
     });
