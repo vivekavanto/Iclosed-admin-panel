@@ -262,6 +262,10 @@ export interface Database {
           outstanding_requisitions: number | null;
           source: string | null;
           partner_id: string | null;
+          // Extra per-file CC addresses, merged with the partner’s contacts at
+          // send time (see src/lib/agentCc.ts). Applies only to templates with
+          // shared_with_agent = true; never to auth emails.
+          cc_emails: string[];
         };
         Insert: {
           id?: string;
@@ -289,6 +293,7 @@ export interface Database {
           outstanding_requisitions?: number | null;
           source?: string | null;
           partner_id?: string | null;
+          cc_emails?: string[];
         };
         Update: {
           id?: string;
@@ -316,6 +321,7 @@ export interface Database {
           outstanding_requisitions?: number | null;
           source?: string | null;
           partner_id?: string | null;
+          cc_emails?: string[];
         };
         Relationships: [
           {
@@ -971,6 +977,51 @@ export interface Database {
           updated_at?: string;
         };
         Relationships: [];
+      };
+
+      // Additional people belonging to a partner, beyond partners.agent_email
+      // (which stays the PRIMARY contact and is still what sendPartnerCodeEmail
+      // and the duplicate-email check read). Everyone here is CC'd on
+      // shared_with_agent emails for any file that partner referred — see
+      // src/lib/agentCc.ts. Unique on (partner_id, lower(email)) where not
+      // deleted, so the same address can't be added twice.
+      partner_contacts: {
+        Row: {
+          id: string;
+          partner_id: string;
+          name: string | null;
+          email: string;
+          is_deleted: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          partner_id: string;
+          name?: string | null;
+          email: string;
+          is_deleted?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          partner_id?: string;
+          name?: string | null;
+          email?: string;
+          is_deleted?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "partner_contacts_partner_id_fkey";
+            columns: ["partner_id"];
+            isOneToOne: false;
+            referencedRelation: "partners";
+            referencedColumns: ["id"];
+          }
+        ];
       };
 
       retainer_signatures: {

@@ -15,6 +15,7 @@ import { maskEmail } from "./maskEmail";
 import { logger } from "./logger";
 import { withRetry } from "./retry";
 import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "./emailIdentity";
+import { buildAgentCcList } from "./agentCc";
 
 export type WelcomeEmailResult = {
   success: boolean;
@@ -211,9 +212,10 @@ export async function sendWelcomeEmail(
 
   // 3. Resolve which file_number to use (deal's file_number if converted)
   let fileNumber: string | null = null;
+  // `id` is also needed further down to read the deal's per-file cc_emails.
   const { data: relatedDeal } = await supabaseAdmin
     .from("deals")
-    .select("file_number")
+    .select("id, file_number")
     .eq("lead_id", leadId)
     .maybeSingle();
   if (relatedDeal?.file_number) fileNumber = relatedDeal.file_number;
@@ -341,6 +343,19 @@ export async function sendWelcomeEmail(
   const resend = new Resend(process.env.RESEND_API_KEY);
   const fromEmail = emailFrom();
 
+  // "Shared with agent?" templates copy everyone attached to the file — the
+  // partner's primary agent, their additional partner_contacts, and the deal's
+  // own cc_emails. This is what makes the manual "Send Email" button honour the
+  // flag; previously only the automated milestone/convert flows ever CC'd, so
+  // an admin sending the same template by hand silently copied nobody.
+  const ccList = template.shared_with_agent
+    ? await buildAgentCcList({
+        partnerId: lead.partner_id,
+        dealId: relatedDeal?.id ?? null,
+        exclude: [lead.email],
+      })
+    : [];
+
   // GAP-012: retry the send a few times with backoff so a transient Resend/API
   // blip doesn't drop the welcome email. Resend returns { error } instead of
   // throwing, so we throw on error to drive the retry.
@@ -352,6 +367,7 @@ export async function sendWelcomeEmail(
           from: fromEmail,
           replyTo: emailReplyTo(),
           to: [normalizeRecipientEmail(lead.email)],
+          ...(ccList.length > 0 ? { cc: ccList } : {}),
           subject,
           html: htmlBody,
         });

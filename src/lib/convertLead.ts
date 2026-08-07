@@ -11,6 +11,7 @@ import {
   retainerSidesForLeadType,
 } from "./sendRetainerLink";
 import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "./emailIdentity";
+import { buildAgentCcList } from "./agentCc";
 
 export type ConvertOneResult = {
   success: boolean;
@@ -531,18 +532,17 @@ export async function convertSingleLead(
                       // No HTML wrapper / logo injection — the DB template owns its layout.
                       const htmlBody = processedBody;
 
-                      // "Shared with agent?" templates also CC the referral
-                      // partner linked to this lead/deal (skipped when unset or
-                      // the partner has no email).
+                      // "Shared with agent?" templates also CC everyone attached
+                      // to the file: the partner's primary agent, any additional
+                      // partner_contacts, and the deal's own cc_emails.
                       let cc: string[] | undefined;
-                      if (emailTemplate.shared_with_agent && lead.partner_id) {
-                        const { data: partner } = await supabaseAdmin
-                          .from("partners")
-                          .select("agent_email")
-                          .eq("id", lead.partner_id)
-                          .eq("is_deleted", false)
-                          .maybeSingle();
-                        if (partner?.agent_email) cc = [partner.agent_email];
+                      if (emailTemplate.shared_with_agent) {
+                        const list = await buildAgentCcList({
+                          partnerId: lead.partner_id,
+                          dealId,
+                          exclude: [clientData.email],
+                        });
+                        if (list.length > 0) cc = list;
                       }
 
                       await resend.emails.send({

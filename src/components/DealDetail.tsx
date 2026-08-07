@@ -261,6 +261,59 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
     }
   };
 
+  // Per-file CC list (deals.cc_emails) — extra people copied on this file's
+  // "Shared with agent" emails, on top of the referral partner's own contacts.
+  // Mirrored across the family by the PATCH route, so it's one list per file.
+  // Same local-state-plus-router.refresh() approach as the lock box editor above.
+  const serverCcEmails = ((rawDeal?.cc_emails as string[] | null | undefined) ?? []);
+  const serverCcKey = serverCcEmails.join("\n");
+  const [ccEmails, setCcEmails] = useState<string[]>(serverCcEmails);
+  const [syncedCcKey, setSyncedCcKey] = useState(serverCcKey);
+  const [newCcEmail, setNewCcEmail] = useState("");
+  const [savingCc, setSavingCc] = useState(false);
+  // Re-sync during render rather than in an effect: the server value arrives as
+  // a fresh array every render, so an effect keyed on it would loop. Comparing a
+  // joined key means we only reset local state when the contents actually change
+  // (React's documented "adjust state when props change" pattern).
+  if (syncedCcKey !== serverCcKey) {
+    setSyncedCcKey(serverCcKey);
+    setCcEmails(serverCcEmails);
+  }
+
+  // One writer for both add and remove — the column is written whole, so a
+  // partial update would silently drop the other entries.
+  const saveCcEmails = async (next: string[]) => {
+    setSavingCc(true);
+    try {
+      const res = await fetch(`/api/admin/deals/${deal.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cc_emails: next }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || "Failed to save CC list");
+      setCcEmails(next);
+      setNewCcEmail("");
+      showToast("CC list saved");
+      router.refresh();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Failed to save CC list", "error");
+    } finally {
+      setSavingCc(false);
+    }
+  };
+
+  const addCcEmail = () => {
+    const email = newCcEmail.trim();
+    if (!email) return;
+    // Client-side dupe guard only; the route re-validates and de-dupes.
+    if (ccEmails.some((e) => e.toLowerCase() === email.toLowerCase())) {
+      showToast("That address is already on the CC list", "error");
+      return;
+    }
+    saveCcEmails([...ccEmails, email]);
+  };
+
   // Documents modal state
   const [showDocuments, setShowDocuments] = useState(false);
   const [dealDocuments, setDealDocuments] = useState<{ task_id: string; file_name: string; file_url: string; task_title: string }[]>([]);
@@ -4605,6 +4658,69 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
               </div>
             );
           })()}
+
+          {/* Email CC — extra people copied on this file's "Shared with agent"
+              emails. Always shown (not gated on hasPartner) because a one-off CC
+              is exactly the case where no referral partner exists. */}
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+            <h3 className="font-bold text-slate-800 text-sm mb-1">Email CC</h3>
+            <p className="text-xs text-slate-500 mb-4 leading-relaxed">
+              Copied on this file&apos;s &ldquo;Shared with agent&rdquo; emails, in
+              addition to the referral partner&apos;s own contacts. Activation and
+              password-reset emails are never CC&apos;d.
+            </p>
+
+            <div className="space-y-2">
+              {ccEmails.length === 0 && (
+                <p className="text-xs text-slate-400 italic">No extra CC addresses.</p>
+              )}
+
+              {ccEmails.map((email) => (
+                <div
+                  key={email}
+                  className="flex items-center gap-2 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2"
+                >
+                  <span className="text-xs font-bold text-slate-800 truncate flex-1">
+                    {email}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => saveCcEmails(ccEmails.filter((e) => e !== email))}
+                    disabled={savingCc}
+                    title="Remove from CC"
+                    className="p-1 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-50"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
+
+              <div className="flex gap-2 pt-1">
+                <input
+                  type="email"
+                  placeholder="someone@example.com"
+                  value={newCcEmail}
+                  onChange={(e) => setNewCcEmail(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      addCcEmail();
+                    }
+                  }}
+                  disabled={savingCc}
+                  className="flex-1 min-w-0 px-3 py-1.5 text-xs border border-slate-300 rounded-md focus:border-brand-primary outline-none disabled:opacity-60"
+                />
+                <button
+                  type="button"
+                  onClick={addCcEmail}
+                  disabled={savingCc || !newCcEmail.trim()}
+                  className="px-3 py-1.5 text-xs font-semibold text-white bg-[#C10007] rounded-md hover:bg-[#a30006] disabled:opacity-60 whitespace-nowrap"
+                >
+                  {savingCc ? "Saving…" : "Add"}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       {showStageForm && (

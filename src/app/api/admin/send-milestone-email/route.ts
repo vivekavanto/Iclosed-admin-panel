@@ -5,6 +5,7 @@ import { getFamilyDealIds } from "@/lib/familyDeals"
 import { formatLeadTypeLabel, buildLeadAddressForEmail } from "@/lib/leadEmailAddress"
 import { guardServiceRequest } from "@/lib/verifyServiceSignature"
 import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "@/lib/emailIdentity"
+import { buildAgentCcList } from "@/lib/agentCc"
 
 /**
  * Sends a milestone email to the client of a single deal.
@@ -221,18 +222,18 @@ async function sendEmailForDeal(
         processedSubject = processedSubject.replace(/\{\{\s*file_number\s*\}\}/gi, fileNumber);
         processedSubject = processedSubject.replace(/\{\{\s*side_suffix\s*\}\}/gi, sideSuffix);
 
-        // "Shared with agent?" templates also CC the deal's referral partner.
-        // Client stays the primary recipient; CC is skipped when the flag is
-        // off, no partner is linked, or the linked partner has no email.
+        // "Shared with agent?" templates also CC everyone attached to the file:
+        // the partner's primary agent, any additional partner_contacts, and the
+        // deal's own cc_emails. Client stays the primary recipient; CC is
+        // skipped entirely when the flag is off.
         let cc: string[] | undefined
-        if (template.shared_with_agent && deal.partner_id) {
-            const { data: partner } = await supabaseAdmin
-                .from("partners")
-                .select("agent_email")
-                .eq("id", deal.partner_id)
-                .eq("is_deleted", false)
-                .maybeSingle()
-            if (partner?.agent_email) cc = [partner.agent_email]
+        if (template.shared_with_agent) {
+            const list = await buildAgentCcList({
+                partnerId: deal.partner_id,
+                dealId,
+                exclude: [client.email],
+            })
+            if (list.length > 0) cc = list
         }
 
         const { data: sendResult, error: sendError } = await resend.emails.send({
@@ -250,7 +251,7 @@ async function sendEmailForDeal(
 
         console.log(
             `[Milestone Email] Sent to ${client.email}` +
-            `${cc ? ` (cc agent: ${cc.join(", ")})` : template.shared_with_agent ? " (shared_with_agent on, but no partner email on deal — no cc)" : ""}` +
+            `${cc ? ` (cc ${cc.length}: ${cc.join(", ")})` : template.shared_with_agent ? " (shared_with_agent on, but no cc addresses on file — no cc)" : ""}` +
             `, milestone: "${milestone.title}", id: ${sendResult?.id}`
         )
 
