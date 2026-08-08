@@ -280,7 +280,15 @@ function detectKind(
 // the content type: Vercel Blob echoes back whatever the browser reported at
 // upload time, which for .heic is often a bare "application/octet-stream".
 function isHeic(name?: string | null, contentType?: string | null): boolean {
-  const n = (name ?? "").toLowerCase();
+  // Normalise before matching: this is called with either a stored file_name
+  // (which can carry stray whitespace) or, as a fallback, the blob URL (which
+  // can carry a ?query or #hash). A bare endsWith on the raw string misses both
+  // and the file would silently fall through as an unconvertible attachment.
+  const n = (name ?? "")
+    .trim()
+    .toLowerCase()
+    .split(/[?#]/)[0]
+    .trim();
   const ct = (contentType ?? "").toLowerCase();
   return (
     n.endsWith(".heic") ||
