@@ -260,17 +260,65 @@ function ascii(str: string): string {
     .slice(0, 200);
 }
 
-function detectKind(name?: string | null, contentType?: string | null): "pdf" | "jpg" | "png" | "other" {
+function detectKind(
+  name?: string | null,
+  contentType?: string | null,
+): "pdf" | "jpg" | "png" | "heic" | "other" {
   const n = (name ?? "").toLowerCase();
   const ct = (contentType ?? "").toLowerCase();
   if (n.endsWith(".pdf") || ct.includes("pdf")) return "pdf";
   if (n.endsWith(".jpg") || n.endsWith(".jpeg") || ct.includes("jpeg") || ct.includes("jpg")) return "jpg";
   if (n.endsWith(".png") || ct.includes("png")) return "png";
+  if (isHeic(name, contentType)) return "heic";
   return "other";
 }
 
+// iPhones photograph IDs as HEIC and the upload drawer accepts .heic, but
+// neither pdf-lib nor Chrome can decode it — a HEIC ID used to land in the
+// export as a "This file type can't be previewed inline" placeholder, i.e. an
+// identification PDF with no identification in it. Detected on the filename OR
+// the content type: Vercel Blob echoes back whatever the browser reported at
+// upload time, which for .heic is often a bare "application/octet-stream".
+function isHeic(name?: string | null, contentType?: string | null): boolean {
+  const n = (name ?? "").toLowerCase();
+  const ct = (contentType ?? "").toLowerCase();
+  return (
+    n.endsWith(".heic") ||
+    n.endsWith(".heif") ||
+    ct.includes("heic") ||
+    ct.includes("heif")
+  );
+}
+
+// Decode HEIC to JPEG in the browser via libheif (WASM). Imported dynamically
+// because the decoder is a ~2.9MB chunk (the wasm is inlined as base64, so
+// there is no separate asset to serve); it downloads only when an export
+// actually contains a HEIC, and never on any other download. The `/csp` build
+// avoids `unsafe-eval`, so this keeps working when the CSP in next.config.ts is
+// switched from report-only to enforcing — that build spawns libheif in a
+// blob: worker, which is why the CSP carries `worker-src 'self' blob:`.
+// Returns null on failure so the caller can fall back to a placeholder page
+// rather than losing the whole PDF.
+async function heicToJpegBytes(bytes: Uint8Array): Promise<Uint8Array | null> {
+  try {
+    const { heicTo } = await import("heic-to/csp");
+    const jpegBlob = await heicTo({
+      blob: new Blob([bytes as unknown as BlobPart], { type: "image/heic" }),
+      type: "image/jpeg",
+      quality: 0.92,
+    });
+    return new Uint8Array(await jpegBlob.arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
+// Download a stored document, transparently converting HEIC to JPEG so every
+// embedding path downstream only ever deals with pdf/jpg/png. `fileName` is
+// what carries the ".heic" hint — the blob URL is not always self-describing.
 async function fetchFile(
   url: string,
+  fileName?: string | null,
 ): Promise<{ bytes: Uint8Array; contentType: string | null } | null> {
   try {
     // Private docs stream through the same-origin auth-gated proxy (session
@@ -280,10 +328,28 @@ async function fetchFile(
     });
     if (!res.ok) return null;
     const buf = await res.arrayBuffer();
-    return { bytes: new Uint8Array(buf), contentType: res.headers.get("content-type") };
+    const bytes = new Uint8Array(buf);
+    const contentType = res.headers.get("content-type");
+
+    if (isHeic(fileName ?? url, contentType)) {
+      const jpeg = await heicToJpegBytes(bytes);
+      // On success the file continues through the pipeline as a plain JPEG. On
+      // failure we hand back the original bytes and the untouched content type,
+      // so detectKind still reports "heic" and the caller notes it explicitly.
+      if (jpeg) return { bytes: jpeg, contentType: "image/jpeg" };
+    }
+
+    return { bytes, contentType };
   } catch {
     return null;
   }
+}
+
+// Note shown when a document can't be rendered into the package.
+function unembeddableNote(kind: ReturnType<typeof detectKind>): string {
+  return kind === "heic"
+    ? "This HEIC image could not be converted for preview. It remains available via its original link."
+    : "This file type can't be previewed inline. It remains available via its original link.";
 }
 
 type PdfLib = typeof import("pdf-lib");
@@ -381,7 +447,7 @@ async function appendFileToDoc(
   r: PdfResponse,
 ): Promise<void> {
   if (!r.file_url) return;
-  const file = await fetchFile(r.file_url);
+  const file = await fetchFile(r.file_url, r.file_name);
   if (!file) {
     addNotePage(
       pdfDoc,
@@ -449,13 +515,7 @@ async function appendFileToDoc(
         addImagePage(pdfDoc, font, lib, caption, img);
       }
     } else {
-      addNotePage(
-        pdfDoc,
-        font,
-        lib,
-        caption,
-        "This file type can't be previewed inline. It remains available via its original link.",
-      );
+      addNotePage(pdfDoc, font, lib, caption, unembeddableNote(kind));
     }
   } catch {
     addNotePage(
@@ -571,10 +631,12 @@ async function downloadAttachmentsOnly(
 ): Promise<boolean> {
   // A single attachment is downloaded exactly as uploaded (original bytes, no
   // re-encoding) so a mortgage statement / void cheque / ID / APS arrives as
-  // its own file with no extra pages.
+  // its own file with no extra pages. The one exception is HEIC, which fetchFile
+  // converts to JPEG — Windows and most viewers can't open the original, so the
+  // extension below follows the converted bytes rather than the stored name.
   if (fileResponses.length === 1) {
     const r = fileResponses[0];
-    const file = await fetchFile(r.file_url!);
+    const file = await fetchFile(r.file_url!, r.file_name);
     if (!file) return false;
     const kind = detectKind(r.file_name, file.contentType);
     const ext =
@@ -593,7 +655,7 @@ async function downloadAttachmentsOnly(
   const out = await lib.PDFDocument.create();
   let added = 0;
   for (const r of fileResponses) {
-    const file = await fetchFile(r.file_url!);
+    const file = await fetchFile(r.file_url!, r.file_name);
     if (!file) continue;
     const kind = detectKind(r.file_name, file.contentType);
     try {
@@ -704,7 +766,7 @@ async function downloadBrandedTaskPdf(
   for (const r of fileResponses) {
     docIdx++;
     const fname = r.file_name || "Document";
-    const file = await fetchFile(r.file_url!);
+    const file = await fetchFile(r.file_url!, r.file_name);
     if (file) {
       const kind = detectKind(r.file_name, file.contentType);
       if (kind === "jpg" || kind === "png") {
@@ -721,7 +783,7 @@ async function downloadBrandedTaskPdf(
         inserts.push({ afterPage: doc.getNumberOfPages(), bytes: file.bytes });
       } else {
         pkgAttachedTitle(doc, docIdx, totalFiles, task.title || "Document", fname);
-        pkgPlaceholder(doc, fname, "This file type can't be previewed inline. It remains available via its original link.", false);
+        pkgPlaceholder(doc, fname, unembeddableNote(kind), false);
       }
     } else {
       pkgAttachedTitle(doc, docIdx, totalFiles, task.title || "Document", fname);
@@ -1205,13 +1267,13 @@ export async function downloadDealPdf(
 
   // Fetch each uploaded file once; reuse the bytes for both detection and the
   // final pdf-lib merge.
-  type Fetched = { bytes: Uint8Array; kind: "pdf" | "jpg" | "png" | "other"; ok: boolean };
+  type Fetched = { bytes: Uint8Array; kind: ReturnType<typeof detectKind>; ok: boolean };
   const cache = new Map<string, Fetched>();
   const getFile = async (r: PdfResponse): Promise<Fetched | null> => {
     if (!r.file_url) return null;
     const cached = cache.get(r.file_url);
     if (cached) return cached;
-    const file = await fetchFile(r.file_url);
+    const file = await fetchFile(r.file_url, r.file_name);
     const entry: Fetched = file
       ? { bytes: file.bytes, kind: detectKind(r.file_name, file.contentType), ok: true }
       : { bytes: new Uint8Array(), kind: detectKind(r.file_name, null), ok: false };
@@ -1315,7 +1377,7 @@ export async function downloadDealPdf(
           inserts.push({ afterPage: doc.getNumberOfPages(), bytes: f.bytes });
         } else if (f && f.ok) {
           pkgAttachedTitle(doc, docIdx, fileCount, sectionTitle, fname);
-          pkgPlaceholder(doc, fname, "This file type can't be previewed inline. It remains available via its original link.", false);
+          pkgPlaceholder(doc, fname, unembeddableNote(f.kind), false);
         } else {
           pkgAttachedTitle(doc, docIdx, fileCount, sectionTitle, fname);
           pkgPlaceholder(doc, fname, "This file could not be downloaded for embedding (it may require sign-in or block cross-origin access). It remains available via its original link.", false);
