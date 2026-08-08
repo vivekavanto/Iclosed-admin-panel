@@ -3081,11 +3081,80 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deal.id, includeFamilyTasks]);
 
+  // Every family member's identification documents, keyed by lead_id, read
+  // straight from lead_corporate_docs. task_responses is NOT a reliable index
+  // of these — "Save draft", "Replace" and "Clone from previous deal" write
+  // only to lead_corporate_docs — so both the download gate below and the PDF
+  // export consult this map instead of inferring ID documents from responses.
+  // Fetched for the whole family in one call (and re-fetched before a download)
+  // rather than via /api/admin/lead-docs?deal_id=, which dedupes by file_name
+  // and would hide one person's file when two members upload the same name.
+  const [idDocsByLead, setIdDocsByLead] = useState<Map<string, IdDocRow[]>>(new Map());
+
+  // Returns the freshly-fetched map, or null on failure so callers fall back to
+  // the last good state rather than treating a hiccup as "this lead has no ID".
+  const fetchIdDocsFor = async (
+    leadIdsKey: string,
+  ): Promise<Map<string, IdDocRow[]> | null> => {
+    if (!leadIdsKey) return null;
+    try {
+      const res = await fetch(
+        `/api/admin/lead-identification-docs?lead_ids=${encodeURIComponent(leadIdsKey)}`,
+      );
+      const data = await res.json();
+      if (!data?.success) return null;
+      return new Map<string, IdDocRow[]>(
+        Object.entries((data.docs_by_lead ?? {}) as Record<string, IdDocRow[]>),
+      );
+    } catch {
+      return null;
+    }
+  };
+
+  // Refresh + publish to state. Used before a download so an ID uploaded in
+  // this session is picked up without a page refresh.
+  const fetchIdDocsByLead = async (): Promise<Map<string, IdDocRow[]> | null> => {
+    const map = await fetchIdDocsFor(familyLeadIdsKey);
+    if (map) setIdDocsByLead(map);
+    return map;
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const map = await fetchIdDocsFor(familyLeadIdsKey);
+      if (!cancelled && map) setIdDocsByLead(map);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [familyLeadIdsKey]);
+
+  // The identification documents belonging to an ID task's own person. Family
+  // views list one ID row per person, so scoping by the task's owner keeps a
+  // co-purchaser's documents off the primary's export (and vice versa).
+  const taskIdentificationDocs = (
+    task: DisplayTask,
+    idDocMap?: Map<string, IdDocRow[]>,
+  ): IdDocRow[] => {
+    const ownerLeadId = (task.ownerLeadId as string | null) ?? primaryLeadId;
+    if (!ownerLeadId) return [];
+    return (idDocMap ?? idDocsByLead).get(ownerLeadId) ?? [];
+  };
+
   // Does this task have any downloadable data (client responses or files)?
-  // Drives whether the per-task PDF button is shown.
+  // Drives whether the per-task PDF button is shown, and which tasks make it
+  // into the "Download All" package.
   const taskHasData = (task: DisplayTask): boolean => {
     if (task.isTemplate) return false;
-    return (responsesByTask.get(task.id)?.length ?? 0) > 0 || getTaskFileDocs(task).length > 0;
+    if ((responsesByTask.get(task.id)?.length ?? 0) > 0) return true;
+    if (getTaskFileDocs(task).length > 0) return true;
+    // An ID task whose documents were never mirrored into task_responses still
+    // has data to export — without this it was silently dropped from the deal
+    // package and showed no download button of its own.
+    return (
+      isIdentificationTask(task) &&
+      taskIdentificationDocs(task).some((d) => !!d.file_url)
+    );
   };
 
   // Deal-level metadata reused by both PDF entry points.
@@ -3191,9 +3260,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
   const buildPdfTaskInput = async (
     task: DisplayTask,
     respMap?: Map<string, any[]>,
+    idDocMap?: Map<string, IdDocRow[]>,
   ): Promise<PdfTaskInput> => {
     const source = respMap ?? responsesByTask;
-    const responses = [...(source.get(task.id) ?? [])];
+    let responses = [...(source.get(task.id) ?? [])];
     const seenFileUrls = new Set(
       responses.filter((r) => r.field_type === "file" && r.file_url).map((r) => r.file_url),
     );
@@ -3201,6 +3271,45 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
       if (d.field_type === "file" && d.file_url && !seenFileUrls.has(d.file_url)) {
         responses.push(d);
         seenFileUrls.add(d.file_url);
+      }
+    }
+
+    // Identification tasks: lead_corporate_docs (doc_type='identification') is
+    // the source of truth, not task_responses. Several flows write only there —
+    // "Save draft", "Replace", "Clone from previous deal" — and the batch
+    // endpoint deletes-then-inserts, so a task's response rows are routinely
+    // missing or stale. Reading them alone produced an ID PDF containing just
+    // the client's name and no documents at all.
+    //
+    // When the lead has ID docs we treat that list as authoritative: file rows
+    // whose blob is no longer one of them are dropped (a replaced or deleted
+    // document that left its response row behind), and any doc without a
+    // response row is added. If the lookup comes back empty we leave the
+    // responses untouched rather than blanking a task whose files are only
+    // recorded there.
+    if (isIdentificationTask(task)) {
+      const idDocs = taskIdentificationDocs(task, idDocMap);
+      const liveUrls = new Set(
+        idDocs.map((d) => d.file_url).filter((u): u is string => !!u),
+      );
+      if (liveUrls.size > 0) {
+        responses = responses.filter(
+          (r) => r.field_type !== "file" || (r.file_url && liveUrls.has(r.file_url)),
+        );
+        const attached = new Set(
+          responses.filter((r) => r.field_type === "file").map((r) => r.file_url),
+        );
+        for (const d of idDocs) {
+          if (!d.file_url || attached.has(d.file_url)) continue;
+          responses.push({
+            field_id: null,
+            field_label: formatIdDocLabel(d.custom_type),
+            field_type: "file",
+            file_url: d.file_url,
+            file_name: d.file_name,
+          });
+          attached.add(d.file_url);
+        }
       }
     }
 
@@ -3263,11 +3372,15 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
   const handleDownloadTaskPdf = async (task: DisplayTask) => {
     setDownloadingTaskId(task.id);
     try {
-      // Pull the latest responses so a just-saved value (e.g. a co-person's
-      // employer phone) is included even without a page refresh.
-      const fresh = await fetchFreshResponsesMap();
+      // Pull the latest responses and ID documents so a just-saved value (e.g.
+      // a co-person's employer phone) or a just-uploaded ID is included even
+      // without a page refresh.
+      const [fresh, freshIdDocs] = await Promise.all([
+        fetchFreshResponsesMap(),
+        fetchIdDocsByLead(),
+      ]);
       if (fresh) setResponsesByTask(fresh);
-      const taskInput = await buildPdfTaskInput(task, fresh ?? undefined);
+      const taskInput = await buildPdfTaskInput(task, fresh ?? undefined, freshIdDocs ?? undefined);
       await downloadTaskPdf(buildPdfDealMeta(), taskInput);
     } catch {
       showToast("Could not generate the task PDF", "error");
@@ -3283,11 +3396,21 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
   const handleDownloadDealPdf = async () => {
     setDownloadingDealPdf(true);
     try {
-      // Freshest responses so recently-saved edits are included.
-      const fresh = await fetchFreshResponsesMap();
+      // Freshest responses and ID documents so recently-saved edits and uploads
+      // are included without a page refresh.
+      const [fresh, freshIdDocs] = await Promise.all([
+        fetchFreshResponsesMap(),
+        fetchIdDocsByLead(),
+      ]);
       if (fresh) setResponsesByTask(fresh);
-      const realTasks = dedupeTasksByTemplate(tasks).filter((t) =>
-        taskHasData({ ...t, isTemplate: false }),
+      const realTasks = dedupeTasksByTemplate(tasks).filter(
+        (t) =>
+          taskHasData({ ...t, isTemplate: false }) ||
+          (isIdentificationTask({ ...t, isTemplate: false }) &&
+            taskIdentificationDocs(
+              { ...t, isTemplate: false },
+              freshIdDocs ?? undefined,
+            ).some((d) => !!d.file_url)),
       );
       const milestoneOrder = (m: Milestone) => m.orderIndex ?? Number.MAX_SAFE_INTEGER;
       const orderedMilestones = [...milestones].sort((a, b) => milestoneOrder(a) - milestoneOrder(b));
@@ -3300,7 +3423,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
         if (milestoneTasks.length === 0) continue;
         milestoneTasks.forEach((t) => usedTaskIds.add(t.id));
         const builtTasks = await Promise.all(
-          milestoneTasks.map((t) => buildPdfTaskInput({ ...t, isTemplate: false }, fresh ?? undefined)),
+          milestoneTasks.map((t) =>
+            buildPdfTaskInput({ ...t, isTemplate: false }, fresh ?? undefined, freshIdDocs ?? undefined),
+          ),
         );
         sections.push({
           milestoneTitle: m.title,
@@ -3312,7 +3437,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
       const orphanTasks = realTasks.filter((t) => !usedTaskIds.has(t.id));
       if (orphanTasks.length > 0) {
         const builtOrphanTasks = await Promise.all(
-          orphanTasks.map((t) => buildPdfTaskInput({ ...t, isTemplate: false }, fresh ?? undefined)),
+          orphanTasks.map((t) =>
+            buildPdfTaskInput({ ...t, isTemplate: false }, fresh ?? undefined, freshIdDocs ?? undefined),
+          ),
         );
         sections.push({
           milestoneTitle: "Other Tasks",

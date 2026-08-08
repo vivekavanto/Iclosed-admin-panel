@@ -173,8 +173,37 @@ const DEFAULT_ORDER: LabelKey[] = [
   "secondary_back",
 ];
 
-function labelText(label: LabelKey) {
-  return LABEL_OPTIONS.find((o) => o.value === label)?.text ?? "Other";
+// Human label for a stored lead_corporate_docs.custom_type. Three shapes reach
+// this column, so a plain LABEL_OPTIONS lookup isn't enough — it only knows the
+// legacy keys and renders everything else as "Other":
+//   - Detection-derived:  "Driver's License_front", "Permanent Resident Card_front-and-back"
+//   - Legacy label keys:  "primary_front", "secondary_back", "other"
+//   - Generic fallback:   "identification"
+// Mirrors formatExistingDocLabel() in the customer portal so both apps label
+// the same document identically. Used for the drawer's "Previously Uploaded"
+// list AND for the field_label written into task_responses, so the exported
+// PDF names each document the same way the drawer does.
+function formatExistingDocLabel(customType: string | null): string {
+  if (!customType) return "Document";
+
+  const known = LABEL_OPTIONS.find((o) => o.value === customType);
+  if (known) return known.text;
+
+  if (customType === "identification") return "Identification";
+
+  const match = /^(.*)_(front-and-back|front|back)$/i.exec(customType);
+  if (match) {
+    const type = match[1];
+    const side = match[2].toLowerCase();
+    const sideLabel =
+      side === "front-and-back"
+        ? "Front & Back"
+        : side.charAt(0).toUpperCase() + side.slice(1);
+    return `${type} — ${sideLabel}`;
+  }
+
+  // Document type with no side suffix (single-sided IDs like passports)
+  return customType;
 }
 
 function validateFile(f: File): string | null {
@@ -655,6 +684,61 @@ export default function UploadIdentificationDrawer({
     };
   }, [open, leadId]);
 
+  // ── lead_corporate_docs → task_responses sync ───────────────────────────────
+  //
+  // Identification documents are stored in lead_corporate_docs, but the deal
+  // page's Doc column and BOTH PDF exports (per-task and "Download All") read
+  // task_responses. Every path that changes the document list therefore has to
+  // re-sync, or the exported "Upload Identification" PDF comes out with no
+  // attachments — or worse, attaches a file the admin already replaced/deleted.
+  //
+  // The sync is always a FULL replace from the server's current doc list rather
+  // than an incremental append: /api/admin/task-responses-batch deletes every
+  // row for the task before inserting, so sending only the newly-picked files
+  // (what this drawer used to do) silently dropped everything uploaded earlier.
+
+  // Re-read this lead's identification docs and refresh `existing`. Returns the
+  // list so callers can sync task_responses from the same snapshot. Throws on
+  // failure — callers surface it rather than leaving the two tables diverged.
+  const reloadExisting = useCallback(async (): Promise<ExistingDoc[]> => {
+    if (!leadId) return [];
+    const res = await fetch(
+      `/api/admin/lead-identification-docs?lead_id=${encodeURIComponent(leadId)}`,
+    );
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error ?? "Failed to load documents");
+    const docs: ExistingDoc[] = data.docs ?? [];
+    setExisting(docs);
+    return docs;
+  }, [leadId]);
+
+  // Mirror `docs` into the task's responses. `draft: true` leaves the task's
+  // status alone; only the explicit Upload action marks it Completed. A no-op
+  // without a taskId (drawer opened outside a task context).
+  const syncTaskResponses = useCallback(
+    async (docs: ExistingDoc[], opts: { draft: boolean }): Promise<void> => {
+      if (!taskId) return;
+      const res = await fetch("/api/admin/task-responses-batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task_id: taskId,
+          draft: opts.draft,
+          responses: docs
+            .filter((d) => !!d.file_url)
+            .map((d) => ({
+              field_label: formatExistingDocLabel(d.custom_type),
+              field_type: "file",
+              file_url: d.file_url,
+              file_name: d.file_name,
+            })),
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to record the document list on the task.");
+    },
+    [taskId],
+  );
+
   // Close on Escape — skipped when embedded (the parent accordion owns Escape;
   // hijacking it here would close the whole multi-party modal).
   useEffect(() => {
@@ -924,6 +1008,20 @@ export default function UploadIdentificationDrawer({
     } catch (err: unknown) {
       setExisting(prev);
       setGlobalError(err instanceof Error ? err.message : "Failed to delete document.");
+      return;
+    }
+    // Drop the matching task_responses row too — otherwise the deleted document
+    // keeps showing in the Doc column and the exported PDF. Separate from the
+    // delete above so a sync failure doesn't roll the list back to a document
+    // that is already gone from the database.
+    try {
+      await syncTaskResponses(await reloadExisting(), { draft: true });
+    } catch (err: unknown) {
+      setGlobalError(
+        err instanceof Error
+          ? `Document deleted, but ${err.message.charAt(0).toLowerCase()}${err.message.slice(1)}`
+          : "Document deleted, but the task's document list could not be updated.",
+      );
     }
   }
 
@@ -965,9 +1063,10 @@ export default function UploadIdentificationDrawer({
       const delData = await delRes.json();
       if (!delData.success) throw new Error(delData.error ?? "Failed to remove old file");
 
-      const r = await fetch(`/api/admin/lead-identification-docs?lead_id=${encodeURIComponent(leadId)}`);
-      const d = await r.json();
-      if (d.success) setExisting(d.docs ?? []);
+      // Point the task at the replacement. Without this the task_responses row
+      // still references the old blob (which is never deleted from storage), so
+      // the exported PDF would keep attaching the file that was just replaced.
+      await syncTaskResponses(await reloadExisting(), { draft: true });
     } catch (e: unknown) {
       setGlobalError(e instanceof Error ? e.message : "Failed to replace file.");
     } finally {
@@ -1228,27 +1327,7 @@ export default function UploadIdentificationDrawer({
         return { selected: s, url };
       });
 
-      const uploaded = await Promise.all(uploads);
-
-      if (taskId) {
-        const respRes = await fetch("/api/admin/task-responses-batch", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            task_id: taskId,
-            responses: uploaded.map(({ selected: s, url }) => ({
-              field_label: s.detection?.documentType 
-                ? `${s.detection.documentType}${s.detection.side !== "unknown" ? ` (${s.detection.side})` : ""}`
-                : "Identification Document",
-              field_type: "file",
-              file_url: url,
-              file_name: s.file.name,
-            })),
-          }),
-        });
-        if (!respRes.ok) throw new Error("Files uploaded, but failed to record task completion.");
-        if (onSaved) onSaved();
-      }
+      await Promise.all(uploads);
 
       // Clear selected and reload existing
       selected.forEach((s) => {
@@ -1256,11 +1335,22 @@ export default function UploadIdentificationDrawer({
       });
       setSelected([]);
 
+      // Sync from the server's full doc list, not just the files uploaded in
+      // this batch: task-responses-batch replaces every row for the task, so
+      // posting only the newly-picked files would delete the rows for documents
+      // saved as a draft earlier or added in a previous batch. draft:false
+      // marks the task Completed, same as before.
       try {
-        const r = await fetch(`/api/admin/lead-identification-docs?lead_id=${encodeURIComponent(leadId)}`);
-        const d = await r.json();
-        if (d.success) setExisting(d.docs ?? []);
-      } catch {}
+        const docs = await reloadExisting();
+        if (taskId) {
+          await syncTaskResponses(docs, { draft: false });
+          if (onSaved) onSaved();
+        }
+      } catch {
+        // The files themselves are safely stored — only the task bookkeeping
+        // failed, so say so rather than implying the upload was lost.
+        throw new Error("Files uploaded, but failed to record task completion.");
+      }
     } catch (err: unknown) {
       setGlobalError(err instanceof Error ? err.message : "One or more uploads failed.");
     } finally {
@@ -1341,13 +1431,13 @@ export default function UploadIdentificationDrawer({
       setSelected([]);
 
       try {
-        const r = await fetch(
-          `/api/admin/lead-identification-docs?lead_id=${encodeURIComponent(leadId)}`,
-        );
-        const d = await r.json();
-        if (d.success) setExisting(d.docs ?? []);
+        // A draft still has to reach task_responses: the Doc column and the PDF
+        // export read from there, so drafts used to be invisible to both — the
+        // "Upload Identification" PDF downloaded with no attachments at all.
+        // draft:true records the documents without marking the task Completed.
+        await syncTaskResponses(await reloadExisting(), { draft: true });
       } catch {
-        /* non-fatal — the docs are saved; reload just refreshes the UI */
+        /* non-fatal — the docs are saved; the sync retries on the next change */
       }
 
       setDraftSaved(true);
@@ -1683,7 +1773,7 @@ export default function UploadIdentificationDrawer({
                         )}
                         {doc.custom_type && (
                           <p className="text-[10px] font-medium text-green-700 mt-0.5">
-                            {labelText(doc.custom_type as LabelKey)}
+                            {formatExistingDocLabel(doc.custom_type)}
                           </p>
                         )}
                       </div>

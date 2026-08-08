@@ -48,6 +48,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS partner_contacts_partner_email_unique_idx
 -- text[] rather than a child table: this is a short, unordered list of bare
 -- addresses with no attributes of its own, always read and written whole
 -- alongside the deal.
+
 ALTER TABLE deals
   ADD COLUMN IF NOT EXISTS cc_emails text[] NOT NULL DEFAULT '{}';
 
