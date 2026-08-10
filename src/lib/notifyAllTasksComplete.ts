@@ -12,6 +12,8 @@ import {
   decodeTemplateBraces,
   type TemplateValue,
 } from "./renderEmailTemplate";
+import { collectFamilyDocuments, renderDocumentSummaryHtml } from "./familyDocuments";
+import { ALL_TASKS_COMPLETE_TYPE } from "./notificationTypes";
 import { logger } from "./logger";
 import { withRetry } from "./retry";
 
@@ -31,6 +33,10 @@ import { withRetry } from "./retry";
  *     every non-deleted task. Filtering on it would ignore tasks still on the
  *     client's screen and fire this alert early, so we deliberately don't.
  *
+ * The email carries the family's whole document package as attachments (see
+ * familyDocuments.ts) so the reviewer doesn't have to open the file to read it.
+ * Anything over the size budget is listed as a download link instead.
+ *
  * Idempotency: `deals.all_tasks_notified_at` on the family's PRIMARY deal is
  * claimed with a conditional UPDATE (NULL → now()), so two task completions
  * landing at once can't both send. It's cleared again the moment the family
@@ -43,7 +49,6 @@ import { withRetry } from "./retry";
  */
 
 const TEMPLATE_NAME = "All Tasks Completed";
-const NOTIFICATION_TYPE = "deal.all_tasks_complete";
 
 export type NotifyAllTasksResult = {
   notified: boolean;
@@ -99,18 +104,19 @@ function joinNames(names: string[]): string {
 /**
  * Who gets the alert email.
  *
- * Defaults to the firm's alert inbox rather than fanning out to every admin —
- * one place to watch, and no risk of blasting the whole team while the feature
- * is being tuned. Override with ALL_TASKS_ALERT_TO:
+ * Defaults to EVERY active admin — the alert exists so whoever picks the file
+ * up next sees it, and routing it to one tuning inbox meant the team never got
+ * it. Override with ALL_TASKS_ALERT_TO:
  *
- *   ALL_TASKS_ALERT_TO="ops@example.com,clerk@example.com"  → those addresses
  *   ALL_TASKS_ALERT_TO="admins"                             → every active
  *                                                             admin_users row
+ *                                                             (the default)
+ *   ALL_TASKS_ALERT_TO="ops@example.com,clerk@example.com"  → those addresses
  *
  * The in-app notification is unaffected either way — it's a broadcast row, so
- * every admin still sees it in the sidebar bell regardless of who is emailed.
+ * every admin still sees it in the bell regardless of who is emailed.
  */
-const DEFAULT_ALERT_TO = "testing@navawilson.law";
+const DEFAULT_ALERT_TO = "admins";
 
 async function resolveRecipients(): Promise<string[]> {
   const configured = (process.env.ALL_TASKS_ALERT_TO ?? DEFAULT_ALERT_TO).trim();
@@ -277,16 +283,19 @@ async function dispatchAlert(
   const fileNumber = deal.file_number ?? "";
   const dealUrl = `${adminBaseUrl()}/admin/deals/${deal.id}`;
 
-  const title = `All tasks completed — ${partySummary}`;
+  // Reads as the one-line sentence the bell shows, so the dropdown needs no
+  // second line to make sense; `body` carries the supporting detail.
+  const title =
+    `Your client ${partySummary}${propertyAddress ? ` (${propertyAddress})` : ""} ` +
+    `has just completed all tasks, please review.`;
   const body =
-    `${partySummary}${transaction ? ` (${transaction})` : ""} ` +
-    `has completed all ${taskCount} task${taskCount === 1 ? "" : "s"} on iClosed. ` +
-    `Closing date: ${closingDate}.`;
+    `${taskCount} task${taskCount === 1 ? "" : "s"} completed` +
+    `${transaction ? ` · ${transaction}` : ""} · Closing ${closingDate}.`;
 
   // 1. In-app notification. Written FIRST so the bell is right even if Resend
   //    is down or no template is configured.
   const { error: notifErr } = await supabaseAdmin.from("notifications").insert({
-    type: NOTIFICATION_TYPE,
+    type: ALL_TASKS_COMPLETE_TYPE,
     title,
     body,
     deal_id: deal.id,
@@ -340,6 +349,12 @@ async function dispatchAlert(
     return { notified: true, reason: "template_inactive", emailedTo: 0 };
   }
 
+  // Every document the family has uploaded rides along with the alert, so the
+  // reviewer has the package in hand rather than having to open the file. Done
+  // AFTER the template checks so an inactive template costs us no downloads.
+  const familyLeadIds = (familyLeads ?? []).map((l) => l.id);
+  const docs = await collectFamilyDocuments(familyDealIds, familyLeadIds, adminBaseUrl());
+
   const values: Record<string, string> = {
     client_name: clientName,
     co_party_names: coPartyNames.join(", "),
@@ -351,6 +366,8 @@ async function dispatchAlert(
     lead_type: leadTypeLabel,
     task_count: String(taskCount),
     deal_url: dealUrl,
+    document_count: String(docs.total),
+    attached_count: String(docs.attachments.length),
   };
   const resolve = (name: string): TemplateValue | null => {
     const key = name.toLowerCase().replace(/^\.+/, "");
@@ -360,7 +377,13 @@ async function dispatchAlert(
     return { value: values[key], raw: key === "deal_url" };
   };
 
-  const html = renderTemplateSafe(decodeTemplateBraces(template.body), resolve);
+  // The document block ("N documents attached" + any too-large links) is
+  // appended rather than templated. See renderDocumentSummaryHtml — the
+  // template row is shared by every environment via the database, so a new
+  // {{ placeholder }} in it renders literally wherever the code hasn't shipped.
+  const html =
+    renderTemplateSafe(decodeTemplateBraces(template.body), resolve) +
+    renderDocumentSummaryHtml(docs);
   const subject = renderTemplateSafe(
     template.subject?.trim() ? template.subject : template.name,
     resolve,
@@ -385,6 +408,7 @@ async function dispatchAlert(
           to: recipients,
           subject,
           html,
+          ...(docs.attachments.length > 0 ? { attachments: docs.attachments } : {}),
         });
         if (error) throw new Error(error.message);
         return data;
@@ -392,7 +416,9 @@ async function dispatchAlert(
       { attempts: 3, label: "all-tasks-complete-email" },
     );
     logger.info(
-      `[AllTasksComplete] alerted ${recipients.length} admin(s) — deal=${deal.id} file=${fileNumber}`,
+      `[AllTasksComplete] alerted ${recipients.length} admin(s) — deal=${deal.id} ` +
+        `file=${fileNumber} docs=${docs.attachments.length} attached / ${docs.linked.length} linked ` +
+        `(${Math.round(docs.attachedBytes / 1024)}KB)`,
     );
   } catch (sendErr) {
     // Deliberately NOT releasing the claim: the in-app notification is already

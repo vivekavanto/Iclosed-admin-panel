@@ -1,20 +1,25 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Bell, CheckCheck, Loader2, X } from "lucide-react";
+import { Bell, ChevronRight, Loader2 } from "lucide-react";
 
-// Sidebar bell for the in-app admin feed (/api/admin/notifications).
+// The admin notification bell, mounted top-right in AppHeader.
 //
-// Today the only event is `deal.all_tasks_complete` — raised by
-// src/lib/notifyAllTasksComplete.ts once a client and their co-party have
-// finished every client-visible task on a file. The feed is a broadcast: every
-// admin sees every row, and "read" is tracked per admin.
+// Two event types today, both raised server-side:
+//   • `deal.all_tasks_complete` — src/lib/notifyAllTasksComplete.ts, once a
+//     client AND their co-party finish every client-visible task on a file.
+//   • `client.signed_up`        — src/lib/notifyClientSignup.ts, when a client
+//     activates their portal account.
 //
-// Rendered inside Sidebar's <nav>, so it inherits the dark rail styling. The
-// dropdown itself is `fixed` and anchored past the rail using the --sidebar-w
-// custom property that ClientLayout sets, so it stays put when the sidebar
-// collapses.
+// The feed is a BROADCAST: every admin sees every row, and "read" is tracked
+// per admin in notification_reads. Clicking a row marks it read and opens the
+// deal it belongs to.
+//
+// Unread is shown as a plain red DOT, not a count. The bell sits in a light
+// header where a number reads as clutter, and the useful signal is binary —
+// "something is waiting". The exact count still shows inside the panel.
 
 type Notification = {
   id: string;
@@ -28,31 +33,39 @@ type Notification = {
   read: boolean;
 };
 
-// Poll cadence for the unread badge. Task completion is a human-paced event, so
-// a minute is plenty and keeps this cheap.
+// Poll cadence for the unread dot. Task completion and signup are human-paced
+// events, so a minute is plenty and keeps this cheap.
 const POLL_MS = 60_000;
+
+// How many rows the dropdown shows. The rest live on /admin/notifications.
+const PANEL_LIMIT = 8;
 
 function relativeTime(iso: string): string {
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) return "";
   const mins = Math.floor((Date.now() - then) / 60_000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
+  if (mins < 1) return "Just now";
+  if (mins < 60) return `${mins} minute${mins === 1 ? "" : "s"} ago`;
   const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const date = new Date(iso);
+  const time = date.toLocaleTimeString("en-CA", {
+    hour: "numeric",
+    minute: "2-digit",
+  });
   const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  return new Date(iso).toLocaleDateString("en-CA", { month: "short", day: "numeric" });
+  if (days === 1) return `Yesterday, ${time}`;
+  if (days < 7) {
+    return `${date.toLocaleDateString("en-CA", { weekday: "long" })}, ${time}`;
+  }
+  return date.toLocaleDateString("en-CA", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
-interface NotificationBellProps {
-  /** False when the desktop sidebar is collapsed — icon only, no label. */
-  showLabel: boolean;
-  /** Called after a navigation so the mobile drawer can close itself. */
-  onNavigate?: () => void;
-}
-
-const NotificationBell: React.FC<NotificationBellProps> = ({ showLabel, onNavigate }) => {
+const NotificationBell: React.FC = () => {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<Notification[]>([]);
@@ -78,12 +91,14 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ showLabel, onNaviga
     }
   }, []);
 
-  // Badge stays warm in the background; the panel refreshes on open. The first
-  // fetch is deferred to a timeout rather than run inline, so mounting the
-  // sidebar doesn't set state synchronously inside the effect body.
+  // The dot stays warm in the background; the panel refreshes on open. The
+  // first fetch is deferred to a timeout rather than run inline, so mounting
+  // the header doesn't set state synchronously inside the effect body.
   useEffect(() => {
     let cancelled = false;
-    const tick = () => { if (!cancelled) load(); };
+    const tick = () => {
+      if (!cancelled) load();
+    };
     const initial = setTimeout(tick, 0);
     const timer = setInterval(tick, POLL_MS);
     return () => {
@@ -120,7 +135,7 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ showLabel, onNaviga
   };
 
   const markRead = async (payload: { all: true } | { ids: string[] }) => {
-    // Optimistic — the badge should drop the instant it's clicked.
+    // Optimistic — the dot should clear the instant it's clicked.
     const targetIds = "all" in payload ? items.map((i) => i.id) : payload.ids;
     const targetSet = new Set(targetIds);
     setItems((prev) => prev.map((i) => (targetSet.has(i.id) ? { ...i, read: true } : i)));
@@ -134,7 +149,7 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ showLabel, onNaviga
         body: JSON.stringify(payload),
       });
     } catch {
-      // Re-sync from the server so the badge doesn't lie if the write failed.
+      // Re-sync from the server so the dot doesn't lie if the write failed.
       load();
     }
   };
@@ -142,69 +157,52 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ showLabel, onNaviga
   const openNotification = async (n: Notification) => {
     setOpen(false);
     if (!n.read) await markRead({ ids: [n.id] });
-    if (n.deal_id) {
-      router.push(`/admin/deals/${n.deal_id}`);
-      onNavigate?.();
-    }
+    if (n.deal_id) router.push(`/admin/deals/${n.deal_id}`);
   };
 
+  const visible = items.slice(0, PANEL_LIMIT);
+
   return (
-    <div ref={containerRef}>
+    <div ref={containerRef} className="relative">
       <button
         onClick={togglePanel}
-        title={!showLabel ? "Notifications" : undefined}
         aria-label={unread > 0 ? `Notifications, ${unread} unread` : "Notifications"}
-        className={`w-full flex items-center justify-center py-2.5 rounded-lg transition-all duration-200 hover:bg-slate-800 hover:text-white ${
-          showLabel ? "px-4 !justify-start gap-3" : ""
-        } ${open ? "bg-slate-800 text-white" : ""}`}
+        className={`relative flex items-center justify-center w-10 h-10 rounded-xl border transition-colors ${
+          open
+            ? "border-slate-300 bg-slate-100 text-slate-900"
+            : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+        }`}
       >
-        <span className="relative flex shrink-0">
-          <Bell size={20} />
-          {unread > 0 && (
-            <span
-              className={`absolute -top-1.5 -right-2 min-w-[18px] h-[18px] px-1 rounded-full bg-brand-primary text-white text-[10px] font-bold flex items-center justify-center ${
-                showLabel ? "" : "ring-2 ring-slate-900"
-              }`}
-            >
-              {unread > 9 ? "9+" : unread}
-            </span>
-          )}
-        </span>
-        {showLabel && <span className="font-medium text-sm">Notifications</span>}
+        <Bell size={20} />
+        {unread > 0 && (
+          // Binary signal only — the count lives in the panel header.
+          <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 rounded-full bg-brand-primary ring-2 ring-white" />
+        )}
       </button>
 
       {open && (
         <div
-          className="fixed z-50 inset-x-3 top-16 md:inset-x-auto md:top-4 md:left-[var(--sidebar-w)] md:ml-3 md:w-[380px] max-h-[70vh] flex flex-col rounded-xl border border-slate-200 bg-white shadow-2xl text-slate-900"
+          className="fixed inset-x-3 top-16 sm:absolute sm:inset-x-auto sm:top-full sm:right-0 sm:mt-2 sm:w-[420px] z-50 max-h-[70vh] flex flex-col rounded-xl border border-slate-200 bg-white shadow-2xl text-slate-900"
           role="dialog"
           aria-label="Notifications"
         >
-          <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200">
-            <h2 className="text-sm font-semibold">
+          <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100">
+            <h2 className="text-base font-semibold">
               Notifications
               {unread > 0 && (
-                <span className="ml-2 text-xs font-medium text-brand-primary">{unread} new</span>
+                <span className="ml-2 text-xs font-medium text-brand-primary align-middle">
+                  {unread} new
+                </span>
               )}
             </h2>
-            <div className="flex items-center gap-1">
-              {unread > 0 && (
-                <button
-                  onClick={() => markRead({ all: true })}
-                  className="flex items-center gap-1 px-2 py-1 rounded-md text-xs text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors"
-                  title="Mark all as read"
-                >
-                  <CheckCheck size={14} />
-                  Mark all read
-                </button>
-              )}
+            {unread > 0 && (
               <button
-                onClick={() => setOpen(false)}
-                className="p-1.5 rounded-md text-slate-400 hover:text-slate-900 hover:bg-slate-100 transition-colors"
-                aria-label="Close notifications"
+                onClick={() => markRead({ all: true })}
+                className="text-sm font-medium text-brand-primary hover:underline"
               >
-                <X size={16} />
+                Mark all as read
               </button>
-            </div>
+            )}
           </div>
 
           <div className="overflow-y-auto">
@@ -220,42 +218,47 @@ const NotificationBell: React.FC<NotificationBellProps> = ({ showLabel, onNaviga
                 You&apos;re all caught up.
               </p>
             ) : (
-              <ul className="divide-y divide-slate-100">
-                {items.map((n) => (
+              <ul>
+                {visible.map((n) => (
                   <li key={n.id}>
                     <button
                       onClick={() => openNotification(n)}
-                      className={`w-full text-left px-4 py-3 hover:bg-slate-50 transition-colors ${
-                        n.read ? "" : "bg-brand-light/40"
+                      className={`w-full text-left px-5 py-3.5 flex items-start gap-3 transition-colors ${
+                        n.read ? "hover:bg-slate-50" : "bg-brand-light/30 hover:bg-brand-light/50"
                       }`}
                     >
-                      <div className="flex items-start gap-2">
+                      <span className="w-2.5 shrink-0 pt-1.5">
                         {!n.read && (
-                          <span className="mt-1.5 w-2 h-2 rounded-full bg-brand-primary shrink-0" />
+                          <span className="block w-2.5 h-2.5 rounded-full bg-brand-primary" />
                         )}
-                        <div className={`flex-1 min-w-0 ${n.read ? "pl-4" : ""}`}>
-                          <p
-                            className={`text-sm truncate ${
-                              n.read ? "text-slate-600" : "font-semibold text-slate-900"
-                            }`}
-                          >
-                            {n.title}
-                          </p>
-                          {n.body && (
-                            <p className="mt-0.5 text-xs text-slate-500 line-clamp-2">{n.body}</p>
-                          )}
-                          <p className="mt-1 text-[11px] text-slate-400">
-                            {n.file_number ? `File ${n.file_number} · ` : ""}
-                            {relativeTime(n.created_at)}
-                          </p>
-                        </div>
-                      </div>
+                      </span>
+                      <span className="flex-1 min-w-0">
+                        <span
+                          className={`block text-sm leading-snug ${
+                            n.read ? "text-slate-600" : "font-medium text-slate-900"
+                          }`}
+                        >
+                          {n.title}
+                        </span>
+                        <span className="block mt-1 text-xs text-slate-400">
+                          {relativeTime(n.created_at)}
+                        </span>
+                      </span>
+                      <ChevronRight size={16} className="shrink-0 mt-0.5 text-slate-300" />
                     </button>
                   </li>
                 ))}
               </ul>
             )}
           </div>
+
+          <Link
+            href="/admin/notifications"
+            onClick={() => setOpen(false)}
+            className="block px-5 py-3.5 text-center text-sm font-medium text-slate-600 border-t border-slate-100 hover:bg-slate-50 transition-colors"
+          >
+            View all notifications
+          </Link>
         </div>
       )}
     </div>

@@ -1833,8 +1833,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
           });
           const data = await res.json();
           if (data.success) {
-            const linkedMsg = data.linked_emails_sent > 0
-              ? ` (also sent to ${data.linked_emails_sent} linked deal${data.linked_emails_sent > 1 ? "s" : ""})`
+            // One combined email now goes to everyone on the file, so this
+            // reports how many clients were on it — not a second send.
+            const linkedMsg = data.recipient_count > 1
+              ? ` (one email to all ${data.recipient_count} clients on this file)`
               : "";
             if (data.skipped) {
               showToast(data.message || "Email skipped — template is inactive.", "error");
@@ -1916,8 +1918,8 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
     });
     const data = await res.json();
     if (data.success) {
-      const linkedMsg = data.linked_emails_sent > 0
-        ? ` (also sent to ${data.linked_emails_sent} linked deal${data.linked_emails_sent > 1 ? "s" : ""})`
+      const linkedMsg = data.recipient_count > 1
+        ? ` (one email to all ${data.recipient_count} clients on this file)`
         : "";
       if (data.skipped) {
         showToast(data.message || "Email skipped — template is inactive.", "error");
@@ -2041,8 +2043,8 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
             });
             const data = await res.json();
             if (data.success) {
-              const linkedMsg = data.linked_emails_sent > 0
-                ? ` (also sent to ${data.linked_emails_sent} linked deal${data.linked_emails_sent > 1 ? "s" : ""})`
+              const linkedMsg = data.recipient_count > 1
+                ? ` (one email to all ${data.recipient_count} clients on this file)`
                 : "";
               if (data.skipped) {
                 showToast(data.message || "Email skipped — template is inactive.", "error");
@@ -3001,6 +3003,25 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
   // matching its source template's lead_type. No item is duplicated across
   // tabs. (Manually-added rows with no lead_type still appear on every tab so
   // they aren't hidden.)
+  // Resolve a raw task row into the row the task table actually renders:
+  // side-scoped leadType (a co-client acts on one side only) with the
+  // template's lead_type as the fallback. Returns null when the row doesn't
+  // belong to that person at all. Shared by displayTasks and the "Download All"
+  // export so the two can never disagree about a row's leadType — which
+  // getTaskFileDocs uses to decide whether a document belongs to the task.
+  const toDisplayRow = (t: Task): DisplayTask | null => {
+    const ownerSide =
+      includeFamilyTasks && t.ownerDealId ? ownerDealSide.get(t.ownerDealId) : undefined;
+    const rawLeadType =
+      t.leadType
+      ?? (t.taskTemplateId ? taskTemplateLeadTypeMap.get(t.taskTemplateId) ?? null : null);
+    if (ownerSide) {
+      if (rawLeadType && rawLeadType.toLowerCase() !== ownerSide.toLowerCase()) return null;
+      return { ...t, isTemplate: false, leadType: ownerSide };
+    }
+    return { ...t, isTemplate: false, leadType: rawLeadType };
+  };
+
   const displayTasks: DisplayTask[] = (() => {
     const dedupedTasks = dedupeTasksByTemplate(tasks);
     const userTitles = new Set(dedupedTasks.map(t => t.title.toLowerCase()));
@@ -3026,29 +3047,19 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
         leadType: t.lead_type ?? null,
         orderIndex: t.order_index ?? null,
       }));
+    // In the unified family view, scope each co-client's PERSONAL rows to the
+    // single side their role acts on. A co-purchaser only deals on Purchase,
+    // a co-seller only on Sale, so for a co-client row toDisplayRow:
+    //   • DROPS it when its template lead_type is the OTHER side — e.g. a
+    //     Sale-side Personal Info/ID mis-seeded onto a co-purchaser's deal
+    //     (happens when the co-lead inherited a combined "Purchase & Sale"
+    //     lead_type); such a row doesn't belong to that person at all.
+    //   • PINS a row that has no template lead_type to the co-client's own side
+    //     so it lands on the correct tab instead of every tab.
+    // The primary acts on both sides, so their rows are left untouched.
     const userRows: DisplayTask[] = dedupedTasks.flatMap(t => {
-      // In the unified family view, scope each co-client's PERSONAL rows to the
-      // single side their role acts on. A co-purchaser only deals on Purchase,
-      // a co-seller only on Sale, so for a co-client row we:
-      //   • DROP it when its template lead_type is the OTHER side — e.g. a
-      //     Sale-side Personal Info/ID mis-seeded onto a co-purchaser's deal
-      //     (happens when the co-lead inherited a combined "Purchase & Sale"
-      //     lead_type); such a row doesn't belong to that person at all.
-      //   • PIN a row that has no template lead_type to the co-client's own side
-      //     so it lands on the correct tab instead of every tab.
-      // The primary acts on both sides, so their rows are left untouched.
-      const ownerSide =
-        includeFamilyTasks && t.ownerDealId ? ownerDealSide.get(t.ownerDealId) : undefined;
-      const rawLeadType =
-        t.leadType
-        ?? (t.taskTemplateId ? taskTemplateLeadTypeMap.get(t.taskTemplateId) ?? null : null);
-      if (ownerSide) {
-        if (rawLeadType && rawLeadType.toLowerCase() !== ownerSide.toLowerCase()) {
-          return [];
-        }
-        return [{ ...t, isTemplate: false, leadType: ownerSide }];
-      }
-      return [{ ...t, isTemplate: false, leadType: rawLeadType }];
+      const row = toDisplayRow(t);
+      return row ? [row] : [];
     });
     // Sort by order_index (the per-deal task sequence, kept in sync with the
     // template order and editable via the drag handles). Rows without an order
@@ -3213,9 +3224,15 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
 
   // Does this task have any downloadable data (client responses or files)?
   // Drives whether the per-task PDF button is shown.
-  const taskHasData = (task: DisplayTask): boolean => {
+  //
+  // `respMap` overrides the responses held in state. Callers that just fetched
+  // a fresh map MUST pass it: setResponsesByTask() doesn't take effect until the
+  // next render, so reading state here would judge every task against the
+  // pre-fetch snapshot — empty if the page's own fetch hasn't landed yet.
+  const taskHasData = (task: DisplayTask, respMap?: Map<string, any[]>): boolean => {
     if (task.isTemplate) return false;
-    return (responsesByTask.get(task.id)?.length ?? 0) > 0 || getTaskFileDocs(task).length > 0;
+    const source = respMap ?? responsesByTask;
+    return (source.get(task.id)?.length ?? 0) > 0 || getTaskFileDocs(task).length > 0;
   };
 
   // Deal-level metadata reused by both PDF entry points.
@@ -3410,15 +3427,57 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
   // uploaded documents), grouped by milestone, with all personal info +
   // uploaded documents embedded. Empty tasks are excluded — same rule as the
   // per-task download button.
+  const [emailingClerk, setEmailingClerk] = useState(false);
+
+  /**
+   * Send every uploaded document on the file to the conveyancing clerk.
+   *
+   * All the work is server-side (/api/admin/deals/[id]/email-to-clerk) — the
+   * inbox is picked from the file type there, and the documents are attached as
+   * separate files rather than merged into the combined PDF that "Download All"
+   * produces. Confirmed first because it pushes client PII to an external
+   * mailbox and can't be recalled.
+   */
+  const handleEmailToClerk = async () => {
+    const confirmed = window.confirm(
+      "Email all client documents on this file to the clerk?\n\n" +
+      "They will be sent as separate attachments to the purchase and/or sale " +
+      "clerk inbox, based on the file type.",
+    );
+    if (!confirmed) return;
+
+    setEmailingClerk(true);
+    try {
+      const res = await fetch(`/api/admin/deals/${deal.id}/email-to-clerk`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        showToast(data.error ?? "Failed to email the documents", "error");
+        return;
+      }
+      const linkedNote = data.linked > 0 ? ` (${data.linked} sent as links — too large to attach)` : "";
+      showToast(
+        `Sent ${data.attached} document${data.attached === 1 ? "" : "s"} to ${data.recipients.join(", ")}${linkedNote}`,
+      );
+    } catch (err: any) {
+      showToast(err?.message ?? "Failed to email the documents", "error");
+    } finally {
+      setEmailingClerk(false);
+    }
+  };
+
   const handleDownloadDealPdf = async () => {
     setDownloadingDealPdf(true);
     try {
       // Freshest responses so recently-saved edits are included.
       const fresh = await fetchFreshResponsesMap();
       if (fresh) setResponsesByTask(fresh);
-      const realTasks = dedupeTasksByTemplate(tasks).filter((t) =>
-        taskHasData({ ...t, isTemplate: false }),
-      );
+      // Filter the SAME rows the task table renders (resolved leadType) against
+      // the freshly-fetched responses — not the raw rows against state, which
+      // reports "no tasks" whenever the page's own response fetch hasn't landed.
+      const realTasks = dedupeTasksByTemplate(tasks).flatMap((t) => {
+        const row = toDisplayRow(t);
+        return row && taskHasData(row, fresh ?? undefined) ? [row] : [];
+      });
       const milestoneOrder = (m: Milestone) => m.orderIndex ?? Number.MAX_SAFE_INTEGER;
       const orderedMilestones = [...milestones].sort((a, b) => milestoneOrder(a) - milestoneOrder(b));
       const sections: PdfDealSection[] = [];
@@ -3430,7 +3489,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
         if (milestoneTasks.length === 0) continue;
         milestoneTasks.forEach((t) => usedTaskIds.add(t.id));
         const builtTasks = await Promise.all(
-          milestoneTasks.map((t) => buildPdfTaskInput({ ...t, isTemplate: false }, fresh ?? undefined)),
+          milestoneTasks.map((t) => buildPdfTaskInput(t, fresh ?? undefined)),
         );
         sections.push({
           milestoneTitle: m.title,
@@ -3438,19 +3497,39 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
           tasks: builtTasks,
         });
       }
-      // Tasks not attached to any milestone (manually-added / unlinked).
+      // Tasks the milestone pass didn't claim. In the unified family view that's
+      // every co-client's personal task: their milestones live on THEIR deal row,
+      // so `t.milestoneId` never matches one of the primary's milestones loaded
+      // above. Lumping them under "Other Tasks" hid whose paperwork it was, so
+      // they're grouped per person and the section is titled with that person's
+      // name and role ("Pavithra Testing — Co-Purchaser"). Anything with no
+      // resolvable owner (a manually-added, unlinked task) keeps the old label.
       const orphanTasks = realTasks.filter((t) => !usedTaskIds.has(t.id));
       if (orphanTasks.length > 0) {
-        const builtOrphanTasks = await Promise.all(
-          orphanTasks.map((t) => buildPdfTaskInput({ ...t, isTemplate: false }, fresh ?? undefined)),
-        );
-        sections.push({
-          milestoneTitle: "Other Tasks",
-          tasks: builtOrphanTasks,
-        });
+        const byOwner = new Map<string, DisplayTask[]>();
+        for (const t of orphanTasks) {
+          const key = t.ownerDealId ?? "";
+          byOwner.set(key, [...(byOwner.get(key) ?? []), t]);
+        }
+        for (const [ownerDealId, ownerTasks] of byOwner) {
+          const person = ownerDealId ? familyPeople.find((p) => p.id === ownerDealId) : undefined;
+          const built = await Promise.all(
+            ownerTasks.map((t) => buildPdfTaskInput(t, fresh ?? undefined)),
+          );
+          sections.push({
+            milestoneTitle: person?.lead_name || "Other Tasks",
+            leadType: person?.role || null,
+            tasks: built,
+          });
+        }
       }
       if (sections.length === 0) {
-        showToast("No tasks to download for this deal", "error");
+        showToast(
+          tasks.length === 0
+            ? "This deal's tasks are still loading — try again in a moment"
+            : "No tasks with responses or documents to download",
+          "error",
+        );
         return;
       }
       await downloadDealPdf(buildPdfDealMeta(), sections);
@@ -4236,6 +4315,28 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                 ) : (
                   <>
                     <FileDown size={16} /> Download All
+                  </>
+                )}
+              </button>
+              )}
+              {/* Sends every uploaded document to the firm's clerk inbox as
+                  SEPARATE attachments — deliberately not the combined PDF above,
+                  which mangles the source documents' own formatting. Shown on
+                  the same condition as Download All. */}
+              {tasks.some((t) => t.status === "Completed") && (
+              <button
+                onClick={handleEmailToClerk}
+                disabled={emailingClerk}
+                className="bg-white text-brand-primary border border-brand-primary hover:bg-brand-light px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-colors shadow-sm disabled:opacity-60"
+                title="Email all client documents to the purchase / sale clerk"
+              >
+                {emailingClerk ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" /> Sending…
+                  </>
+                ) : (
+                  <>
+                    <Mail size={16} /> Email to Clerk
                   </>
                 )}
               </button>

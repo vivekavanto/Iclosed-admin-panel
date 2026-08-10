@@ -4,7 +4,7 @@ import { sendAuthEmailViaResend } from "./sendAuthEmail";
 import { getFamilyDealIds } from "./familyDeals";
 import { recalcMilestonesForFamily } from "./recalcMilestones";
 import { sendWelcomeEmail } from "./sendWelcomeEmail";
-import { formatLeadTypeLabel, buildLeadAddressForEmail } from "./leadEmailAddress";
+import type { PendingMilestoneEmail } from "./sendMilestoneEmail";
 import { prefillPersonalInfoFromPriorDeal } from "./prefillPersonalInfo";
 import {
   sendRetainerLinkEmail,
@@ -23,6 +23,12 @@ export type ConvertOneResult = {
   retainer_link_sent?: boolean;
   already_has_login?: boolean;
   auth_error?: string | null;
+  /**
+   * Auto-completed milestones whose email has NOT been sent yet. The caller must
+   * hand these to `dispatchAutoCompleteMilestoneEmails` once every lead in the
+   * family has been converted — see the note at the collection site.
+   */
+  auto_complete_emails?: PendingMilestoneEmail[];
   error?: string;
   statusCode?: number;
 };
@@ -345,6 +351,10 @@ export async function convertSingleLead(
     // ── Copy stage_templates → milestones ────────────────────────────────────
     const stageToMilestone: Record<string, string> = {};
 
+    // Auto-completed stages that carry an email template. Deliberately NOT sent
+    // from here — see the note at the push site.
+    const autoCompleteEmails: PendingMilestoneEmail[] = [];
+
     try {
       const { data: stageTemplatesRaw } = await supabaseAdmin
         .from("stage_templates")
@@ -436,133 +446,22 @@ export async function convertSingleLead(
             if (ms.stage_template_id) {
               stageToMilestone[ms.stage_template_id] = ms.id;
 
-              // Send email for auto-completed milestones that have an email template
+              // Auto-completed milestones with a linked template earn an email —
+              // but a family converts ONE LEAD AT A TIME, so sending from here
+              // produced a separate copy per party (and CC'd the referral agent
+              // once for each). Collect them instead; the caller dispatches a
+              // single combined email per stage once the whole family exists.
+              // See dispatchAutoCompleteMilestoneEmails.
               const st = stageTemplateMap.get(ms.stage_template_id);
               if (st?.auto_complete && st?.email_template_id) {
-                try {
-                  // Fetch the email template
-                  const { data: emailTemplate } = await supabaseAdmin
-                    .from("email_templates")
-                    .select("name, subject, body, is_active, shared_with_agent")
-                    .eq("id", st.email_template_id)
-                    .single();
-
-                  // Strict is_active check — skip the auto-complete email if
-                  // admin disabled this template. Milestone stays completed.
-                  if (emailTemplate && !emailTemplate.is_active) {
-                    console.log(
-                      `[Convert] Auto-complete email skipped — template "${emailTemplate.name}" is inactive. milestone=${ms.id}`,
-                    );
-                  } else if (emailTemplate?.body) {
-                    // Fetch client info
-                    const { data: clientData } = await supabaseAdmin
-                      .from("clients")
-                      .select("email, first_name, last_name")
-                      .eq("id", clientId)
-                      .single();
-
-                    if (clientData?.email) {
-                      const { Resend } = await import("resend");
-                      const resend = new Resend(process.env.RESEND_API_KEY);
-                      const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <support@iclosed.ca>";
-
-                      const fullName = `${clientData.first_name ?? ""} ${clientData.last_name ?? ""}`.trim();
-                      // Combines purchase + selling for P&S leads, with a
-                      // family-sibling fallback for split families.
-                      const leadAddress = await buildLeadAddressForEmail(lead);
-                      const leadTypeLabel = formatLeadTypeLabel(leadType);
-
-                      // Replace placeholders in body
-                      let processedBody = emailTemplate.body
-                        .replace(/&#123;/g, "{").replace(/&#125;/g, "}").replace(/&nbsp;/g, " ").replace(/\u00A0/g, " ");
-
-                      const placeholders: Record<string, string> = {
-                        "{{ user.first_name }}": clientData.first_name ?? "",
-                        "{{ user.last_name }}": clientData.last_name ?? "",
-                        "{{ user.full_name }}": fullName,
-                        "{{ user.get_full_name }}": fullName,
-                        "{{ user.email }}": clientData.email,
-                        "{{ lead_address }}": leadAddress,
-                        "{{ lead.address_line1 }}": lead.address_street ?? "",
-                        "{{ lead.address_city }}": lead.address_city ?? "",
-                        "{{ lead.address_province }}": lead.address_province ?? "",
-                        "{{ lead.file_number }}": generatedFileNumber ?? "",
-                        "{{ lead_type }}": leadTypeLabel,
-                        "{{ stage_name }}": st.name ?? "",
-                        "{{user.first_name}}": clientData.first_name ?? "",
-                        "{{user.last_name}}": clientData.last_name ?? "",
-                        "{{user.full_name}}": fullName,
-                        "{{user.get_full_name}}": fullName,
-                        "{{user.email}}": clientData.email,
-                        "{{lead_address}}": leadAddress,
-                        "{{lead.address_line1}}": lead.address_street ?? "",
-                        "{{lead.address_city}}": lead.address_city ?? "",
-                        "{{lead.address_province}}": lead.address_province ?? "",
-                        "{{lead.file_number}}": generatedFileNumber ?? "",
-                        "{{lead_type}}": leadTypeLabel,
-                        "{{stage_name}}": st.name ?? "",
-                      };
-                      for (const [key, value] of Object.entries(placeholders)) {
-                        processedBody = processedBody.replaceAll(key, value);
-                      }
-                      // Whitespace-tolerant regex fallbacks — catches stray
-                      // template values like "{{  user.get_full_name  }}".
-                      processedBody = processedBody.replace(/\{\{\s*user\.get_full_name\s*\}\}/gi, fullName);
-                      processedBody = processedBody.replace(/\{\{\s*user\.full_name\s*\}\}/gi, fullName);
-                      processedBody = processedBody.replace(/\{\{\s*user\.first_name\s*\}\}/gi, clientData.first_name ?? "");
-                      processedBody = processedBody.replace(/\{\{\s*user\.last_name\s*\}\}/gi, clientData.last_name ?? "");
-                      processedBody = processedBody.replace(/\{\{\s*user\.email\s*\}\}/gi, clientData.email ?? "");
-                      processedBody = processedBody.replace(/\{\{\s*lead_address\s*\}\}/gi, leadAddress);
-                      processedBody = processedBody.replace(/\{\{\s*lead\.address_line1\s*\}\}/gi, lead.address_street ?? "");
-                      processedBody = processedBody.replace(/\{\{\s*lead\.address_city\s*\}\}/gi, lead.address_city ?? "");
-                      processedBody = processedBody.replace(/\{\{\s*lead\.address_province\s*\}\}/gi, lead.address_province ?? "");
-                      processedBody = processedBody.replace(/\{\{\s*lead\.file_number\s*\}\}/gi, generatedFileNumber ?? "");
-                      processedBody = processedBody.replace(/\{\{\s*lead_type\s*\}\}/gi, leadTypeLabel);
-                      processedBody = processedBody.replace(/\{\{\s*stage_name\s*\}\}/gi, st.name ?? "");
-
-                      // Replace placeholders in subject — derived from template only.
-                      let processedSubject = (emailTemplate.subject || emailTemplate.name)
-                        .replace(/&#123;/g, "{").replace(/&#125;/g, "}");
-                      for (const [key, value] of Object.entries(placeholders)) {
-                        processedSubject = processedSubject.replaceAll(key, value);
-                      }
-
-                      // No HTML wrapper / logo injection — the DB template owns its layout.
-                      const htmlBody = processedBody;
-
-                      // "Shared with agent?" templates also CC the referral
-                      // partner linked to this lead/deal (skipped when unset or
-                      // the partner has no email).
-                      let cc: string[] | undefined;
-                      if (emailTemplate.shared_with_agent && lead.partner_id) {
-                        const { data: partner } = await supabaseAdmin
-                          .from("partners")
-                          .select("agent_email")
-                          .eq("id", lead.partner_id)
-                          .eq("is_deleted", false)
-                          .maybeSingle();
-                        if (partner?.agent_email) cc = [partner.agent_email];
-                      }
-
-                      await resend.emails.send({
-                        from: fromEmail,
-                        replyTo: "testing@iclosed.ca",
-                        to: [clientData.email],
-                        ...(cc ? { cc } : {}),
-                        subject: processedSubject,
-                        html: htmlBody,
-                      });
-
-                      // Mark email_sent on the milestone
-                      await supabaseAdmin
-                        .from("milestones")
-                        .update({ email_sent: true })
-                        .eq("id", ms.id);
-                    }
-                  }
-                } catch (emailErr) {
-                  console.error("[Convert] Auto-complete email failed (non-blocking):", emailErr);
-                }
+                autoCompleteEmails.push({
+                  milestoneId: ms.id,
+                  dealId,
+                  stageTemplateId: ms.stage_template_id,
+                  emailTemplateId: st.email_template_id,
+                  stageName: st.name ?? "",
+                  fileNumber: generatedFileNumber ?? null,
+                });
               }
             }
           }
@@ -875,6 +774,7 @@ export async function convertSingleLead(
       retainer_link_sent: retainerLinkSent,
       already_has_login: alreadyHasLogin,
       auth_error: authError,
+      auto_complete_emails: autoCompleteEmails,
     };
   } catch (err: any) {
     return {

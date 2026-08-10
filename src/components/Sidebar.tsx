@@ -27,7 +27,6 @@ import {
 } from "lucide-react";
 import { NAV_ITEMS } from "../constants";
 import { useAuth } from "@/lib/AuthProvider";
-import NotificationBell from "./NotificationBell";
 
 interface SidebarProps {
   onSearchClick?: () => void;
@@ -124,13 +123,6 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed =
 
         {/* Navigation */}
         <nav className="flex-1 px-2 py-4 space-y-1 overflow-y-auto">
-          {/* Not a NAV_ITEM — it owns its own dropdown and unread badge rather
-              than routing anywhere. Kept at the top of the rail so the badge is
-              visible from every page. */}
-          <NotificationBell
-            showLabel={showLabels}
-            onNavigate={() => { if (isMobile) setMobileOpen(false); }}
-          />
           {NAV_ITEMS.map((item) => {
             const active =
               isActive(item.id) ||

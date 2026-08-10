@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { activateClientDeals } from "@/lib/activateClientDeals";
 import { sendAgentSignupEmail } from "@/lib/sendAgentSignupEmail";
+import { notifyClientSignup } from "@/lib/notifyClientSignup";
 import { guardServiceRequest } from "@/lib/verifyServiceSignature";
 
 /**
@@ -57,6 +58,22 @@ export async function POST(req: NextRequest) {
     // no longer Inactive, so a retry can't misfire. Silently no-ops when the
     // lead has no agent on file.
     const activatedLeadId = result.leadId ?? lead_id ?? null;
+
+    // Tell the back office, in-app only, that this client is now on the portal.
+    // Gated on `activated > 0` so it fires exactly once: activateClientDeals'
+    // UPDATE is conditional on status = 'Inactive', so a retried webhook flips
+    // nothing and raises no duplicate. Never blocks activation.
+    if (activatedLeadId && result.activated > 0) {
+      try {
+        await notifyClientSignup(activatedLeadId);
+      } catch (notifyErr: unknown) {
+        const m = notifyErr instanceof Error ? notifyErr.message : String(notifyErr);
+        console.warn(
+          `[activate-deal webhook] signup notification threw (non-blocking): ${m}`,
+        );
+      }
+    }
+
     if (activatedLeadId) {
       try {
         const agentResult = await sendAgentSignupEmail(activatedLeadId, {

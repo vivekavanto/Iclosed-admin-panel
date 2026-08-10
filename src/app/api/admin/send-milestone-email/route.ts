@@ -2,269 +2,20 @@ import { NextResponse } from "next/server"
 import supabaseAdmin from "@/lib/supabaseAdmin"
 import { Resend } from "resend"
 import { getFamilyDealIds } from "@/lib/familyDeals"
-import { formatLeadTypeLabel, buildLeadAddressForEmail } from "@/lib/leadEmailAddress"
 import { guardServiceRequest } from "@/lib/verifyServiceSignature"
 import { maybeNotifyAllTasksComplete } from "@/lib/notifyAllTasksComplete"
+import { resolveMilestoneSide } from "@/lib/milestoneSide"
 import {
-    resolveMilestoneSide,
-    resolveDealRecipientSide,
-    shouldEmailForSide,
-    type Side,
-} from "@/lib/milestoneSide"
+    collectMilestoneRecipients,
+    sendCombinedMilestoneEmail,
+} from "@/lib/sendMilestoneEmail"
 
 /**
- * Sends a milestone email to the client of a single deal.
- * Returns { success, email, error? }
+ * A file's clients get ONE milestone email between them — every eligible party
+ * in `to`, the referral agent CC'd once. Recipient selection, side scoping and
+ * rendering all live in sendMilestoneEmail.ts; this route owns the milestone /
+ * task completion bookkeeping around it.
  */
-async function sendEmailForDeal(
-    dealId: string,
-    milestone: any,
-    template: any,
-    resend: Resend,
-    fromEmail: string,
-): Promise<{ success: boolean; email?: string; error?: string }> {
-    try {
-        const { data: deal } = await supabaseAdmin
-            .from("deals")
-            .select("client_id, lead_id, file_number, property_address, lockbox_code, type, closing_date, partner_id")
-            .eq("id", dealId)
-            .single()
-
-        if (!deal?.client_id) return { success: false, error: "Deal or client not found" }
-
-        const { data: client } = await supabaseAdmin
-            .from("clients")
-            .select("email, first_name, last_name")
-            .eq("id", deal.client_id)
-            .single()
-
-        if (!client?.email) return { success: false, error: "Client email not found" }
-
-        // Fetch lead data for lead placeholders
-        let lead: any = null;
-        if (deal.lead_id) {
-            const { data: leadData } = await supabaseAdmin
-                .from("leads")
-                .select("*")
-                .eq("id", deal.lead_id)
-                .single()
-            lead = leadData;
-        }
-
-        // Build formatted address — combines purchase + selling for P&S
-        // and pulls the missing side from family-sibling leads when needed.
-        const leadAddress =
-            (await buildLeadAddressForEmail(lead)) || deal.property_address || ""
-
-        // Replace placeholders in email body
-        const fullName = `${client.first_name ?? ""} ${client.last_name ?? ""}`.trim()
-        const leadType = formatLeadTypeLabel(lead?.lead_type ?? deal.type)
-        const fileNumber = deal.file_number ?? ""
-
-        // Lock box code is stored per-deal on the primary PURCHASE deal (it's
-        // deliberately not mirrored across the family). A co-purchaser's own
-        // deal has no code, so fall back to the primary purchaser's deal —
-        // it's the same physical property. Sale-side people (co-sellers) never
-        // inherit it. `lockboxValue` is bolded for the HTML email; an empty
-        // code stays empty so we don't emit an orphan <strong></strong>.
-        let lockboxCode = deal.lockbox_code ?? ""
-        if (!lockboxCode && lead?.parent_lead_id && lead?.co_person_role === "purchaser") {
-            const { data: primaryDeal } = await supabaseAdmin
-                .from("deals")
-                .select("lockbox_code")
-                .eq("lead_id", lead.parent_lead_id)
-                .limit(1)
-                .maybeSingle()
-            lockboxCode = primaryDeal?.lockbox_code ?? ""
-        }
-        const lockboxValue = lockboxCode ? `<strong>${lockboxCode}</strong>` : ""
-
-        // Short-form / specialty tokens used by some templates (retainer agreement etc.)
-        const leadTypeLower = leadType.toLowerCase()
-        const sideSuffix = leadTypeLower.includes("purchase") && leadTypeLower.includes("sale")
-            ? " (Purchase & Sale)"
-            : leadTypeLower === "sale" || (leadTypeLower.includes("sale") && !leadTypeLower.includes("purchase"))
-                ? " (Sale)"
-                : ""
-        const computeRole = (l: any): string => {
-            const lt = (l?.lead_type ?? leadType ?? "").toLowerCase().trim();
-            const isCombined = lt.includes("purchase") && lt.includes("sale");
-            const isSaleOnly = lt === "sale" || (lt.includes("sale") && !lt.includes("purchase"));
-            if (l?.parent_lead_id) {
-                if (isSaleOnly) return "Co-Seller";
-                if (isCombined && l?.selling_address_street) return "Co-Seller";
-                if (lt.includes("purchase") && !isSaleOnly) return "Co-Purchaser";
-                if (l?.selling_address_street) return "Co-Seller";
-                return "Co-Purchaser";
-            }
-            if (isCombined) return "Purchaser & Seller";
-            if (isSaleOnly) return "Seller";
-            return "Purchaser";
-        }
-        const role = computeRole(lead)
-        const propertyRoleRow = role ? `Your Role: ${role}` : ""
-
-        // Per-recipient transaction label: a co-person on a Purchase & Sale deal
-        // retains us for only one side, so the email shows just that side —
-        // Co-Seller → "Sale", Co-Purchaser → "Purchase". The primary client keeps
-        // the full "Purchase & Sale" label. Mirrors formatLeadTypeLabelForRecipient
-        // in iclosed_web.
-        const isPSDeal = leadTypeLower.includes("purchase") && leadTypeLower.includes("sale")
-        const displayLeadType =
-            isPSDeal && lead?.parent_lead_id
-                ? role === "Co-Seller"
-                    ? "Sale"
-                    : role === "Co-Purchaser"
-                        ? "Purchase"
-                        : leadType
-                : leadType
-
-        const placeholders: Record<string, string> = {
-            // User placeholders
-            "{{ user.first_name }}": client.first_name ?? "",
-            "{{ user.last_name }}": client.last_name ?? "",
-            "{{ user.full_name }}": fullName,
-            "{{ user.get_full_name }}": fullName,
-            "{{ user.email }}": client.email,
-            "{{user.first_name}}": client.first_name ?? "",
-            "{{user.last_name}}": client.last_name ?? "",
-            "{{user.full_name}}": fullName,
-            "{{user.get_full_name}}": fullName,
-            "{{user.email}}": client.email,
-            // Lead / deal placeholders
-            "{{ lead_address }}": leadAddress,
-            "{{lead_address}}": leadAddress,
-            "{{ lead.address_line1 }}": lead?.address_street ?? deal.property_address ?? "",
-            "{{lead.address_line1}}": lead?.address_street ?? deal.property_address ?? "",
-            "{{ lead.address_city }}": lead?.address_city ?? "",
-            "{{lead.address_city}}": lead?.address_city ?? "",
-            "{{ lead.address_province }}": lead?.address_province ?? "",
-            "{{lead.address_province}}": lead?.address_province ?? "",
-            "{{ lead.file_number }}": fileNumber,
-            "{{lead.file_number}}": fileNumber,
-            "{{ lead_type }}": displayLeadType,
-            "{{lead_type}}": displayLeadType,
-            // Milestone placeholders
-            "{{ stage_name }}": milestone?.title ?? "",
-            "{{stage_name}}": milestone?.title ?? "",
-            "{{ stage_status }}": milestone?.status ?? "Completed",
-            "{{stage_status}}": milestone?.status ?? "Completed",
-            // Short-form aliases (retainer agreement and similar templates)
-            "{{ first_name }}": client.first_name ?? "",
-            "{{ last_name }}": client.last_name ?? "",
-            "{{ full_name }}": fullName,
-            "{{ email }}": client.email,
-            "{{ property_address }}": leadAddress,
-            "{{ lockbox_code }}": lockboxValue,
-            "{{lockbox_code}}": lockboxValue,
-            "{{ lead.lockbox_code }}": lockboxValue,
-            "{{lead.lockbox_code}}": lockboxValue,
-            "{{ file_number }}": fileNumber,
-            "{{ side_suffix }}": sideSuffix,
-            "{{ property_role_row }}": propertyRoleRow,
-            "{{first_name}}": client.first_name ?? "",
-            "{{last_name}}": client.last_name ?? "",
-            "{{full_name}}": fullName,
-            "{{email}}": client.email,
-            "{{property_address}}": leadAddress,
-            "{{file_number}}": fileNumber,
-            "{{side_suffix}}": sideSuffix,
-            "{{property_role_row}}": propertyRoleRow,
-        }
-
-        let processedBody = template.body
-            .replace(/&#123;/g, "{")
-            .replace(/&#125;/g, "}")
-            .replace(/&nbsp;/g, " ")
-            .replace(/\u00A0/g, " ")
-        for (const [key, value] of Object.entries(placeholders)) {
-            processedBody = processedBody.replaceAll(key, value)
-        }
-
-        // Catch remaining placeholders with flexible whitespace
-        processedBody = processedBody.replace(/\{\{\s*user\.get_full_name\s*\}\}/gi, fullName);
-        processedBody = processedBody.replace(/\{\{\s*user\.first_name\s*\}\}/gi, client.first_name ?? "");
-        processedBody = processedBody.replace(/\{\{\s*user\.last_name\s*\}\}/gi, client.last_name ?? "");
-        processedBody = processedBody.replace(/\{\{\s*user\.full_name\s*\}\}/gi, fullName);
-        processedBody = processedBody.replace(/\{\{\s*user\.email\s*\}\}/gi, client.email ?? "");
-        processedBody = processedBody.replace(/\{\{\s*lead_address\s*\}\}/gi, leadAddress);
-        processedBody = processedBody.replace(/\{\{\s*lead\.address_line1\s*\}\}/gi, lead?.address_street ?? deal.property_address ?? "");
-        processedBody = processedBody.replace(/\{\{\s*lead\.address_city\s*\}\}/gi, lead?.address_city ?? "");
-        processedBody = processedBody.replace(/\{\{\s*lead\.address_province\s*\}\}/gi, lead?.address_province ?? "");
-        processedBody = processedBody.replace(/\{\{\s*lead\.file_number\s*\}\}/gi, deal.file_number ?? "");
-        processedBody = processedBody.replace(/\{\{\s*lead_type\s*\}\}/gi, displayLeadType);
-        processedBody = processedBody.replace(/\{\{\s*stage_name\s*\}\}/gi, milestone?.title ?? "");
-        processedBody = processedBody.replace(/\{\{\s*stage_status\s*\}\}/gi, milestone?.status ?? "Completed");
-        // Short-form alias fallbacks
-        processedBody = processedBody.replace(/\{\{\s*first_name\s*\}\}/gi, client.first_name ?? "");
-        processedBody = processedBody.replace(/\{\{\s*last_name\s*\}\}/gi, client.last_name ?? "");
-        processedBody = processedBody.replace(/\{\{\s*full_name\s*\}\}/gi, fullName);
-        processedBody = processedBody.replace(/\{\{\s*email\s*\}\}/gi, client.email ?? "");
-        processedBody = processedBody.replace(/\{\{\s*property_address\s*\}\}/gi, leadAddress);
-        processedBody = processedBody.replace(/\{\{\s*lockbox_code\s*\}\}/gi, lockboxValue);
-        processedBody = processedBody.replace(/\{\{\s*lead\.lockbox_code\s*\}\}/gi, lockboxValue);
-        processedBody = processedBody.replace(/\{\{\s*file_number\s*\}\}/gi, fileNumber);
-        processedBody = processedBody.replace(/\{\{\s*side_suffix\s*\}\}/gi, sideSuffix);
-        processedBody = processedBody.replace(/\{\{\s*property_role_row\s*\}\}/gi, propertyRoleRow);
-
-        // No HTML wrapper / logo injection — the DB template owns its layout.
-        const htmlBody = processedBody
-
-        // Apply placeholder replacement to subject — derived from template only.
-        let processedSubject = (template.subject || template.name)
-            .replace(/&#123;/g, "{")
-            .replace(/&#125;/g, "}");
-        for (const [key, value] of Object.entries(placeholders)) {
-            processedSubject = processedSubject.replaceAll(key, value);
-        }
-        processedSubject = processedSubject.replace(/\{\{\s*lead_address\s*\}\}/gi, leadAddress);
-        processedSubject = processedSubject.replace(/\{\{\s*lead\.file_number\s*\}\}/gi, deal.file_number ?? "");
-        processedSubject = processedSubject.replace(/\{\{\s*user\.first_name\s*\}\}/gi, client.first_name ?? "");
-        processedSubject = processedSubject.replace(/\{\{\s*user\.full_name\s*\}\}/gi, fullName);
-        processedSubject = processedSubject.replace(/\{\{\s*first_name\s*\}\}/gi, client.first_name ?? "");
-        processedSubject = processedSubject.replace(/\{\{\s*full_name\s*\}\}/gi, fullName);
-        processedSubject = processedSubject.replace(/\{\{\s*property_address\s*\}\}/gi, leadAddress);
-        processedSubject = processedSubject.replace(/\{\{\s*file_number\s*\}\}/gi, fileNumber);
-        processedSubject = processedSubject.replace(/\{\{\s*side_suffix\s*\}\}/gi, sideSuffix);
-
-        // "Shared with agent?" templates also CC the deal's referral partner.
-        // Client stays the primary recipient; CC is skipped when the flag is
-        // off, no partner is linked, or the linked partner has no email.
-        let cc: string[] | undefined
-        if (template.shared_with_agent && deal.partner_id) {
-            const { data: partner } = await supabaseAdmin
-                .from("partners")
-                .select("agent_email")
-                .eq("id", deal.partner_id)
-                .eq("is_deleted", false)
-                .maybeSingle()
-            if (partner?.agent_email) cc = [partner.agent_email]
-        }
-
-        const { data: sendResult, error: sendError } = await resend.emails.send({
-            from: fromEmail,
-            replyTo: "testing@iclosed.ca",
-            to: [client.email],
-            ...(cc ? { cc } : {}),
-            subject: processedSubject,
-            html: htmlBody,
-        })
-
-        if (sendError) {
-            return { success: false, email: client.email, error: sendError.message }
-        }
-
-        console.log(
-            `[Milestone Email] Sent to ${client.email}` +
-            `${cc ? ` (cc agent: ${cc.join(", ")})` : template.shared_with_agent ? " (shared_with_agent on, but no partner email on deal — no cc)" : ""}` +
-            `, milestone: "${milestone.title}", id: ${sendResult?.id}`
-        )
-
-        return { success: true, email: client.email }
-    } catch (err: any) {
-        return { success: false, error: err.message }
-    }
-}
 
 /**
  * Handles direct email send from the customer portal.
@@ -346,9 +97,10 @@ async function handlePortalRequest(body: Record<string, any>) {
     }
 
     // On a Purchase & Sale file every family deal carries BOTH sides' milestones,
-    // so a purchase-side stage would otherwise email the co-sellers as well.
-    // Scope the fan-out to the side this milestone belongs to. See milestoneSide.ts.
-    let milestoneSide: Side | null = null
+    // so a purchase-side stage would otherwise reach the co-sellers as well.
+    // Scope the RECIPIENT LIST to the side this milestone belongs to — the send
+    // itself is a single email to whoever survives. See milestoneSide.ts.
+    let milestoneSide = null as Awaited<ReturnType<typeof resolveMilestoneSide>>
     if (milestone_id) {
         const { data: ms } = await supabaseAdmin
             .from("milestones")
@@ -358,70 +110,64 @@ async function handlePortalRequest(body: Record<string, any>) {
         if (ms) milestoneSide = await resolveMilestoneSide(ms)
     }
 
-    // Send email to each deal's client
-    const results: { email?: string; success: boolean; error?: string }[] = []
+    const { recipients, skippedDealIds } = await collectMilestoneRecipients(allDealIds, milestoneSide)
 
-    for (const did of allDealIds) {
-        // Gate only the SEND, not the email_sent bookkeeping below: the wrong-side
-        // client is intentionally not being emailed, so the milestone should still
-        // be marked done rather than left looking un-sent and retried forever.
-        let sendToThisDeal = true
-        if (milestoneSide) {
-            const recipientSide = await resolveDealRecipientSide(did)
-            sendToThisDeal = shouldEmailForSide(milestoneSide, recipientSide)
-            if (!sendToThisDeal) {
-                console.log(
-                    `[MilestoneEmail Portal] Skipped deal ${did} — ${recipientSide}-side client, ${milestoneSide}-side milestone "${milestone_title}"`,
-                )
-            }
-        }
-
-        if (sendToThisDeal) {
-            const result = await sendEmailForDeal(did, { title: milestone_title }, template, resend, fromEmail)
-            results.push(result)
-        }
-
-        // Mark milestone email_sent on each linked deal's matching milestone
-        if (milestone_id) {
-            try {
-                // Get stage_template_id from the original milestone
-                const { data: origMilestone } = await supabaseAdmin
-                    .from("milestones")
-                    .select("stage_template_id")
-                    .eq("id", milestone_id)
-                    .single()
-
-                if (origMilestone?.stage_template_id) {
-                    await supabaseAdmin
-                        .from("milestones")
-                        .update({ email_sent: true })
-                        .eq("deal_id", did)
-                        .eq("stage_template_id", origMilestone.stage_template_id)
-                }
-            } catch {
-                // Non-blocking
-            }
-        }
+    if (skippedDealIds.length) {
+        console.log(
+            `[MilestoneEmail Portal] ${skippedDealIds.length} deal(s) not emailed for ${milestoneSide ?? "side-less"} milestone "${milestone_title}": ${skippedDealIds.join(", ")}`,
+        )
     }
 
-    // Also mark email_sent on the original milestone
+    const sendResult = await sendCombinedMilestoneEmail({
+        recipients,
+        milestone: { title: milestone_title },
+        template,
+        resend,
+        fromEmail,
+        milestoneSide,
+    })
+
+    // Mark milestone email_sent on every linked deal's matching milestone. This
+    // runs over the WHOLE family, not just the deals we emailed: the wrong-side
+    // client is intentionally not being emailed, so their milestone should still
+    // be marked done rather than left looking un-sent and retried forever.
     if (milestone_id) {
+        try {
+            const { data: origMilestone } = await supabaseAdmin
+                .from("milestones")
+                .select("stage_template_id")
+                .eq("id", milestone_id)
+                .single()
+
+            if (origMilestone?.stage_template_id && allDealIds.length) {
+                await supabaseAdmin
+                    .from("milestones")
+                    .update({ email_sent: true })
+                    .eq("stage_template_id", origMilestone.stage_template_id)
+                    .in("deal_id", allDealIds)
+            }
+        } catch {
+            // Non-blocking
+        }
+
         await supabaseAdmin
             .from("milestones")
             .update({ email_sent: true })
             .eq("id", milestone_id)
     }
 
-    const successCount = results.filter((r) => r.success).length
-    const failedCount = results.filter((r) => !r.success).length
-
-    console.log(`[MilestoneEmail Portal] Sent to ${successCount} client(s), milestone: "${milestone_title}"`)
+    console.log(
+        `[MilestoneEmail Portal] Sent 1 email to ${sendResult.recipients.length} client(s), milestone: "${milestone_title}"`,
+    )
 
     return NextResponse.json({
         success: true,
-        emails_sent: successCount,
-        emails_failed: failedCount,
-        email_sent_to: results.filter((r) => r.success).map((r) => r.email),
+        // Clients reached — one email now carries all of them.
+        emails_sent: sendResult.success ? sendResult.recipients.length : 0,
+        emails_failed: sendResult.success ? 0 : 1,
+        email_sent_to: sendResult.recipients,
+        cc: sendResult.cc,
+        ...(sendResult.error ? { error: sendResult.error } : {}),
     })
 }
 
@@ -443,7 +189,6 @@ export async function POST(req: Request) {
 
         // Admin panel format (camelCase fields)
         const milestoneId = body.milestoneId ?? body.milestone_id
-        const dealId = body.dealId ?? body.deal_id
         const sendToLinkedDeals = body.sendToLinkedDeals ?? false
 
         if (!milestoneId) {
@@ -458,6 +203,10 @@ export async function POST(req: Request) {
             .single()
 
         if (!milestone) throw new Error("Milestone not found")
+
+        // The caller normally passes the deal it clicked from; fall back to the
+        // milestone's own deal so family enumeration can never run on undefined.
+        const dealId: string | null = body.dealId ?? body.deal_id ?? milestone.deal_id ?? null
 
         // 2. Update milestone status to Completed
         await supabaseAdmin
@@ -525,56 +274,39 @@ export async function POST(req: Request) {
 
         // On a Purchase & Sale file every family deal carries BOTH sides'
         // milestones, so a purchase-side stage ("Title Search", "Financing Firm ->
-        // Mortgage Instructions") would otherwise email the co-sellers too. The
-        // completion mirror below is already side-safe because it matches on
-        // stage_template_id, but the sends were outside that guard. See
+        // Mortgage Instructions") must not reach the co-sellers. The completion
+        // mirror below is already side-safe because it matches on
+        // stage_template_id; the recipient list is scoped separately. See
         // milestoneSide.ts — an unknown side on either end still sends.
         const milestoneSide = await resolveMilestoneSide(milestone)
 
-        // 6. Send email to primary deal's client
-        const primarySide = milestoneSide ? await resolveDealRecipientSide(dealId) : null
-        const emailPrimary = shouldEmailForSide(milestoneSide, primarySide)
+        // The whole family is always marked as emailed (step 8, unchanged), but
+        // only a sendToLinkedDeals request actually reaches beyond this deal.
+        const allFamilyDealIds = dealId ? await getFamilyDealIds(dealId) : []
+        const familyDealIds = sendToLinkedDeals
+            ? allFamilyDealIds
+            : dealId
+                ? [dealId]
+                : []
 
-        let primaryResult: { success: boolean; email?: string; error?: string } = { success: true }
-        if (emailPrimary) {
-            primaryResult = await sendEmailForDeal(dealId, milestone, template, resend, fromEmail)
-
-            if (!primaryResult.success) {
-                return NextResponse.json(
-                    { success: false, error: `Email send failed: ${primaryResult.error}` },
-                    { status: 500 }
-                )
-            }
-        } else {
-            // Not a failure — this client is on the other side of the file, so the
-            // milestone genuinely isn't theirs. Bookkeeping below still runs.
-            console.log(
-                `[MilestoneEmail] Skipped deal ${dealId} — ${primarySide}-side client, ${milestoneSide}-side milestone "${milestone.title}"`,
-            )
-        }
-
-        // 7. If sendToLinkedDeals, also send to all co-purchaser/primary linked deals
-        const linkedResults: { email?: string; success: boolean; error?: string }[] = []
-
+        // 6. Mirror completion onto the rest of the family. Independent of who
+        // gets emailed — it is keyed on stage_template_id, so it is already
+        // side-correct.
         if (sendToLinkedDeals) {
-            const familyDealIds = await getFamilyDealIds(dealId)
-            const otherDealIds = familyDealIds.filter((id) => id !== dealId)
-
-            for (const linkedDealId of otherDealIds) {
-                // Also complete the matching milestone on the linked deal
+            for (const linkedDealId of familyDealIds.filter((id) => id !== dealId)) {
                 try {
-                    const { data: linkedMilestones } = await supabaseAdmin
+                    const { data: linkedMilestone } = await supabaseAdmin
                         .from("milestones")
                         .select("id, email_sent, stage_template_id")
                         .eq("deal_id", linkedDealId)
                         .eq("stage_template_id", milestone.stage_template_id)
                         .maybeSingle()
 
-                    if (linkedMilestones && !linkedMilestones.email_sent) {
+                    if (linkedMilestone && !linkedMilestone.email_sent) {
                         await supabaseAdmin
                             .from("milestones")
                             .update({ status: "Completed", completed_at: new Date(), email_sent: true })
-                            .eq("id", linkedMilestones.id)
+                            .eq("id", linkedMilestone.id)
 
                         await supabaseAdmin
                             .from("tasks")
@@ -583,28 +315,40 @@ export async function POST(req: Request) {
                                 completed: true,
                                 completed_at: new Date().toISOString(),
                             })
-                            .eq("milestone_id", linkedMilestones.id)
+                            .eq("milestone_id", linkedMilestone.id)
                     }
                 } catch {
                     // Non-blocking
                 }
-
-                // Same side gate as the primary. The completion mirror above is
-                // keyed on stage_template_id so it's already side-correct; this
-                // send was the leak.
-                if (milestoneSide) {
-                    const linkedSide = await resolveDealRecipientSide(linkedDealId)
-                    if (!shouldEmailForSide(milestoneSide, linkedSide)) {
-                        console.log(
-                            `[MilestoneEmail] Skipped linked deal ${linkedDealId} — ${linkedSide}-side client, ${milestoneSide}-side milestone "${milestone.title}"`,
-                        )
-                        continue
-                    }
-                }
-
-                const result = await sendEmailForDeal(linkedDealId, milestone, template, resend, fromEmail)
-                linkedResults.push(result)
             }
+        }
+
+        // 7. One email to the whole eligible family, agent CC'd once.
+        const { recipients, skippedDealIds } = await collectMilestoneRecipients(
+            familyDealIds,
+            milestoneSide,
+        )
+
+        if (skippedDealIds.length) {
+            console.log(
+                `[MilestoneEmail] ${skippedDealIds.length} deal(s) not emailed for ${milestoneSide ?? "side-less"} milestone "${milestone.title}": ${skippedDealIds.join(", ")}`,
+            )
+        }
+
+        const sendResult = await sendCombinedMilestoneEmail({
+            recipients,
+            milestone,
+            template,
+            resend,
+            fromEmail,
+            milestoneSide,
+        })
+
+        if (!sendResult.success) {
+            return NextResponse.json(
+                { success: false, error: `Email send failed: ${sendResult.error}` },
+                { status: 500 }
+            )
         }
 
         // 8. Mark email_sent on ALL family milestones with same stage_template_id
@@ -613,10 +357,8 @@ export async function POST(req: Request) {
             .update({ email_sent: true })
             .eq("id", milestoneId)
 
-        // Also mark email_sent on all linked deal milestones by stage_template_id
-        if (milestone.stage_template_id && dealId) {
+        if (milestone.stage_template_id && allFamilyDealIds.length) {
             try {
-                const allFamilyDealIds = await getFamilyDealIds(dealId)
                 await supabaseAdmin
                     .from("milestones")
                     .update({ email_sent: true })
@@ -628,7 +370,7 @@ export async function POST(req: Request) {
         }
 
         // This route bulk-completes every task under the milestone (steps 2 and
-        // 7) without going through recalcMilestonesForFamily, so it's the one
+        // 6) without going through recalcMilestonesForFamily, so it's the one
         // completion path the alert hook in recalcMilestones can't see. Fire it
         // here too — the helper's claim makes a double call a no-op.
         if (dealId) {
@@ -639,16 +381,13 @@ export async function POST(req: Request) {
             }
         }
 
-        const linkedSent = linkedResults.filter((r) => r.success).length
-        const totalFailed = linkedResults.filter((r) => !r.success).length
-
         return NextResponse.json({
             success: true,
-            // Undefined when the primary is on the other side of the file and was
-            // deliberately skipped.
-            email_sent_to: primaryResult.email,
-            linked_emails_sent: linkedSent,
-            linked_emails_failed: totalFailed,
+            // Every client on the file who was in scope for this milestone.
+            // Empty when they were all on the other side and deliberately skipped.
+            email_sent_to: sendResult.recipients,
+            recipient_count: sendResult.recipients.length,
+            cc: sendResult.cc,
             ...(milestoneSide ? { milestone_side: milestoneSide } : {}),
         })
 

@@ -67,6 +67,19 @@ CREATE TABLE IF NOT EXISTS notification_reads (
 CREATE INDEX IF NOT EXISTS notification_reads_admin_idx
   ON notification_reads (admin_user_id);
 
+-- Grants. Supabase's default privileges did NOT reach these two tables when
+-- this migration was first applied, so every read through the service-role
+-- client failed with 42501 "permission denied for table notifications" and the
+-- admin feed answered 500. Granting explicitly here so a fresh database never
+-- repeats it. (2026-08-10-client-signup-notifications.sql carries the same
+-- grants to repair databases where this file already ran.)
+--
+-- service_role ONLY, deliberately: the feed is read exclusively through
+-- src/lib/supabaseAdmin.ts behind the /api/admin/* auth middleware, so a leaked
+-- anon key still cannot reach the client names and addresses stored here.
+GRANT SELECT, INSERT, UPDATE, DELETE ON notifications      TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON notification_reads TO service_role;
+
 -- 3 ─────────────────────────────────────────────────────────────────────────
 ALTER TABLE deals
   ADD COLUMN IF NOT EXISTS all_tasks_notified_at timestamptz;

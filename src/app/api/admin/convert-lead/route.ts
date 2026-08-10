@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { convertSingleLead, type ConvertOneResult } from "@/lib/convertLead";
+import { dispatchAutoCompleteMilestoneEmails } from "@/lib/sendMilestoneEmail";
 
 /**
  * POST /api/admin/convert-lead
@@ -95,6 +96,10 @@ export async function POST(req: Request) {
         );
       }
 
+      // Auto-complete milestone emails are deferred out of convertSingleLead so
+      // a family gets ONE combined email per stage rather than one per party.
+      await dispatchAutoCompleteMilestoneEmails(one.auto_complete_emails ?? []);
+
       const retainerMode = authEmailMode === "retainer";
 
       return NextResponse.json({
@@ -167,6 +172,14 @@ export async function POST(req: Request) {
         );
       }
     }
+
+    // Every party now has a deal, so the auto-complete stage emails can go out
+    // as ONE email per stage addressed to the whole family — sending them inside
+    // convertSingleLead gave each party their own copy and CC'd the referral
+    // agent once per party.
+    await dispatchAutoCompleteMilestoneEmails(
+      results.flatMap((r) => r.auto_complete_emails ?? []),
+    );
 
     const created_count = results.filter((r) => r.created).length;
     const skipped_count = results.length - created_count;

@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import Sidebar from "../components/Sidebar";
+import AppHeader from "../components/AppHeader";
 import SearchDrawer from "../components/SearchDrawer";
 import { useNavigation } from "./providers";
 import { useRouter, usePathname } from "next/navigation";
@@ -62,10 +63,16 @@ export default function ClientLayout({
           closeSearch();
         }}
       />
+      {/* `<main>` is the scroll root, so AppHeader lives INSIDE it and sticks to
+          the top as the page scrolls. Padding moved onto the inner wrapper so
+          the header can span edge-to-edge under it. */}
       <main
-        className={`ml-0 ${sidebarCollapsed ? "md:ml-[72px]" : "md:ml-64"} flex-1 p-4 sm:p-6 md:p-8 pt-16 md:pt-8 h-screen overflow-y-auto transition-all duration-300`}
+        className={`ml-0 ${sidebarCollapsed ? "md:ml-[72px]" : "md:ml-64"} flex-1 h-screen overflow-y-auto transition-all duration-300`}
       >
-        <div className={`${isFullWidth ? "w-full" : "max-w-7xl mx-auto"} h-full`}>{children}</div>
+        <AppHeader />
+        <div className="p-4 sm:p-6 md:p-8">
+          <div className={`${isFullWidth ? "w-full" : "max-w-7xl mx-auto"}`}>{children}</div>
+        </div>
       </main>
     </div>
   );

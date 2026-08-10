@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { convertSingleLead } from "@/lib/convertLead";
+import { dispatchAutoCompleteMilestoneEmails } from "@/lib/sendMilestoneEmail";
 
 /**
  * POST /api/admin/deals/[id]/co-clients
@@ -253,6 +254,11 @@ export async function POST(
       { status: convert.statusCode ?? 500 },
     );
   }
+
+  // Auto-complete stage emails are deferred out of convertSingleLead. The rest
+  // of the family was emailed when they converted, so dispatch drops them and
+  // this sends only to the newly added co-client.
+  await dispatchAutoCompleteMilestoneEmails(convert.auto_complete_emails ?? []);
 
   return NextResponse.json({
     success: true,

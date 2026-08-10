@@ -14,9 +14,19 @@ import { logger } from "@/lib/logger";
 //
 // Gated to admins by src/middleware.ts (everything under /api/admin/*).
 
+// What the header dropdown reads. The full-feed page at /admin/notifications
+// asks for more via ?limit=.
 const FEED_LIMIT = 50;
+const MAX_LIMIT = 200;
 
-export async function GET() {
+/** Clamp an untrusted ?limit= to something we're willing to serve. */
+function parseLimit(raw: string | null): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return FEED_LIMIT;
+  return Math.min(Math.floor(n), MAX_LIMIT);
+}
+
+export async function GET(req: Request) {
   const actor = await getActingAdmin();
   if (!actor.id) {
     return NextResponse.json(
@@ -25,11 +35,13 @@ export async function GET() {
     );
   }
 
+  const limit = parseLimit(new URL(req.url).searchParams.get("limit"));
+
   const { data: rows, error } = await supabaseAdmin
     .from("notifications")
     .select("id, type, title, body, deal_id, file_number, metadata, created_at")
     .order("created_at", { ascending: false })
-    .limit(FEED_LIMIT);
+    .limit(limit);
 
   if (error) {
     logger.error("[notifications] feed read failed:", error);
@@ -83,11 +95,14 @@ export async function PATCH(req: Request) {
   let targetIds: string[];
 
   if (body.all) {
+    // MAX_LIMIT, not FEED_LIMIT: "Mark all as read" is also offered on the
+    // full-feed page, which can be showing more rows than the dropdown does.
+    // Clearing only the first 50 there would leave a still-lit dot behind.
     const { data: rows } = await supabaseAdmin
       .from("notifications")
       .select("id")
       .order("created_at", { ascending: false })
-      .limit(FEED_LIMIT);
+      .limit(MAX_LIMIT);
     targetIds = (rows ?? []).map((r) => r.id);
   } else {
     const raw = Array.isArray(body.ids) ? body.ids : [];

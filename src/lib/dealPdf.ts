@@ -63,6 +63,9 @@ export interface PdfDealMeta {
 
 export interface PdfDealSection {
   milestoneTitle: string;
+  /** Parenthetical qualifier on the section title: the milestone's lead type
+   *  ("Purchase"/"Sale"), or — for a section grouping one family member's own
+   *  tasks — that person's role, e.g. "Pavithra Testing (Co-Purchaser)". */
   leadType?: string | null;
   tasks: PdfTaskInput[];
 }
@@ -713,19 +716,16 @@ async function downloadBrandedTaskPdf(
           pkgImagePage(doc, task.ownerName || task.title || "Document", task.ownerName ? task.title : "", img, kind === "png" ? "PNG" : "JPEG");
           continue;
         }
-        pkgAttachedTitle(doc, docIdx, totalFiles, task.title || "Document", fname);
-        pkgPlaceholder(doc, fname, "This image could not be rendered. It remains available via its original link.", false);
+        pkgNotePage(doc, docIdx, totalFiles, task.title || "Document", fname, "This image could not be rendered. It remains available via its original link.");
       } else if (kind === "pdf") {
-        pkgAttachedTitle(doc, docIdx, totalFiles, task.title || "Document", fname);
-        pkgPlaceholder(doc, fname, "The original document is merged into the package at this position.", true);
+        // No title/placeholder page — the uploaded PDF's own pages are merged in
+        // right here (phase B below).
         inserts.push({ afterPage: doc.getNumberOfPages(), bytes: file.bytes });
       } else {
-        pkgAttachedTitle(doc, docIdx, totalFiles, task.title || "Document", fname);
-        pkgPlaceholder(doc, fname, "This file type can't be previewed inline. It remains available via its original link.", false);
+        pkgNotePage(doc, docIdx, totalFiles, task.title || "Document", fname, "This file type can't be previewed inline. It remains available via its original link.");
       }
     } else {
-      pkgAttachedTitle(doc, docIdx, totalFiles, task.title || "Document", fname);
-      pkgPlaceholder(doc, fname, "This file could not be downloaded for embedding (it may require sign-in or block cross-origin access). It remains available via its original link.", false);
+      pkgNotePage(doc, docIdx, totalFiles, task.title || "Document", fname, "This file could not be downloaded for embedding (it may require sign-in or block cross-origin access). It remains available via its original link.");
     }
   }
 
@@ -745,8 +745,7 @@ async function downloadBrandedTaskPdf(
   let offset = 0;
   for (const ins of inserts) {
     try {
-      const src = await lib.PDFDocument.load(ins.bytes, { ignoreEncryption: true });
-      const copied = await pdfDoc.copyPages(src, src.getPageIndices());
+      const copied = await copyEmbeddedPages(lib, pdfDoc, ins.bytes);
       let at = ins.afterPage + offset;
       for (const p of copied) {
         pdfDoc.insertPage(at, p);
@@ -754,7 +753,7 @@ async function downloadBrandedTaskPdf(
       }
       offset += copied.length;
     } catch {
-      /* leave the placeholder page standing if this PDF can't be merged */
+      /* skip this attachment rather than failing the whole download */
     }
   }
 
@@ -764,10 +763,14 @@ async function downloadBrandedTaskPdf(
 
 // ═══════════════════════ Deal Package (branded layout) ═══════════════════════
 // A polished, self-contained "Deal Package" for downloadDealPdf: a cover page,
-// section divider pages, key/value tables with row rules, a running header +
-// footer on every page, and styled attachment title + placeholder pages.
-// Uploaded PDFs are inserted right after their title page (via pdf-lib); images
-// are drawn onto their own styled page by jsPDF.
+// section divider pages, key/value tables with row rules, and a running header +
+// footer on every page.
+//
+// Every generated page must carry real content. Uploaded PDFs are merged in
+// directly (via pdf-lib) with no title card or "merged here" placeholder in
+// front of them; images are drawn onto their own styled page by jsPDF. Only an
+// attachment that could NOT be embedded gets a generated page (pkgNotePage),
+// because there the note *is* the content.
 
 const PKG = {
   ink: [24, 24, 27] as [number, number, number], // near-black (slate-900)
@@ -785,18 +788,6 @@ function pkgGeom(doc: JsPdfDoc) {
   const top = 104; // content top (clears the running header at y=68)
   const bottom = pageH - 76; // content bottom (clears the running footer)
   return { pageW, pageH, M, top, bottom, contentW: pageW - M * 2 };
-}
-
-function setDash(doc: JsPdfDoc, arr: number[]) {
-  try {
-    (doc as any).setLineDashPattern(arr, 0);
-  } catch {
-    try {
-      (doc as any).setLineDash(arr);
-    } catch {
-      /* older jsPDF — dash unsupported, fall back to solid */
-    }
-  }
 }
 
 function money(n?: number | null): string | null {
@@ -1047,12 +1038,102 @@ function pkgSectionCover(
   }
 }
 
-function pkgAttachedTitle(
+// ───────────── scaffolding inside an embedded attachment ─────────────
+//
+// An uploaded document is sometimes itself an older iClosed package export — a
+// staff member downloads one file's package and uploads it as a document on
+// another file. Merged verbatim, its own title cards and "the original document
+// is merged here" placeholders land in this package as pages that say nothing,
+// which is what used to sit between a SECTION cover and its first real document.
+//
+// A page is dropped ONLY when it carries our own running chrome (the "DEAL FILE"
+// header + "CONFIDENTIAL" footer that stampChrome writes on every page we draw)
+// AND holds nothing else of substance. A client's own document never contains
+// that chrome, so their pages are never candidates. Every step fails open — any
+// parse problem, unavailable pdf-lib internal, or a source whose pages ALL look
+// like scaffolding keeps the document whole. Losing a page of a client's legal
+// document is far worse than keeping a sparse one.
+
+// Decode a page's content stream to a latin-1 string. Standard PDF fonts (what
+// jsPDF uses) write their text as literal bytes in the stream, so the drawn text
+// is readable here without a full text-extraction library.
+function decodePageContent(lib: PdfLib, src: any, page: any): string | null {
+  const decodeRaw = (lib as any).decodePDFRawStream;
+  if (typeof decodeRaw !== "function") return null;
+  try {
+    const contents = page.node.get(lib.PDFName.of("Contents"));
+    const resolved = src.context.lookup(contents);
+    const streams: any[] =
+      resolved instanceof (lib as any).PDFArray
+        ? resolved.asArray().map((r: any) => src.context.lookup(r))
+        : [resolved];
+    const decoder = new TextDecoder("latin1");
+    let out = "";
+    for (const s of streams) {
+      if (!s) continue;
+      out += decoder.decode(decodeRaw(s).decode());
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+function isEmbeddedScaffoldPage(lib: PdfLib, src: any, page: any): boolean {
+  const content = decodePageContent(lib, src, page);
+  if (!content) return false;
+
+  // Not one of ours → never a candidate.
+  if (!content.includes("DEAL FILE") || !content.includes("CONFIDENTIAL")) return false;
+
+  // Our old title / placeholder pages name themselves.
+  if (content.includes("ATTACHED DOCUMENT") || content.includes("ORIGINAL ATTACHMENT")) return true;
+
+  // Anything that paints an image or form XObject carries real content.
+  if (/\/[A-Za-z0-9_.]+\s+Do\b/.test(content)) return false;
+
+  // Otherwise: scaffolding only if barely any text was drawn. Budget, measured
+  // against real output: chrome 4 draws + heading band 2 = 6, and each info row
+  // adds 2. So a name-only block (the band plus a "Name" row that just repeats
+  // it) lands at 8, while a block carrying even ONE real response reaches 10 and
+  // is kept. The threshold sits between the two.
+  const draws =
+    (content.match(/\)\s*Tj/g)?.length ?? 0) + (content.match(/\]\s*TJ/g)?.length ?? 0);
+  return draws <= 8;
+}
+
+/** Copy an embedded PDF's pages into the package, skipping any page that is
+ *  another iClosed package's scaffolding. Returns the copied pages.
+ *
+ *  An attachment CAN reduce to nothing — a package export whose own attachments
+ *  were all un-renderable (HEICs, say) is title cards and "can't be previewed"
+ *  notes end to end, and contributes no content here. It's dropped whole; the
+ *  section cover still lists it by filename, so the file is on the record. There
+ *  is deliberately no "if everything matched, keep it anyway" fallback: it fires
+ *  precisely on the all-scaffolding documents this is meant to strip. The
+ *  safeguard that matters is upstream — a page is only ever a candidate if it
+ *  carries our own chrome, which a client's document never does. */
+async function copyEmbeddedPages(lib: PdfLib, target: any, bytes: Uint8Array): Promise<any[]> {
+  const src = await lib.PDFDocument.load(bytes, { ignoreEncryption: true });
+  const keep = src
+    .getPageIndices()
+    .filter((i: number) => !isEmbeddedScaffoldPage(lib, src, src.getPage(i)));
+  if (keep.length === 0) return [];
+  return target.copyPages(src, keep);
+}
+
+// A single page standing in for an attachment that could NOT be embedded inline
+// (unsupported type, or the download failed). Attachments that *can* be embedded
+// get no generated page at all — their own pages are merged straight into the
+// package, so the reader never pages past a title card and a "the document is
+// merged below" placeholder to reach the document itself.
+function pkgNotePage(
   doc: JsPdfDoc,
   idx: number,
   total: number,
   sectionTitle: string,
   fileName: string,
+  note: string,
 ) {
   doc.addPage();
   const g = pkgGeom(doc);
@@ -1073,50 +1154,15 @@ function pkgAttachedTitle(
   doc.rect(g.M, y, 4, chipH, "F");
   doc.setTextColor(...PKG.ink);
   doc.text(fname, g.M + 16, y + chipH / 2 + 4, { maxWidth: chipW - 28 } as any);
-}
-
-function pkgPlaceholder(doc: JsPdfDoc, fileName: string, note: string, embedded: boolean) {
-  doc.addPage();
-  const g = pkgGeom(doc);
-  const bx = g.M;
-  const by = g.top;
-  const bw = g.contentW;
-  const bh = g.bottom - g.top;
-
-  doc.setDrawColor(...PKG.hair);
-  doc.setLineWidth(1);
-  setDash(doc, [3, 3]);
-  doc.roundedRect(bx, by, bw, bh, 8, 8, "S");
-  setDash(doc, []);
-
-  const cx = g.pageW / 2;
-  let y = by + 64;
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(8.5);
-  doc.setTextColor(...PKG.brand);
-  doc.text(embedded ? "ORIGINAL ATTACHMENT · EMBEDDED HERE" : "ORIGINAL ATTACHMENT", cx, y, {
-    align: "center",
-    charSpace: 2,
-  } as any);
-  y += 28;
-
-  doc.setFont("courier", "bold");
-  doc.setFontSize(12);
-  doc.setTextColor(...PKG.ink);
-  const nameLines: string[] = doc.splitTextToSize(String(fileName || "document"), bw - 80);
-  for (const ln of nameLines) {
-    doc.text(ln, cx, y, { align: "center" } as any);
-    y += 18;
-  }
-  y += 12;
+  y += chipH + 22;
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(10);
   doc.setTextColor(...PKG.sub);
-  const noteLines: string[] = doc.splitTextToSize(String(note || ""), bw - 120);
+  const noteLines: string[] = doc.splitTextToSize(String(note || ""), g.contentW);
   for (const ln of noteLines) {
-    doc.text(ln, cx, y, { align: "center" } as any);
-    y += 18;
+    doc.text(ln, g.M, y);
+    y += 15;
   }
 }
 
@@ -1192,9 +1238,9 @@ function stampChrome(doc: JsPdfDoc, deal: PdfDealMeta) {
 
 /** Build and download a single self-contained, branded "Deal Package" PDF for
  *  the whole deal: a cover page, then each milestone rendered as an info block
- *  (bands + key/value tables) or a document section (divider + attachment title
- *  pages) with every uploaded PDF merged inline and every image drawn on its own
- *  styled page. */
+ *  (bands + key/value tables) or a document section (a divider page listing the
+ *  section's files) with every uploaded PDF merged inline and every image drawn
+ *  on its own styled page. */
 export async function downloadDealPdf(
   deal: PdfDealMeta,
   sections: PdfDealSection[],
@@ -1281,8 +1327,10 @@ export async function downloadDealPdf(
       const textResponses = (t.responses ?? []).filter((r) => r.field_type !== "file");
 
       // Info block: person / task heading band + its key/value responses.
-      const hasText = textResponses.length > 0 || !!t.ownerName;
-      if (hasText) {
+      // A block whose only row would be "Name" just repeats the heading band and
+      // burns a page (e.g. the Upload ID task), so it's skipped — the person is
+      // already named on the image/attachment pages that follow.
+      if (textResponses.length > 0) {
         flow.page();
         const bandTitle = t.ownerName || t.title || "Details";
         const bandLabel = t.ownerName ? t.title : t.leadType || undefined;
@@ -1307,18 +1355,16 @@ export async function downloadDealPdf(
             pkgImagePage(doc, heading, sub, img, f.kind === "png" ? "PNG" : "JPEG");
             continue;
           }
-          pkgAttachedTitle(doc, docIdx, fileCount, sectionTitle, fname);
-          pkgPlaceholder(doc, fname, "This image could not be rendered. It remains available via its original link.", false);
+          pkgNotePage(doc, docIdx, fileCount, sectionTitle, fname, "This image could not be rendered. It remains available via its original link.");
         } else if (f && f.ok && f.kind === "pdf") {
-          pkgAttachedTitle(doc, docIdx, fileCount, sectionTitle, fname);
-          pkgPlaceholder(doc, fname, "The original document is merged into the package at this position.", true);
+          // No title/placeholder page — the uploaded PDF's own pages are merged
+          // in right here (phase B below), so it follows the section cover
+          // directly instead of two pages of scaffolding.
           inserts.push({ afterPage: doc.getNumberOfPages(), bytes: f.bytes });
         } else if (f && f.ok) {
-          pkgAttachedTitle(doc, docIdx, fileCount, sectionTitle, fname);
-          pkgPlaceholder(doc, fname, "This file type can't be previewed inline. It remains available via its original link.", false);
+          pkgNotePage(doc, docIdx, fileCount, sectionTitle, fname, "This file type can't be previewed inline. It remains available via its original link.");
         } else {
-          pkgAttachedTitle(doc, docIdx, fileCount, sectionTitle, fname);
-          pkgPlaceholder(doc, fname, "This file could not be downloaded for embedding (it may require sign-in or block cross-origin access). It remains available via its original link.", false);
+          pkgNotePage(doc, docIdx, fileCount, sectionTitle, fname, "This file could not be downloaded for embedding (it may require sign-in or block cross-origin access). It remains available via its original link.");
         }
       }
     }
@@ -1344,8 +1390,7 @@ export async function downloadDealPdf(
   let offset = 0;
   for (const ins of inserts) {
     try {
-      const src = await lib.PDFDocument.load(ins.bytes, { ignoreEncryption: true });
-      const copied = await pdfDoc.copyPages(src, src.getPageIndices());
+      const copied = await copyEmbeddedPages(lib, pdfDoc, ins.bytes);
       let at = ins.afterPage + offset;
       for (const p of copied) {
         pdfDoc.insertPage(at, p);
@@ -1353,7 +1398,7 @@ export async function downloadDealPdf(
       }
       offset += copied.length;
     } catch {
-      /* leave the placeholder page standing if this PDF can't be merged */
+      /* skip this attachment rather than failing the whole download */
     }
   }
 
