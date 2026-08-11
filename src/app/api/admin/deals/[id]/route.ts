@@ -6,6 +6,7 @@ import { recordAudit } from "@/lib/recordAudit";
 import { getActingAdmin } from "@/lib/getActingAdmin";
 import { FILE_NUMBER_REGEX, FILE_NUMBER_HINT } from "@/lib/fileNumber";
 import { normalizeRecipientEmail } from "@/lib/emailIdentity";
+import { partnerCcAddresses } from "@/lib/partnerCcAddresses";
 
 const supabase = supabaseAdmin;
 
@@ -43,6 +44,11 @@ export async function GET(
       .maybeSingle();
     data.referral_partner = partner ?? null;
   }
+
+  // Addresses this file is CC'd on via the partner rather than via
+  // deals.cc_emails. Surfaced so the Email CC panel can show the complete CC
+  // line instead of only its own editable half.
+  data.partner_cc_emails = await partnerCcAddresses(id);
 
   // Resolve "account created" (last_sign_in_at) for the current lead and
   // every family member. Mirrors the All Files list so the detail page
@@ -523,6 +529,48 @@ export async function PATCH(
         seen.add(dedupeKey);
         cleaned.push(email);
       }
+
+      // Reject an address the referral partner already carries. The send-side
+      // helper unions partner agent_email + partner_contacts + this column and
+      // de-dupes, so re-adding one here copies nobody new — it just puts the
+      // address in two places, where removing it from the file appears to do
+      // nothing. Only NEW entries are checked: an address already stored on the
+      // deal (added before this rule, or added to the partner afterwards) stays
+      // editable, otherwise the admin could never save the list again to
+      // remove it.
+      const existing = new Set<string>();
+      {
+        const { data: current } = await supabase
+          .from("deals")
+          .select("cc_emails")
+          .eq("id", id)
+          .maybeSingle();
+        for (const e of (current?.cc_emails as string[] | null) ?? []) {
+          existing.add(normalizeRecipientEmail(e).toLowerCase());
+        }
+      }
+      const added = cleaned.filter((e) => !existing.has(e.toLowerCase()));
+      if (added.length > 0) {
+        const fromPartner = await partnerCcAddresses(id);
+        const byEmail = new Map(
+          fromPartner.map((p) => [p.email.toLowerCase(), p]),
+        );
+        for (const email of added) {
+          const hit = byEmail.get(email.toLowerCase());
+          if (hit) {
+            return NextResponse.json(
+              {
+                success: false,
+                error:
+                  `${email} is already copied on this file through referral partner ` +
+                  `${hit.partner}${hit.source === "agent_email" ? " (partner agent email)" : " (partner contact)"} — no need to add it here.`,
+              },
+              { status: 400 },
+            );
+          }
+        }
+      }
+
       updates[key] = cleaned;
       continue;
     }

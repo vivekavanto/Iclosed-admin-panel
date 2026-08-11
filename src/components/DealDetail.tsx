@@ -303,12 +303,31 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
     }
   };
 
+  // Addresses this file is already CC'd on via its referral partner
+  // (partners.agent_email + partner_contacts). Resolved server-side by the deal
+  // GET because they live on the partner, not the deal — see partnerCcAddresses.
+  const partnerCc = ((rawDeal?.partner_cc_emails as
+    | { email: string; partner: string; source: "agent_email" | "partner_contacts" }[]
+    | null
+    | undefined) ?? []);
+
   const addCcEmail = () => {
     const email = newCcEmail.trim();
     if (!email) return;
-    // Client-side dupe guard only; the route re-validates and de-dupes.
+    // Client-side dupe guards only; the route re-validates, re-checks the
+    // partner's own addresses and de-dupes.
     if (ccEmails.some((e) => e.toLowerCase() === email.toLowerCase())) {
       showToast("That address is already on the CC list", "error");
+      return;
+    }
+    const viaPartner = partnerCc.find(
+      (p) => p.email.toLowerCase() === email.toLowerCase(),
+    );
+    if (viaPartner) {
+      showToast(
+        `Already copied via referral partner ${viaPartner.partner} — no need to add it here`,
+        "error",
+      );
       return;
     }
     saveCcEmails([...ccEmails, email]);
@@ -4798,17 +4817,60 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
             </p>
 
             <div className="space-y-2">
-              {ccEmails.length === 0 && (
-                <p className="text-xs text-slate-400 italic">No extra CC addresses.</p>
+              {/* Inherited from the referral partner (partners.agent_email +
+                  partner_contacts). Read-only here: they belong to the partner
+                  and apply to every file it referred, so removing one is a
+                  Partners-page decision, not a per-file one. Listed so the panel
+                  shows the whole CC line — otherwise these arrive on an email
+                  while the file claims "No extra CC addresses". */}
+              {partnerCc.length > 0 && (
+                <div className="space-y-2 pb-1">
+                  {partnerCc.map((p) => (
+                    <div
+                      key={p.email}
+                      className="flex items-center gap-2 bg-slate-50/60 border border-dashed border-slate-200 rounded-lg px-3 py-2"
+                      title={`Copied via referral partner ${p.partner} — manage in Partners`}
+                    >
+                      <span className="text-xs font-bold text-slate-500 truncate flex-1">
+                        {p.email}
+                      </span>
+                      <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide shrink-0">
+                        {p.partner}
+                      </span>
+                    </div>
+                  ))}
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    From the referral partner — edit these under Partners.
+                  </p>
+                </div>
               )}
 
-              {ccEmails.map((email) => (
+              {ccEmails.length === 0 && (
+                <p className="text-xs text-slate-400 italic">
+                  No extra CC addresses for this file.
+                </p>
+              )}
+
+              {ccEmails.map((email) => {
+                // Saved on the file AND carried by the partner. New ones are
+                // rejected, but an entry from before that rule (or added to the
+                // partner afterwards) can still be here — flag it so the admin
+                // knows removing it costs nothing.
+                const alsoViaPartner = partnerCc.find(
+                  (p) => p.email.toLowerCase() === email.toLowerCase(),
+                );
+                return (
                 <div
                   key={email}
                   className="flex items-center gap-2 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2"
                 >
                   <span className="text-xs font-bold text-slate-800 truncate flex-1">
                     {email}
+                    {alsoViaPartner && (
+                      <span className="block text-[10px] font-semibold text-amber-600 normal-case">
+                        Duplicate — already copied via {alsoViaPartner.partner}
+                      </span>
+                    )}
                   </span>
                   <button
                     type="button"
@@ -4820,7 +4882,8 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                     <X size={14} />
                   </button>
                 </div>
-              ))}
+                );
+              })}
 
               <div className="flex gap-2 pt-1">
                 <input
