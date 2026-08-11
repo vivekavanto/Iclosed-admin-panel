@@ -22,9 +22,10 @@ import {
   Clock,
   IdCard,
 } from "lucide-react";
+import { upload } from "@vercel/blob/client";
 import Button from "@/components/ui/Button";
 import { useIsLargeScreen } from "@/hooks/useMediaQuery";
-import { docDownloadHref } from "@/lib/blobPrivacy";
+import { docDownloadHref, BLOB_ACCESS } from "@/lib/blobPrivacy";
 
 interface UploadIdentificationDrawerProps {
   open: boolean;
@@ -114,6 +115,20 @@ interface DetectionResult {
 interface SelectedFile {
   id: string;
   file: File;
+  /**
+   * Where the file already lives in Vercel Blob.
+   *
+   * Documents are uploaded straight from the browser to Blob the moment they're
+   * picked (see stageFile), because Vercel caps a serverless function's request
+   * body at ~4.5 MB — pushing a 10 MB PDF through /api/admin/uploadblobstorage
+   * failed at the platform edge before any of our code ran. Identification then
+   * classifies BY URL, and Save/Draft only has to record the row.
+   *
+   * null while the upload is still in flight or if it failed.
+   */
+  blobUrl: string | null;
+  uploading: boolean;
+  uploadError: string | null;
   previewUrl: string | null;
   error: string | null;
   label: LabelKey;
@@ -307,17 +322,64 @@ type DetectionFetchResult =
   | { ok: true; detection: DetectionResult }
   | { ok: false; error: string };
 
-async function fetchDetection(file: File, timeoutMs = 50_000): Promise<DetectionFetchResult> {
+/**
+ * Turn a non-JSON / error response into something the user can act on.
+ *
+ * This matters because the failure that started all of this was invisible:
+ * Vercel answers an oversized request with an HTML 413 page, `res.json()` threw,
+ * and every cause collapsed into a single "Unable to process". Read the status
+ * first and only fall back to a generic message when there's genuinely nothing
+ * more specific to say.
+ */
+async function describeHttpFailure(res: Response): Promise<string> {
+  const data = await res.json().catch(() => null);
+  if (data && typeof data.error === "string" && data.error.trim()) {
+    return data.error;
+  }
+  switch (res.status) {
+    case 401:
+    case 403:
+      return "Your session has expired. Please sign in again and retry.";
+    case 413:
+      return "File is too large to process (max 10 MB).";
+    case 415:
+      return "Unsupported file type. Please upload a PDF, JPG, PNG or HEIC.";
+    case 429:
+      return "Too many document checks in a short time. Please wait a moment and try again.";
+    case 504:
+      return "Document verification timed out. Please try again.";
+    default:
+      return `Document verification failed (HTTP ${res.status}).`;
+  }
+}
+
+/**
+ * Classify a document that is ALREADY stored in Vercel Blob.
+ *
+ * Only the URL is posted — the bytes are read back server-side. Previously the
+ * whole file was posted as multipart, which Vercel refused above ~4.5 MB.
+ */
+async function fetchDetection(
+  blobUrl: string,
+  file: File,
+  timeoutMs = 50_000,
+): Promise<DetectionFetchResult> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const fd = new FormData();
-    fd.append("file", file);
     const res = await fetch("/api/admin/identify-document", {
       method: "POST",
-      body: fd,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        file_url: blobUrl,
+        file_name: file.name,
+        mime_type: file.type || undefined,
+      }),
       signal: controller.signal,
     });
+    if (!res.ok) {
+      return { ok: false, error: await describeHttpFailure(res) };
+    }
     const data = await res
       .json()
       .catch(() => ({ success: false, error: "Invalid response from server." }));
@@ -393,14 +455,118 @@ async function fetchDetection(file: File, timeoutMs = 50_000): Promise<Detection
   }
 }
 
-function appendDetectionFields(fd: FormData, det: DetectionResult | null) {
-  if (!det) return;
-  fd.append("is_identification", det.isIdentification ? "true" : "false");
-  if (det.documentType) fd.append("document_type", det.documentType);
-  fd.append("side", det.side);
-  fd.append("side_requirement", det.sideRequirement);
-  fd.append("confidence", det.confidence);
-  if (det.reason) fd.append("detection_reason", det.reason);
+function detectionFields(det: DetectionResult | null): Record<string, unknown> {
+  if (!det) return {};
+  return {
+    is_identification: det.isIdentification,
+    document_type: det.documentType ?? undefined,
+    side: det.side,
+    side_requirement: det.sideRequirement,
+    confidence: det.confidence,
+    detection_reason: det.reason || undefined,
+  };
+}
+
+/**
+ * Upload a document straight from the browser to Vercel Blob.
+ *
+ * The token comes from /api/admin/uploadblobstorage/token, which pins the
+ * allowed content types and the 10 MB ceiling server-side — the browser cannot
+ * widen either. The bytes never pass through a serverless function, which is
+ * what lets a 10 MB file through at all (Vercel's request-body cap is ~4.5 MB).
+ * The resulting pathname is byte-for-byte the shape the old server-side put()
+ * produced, so stored URLs, the download proxy and every existing row keep
+ * working unchanged.
+ */
+async function uploadFileToBlob(file: File, leadId: string): Promise<string> {
+  const blob = await upload(
+    `corporate-docs/${leadId}/${Date.now()}-${file.name}`,
+    file,
+    {
+      access: BLOB_ACCESS,
+      handleUploadUrl: "/api/admin/uploadblobstorage/token",
+      contentType: file.type || undefined,
+      clientPayload: JSON.stringify({ lead_id: leadId, doc_type: DOC_TYPE }),
+    },
+  );
+  return blob.url;
+}
+
+/** Human-readable reason a direct-to-Blob upload failed. */
+function describeUploadError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : "";
+  const lower = raw.toLowerCase();
+  if (lower.includes("too large") || lower.includes("maximum size")) {
+    return "File is too large (max 10 MB).";
+  }
+  if (lower.includes("content type") || lower.includes("not allowed")) {
+    return "Unsupported file type. Please upload a PDF, JPG, PNG or HEIC.";
+  }
+  if (lower.includes("token") && lower.includes("expired")) {
+    return "The upload took too long to start. Please try again.";
+  }
+  if (lower.includes("lead not found")) {
+    return "This lead no longer exists. Please refresh and try again.";
+  }
+  if (lower.includes("unauthorized") || lower.includes("401")) {
+    return "Your session has expired. Please sign in again and retry.";
+  }
+  if (lower.includes("failed to fetch") || lower.includes("network")) {
+    return "Upload failed — check your connection and try again.";
+  }
+  return raw || "Upload failed. Please try again.";
+}
+
+/**
+ * Record an already-uploaded blob as a document row. Posts JSON (a few hundred
+ * bytes), never the file itself.
+ */
+async function registerUploadedDoc(payload: {
+  leadId: string;
+  blobUrl: string;
+  fileName: string;
+  customType: string;
+  detection: DetectionResult | null;
+}): Promise<string> {
+  const res = await fetch("/api/admin/uploadblobstorage", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      file_url: payload.blobUrl,
+      file_name: payload.fileName,
+      lead_id: payload.leadId,
+      doc_type: DOC_TYPE,
+      custom_type: payload.customType,
+      ...detectionFields(payload.detection),
+    }),
+  });
+
+  if (!res.ok) {
+    throw new Error(await describeHttpFailure(res));
+  }
+  const data = await res
+    .json()
+    .catch(() => ({ success: false, error: "Invalid response from server." }));
+  if (!data.success) throw new Error(data.error ?? "Upload failed");
+
+  const url: string | undefined = data.url ?? data.file_url;
+  if (!url) throw new Error("Upload did not return a URL.");
+  return url;
+}
+
+/**
+ * Delete a blob that was uploaded but never saved (file removed from the
+ * picker, or the drawer closed without saving). Fire-and-forget: the server
+ * refuses to touch anything a document row already references.
+ */
+function discardUploadedBlob(blobUrl: string | null | undefined) {
+  if (!blobUrl) return;
+  void fetch(
+    `/api/admin/uploadblobstorage?url=${encodeURIComponent(blobUrl)}`,
+    { method: "DELETE", keepalive: true },
+  ).catch(() => {
+    /* best-effort cleanup — a leftover blob is not worth surfacing */
+  });
 }
 
 // ── Acceptable Documents Section (LSO By-Law 7.1) ────────────────────────────
@@ -634,6 +800,10 @@ export default function UploadIdentificationDrawer({
   const resetAll = useCallback(() => {
     selected.forEach((s) => {
       if (s.previewUrl) URL.revokeObjectURL(s.previewUrl);
+      // Staged-but-never-saved files were already uploaded to Blob (that's how
+      // identification reads them). Closing the drawer abandons them, so clean
+      // the bytes up — the server ignores anything a saved row references.
+      discardUploadedBlob(s.blobUrl);
     });
     setSelected([]);
     setExisting([]);
@@ -827,8 +997,56 @@ export default function UploadIdentificationDrawer({
     }
   }
 
-  async function detectIdentification(id: string, file: File) {
-    const result = await fetchDetection(file);
+  /**
+   * Stage a freshly-picked file: upload it to Blob first, then classify it by
+   * URL. The upload has to happen up front because identification now reads the
+   * document server-side from storage — and because a 4.5–10 MB file simply
+   * cannot be posted to an API route on Vercel.
+   *
+   * If the user removes the file or closes the drawer without saving,
+   * discardUploadedBlob() cleans the bytes up.
+   */
+  async function stageFile(id: string, file: File, leadIdForUpload: string) {
+    let blobUrl: string;
+    try {
+      blobUrl = await uploadFileToBlob(file, leadIdForUpload);
+    } catch (err: unknown) {
+      const message = describeUploadError(err);
+      setSelected((prev) =>
+        prev.map((s) =>
+          s.id === id
+            ? {
+                ...s,
+                uploading: false,
+                uploadError: message,
+                detecting: false,
+                detectionError: message,
+              }
+            : s,
+        ),
+      );
+      openErrorModal({
+        fileId: id,
+        fileName: file.name,
+        kind: message.toLowerCase().includes("too large")
+          ? "file_too_large"
+          : "unable_to_process",
+        customReason: message,
+      });
+      return;
+    }
+
+    setSelected((prev) =>
+      prev.map((s) =>
+        s.id === id ? { ...s, blobUrl, uploading: false, uploadError: null } : s,
+      ),
+    );
+
+    await detectIdentification(id, blobUrl, file);
+  }
+
+  async function detectIdentification(id: string, blobUrl: string, file: File) {
+    const result = await fetchDetection(blobUrl, file);
     const fileName = selectedRef.current.find((s) => s.id === id)?.file.name ?? "";
 
     if (!result.ok) {
@@ -890,9 +1108,14 @@ export default function UploadIdentificationDrawer({
 
   function addFiles(files: FileList | File[]) {
     const incoming = Array.from(files);
-    const queuedForDetection: { id: string; file: File }[] = [];
+    const queuedForStaging: { id: string; file: File }[] = [];
     const additions: SelectedFile[] = [];
     const working = [...selected];
+
+    if (!leadId) {
+      setGlobalError("Missing lead. Please refresh and try again.");
+      return;
+    }
 
     for (const f of incoming) {
       const err = validateFile(f);
@@ -905,11 +1128,14 @@ export default function UploadIdentificationDrawer({
         });
         continue;
       }
-      
+
       const id = makeId();
       const nextItem: SelectedFile = {
         id,
         file: f,
+        blobUrl: null,
+        uploading: true,
+        uploadError: null,
         previewUrl: isImageFile(f) ? URL.createObjectURL(f) : null,
         error: null,
         label: nextDefaultLabel(working, existing),
@@ -923,7 +1149,7 @@ export default function UploadIdentificationDrawer({
       };
       additions.push(nextItem);
       working.push(nextItem);
-      queuedForDetection.push({ id, file: f });
+      queuedForStaging.push({ id, file: f });
     }
 
     if (additions.length > 0) {
@@ -932,11 +1158,11 @@ export default function UploadIdentificationDrawer({
 
     setGlobalError(null);
 
-    // Kick off Gemini detection AND SHA-256 hashing for each newly added file
-    // (fire-and-forget). Duplicate flags update automatically once each hash
-    // resolves.
-    queuedForDetection.forEach(({ id, file }) => {
-      void detectIdentification(id, file);
+    // Upload each file to Blob, then run Gemini detection on it; hash it for
+    // duplicate detection in parallel (fire-and-forget). Duplicate flags update
+    // automatically once each hash resolves.
+    queuedForStaging.forEach(({ id, file }) => {
+      void stageFile(id, file, leadId);
       void attachContentHash(id, file);
     });
   }
@@ -945,6 +1171,9 @@ export default function UploadIdentificationDrawer({
     setSelected((prev) => {
       const target = prev.find((s) => s.id === id);
       if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
+      // The bytes are already in Blob (uploaded at pick time) but nothing
+      // references them yet — drop them so an abandoned pick doesn't leak.
+      discardUploadedBlob(target?.blobUrl);
       return prev.filter((s) => s.id !== id);
     });
   }
@@ -1048,14 +1277,28 @@ export default function UploadIdentificationDrawer({
     setReplacingId(id);
     try {
       const existingDoc = existing.find((d) => d.id === id);
-      const fd = new FormData();
-      fd.append("file", file);
-      fd.append("lead_id", leadId);
-      fd.append("doc_type", DOC_TYPE);
-      if (existingDoc?.custom_type) fd.append("custom_type", existingDoc.custom_type);
-      const uploadRes = await fetch("/api/admin/uploadblobstorage", { method: "POST", body: fd });
-      const uploadData = await uploadRes.json();
-      if (!uploadData.success) throw new Error(uploadData.error ?? "Upload failed");
+
+      // Same two-step as a fresh upload: bytes straight to Blob, then a small
+      // JSON call to record the row.
+      let blobUrl: string;
+      try {
+        blobUrl = await uploadFileToBlob(file, leadId);
+      } catch (uploadErr: unknown) {
+        throw new Error(describeUploadError(uploadErr));
+      }
+
+      try {
+        await registerUploadedDoc({
+          leadId,
+          blobUrl,
+          fileName: file.name,
+          customType: existingDoc?.custom_type || "identification",
+          detection: null,
+        });
+      } catch (registerErr) {
+        discardUploadedBlob(blobUrl);
+        throw registerErr;
+      }
 
       const delRes = await fetch(`/api/admin/lead-identification-docs?id=${encodeURIComponent(id)}`, {
         method: "DELETE",
@@ -1240,9 +1483,14 @@ export default function UploadIdentificationDrawer({
       return;
     }
 
+    if (!leadId) {
+      setCameraError("Missing lead. Please refresh and try again.");
+      return;
+    }
+
     // Convert camera captures to SelectedFile entries and add to selected state
     const newFiles: SelectedFile[] = [];
-    const queuedForDetection: { id: string; file: File }[] = [];
+    const queuedForStaging: { id: string; file: File }[] = [];
 
     for (const slotKey of cameraSteps) {
       const file = cameraCapturedFiles[slotKey];
@@ -1253,6 +1501,9 @@ export default function UploadIdentificationDrawer({
       const newEntry: SelectedFile = {
         id,
         file,
+        blobUrl: null,
+        uploading: true,
+        uploadError: null,
         previewUrl: preview ?? null,
         error: null,
         label: SLOT_CUSTOM_TYPES[slotKey],
@@ -1265,7 +1516,7 @@ export default function UploadIdentificationDrawer({
         contentHash: null,
       };
       newFiles.push(newEntry);
-      queuedForDetection.push({ id, file });
+      queuedForStaging.push({ id, file });
     }
 
     if (newFiles.length > 0) {
@@ -1274,10 +1525,10 @@ export default function UploadIdentificationDrawer({
 
     closeCameraFlow();
 
-    // Run AI detection AND SHA-256 hashing on each captured image. Duplicate
-    // flags will update automatically once each hash resolves.
-    queuedForDetection.forEach(({ id, file }) => {
-      void detectIdentification(id, file);
+    // Upload each capture to Blob, then run AI detection on it, plus SHA-256
+    // hashing. Duplicate flags update automatically once each hash resolves.
+    queuedForStaging.forEach(({ id, file }) => {
+      void stageFile(id, file, leadId);
       void attachContentHash(id, file);
     });
   }
@@ -1308,23 +1559,32 @@ export default function UploadIdentificationDrawer({
     setGlobalError(null);
 
     try {
+      // The bytes are already in Blob (uploaded when each file was picked), so
+      // this only records the rows.
       const uploads = selected.map(async (s) => {
-        const fd = new FormData();
-        fd.append("file", s.file);
-        fd.append("lead_id", leadId);
-        fd.append("doc_type", DOC_TYPE);
+        if (!s.blobUrl) {
+          throw new Error(
+            `${s.file.name}: ${s.uploadError ?? "this file was not uploaded successfully. Please remove it and try again."}`,
+          );
+        }
         // Use detected document type and side as custom_type
-        const customType = s.detection?.documentType 
+        const customType = s.detection?.documentType
           ? `${s.detection.documentType}${s.detection.side !== "unknown" ? `_${s.detection.side}` : ""}`
           : "identification";
-        fd.append("custom_type", customType);
-        appendDetectionFields(fd, s.detection);
-        const res = await fetch("/api/admin/uploadblobstorage", { method: "POST", body: fd });
-        const data = await res.json();
-        if (!data.success) throw new Error(`${s.file.name}: ${data.error ?? "Upload failed"}`);
-        const url: string | undefined = data.url ?? data.file_url;
-        if (!url) throw new Error(`${s.file.name}: upload did not return a URL.`);
-        return { selected: s, url };
+        try {
+          const url = await registerUploadedDoc({
+            leadId,
+            blobUrl: s.blobUrl,
+            fileName: s.file.name,
+            customType,
+            detection: s.detection,
+          });
+          return { selected: s, url };
+        } catch (err: unknown) {
+          throw new Error(
+            `${s.file.name}: ${err instanceof Error ? err.message : "Upload failed"}`,
+          );
+        }
       });
 
       await Promise.all(uploads);
@@ -1387,13 +1647,15 @@ export default function UploadIdentificationDrawer({
       return;
     }
 
+    // A file with no blobUrl never made it into storage (its upload failed), so
+    // there is nothing to record for it — skip rather than fail the whole draft.
     const validToSave = selected.filter(
-      (s) => !s.detecting && !s.isDuplicate,
+      (s) => !s.detecting && !s.uploading && !s.isDuplicate && !!s.blobUrl,
     );
 
     if (validToSave.length === 0) {
       setGlobalError(
-        "No saveable documents — please wait for analysis to finish or remove duplicate files.",
+        "No saveable documents — please wait for the upload and analysis to finish, or remove duplicate/failed files.",
       );
       return;
     }
@@ -1403,30 +1665,39 @@ export default function UploadIdentificationDrawer({
 
     try {
       const uploads = validToSave.map(async (s) => {
-        const fd = new FormData();
-        fd.append("file", s.file);
-        fd.append("lead_id", leadId);
-        fd.append("doc_type", DOC_TYPE);
+        if (!s.blobUrl) {
+          throw new Error(
+            `${s.file.name}: ${s.uploadError ?? "this file was not uploaded successfully. Please remove it and try again."}`,
+          );
+        }
         const customType = s.detection?.documentType
           ? `${s.detection.documentType}${s.detection.side !== "unknown" ? `_${s.detection.side}` : ""}`
           : "identification";
-        fd.append("custom_type", customType);
-        appendDetectionFields(fd, s.detection);
-        const res = await fetch("/api/admin/uploadblobstorage", {
-          method: "POST",
-          body: fd,
-        });
-        const data = await res.json();
-        if (!data.success)
-          throw new Error(`${s.file.name}: ${data.error ?? "Upload failed"}`);
+        try {
+          await registerUploadedDoc({
+            leadId,
+            blobUrl: s.blobUrl,
+            fileName: s.file.name,
+            customType,
+            detection: s.detection,
+          });
+        } catch (err: unknown) {
+          throw new Error(
+            `${s.file.name}: ${err instanceof Error ? err.message : "Upload failed"}`,
+          );
+        }
       });
 
       await Promise.all(uploads);
 
       // Clear in-memory selection + refresh existing docs from DB so the user
       // sees their saved state immediately if they don't navigate away.
+      const savedIds = new Set(validToSave.map((s) => s.id));
       selected.forEach((s) => {
         if (s.previewUrl) URL.revokeObjectURL(s.previewUrl);
+        // Files skipped by the draft filter (still analyzing, duplicates) were
+        // uploaded but never recorded — drop their bytes rather than leak them.
+        if (!savedIds.has(s.id)) discardUploadedBlob(s.blobUrl);
       });
       setSelected([]);
 
@@ -1899,9 +2170,25 @@ export default function UploadIdentificationDrawer({
                                 </div>
                               )}
                             </div>
+                          ) : s.uploading || s.detecting ? (
+                            <div className="flex flex-col gap-0.5 mt-0.5">
+                              <p className="text-[11px] text-gray-500">
+                                {s.uploading
+                                  ? `Uploading… (${formatBytes(s.file.size)})`
+                                  : "Analyzing…"}
+                              </p>
+                            </div>
                           ) : s.detectionError ? (
                             <div className="flex flex-col gap-0.5 mt-0.5">
-                              <p className="text-[11px] font-medium text-[#C10007]">Unable to process</p>
+                              {/* Show the ACTUAL reason. This used to always read
+                                  "Unable to process", which hid everything from an
+                                  oversized-payload rejection to an expired session. */}
+                              <p
+                                className="text-[11px] font-medium text-[#C10007] truncate"
+                                title={s.detectionError}
+                              >
+                                {s.detectionError}
+                              </p>
                               {showDuplicate && (
                                 <div className="flex items-center gap-1 text-[10px] text-[#C10007] font-medium" title={s.duplicateReason ?? undefined}>
                                   <AlertCircle size={10} />
