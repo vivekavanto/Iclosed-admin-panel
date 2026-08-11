@@ -83,3 +83,4 @@ $$;
 
 GRANT EXECUTE ON FUNCTION check_rate_limit(text, int, int)
   TO anon, authenticated, service_role;
+

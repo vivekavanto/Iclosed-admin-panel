@@ -241,7 +241,9 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
   const showToast = useCallback(
     (message: string, type: "success" | "error" = "success") => {
       setToast({ message, type });
-      setTimeout(() => setToast(null), 3000);
+      // Long enough to read a full sentence — the blocked-action messages are
+      // instructions, not confirmations, and a 3s flash is not enough to act on.
+      setTimeout(() => setToast(null), 5000);
     },
     [],
   );
@@ -495,8 +497,14 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
 
   // ───────────────────────────── actions ─────────────────────────────
 
-  const handleSave = async () => {
-    setSaving(true);
+  /**
+   * Persist what is on screen as the working draft.
+   *
+   * No longer a button of its own — it is the first leg of "Save & issue", so a
+   * failure at the issue step can never cost the clerk their typing. Returns
+   * false when the write failed; the reason is already on screen as a toast.
+   */
+  const saveDraft = async (): Promise<boolean> => {
     try {
       const res = await fetch(`/api/admin/deals/${dealId}/closing-estimate`, {
         method: "PUT",
@@ -511,34 +519,55 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
         throw new Error(data?.error || "Save failed");
       }
       draftUpdatedAtRef.current = data.data?.updated_at ?? null;
-      setDirty(false);
-      showToast("Draft estimate saved");
+      // Deliberately does NOT clear `dirty`. A saved draft is not an issued
+      // estimate, and `dirty` is what gates the PDF and the email — clearing it
+      // here would let a save that succeeded followed by an issue that failed
+      // hand out the PREVIOUS issued PDF as if it matched the screen. Only the
+      // reload after a successful issue clears it.
+      return true;
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Save failed", "error");
-    } finally {
-      setSaving(false);
+      return false;
     }
+  };
+
+  /**
+   * Why the PDF and the email can't go out yet, in plain words — null when they
+   * can.
+   *
+   * Both serve the ISSUED snapshot, never what is on screen, so both refuse for
+   * exactly the same two reasons: nothing issued yet, or edits that have not
+   * been issued. Saying so is the whole point — silently handing over a stale
+   * PDF is how last week's figures reach a client's inbox.
+   */
+  const issuedBlocker = (action: string): string | null => {
+    if (!issued) {
+      return `Nothing has been issued yet — click "Save & issue to client" first, then ${action}.`;
+    }
+    if (dirty) {
+      return `Your changes are not issued yet — click "Save & issue to client" first, then ${action}.`;
+    }
+    return null;
   };
 
   /**
    * Email the ISSUED estimate to the client.
    *
-   * Deliberately refuses while there are unsaved edits: what the client would
+   * Deliberately refuses while there are un-issued edits: what the client would
    * receive is the frozen snapshot, not what is on screen, and sending a figure
    * the clerk can see they have just changed is how wrong numbers reach inboxes.
    */
   const handleEmail = async () => {
+    // `!issued` is already covered by the blocker; repeated here so the
+    // estimate_id below is a narrowed non-null rather than an assertion.
+    const blocked = issuedBlocker("send the email");
+    if (blocked || !issued) {
+      showToast(blocked ?? "Nothing has been issued yet.", "error");
+      return;
+    }
     const to = emailTo.trim();
     if (!to) {
       showToast("Enter an email address to send to", "error");
-      return;
-    }
-    if (!issued) {
-      showToast("Issue the estimate before emailing it", "error");
-      return;
-    }
-    if (dirty) {
-      showToast("Save and issue your changes before emailing", "error");
       return;
     }
     if (
@@ -577,7 +606,22 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
     }
   };
 
-  const handleIssue = async () => {
+  /**
+   * The page's one primary action: save what is on screen, then issue it.
+   *
+   * This used to be two buttons, and the pair invited exactly the mistake it
+   * looked like it was preventing — a clerk saved a draft, read the "Issued"
+   * chip still sitting beside it, and walked away believing the client had the
+   * new figures. Both the PDF and the email serve the ISSUED snapshot, so the
+   * client kept receiving the old ones. One button means what is on screen is
+   * what the client gets.
+   *
+   * The save leg still runs first, so a rejected issue (bad price, a final
+   * account missing its adjustment, a dropped connection) leaves the typing
+   * safely on the draft row rather than only in the browser.
+   */
+  const handleSaveAndIssue = async () => {
+    if (busy) return;
     if (inputs.price <= 0) {
       showToast("Enter a purchase price before issuing the estimate", "error");
       return;
@@ -591,11 +635,17 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
     }
     if (
       !window.confirm(
-        "Issue this estimate to the client?\n\nThe figures and the rates behind them are frozen at this point, a PDF is generated, and the client can see it in their portal.",
+        "Save and issue this estimate to the client?\n\nThe figures and the rates behind them are frozen at this point, a PDF is generated, and the client can see it in their portal.",
       )
     ) {
       return;
     }
+
+    setSaving(true);
+    const saved = await saveDraft();
+    setSaving(false);
+    if (!saved) return;
+
     setIssuing(true);
     try {
       const res = await fetch(`/api/admin/deals/${dealId}/closing-estimate/issue`, {
@@ -609,8 +659,8 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
       }
       showToast(
         data.pdf_error
-          ? "Estimate issued — the PDF will be generated on download"
-          : "Estimate issued to the client",
+          ? "Saved and issued — the PDF will be generated on download"
+          : "Saved and issued to the client",
       );
       await load();
     } catch (err) {
@@ -624,16 +674,27 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
   };
 
   /**
-   * Download via fetch rather than a plain link so a JSON error (no saved
-   * estimate, rate limited) surfaces as a toast instead of dumping raw JSON into
-   * a browser tab.
+   * Download the ISSUED statement.
+   *
+   * Refuses before there is one, and refuses while there are un-issued edits,
+   * for the same reason the email does: the bytes come from the frozen
+   * snapshot, so a download taken mid-edit is a document that does not match
+   * the screen it was taken from.
+   *
+   * Fetched rather than opened as a plain link so a JSON error (rate limited,
+   * generation failed) surfaces as a toast instead of dumping raw JSON into a
+   * browser tab.
    */
-  const handleDownload = async (which: "issued" | "draft") => {
+  const handleDownload = async () => {
+    const blocked = issuedBlocker("download the PDF");
+    if (blocked) {
+      showToast(blocked, "error");
+      return;
+    }
     setDownloading(true);
     try {
-      const qs = which === "draft" ? "?draft=1" : "";
       const res = await fetch(
-        `/api/admin/deals/${dealId}/closing-estimate/pdf${qs}`,
+        `/api/admin/deals/${dealId}/closing-estimate/pdf`,
         { credentials: "include" },
       );
       if (!res.ok) {
@@ -687,6 +748,14 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
     form.statementType === "final" &&
     parseAmountInput(form.propertyTaxAdjustment) === null;
   const busy = saving || issuing;
+
+  /**
+   * True while there is no issued snapshot matching the screen — so neither the
+   * PDF nor the email has anything current to hand the client. Drives the muted
+   * styling and the hint under those two buttons; `issuedBlocker` is what
+   * actually refuses the click and says why.
+   */
+  const deliveryBlocked = !issued || dirty;
 
   // ────────────────────────────── render ──────────────────────────────
 
@@ -792,7 +861,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
       {toast && (
         <div
           role="status"
-          className={`fixed right-6 top-6 z-50 rounded-lg px-4 py-3 text-sm text-white shadow-lg ${
+          className={`fixed right-6 top-6 z-50 max-w-sm rounded-lg px-4 py-3 text-sm leading-snug text-white shadow-lg ${
             toast.type === "error" ? "bg-red-600" : "bg-gray-900"
           }`}
         >
@@ -802,8 +871,14 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
 
       {/* Admin chrome — the workflow actions that have no place on the client's
           statement, kept above the letterhead so the document below reads as the
-          document. */}
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+          document.
+
+          Sticky under AppHeader (h-14) so the one action, and the chips saying
+          whether the client has these figures yet, stay in view down a long
+          statement. The negative margins let the bar bleed to the edge of this
+          page's gutter, so content scrolls under an opaque strip rather than
+          past a floating island. */}
+      <div className="sticky top-14 z-20 -mx-4 mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 bg-slate-50/95 px-4 py-2.5 backdrop-blur sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
         <Link
           href={`/admin/deals/${dealId}`}
           className="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-gray-800"
@@ -818,27 +893,34 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
           )}
           {dirty && (
             <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700 ring-1 ring-amber-200">
-              Unsaved changes
+              Not issued yet
             </span>
           )}
+          {/* One button, one meaning: the client ends up with what is on screen.
+              A separate "Save draft" only ever produced files whose issued PDF
+              disagreed with the page that had just been saved. */}
           <button
             type="button"
-            onClick={handleSave}
+            onClick={handleSaveAndIssue}
             disabled={busy}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-          >
-            {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
-            Save draft
-          </button>
-          <button
-            type="button"
-            onClick={handleIssue}
-            disabled={busy}
-            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+            title="Saves these figures and issues them to the client — the PDF and the email both use the issued version."
+            className="inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold text-white disabled:opacity-50"
             style={{ backgroundColor: accent }}
           >
-            {issuing ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
-            Issue to client
+            {busy ? (
+              <Loader2 size={13} className="animate-spin" />
+            ) : issued && !dirty ? (
+              <Send size={13} />
+            ) : (
+              <Save size={13} />
+            )}
+            {saving
+              ? "Saving…"
+              : issuing
+                ? "Issuing…"
+                : issued && !dirty
+                  ? "Re-issue to client"
+                  : "Save & issue to client"}
           </button>
         </div>
       </div>
@@ -917,7 +999,9 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
 
       <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
         {/* ────────────────────────── Your numbers ────────────────────────── */}
-        <section className="flex flex-col gap-4 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm lg:sticky lg:top-6">
+        {/* Sticks below BOTH the app header (h-14) and the action bar above, so
+            the inputs never slide up underneath them. */}
+        <section className="flex flex-col gap-4 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm lg:sticky lg:top-[120px]">
           <div>
             <h2
               className="text-[12px] font-bold uppercase tracking-[0.09em]"
@@ -1139,29 +1223,56 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
             </div>
           </Collapsible>
 
-          <div className="flex flex-wrap gap-2.5 pt-0.5">
-            <button
-              type="button"
-              onClick={() => setEmailOpen((o) => !o)}
-              className="min-w-[150px] flex-1 rounded-xl border border-gray-200 bg-white px-4 py-3 text-[13.5px] font-semibold text-gray-800 transition hover:border-gray-300"
-            >
-              <Mail size={14} className="mr-1.5 inline" />
-              Email to client
-            </button>
-            <button
-              type="button"
-              onClick={() => handleDownload(issued && !dirty ? "issued" : "draft")}
-              disabled={downloading}
-              className="inline-flex min-w-[150px] flex-1 items-center justify-center gap-1.5 rounded-xl px-4 py-3 text-[13.5px] font-semibold text-white transition disabled:opacity-50"
-              style={{ backgroundColor: accent }}
-            >
-              {downloading ? (
-                <Loader2 size={14} className="animate-spin" />
-              ) : (
-                <Download size={14} />
-              )}
-              Download PDF
-            </button>
+          {/* Both of these hand out the ISSUED statement. They stay CLICKABLE
+              while there is nothing issued to hand out — a disabled pair would
+              leave the clerk guessing, where a click gives them the sentence
+              that says what to do. */}
+          <div className="flex flex-col gap-2 pt-0.5">
+            <div className="flex flex-wrap gap-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  const blocked = issuedBlocker("email it");
+                  if (blocked) {
+                    showToast(blocked, "error");
+                    setEmailOpen(false);
+                    return;
+                  }
+                  setEmailOpen((o) => !o);
+                }}
+                className={`min-w-[150px] flex-1 rounded-xl border px-4 py-3 text-[13.5px] font-semibold transition ${
+                  deliveryBlocked
+                    ? "border-gray-200 bg-gray-50 text-gray-400"
+                    : "border-gray-200 bg-white text-gray-800 hover:border-gray-300"
+                }`}
+              >
+                <Mail size={14} className="mr-1.5 inline" />
+                Email to client
+              </button>
+              <button
+                type="button"
+                onClick={handleDownload}
+                disabled={downloading}
+                className={`inline-flex min-w-[150px] flex-1 items-center justify-center gap-1.5 rounded-xl px-4 py-3 text-[13.5px] font-semibold transition disabled:opacity-50 ${
+                  deliveryBlocked ? "bg-gray-200 text-gray-500" : "text-white"
+                }`}
+                style={deliveryBlocked ? undefined : { backgroundColor: accent }}
+              >
+                {downloading ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : (
+                  <Download size={14} />
+                )}
+                Download PDF
+              </button>
+            </div>
+            {deliveryBlocked && (
+              <span className="text-[11px] leading-snug text-amber-700">
+                {issued
+                  ? "You have changed the numbers. Click “Save & issue to client” above before you download or email — both send the issued version, not what is on screen."
+                  : "Click “Save & issue to client” above first. The PDF and the email both send the issued version, so there is nothing to send until then."}
+              </span>
+            )}
           </div>
 
           {emailOpen && (
@@ -1196,7 +1307,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
               </button>
               <span className="text-[10.5px] leading-snug text-gray-400">
                 Sends the ISSUED figures with the PDF attached — not what is on screen.
-                Issue your changes first.
+                Change a number and you will need to save &amp; issue again first.
               </span>
             </div>
           )}
