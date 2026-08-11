@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
@@ -35,7 +35,7 @@ import { docDownloadHref } from "@/lib/blobPrivacy";
 // ~6k lines); that file only gains a link to here.
 //
 // The statement recalculates locally on every keystroke via computeStatement,
-// which is the same pure module the server uses when saving â€” so the preview and
+// which is the same pure module the server uses when saving — so the preview and
 // the stored snapshot can never disagree.
 
 const BRAND = "#C10007";
@@ -50,7 +50,7 @@ const inputClass =
  * SCHEDULE, so they ride in `rate_overrides` and are frozen alongside the
  * effective rates. The land transfer tax, title premium and Statement of
  * Adjustments figure are also adjustable in the same panel, but they are
- * per-file INPUTS rather than rates, so they live on the estimate row itself â€”
+ * per-file INPUTS rather than rates, so they live on the estimate row itself —
  * see ADJUST_INPUTS below.
  *
  * The HST rate and the rebate caps are deliberately absent: they are statutory,
@@ -138,7 +138,7 @@ interface FormState {
   isToronto: boolean;
   isFirstTimeBuyer: boolean;
   /**
-   * Not persisted â€” a cash deal IS simply a zero mortgage. Kept in form state
+   * Not persisted — a cash deal IS simply a zero mortgage. Kept in form state
    * only so the mortgage field can be disabled while the box is ticked; on
    * reload it is derived back from the saved amount.
    */
@@ -152,7 +152,7 @@ interface FormState {
   purchasers: string;
   propertyAddress: string;
   closingDate: string;
-  /** key â†’ typed text; blank means "use the firm standard". */
+  /** key → typed text; blank means "use the firm standard". */
   overrides: Record<string, string>;
 }
 
@@ -246,7 +246,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
     [],
   );
 
-  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ load â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ─────────────────────────────── load ───────────────────────────────
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -275,7 +275,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
 
       // A saved draft wins; otherwise fall back to the issued figures; otherwise
       // seed from the file itself. The Toronto / first-time flags from `prefill`
-      // are hints only â€” a clerk always confirms them.
+      // are hints only — a clerk always confirms them.
       const seed: EstimateRow | null = draft ?? data.latest_issued ?? null;
       const prefill = data.prefill ?? {};
 
@@ -293,7 +293,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
       const mortgageText = seed ? amountText(seed.mortgage_amount) : "";
 
       // The firm's planning figure for the Statement of Adjustments, from
-      // Settings â†’ Closing costs. It seeds a NEW estimate only: once an estimate
+      // Settings → Closing costs. It seeds a NEW estimate only: once an estimate
       // exists its own figure wins, including a deliberately-cleared one, so
       // raising the default never silently re-adds an adjustment a clerk removed.
       const adjustmentDefault = amountText(configRow?.property_tax_default);
@@ -308,7 +308,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
         isFirstTimeBuyer: seed
           ? Boolean(seed.is_first_time_buyer)
           : Boolean(prefill.is_first_time_buyer),
-        // A saved estimate with no mortgage IS a cash deal â€” derive rather than
+        // A saved estimate with no mortgage IS a cash deal — derive rather than
         // store, so the two can never disagree.
         isCashDeal: Boolean(seed) && (parseAmountInput(mortgageText) ?? 0) === 0,
         titlePremiumOverride: seed ? amountText(seed.title_premium_override) : "",
@@ -343,7 +343,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
     void load();
   }, [load]);
 
-  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ computation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ──────────────────────────── computation ───────────────────────────
 
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -422,7 +422,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
    *
    * `config` from the API is the merged row for the DEFAULT firm, so it already
    * carries the shared statutory values. Picking a different firm overlays only
-   * that firm's own columns â€” deliberately by key rather than by spreading the
+   * that firm's own columns — deliberately by key rather than by spreading the
    * whole row, because before the legacy columns are dropped a firm row still
    * carries stale copies of the statutory ones, which must not win.
    */
@@ -493,7 +493,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
     [inputs, form, rateOverrides],
   );
 
-  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ actions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ───────────────────────────── actions ─────────────────────────────
 
   const handleSave = async () => {
     setSaving(true);
@@ -563,7 +563,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
       showToast(
         data.pdf_attached
           ? `Estimate sent to ${data.sent_to}`
-          : `Estimate sent to ${data.sent_to} â€” the PDF could not be attached`,
+          : `Estimate sent to ${data.sent_to} — the PDF could not be attached`,
         data.pdf_attached ? "success" : "error",
       );
       await load();
@@ -609,7 +609,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
       }
       showToast(
         data.pdf_error
-          ? "Estimate issued â€” the PDF will be generated on download"
+          ? "Estimate issued — the PDF will be generated on download"
           : "Estimate issued to the client",
       );
       await load();
@@ -669,7 +669,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
       municipalLttOverride: "",
     }));
     setDirty(true);
-    showToast("Adjustments cleared â€” back to the calculated figures");
+    showToast("Adjustments cleared — back to the calculated figures");
   };
 
   const overrideCount =
@@ -688,12 +688,12 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
     parseAmountInput(form.propertyTaxAdjustment) === null;
   const busy = saving || issuing;
 
-  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ────────────────────────────── render ──────────────────────────────
 
   if (loading) {
     return (
       <div className="flex items-center justify-center gap-2 py-24 text-sm text-gray-500">
-        <Loader2 size={16} className="animate-spin" /> Loading estimateâ€¦
+        <Loader2 size={16} className="animate-spin" /> Loading estimate…
       </div>
     );
   }
@@ -736,7 +736,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
     onBlur: () => setTip((k) => (k === key ? null : k)),
   });
 
-  /** One "label â€¦ amount" row, with its info bubble. */
+  /** One "label … amount" row, with its info bubble. */
   const renderLine = (line: StatementLine, muted = false) => {
     const copy = tipFor(line.key);
     // A "not final yet" marker. The title premium carries its own badge from
@@ -800,7 +800,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
         </div>
       )}
 
-      {/* Admin chrome â€” the workflow actions that have no place on the client's
+      {/* Admin chrome — the workflow actions that have no place on the client's
           statement, kept above the letterhead so the document below reads as the
           document. */}
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
@@ -813,7 +813,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
         <div className="flex flex-wrap items-center gap-2">
           {issued && (
             <span className="rounded-full bg-green-50 px-2.5 py-1 text-[11px] font-semibold text-green-700 ring-1 ring-green-200">
-              Issued Â· {formatCurrency(Number(issued.total_closing_costs))}
+              Issued · {formatCurrency(Number(issued.total_closing_costs))}
             </span>
           )}
           {dirty && (
@@ -847,13 +847,13 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
         <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-900">
           <TriangleAlert size={14} className="mt-0.5 shrink-0" />
           <span>
-            No closing-cost configuration has been saved yet â€” these figures use the
-            built-in defaults. Set them under Settings â†’ Closing costs.
+            No closing-cost configuration has been saved yet — these figures use the
+            built-in defaults. Set them under Settings → Closing costs.
           </span>
         </div>
       )}
 
-      {/* â”€â”€ Letterhead â”€â”€ every value from the firm's profile in Settings. */}
+      {/* ── Letterhead ── every value from the firm's profile in Settings. */}
       <div className="flex flex-wrap items-start justify-between gap-5 border-b border-gray-200 pb-4">
         <div className="flex flex-col gap-1.5">
           {logoUrl ? (
@@ -871,16 +871,16 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
           <div className="text-[12.5px] leading-relaxed text-gray-500">
             {String(activeConfig.firm_address || "")}
             <br />
-            Tel: {String(activeConfig.firm_phone || "â€”")} Â· Fax:{" "}
-            {String(activeConfig.firm_fax || "â€”")} Â· HST #{" "}
-            {String(activeConfig.firm_hst_number || "â€”")}
+            Tel: {String(activeConfig.firm_phone || "—")} · Fax:{" "}
+            {String(activeConfig.firm_fax || "—")} · HST #{" "}
+            {String(activeConfig.firm_hst_number || "—")}
           </div>
         </div>
         <div className="text-right text-xs leading-loose text-gray-500">
           <div>
             File No.{" "}
             <span className="font-semibold tabular-nums text-gray-900">
-              {form.fileNo || deal?.file_number || "â€”"}
+              {form.fileNo || deal?.file_number || "—"}
             </span>
           </div>
           <div>Prepared {todayStr}</div>
@@ -906,7 +906,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
           <p className="text-[13px] leading-relaxed text-amber-900">
             <strong className="font-bold">
               {activeStatementType?.disclaimer_intro ||
-                "This is a draft for planning only â€” please do not send us any funds yet."}
+                "This is a draft for planning only — please do not send us any funds yet."}
             </strong>{" "}
             Your final figures are calculated once we receive the mortgage instructions
             from your bank, and we will send you a signed Statement of Account with exact
@@ -916,7 +916,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
       )}
 
       <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
-        {/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ Your numbers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        {/* ────────────────────────── Your numbers ────────────────────────── */}
         <section className="flex flex-col gap-4 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm lg:sticky lg:top-6">
           <div>
             <h2
@@ -930,7 +930,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
             </p>
           </div>
 
-          {/* Firm + statement type â€” both lists come from Settings. */}
+          {/* Firm + statement type — both lists come from Settings. */}
           <div className="flex flex-col gap-2.5 border-b border-gray-100 pb-3.5">
             <PickerRow
               label="Firm"
@@ -1058,12 +1058,12 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
                   : { borderColor: "#d1d5db" }
               }
             >
-              {form.isFirstTimeBuyer ? "âœ“" : ""}
+              {form.isFirstTimeBuyer ? "✓" : ""}
             </span>
             <span className="leading-relaxed">
               I am a first-time home buyer
               <span className="block text-[11.5px] font-normal text-gray-500">
-                Applies the land transfer tax rebate â€” up to{" "}
+                Applies the land transfer tax rebate — up to{" "}
                 {formatCurrency(rates.rebateOntarioMax, { cents: false })} in Ontario,
                 plus {formatCurrency(rates.rebateTorontoMax, { cents: false })} in
                 Toronto.
@@ -1071,34 +1071,17 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
             </span>
           </button>
 
-          {/* The Statement of Adjustments figure.
-              Out here rather than inside "Adjust fees" because it is not an
-              adjustment to the firm's charges at all — it is money the buyer
-              owes the seller, it lands on the client's balance, and on a final
-              account it is mandatory. Buried in an optional panel it was simply
-              missed. */}
-          <BigMoney
-            id="cc-property-tax"
-            label="Property tax & common expense adjustment"
-            value={form.propertyTaxAdjustment}
-            accent={accent}
-            badge={form.statementType === "final" ? "Required" : undefined}
-            invalid={finalNeedsPropertyTax}
-            hint={
-              finalNeedsPropertyTax
-                ? "A final account cannot go out carrying the planning placeholder — enter the figure from the Statement of Adjustments."
-                : isDraft
-                  ? "The buyer's share of tax the seller has prepaid. A planning figure until the Statement of Adjustments arrives; may be negative if the seller is in arrears."
-                  : "From the Statement of Adjustments. May be negative if the seller is in arrears."
-            }
-            onChange={updatePropertyTax}
-          />
-
-          {/* Adjust fees */}
+          {/* Adjust fees.
+              The Statement of Adjustments figure rides in this panel with the
+              rest of the editable numbers, but it is NOT one of the firm's
+              charges — it is money the buyer owes the seller, it lands on the
+              client's balance, and on a final account it is mandatory. So it
+              keeps its Required chip, and a final account missing it forces the
+              panel open rather than letting it hide behind "Add". */}
           <Collapsible
             title="Adjust fees"
             badge={overrideCount > 0 ? `${overrideCount} adjusted` : undefined}
-            open={panelOpen}
+            open={panelOpen || finalNeedsPropertyTax}
             onToggle={() => setPanelOpen((o) => !o)}
           >
             <div className="grid grid-cols-2 gap-x-2.5 gap-y-2">
@@ -1122,11 +1105,28 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
                   onChange={(v) => setOverride(field.key, v)}
                 />
               ))}
+              <SmallMoney
+                label="Property tax & common expense adj."
+                value={form.propertyTaxAdjustment}
+                accent={accent}
+                allowNegative
+                placeholder={ADJUST_PLACEHOLDERS.propertyTaxAdjustment(statement)}
+                badge={form.statementType === "final" ? "Required" : undefined}
+                invalid={finalNeedsPropertyTax}
+                onChange={updatePropertyTax}
+              />
             </div>
             <div className="flex items-center justify-between gap-2">
-              <span className="text-[10.5px] leading-snug text-gray-400">
-                Leave blank to use the calculated amount. HST recalculates on the
-                adjusted fees.
+              <span
+                className={`text-[10.5px] leading-snug ${
+                  finalNeedsPropertyTax ? "text-amber-700" : "text-gray-400"
+                }`}
+              >
+                {finalNeedsPropertyTax
+                  ? "A final account cannot go out carrying the planning placeholder — enter the property tax & common expense adjustment from the Statement of Adjustments."
+                  : isDraft
+                    ? "Leave blank to use the calculated amount. HST recalculates on the adjusted fees. The property tax adjustment is a planning figure until the Statement of Adjustments arrives, and may be negative if the seller is in arrears."
+                    : "Leave blank to use the calculated amount. HST recalculates on the adjusted fees. The property tax adjustment may be negative if the seller is in arrears."}
               </span>
               <button
                 type="button"
@@ -1195,14 +1195,14 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
                 Send email
               </button>
               <span className="text-[10.5px] leading-snug text-gray-400">
-                Sends the ISSUED figures with the PDF attached â€” not what is on screen.
+                Sends the ISSUED figures with the PDF attached — not what is on screen.
                 Issue your changes first.
               </span>
             </div>
           )}
         </section>
 
-        {/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ The statement â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+        {/* ─────────────────────────── The statement ─────────────────────────── */}
         <section className="rounded-2xl border border-gray-200 bg-white px-7 py-6 shadow-sm">
           <div className="flex flex-wrap items-end justify-between gap-4 border-b border-gray-200 pb-3.5">
             <div>
@@ -1211,15 +1211,15 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
               </h2>
               <p className="mt-0.5 text-[12.5px] text-gray-500">
                 {isDraft
-                  ? "Draft estimate â€” for planning only, before your lender's instructions arrive."
-                  : "Final account â€” figures confirmed against your lender's mortgage instructions."}
+                  ? "Draft estimate — for planning only, before your lender's instructions arrive."
+                  : "Final account — figures confirmed against your lender's mortgage instructions."}
               </p>
             </div>
           </div>
 
-          {/* Rendered from the computed groups, so a line that does not apply â€”
+          {/* Rendered from the computed groups, so a line that does not apply —
               no mortgage registration on a cash deal, no municipal tax outside
-              Toronto â€” is absent rather than shown as zero. */}
+              Toronto — is absent rather than shown as zero. */}
           {statement.groups.map((group) => (
             <div key={group.key}>
               <h3
@@ -1264,7 +1264,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
             </span>
           </div>
 
-          {/* Funds needed â€” the number the client actually acts on. */}
+          {/* Funds needed — the number the client actually acts on. */}
           <div
             className="mt-3.5 rounded-xl border p-4.5 px-5 py-4"
             style={{ borderColor: `${accent}33`, backgroundColor: `${accent}0a` }}
@@ -1331,7 +1331,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
 /**
  * Lines that are still provisional while the statement is a draft.
  *
- * The title premium is NOT here â€” it carries its own badge from the calculation,
+ * The title premium is NOT here — it carries its own badge from the calculation,
  * which disappears the moment the exact FCT quote is entered, and that is more
  * precise than "is this a draft".
  */
@@ -1346,11 +1346,11 @@ const ADJUST_PLACEHOLDERS: Record<
   propertyTaxAdjustment: (s) => amountText(s.detail.propertyTaxAdjustment),
 };
 
-/** "+ $1,200.00" / "â€“ $50,000.00" / "â€”" for zero. */
+/** "+ $1,200.00" / "– $50,000.00" / "—" for zero. */
 function signedCurrency(n: number): string {
   const v = Math.round(n * 100) / 100;
-  if (v === 0) return "â€”";
-  return `${v < 0 ? "â€“ " : "+ "}${formatCurrency(Math.abs(v))}`;
+  if (v === 0) return "—";
+  return `${v < 0 ? "– " : "+ "}${formatCurrency(Math.abs(v))}`;
 }
 
 const BalanceRow: React.FC<{ label: string; value: string; muted?: boolean }> = ({
@@ -1413,7 +1413,7 @@ const ChoiceButton: React.FC<{
   </button>
 );
 
-/** A dashed "â€” optional" disclosure block. */
+/** A dashed "— optional" disclosure block. */
 const Collapsible: React.FC<{
   title: string;
   badge?: string;
@@ -1430,7 +1430,7 @@ const Collapsible: React.FC<{
     >
       <span className="text-[10px] font-bold uppercase tracking-[0.09em] text-gray-400">
         {title}{" "}
-        <span className="font-medium normal-case tracking-normal">â€” optional</span>
+        <span className="font-medium normal-case tracking-normal">— optional</span>
         {badge && (
           <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold normal-case tracking-normal text-amber-700">
             {badge}
@@ -1456,26 +1456,14 @@ const BigMoney: React.FC<{
   value: string;
   accent: string;
   hint?: string;
-  /** Small chip beside the label, e.g. "Required" on a final account. */
-  badge?: string;
-  /** Draws the field as unanswered and reads the hint back as the reason. */
-  invalid?: boolean;
   onChange: (value: string) => void;
-}> = ({ id, label, value, accent, hint, badge, invalid, onChange }) => (
+}> = ({ id, label, value, accent, hint, onChange }) => (
   <div className="flex flex-col gap-1.5">
     <label
       htmlFor={id}
       className="flex flex-wrap items-center gap-2 text-[13px] font-semibold text-gray-900"
     >
       {label}
-      {badge && (
-        <span
-          className="rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider"
-          style={{ backgroundColor: `${accent}18`, color: accent }}
-        >
-          {badge}
-        </span>
-      )}
     </label>
     <div className="relative flex items-center">
       <span className="pointer-events-none absolute left-3.5 font-semibold text-gray-400">
@@ -1486,11 +1474,8 @@ const BigMoney: React.FC<{
         type="text"
         inputMode="decimal"
         value={value}
-        aria-invalid={invalid || undefined}
         onChange={(e) => onChange(e.target.value)}
-        className={`w-full rounded-xl border bg-gray-50/40 py-3 pl-7 pr-3.5 text-base font-semibold tabular-nums text-gray-900 outline-none transition focus:bg-white ${
-          invalid ? "border-amber-400 bg-amber-50/40" : "border-gray-200"
-        }`}
+        className="w-full rounded-xl border border-gray-200 bg-gray-50/40 py-3 pl-7 pr-3.5 text-base font-semibold tabular-nums text-gray-900 outline-none transition focus:bg-white"
         onFocus={(e) => {
           e.currentTarget.style.borderColor = accent;
           e.currentTarget.style.boxShadow = `0 0 0 3px ${accent}22`;
@@ -1501,13 +1486,7 @@ const BigMoney: React.FC<{
         }}
       />
     </div>
-    {hint && (
-      <span
-        className={`text-[11.5px] ${invalid ? "text-amber-700" : "text-gray-500"}`}
-      >
-        {hint}
-      </span>
-    )}
+    {hint && <span className="text-[11.5px] text-gray-500">{hint}</span>}
   </div>
 );
 
@@ -1518,11 +1497,32 @@ const SmallMoney: React.FC<{
   accent: string;
   placeholder?: string;
   allowNegative?: boolean;
+  /** Small chip beside the label, e.g. "Required" on a final account. */
+  badge?: string;
+  /** Draws the field as unanswered; the panel footer reads back the reason. */
+  invalid?: boolean;
   onChange: (value: string) => void;
-}> = ({ label, value, accent, placeholder, allowNegative, onChange }) => (
+}> = ({
+  label,
+  value,
+  accent,
+  placeholder,
+  allowNegative,
+  badge,
+  invalid,
+  onChange,
+}) => (
   <div className="flex flex-col gap-1">
-    <label className="text-[10.5px] font-semibold leading-tight text-gray-600">
+    <label className="flex flex-wrap items-center gap-1.5 text-[10.5px] font-semibold leading-tight text-gray-600">
       {label}
+      {badge && (
+        <span
+          className="rounded px-1 py-px text-[8.5px] font-bold uppercase tracking-wider"
+          style={{ backgroundColor: `${accent}18`, color: accent }}
+        >
+          {badge}
+        </span>
+      )}
     </label>
     <div className="relative flex items-center">
       <span className="pointer-events-none absolute left-2 text-[11px] text-gray-400">
@@ -1533,8 +1533,11 @@ const SmallMoney: React.FC<{
         inputMode={allowNegative ? "text" : "decimal"}
         value={value}
         placeholder={placeholder}
+        aria-invalid={invalid || undefined}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-lg border border-gray-200 bg-white py-1.5 pl-5 pr-2 text-[12px] font-semibold tabular-nums text-gray-900 outline-none placeholder:font-normal placeholder:text-gray-300"
+        className={`w-full rounded-lg border py-1.5 pl-5 pr-2 text-[12px] font-semibold tabular-nums text-gray-900 outline-none placeholder:font-normal placeholder:text-gray-300 ${
+          invalid ? "border-amber-400 bg-amber-50/40" : "border-gray-200 bg-white"
+        }`}
         onFocus={(e) => {
           e.currentTarget.style.borderColor = accent;
           e.currentTarget.style.boxShadow = `0 0 0 3px ${accent}22`;

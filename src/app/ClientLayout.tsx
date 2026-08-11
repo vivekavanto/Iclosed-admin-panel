@@ -7,6 +7,7 @@ import SearchDrawer from "../components/SearchDrawer";
 import { useNavigation } from "./providers";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuth } from "@/lib/AuthProvider";
+import { isPublicPath } from "@/lib/publicRoutes";
 
 export default function ClientLayout({
   children,
@@ -18,6 +19,14 @@ export default function ClientLayout({
   const pathname = usePathname();
   const { user, loading } = useAuth();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  // The public surface renders bare: no sidebar, no header, and — critically —
+  // no auth gate of any kind. This is checked BEFORE the loading spinner so a
+  // visitor with no session never watches getSession() resolve before seeing a
+  // page that was never going to need it.
+  if (isPublicPath(pathname)) {
+    return <>{children}</>;
+  }
 
   // Show loading spinner while checking auth
   if (loading) {
