@@ -7,17 +7,70 @@ import { guardServiceRequest } from "@/lib/verifyServiceSignature"
 import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "@/lib/emailIdentity"
 import { buildAgentCcList } from "@/lib/agentCc"
 
+/** A milestone email rendered for one deal, not yet sent. */
+type RenderedDealEmail = {
+    dealId: string
+    email: string
+    firstName: string
+    lastName: string
+    fullName: string
+    subject: string
+    html: string
+    cc: string[]
+}
+
+type DealSendResult = { success: boolean; email?: string; error?: string }
+
 /**
- * Sends a milestone email to the client of a single deal.
- * Returns { success, email, error? }
+ * Placeholders that name the recipient resolve to these sentinels while a deal
+ * is being rendered, not to the client's own name.
+ *
+ * Everyone on a file used to get their own copy of the milestone email — a
+ * two-purchaser family saw two identical "Title Search Completed" messages land
+ * separately, each blind to the other. They are now merged into a single send
+ * (see sendGroupedEmails), which means the greeting has to name every recipient
+ * on the To line instead of whichever deal happened to render first. Rendering
+ * against sentinels lets us compare two deals' bodies for equality first and
+ * substitute the joined names afterwards, so genuinely different content (a
+ * co-seller's sale-side address and role vs a co-purchaser's) still splits into
+ * separate emails rather than leaking one side's details to the other.
+ *
+ * NUL-delimited so they can never collide with template text.
  */
-async function sendEmailForDeal(
+const NAME_TOKEN = {
+    first: "\u0000ICL_FIRST\u0000",
+    last: "\u0000ICL_LAST\u0000",
+    full: "\u0000ICL_FULL\u0000",
+    email: "\u0000ICL_EMAIL\u0000",
+} as const
+
+/** "Alice", "Alice and Bob", "Alice, Bob and Carol" — dupes dropped. */
+function joinNames(values: string[]): string {
+    const seen = new Set<string>()
+    const uniq: string[] = []
+    for (const raw of values) {
+        const v = (raw ?? "").trim()
+        if (!v) continue
+        const key = v.toLowerCase()
+        if (seen.has(key)) continue
+        seen.add(key)
+        uniq.push(v)
+    }
+    if (uniq.length === 0) return ""
+    if (uniq.length === 1) return uniq[0]
+    if (uniq.length === 2) return `${uniq[0]} and ${uniq[1]}`
+    return `${uniq.slice(0, -1).join(", ")} and ${uniq[uniq.length - 1]}`
+}
+
+/**
+ * Renders the milestone email for one deal's client without sending it.
+ * Returns { ok: false } with a reason when the deal has no reachable client.
+ */
+async function buildEmailForDeal(
     dealId: string,
     milestone: any,
     template: any,
-    resend: Resend,
-    fromEmail: string,
-): Promise<{ success: boolean; email?: string; error?: string }> {
+): Promise<{ ok: true; value: RenderedDealEmail } | { ok: false; email?: string; error: string }> {
     try {
         const { data: deal } = await supabaseAdmin
             .from("deals")
@@ -25,7 +78,7 @@ async function sendEmailForDeal(
             .eq("id", dealId)
             .single()
 
-        if (!deal?.client_id) return { success: false, error: "Deal or client not found" }
+        if (!deal?.client_id) return { ok: false, error: "Deal or client not found" }
 
         const { data: client } = await supabaseAdmin
             .from("clients")
@@ -33,7 +86,7 @@ async function sendEmailForDeal(
             .eq("id", deal.client_id)
             .single()
 
-        if (!client?.email) return { success: false, error: "Client email not found" }
+        if (!client?.email) return { ok: false, error: "Client email not found" }
 
         // Fetch lead data for lead placeholders
         let lead: any = null;
@@ -115,17 +168,18 @@ async function sendEmailForDeal(
                 : leadType
 
         const placeholders: Record<string, string> = {
-            // User placeholders
-            "{{ user.first_name }}": client.first_name ?? "",
-            "{{ user.last_name }}": client.last_name ?? "",
-            "{{ user.full_name }}": fullName,
-            "{{ user.get_full_name }}": fullName,
-            "{{ user.email }}": client.email,
-            "{{user.first_name}}": client.first_name ?? "",
-            "{{user.last_name}}": client.last_name ?? "",
-            "{{user.full_name}}": fullName,
-            "{{user.get_full_name}}": fullName,
-            "{{user.email}}": client.email,
+            // User placeholders — sentinels, resolved once the recipients that
+            // share this rendering are known (see NAME_TOKEN).
+            "{{ user.first_name }}": NAME_TOKEN.first,
+            "{{ user.last_name }}": NAME_TOKEN.last,
+            "{{ user.full_name }}": NAME_TOKEN.full,
+            "{{ user.get_full_name }}": NAME_TOKEN.full,
+            "{{ user.email }}": NAME_TOKEN.email,
+            "{{user.first_name}}": NAME_TOKEN.first,
+            "{{user.last_name}}": NAME_TOKEN.last,
+            "{{user.full_name}}": NAME_TOKEN.full,
+            "{{user.get_full_name}}": NAME_TOKEN.full,
+            "{{user.email}}": NAME_TOKEN.email,
             // Lead / deal placeholders
             "{{ lead_address }}": leadAddress,
             "{{lead_address}}": leadAddress,
@@ -145,10 +199,10 @@ async function sendEmailForDeal(
             "{{ stage_status }}": milestone?.status ?? "Completed",
             "{{stage_status}}": milestone?.status ?? "Completed",
             // Short-form aliases (retainer agreement and similar templates)
-            "{{ first_name }}": client.first_name ?? "",
-            "{{ last_name }}": client.last_name ?? "",
-            "{{ full_name }}": fullName,
-            "{{ email }}": client.email,
+            "{{ first_name }}": NAME_TOKEN.first,
+            "{{ last_name }}": NAME_TOKEN.last,
+            "{{ full_name }}": NAME_TOKEN.full,
+            "{{ email }}": NAME_TOKEN.email,
             "{{ property_address }}": leadAddress,
             "{{ lockbox_code }}": lockboxValue,
             "{{lockbox_code}}": lockboxValue,
@@ -157,10 +211,10 @@ async function sendEmailForDeal(
             "{{ file_number }}": fileNumber,
             "{{ side_suffix }}": sideSuffix,
             "{{ property_role_row }}": propertyRoleRow,
-            "{{first_name}}": client.first_name ?? "",
-            "{{last_name}}": client.last_name ?? "",
-            "{{full_name}}": fullName,
-            "{{email}}": client.email,
+            "{{first_name}}": NAME_TOKEN.first,
+            "{{last_name}}": NAME_TOKEN.last,
+            "{{full_name}}": NAME_TOKEN.full,
+            "{{email}}": NAME_TOKEN.email,
             "{{property_address}}": leadAddress,
             "{{file_number}}": fileNumber,
             "{{side_suffix}}": sideSuffix,
@@ -177,11 +231,11 @@ async function sendEmailForDeal(
         }
 
         // Catch remaining placeholders with flexible whitespace
-        processedBody = processedBody.replace(/\{\{\s*user\.get_full_name\s*\}\}/gi, fullName);
-        processedBody = processedBody.replace(/\{\{\s*user\.first_name\s*\}\}/gi, client.first_name ?? "");
-        processedBody = processedBody.replace(/\{\{\s*user\.last_name\s*\}\}/gi, client.last_name ?? "");
-        processedBody = processedBody.replace(/\{\{\s*user\.full_name\s*\}\}/gi, fullName);
-        processedBody = processedBody.replace(/\{\{\s*user\.email\s*\}\}/gi, client.email ?? "");
+        processedBody = processedBody.replace(/\{\{\s*user\.get_full_name\s*\}\}/gi, NAME_TOKEN.full);
+        processedBody = processedBody.replace(/\{\{\s*user\.first_name\s*\}\}/gi, NAME_TOKEN.first);
+        processedBody = processedBody.replace(/\{\{\s*user\.last_name\s*\}\}/gi, NAME_TOKEN.last);
+        processedBody = processedBody.replace(/\{\{\s*user\.full_name\s*\}\}/gi, NAME_TOKEN.full);
+        processedBody = processedBody.replace(/\{\{\s*user\.email\s*\}\}/gi, NAME_TOKEN.email);
         processedBody = processedBody.replace(/\{\{\s*lead_address\s*\}\}/gi, leadAddress);
         processedBody = processedBody.replace(/\{\{\s*lead\.address_line1\s*\}\}/gi, lead?.address_street ?? deal.property_address ?? "");
         processedBody = processedBody.replace(/\{\{\s*lead\.address_city\s*\}\}/gi, lead?.address_city ?? "");
@@ -191,10 +245,10 @@ async function sendEmailForDeal(
         processedBody = processedBody.replace(/\{\{\s*stage_name\s*\}\}/gi, milestone?.title ?? "");
         processedBody = processedBody.replace(/\{\{\s*stage_status\s*\}\}/gi, milestone?.status ?? "Completed");
         // Short-form alias fallbacks
-        processedBody = processedBody.replace(/\{\{\s*first_name\s*\}\}/gi, client.first_name ?? "");
-        processedBody = processedBody.replace(/\{\{\s*last_name\s*\}\}/gi, client.last_name ?? "");
-        processedBody = processedBody.replace(/\{\{\s*full_name\s*\}\}/gi, fullName);
-        processedBody = processedBody.replace(/\{\{\s*email\s*\}\}/gi, client.email ?? "");
+        processedBody = processedBody.replace(/\{\{\s*first_name\s*\}\}/gi, NAME_TOKEN.first);
+        processedBody = processedBody.replace(/\{\{\s*last_name\s*\}\}/gi, NAME_TOKEN.last);
+        processedBody = processedBody.replace(/\{\{\s*full_name\s*\}\}/gi, NAME_TOKEN.full);
+        processedBody = processedBody.replace(/\{\{\s*email\s*\}\}/gi, NAME_TOKEN.email);
         processedBody = processedBody.replace(/\{\{\s*property_address\s*\}\}/gi, leadAddress);
         processedBody = processedBody.replace(/\{\{\s*lockbox_code\s*\}\}/gi, lockboxValue);
         processedBody = processedBody.replace(/\{\{\s*lead\.lockbox_code\s*\}\}/gi, lockboxValue);
@@ -214,10 +268,10 @@ async function sendEmailForDeal(
         }
         processedSubject = processedSubject.replace(/\{\{\s*lead_address\s*\}\}/gi, leadAddress);
         processedSubject = processedSubject.replace(/\{\{\s*lead\.file_number\s*\}\}/gi, deal.file_number ?? "");
-        processedSubject = processedSubject.replace(/\{\{\s*user\.first_name\s*\}\}/gi, client.first_name ?? "");
-        processedSubject = processedSubject.replace(/\{\{\s*user\.full_name\s*\}\}/gi, fullName);
-        processedSubject = processedSubject.replace(/\{\{\s*first_name\s*\}\}/gi, client.first_name ?? "");
-        processedSubject = processedSubject.replace(/\{\{\s*full_name\s*\}\}/gi, fullName);
+        processedSubject = processedSubject.replace(/\{\{\s*user\.first_name\s*\}\}/gi, NAME_TOKEN.first);
+        processedSubject = processedSubject.replace(/\{\{\s*user\.full_name\s*\}\}/gi, NAME_TOKEN.full);
+        processedSubject = processedSubject.replace(/\{\{\s*first_name\s*\}\}/gi, NAME_TOKEN.first);
+        processedSubject = processedSubject.replace(/\{\{\s*full_name\s*\}\}/gi, NAME_TOKEN.full);
         processedSubject = processedSubject.replace(/\{\{\s*property_address\s*\}\}/gi, leadAddress);
         processedSubject = processedSubject.replace(/\{\{\s*file_number\s*\}\}/gi, fileNumber);
         processedSubject = processedSubject.replace(/\{\{\s*side_suffix\s*\}\}/gi, sideSuffix);
@@ -226,39 +280,171 @@ async function sendEmailForDeal(
         // the partner's primary agent, any additional partner_contacts, and the
         // deal's own cc_emails. Client stays the primary recipient; CC is
         // skipped entirely when the flag is off.
-        let cc: string[] | undefined
+        let cc: string[] = []
         if (template.shared_with_agent) {
-            const list = await buildAgentCcList({
+            cc = await buildAgentCcList({
                 partnerId: deal.partner_id,
                 dealId,
                 exclude: [client.email],
             })
-            if (list.length > 0) cc = list
         }
 
-        const { data: sendResult, error: sendError } = await resend.emails.send({
-            from: fromEmail,
-            replyTo: emailReplyTo(),
-            to: [normalizeRecipientEmail(client.email)],
-            ...(cc ? { cc } : {}),
-            subject: processedSubject,
-            html: htmlBody,
-        })
-
-        if (sendError) {
-            return { success: false, email: client.email, error: sendError.message }
+        return {
+            ok: true,
+            value: {
+                dealId,
+                email: normalizeRecipientEmail(client.email),
+                firstName: client.first_name ?? "",
+                lastName: client.last_name ?? "",
+                fullName,
+                subject: processedSubject,
+                html: htmlBody,
+                cc,
+            },
         }
-
-        console.log(
-            `[Milestone Email] Sent to ${client.email}` +
-            `${cc ? ` (cc ${cc.length}: ${cc.join(", ")})` : template.shared_with_agent ? " (shared_with_agent on, but no cc addresses on file — no cc)" : ""}` +
-            `, milestone: "${milestone.title}", id: ${sendResult?.id}`
-        )
-
-        return { success: true, email: client.email }
     } catch (err: any) {
-        return { success: false, error: err.message }
+        return { ok: false, error: err.message }
     }
+}
+
+/**
+ * Sends the rendered deal emails, merging every deal whose subject and body came
+ * out identical into ONE send with all of those clients on the To line.
+ *
+ * Two family members on the same side of a file receive the same words, so they
+ * belong on the same thread — they can see each other's replies and we stop
+ * sending near-duplicate mail. Anything that genuinely renders differently (a
+ * co-seller's sale-side address, role and "Sale" label vs a co-purchaser's)
+ * falls into its own group and is still sent separately, so neither side sees
+ * the other's details.
+ *
+ * CC is the union of the group's per-deal CC lists minus everyone already on
+ * To — a partner contact attached to only one deal in the family still gets
+ * copied on the merged email exactly once.
+ *
+ * Returns one result per deal, so callers keep their per-deal success counts.
+ */
+async function sendGroupedEmails(
+    rendered: RenderedDealEmail[],
+    milestoneTitle: string,
+    sharedWithAgent: boolean,
+    resend: Resend,
+    fromEmail: string,
+): Promise<Map<string, DealSendResult>> {
+    const results = new Map<string, DealSendResult>()
+
+    // Insertion-ordered so the caller's primary deal stays in the first group.
+    const groups = new Map<string, RenderedDealEmail[]>()
+    for (const r of rendered) {
+        // Length-prefixed so a subject/body boundary can never shift and make
+        // two different renderings collide on the same key.
+        const key = `${r.subject.length}:${r.subject}${r.html}`
+        const bucket = groups.get(key)
+        if (bucket) bucket.push(r)
+        else groups.set(key, [r])
+    }
+
+    for (const group of groups.values()) {
+        const to: string[] = []
+        const toSeen = new Set<string>()
+        for (const r of group) {
+            const key = r.email.toLowerCase()
+            if (!key || toSeen.has(key)) continue
+            toSeen.add(key)
+            to.push(r.email)
+        }
+
+        const cc: string[] = []
+        const ccSeen = new Set<string>()
+        for (const r of group) {
+            for (const addr of r.cc) {
+                const key = addr.toLowerCase()
+                if (!key || toSeen.has(key) || ccSeen.has(key)) continue
+                ccSeen.add(key)
+                cc.push(addr)
+            }
+        }
+
+        // Resolve the name sentinels now that the full recipient set is known:
+        // "Dear Alice and Bob," on a merged email, "Dear Alice," on a solo one.
+        const firstNames = joinNames(group.map((r) => r.firstName))
+        const lastNames = joinNames(group.map((r) => r.lastName))
+        const fullNames = joinNames(group.map((r) => r.fullName))
+        const emails = joinNames(group.map((r) => r.email))
+        const resolve = (text: string) =>
+            text
+                .replaceAll(NAME_TOKEN.first, firstNames)
+                .replaceAll(NAME_TOKEN.last, lastNames)
+                .replaceAll(NAME_TOKEN.full, fullNames)
+                .replaceAll(NAME_TOKEN.email, emails)
+
+        try {
+            const { data: sendResult, error: sendError } = await resend.emails.send({
+                from: fromEmail,
+                replyTo: emailReplyTo(),
+                to,
+                ...(cc.length > 0 ? { cc } : {}),
+                subject: resolve(group[0].subject),
+                html: resolve(group[0].html),
+            })
+
+            if (sendError) {
+                for (const r of group) {
+                    results.set(r.dealId, { success: false, email: r.email, error: sendError.message })
+                }
+                continue
+            }
+
+            console.log(
+                `[Milestone Email] Sent to ${to.join(", ")}` +
+                `${cc.length > 0 ? ` (cc ${cc.length}: ${cc.join(", ")})` : sharedWithAgent ? " (shared_with_agent on, but no cc addresses on file — no cc)" : ""}` +
+                `, milestone: "${milestoneTitle}", id: ${sendResult?.id}`
+            )
+
+            for (const r of group) {
+                results.set(r.dealId, { success: true, email: r.email })
+            }
+        } catch (err: any) {
+            for (const r of group) {
+                results.set(r.dealId, { success: false, email: r.email, error: err?.message ?? "Send failed" })
+            }
+        }
+    }
+
+    return results
+}
+
+/**
+ * Renders every given deal and sends the result, merged by identical content.
+ * Deals that can't be rendered (no client / no email) are reported as failures
+ * without blocking the rest of the family's send.
+ */
+async function sendMilestoneEmails(
+    dealIds: string[],
+    milestone: any,
+    template: any,
+    resend: Resend,
+    fromEmail: string,
+): Promise<Map<string, DealSendResult>> {
+    const results = new Map<string, DealSendResult>()
+    const rendered: RenderedDealEmail[] = []
+
+    for (const dealId of dealIds) {
+        const built = await buildEmailForDeal(dealId, milestone, template)
+        if (built.ok) rendered.push(built.value)
+        else results.set(dealId, { success: false, email: built.email, error: built.error })
+    }
+
+    const sent = await sendGroupedEmails(
+        rendered,
+        milestone?.title ?? "",
+        !!template.shared_with_agent,
+        resend,
+        fromEmail,
+    )
+    for (const [dealId, result] of sent) results.set(dealId, result)
+
+    return results
 }
 
 /**
@@ -340,13 +526,20 @@ async function handlePortalRequest(body: Record<string, any>) {
         allDealIds = await getFamilyDealIds(deal_id)
     }
 
-    // Send email to each deal's client
-    const results: { email?: string; success: boolean; error?: string }[] = []
+    // One send per distinct rendering — the whole family lands on a single
+    // email's To line whenever they'd have received the same words anyway.
+    const sendResults = await sendMilestoneEmails(
+        allDealIds,
+        { title: milestone_title },
+        template,
+        resend,
+        fromEmail,
+    )
+    const results: DealSendResult[] = allDealIds.map(
+        (did) => sendResults.get(did) ?? { success: false, error: "Deal was not processed" },
+    )
 
     for (const did of allDealIds) {
-        const result = await sendEmailForDeal(did, { title: milestone_title }, template, resend, fromEmail)
-        results.push(result)
-
         // Mark milestone email_sent on each linked deal's matching milestone
         if (milestone_id) {
             try {
@@ -489,8 +682,27 @@ export async function POST(req: Request) {
         const resend = new Resend(process.env.RESEND_API_KEY)
         const fromEmail = emailFrom();
 
-        // 6. Send email to primary deal's client
-        const primaryResult = await sendEmailForDeal(dealId, milestone, template, resend, fromEmail)
+        // 6. Send. The primary and any linked deals go out together so family
+        //    members who'd receive identical text share one email rather than
+        //    getting a copy each; only genuinely different renderings split.
+        const otherDealIds: string[] = []
+        if (sendToLinkedDeals) {
+            const familyDealIds = await getFamilyDealIds(dealId)
+            otherDealIds.push(...familyDealIds.filter((id) => id !== dealId))
+        }
+
+        const sendResults = await sendMilestoneEmails(
+            [dealId, ...otherDealIds],
+            milestone,
+            template,
+            resend,
+            fromEmail,
+        )
+
+        const primaryResult = sendResults.get(dealId) ?? {
+            success: false,
+            error: "Primary deal was not processed",
+        }
 
         if (!primaryResult.success) {
             return NextResponse.json(
@@ -499,15 +711,15 @@ export async function POST(req: Request) {
             )
         }
 
-        // 7. If sendToLinkedDeals, also send to all co-purchaser/primary linked deals
-        const linkedResults: { email?: string; success: boolean; error?: string }[] = []
+        const linkedResults: DealSendResult[] = otherDealIds.map(
+            (id) => sendResults.get(id) ?? { success: false, error: "Deal was not processed" },
+        )
 
+        // 7. Complete the matching milestone on every linked deal that was
+        //    emailed. Kept after the send, as before, so a failed send doesn't
+        //    leave the family's milestones marked as notified.
         if (sendToLinkedDeals) {
-            const familyDealIds = await getFamilyDealIds(dealId)
-            const otherDealIds = familyDealIds.filter((id) => id !== dealId)
-
             for (const linkedDealId of otherDealIds) {
-                // Also complete the matching milestone on the linked deal
                 try {
                     const { data: linkedMilestones } = await supabaseAdmin
                         .from("milestones")
@@ -534,9 +746,6 @@ export async function POST(req: Request) {
                 } catch {
                     // Non-blocking
                 }
-
-                const result = await sendEmailForDeal(linkedDealId, milestone, template, resend, fromEmail)
-                linkedResults.push(result)
             }
         }
 
