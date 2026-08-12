@@ -49,6 +49,7 @@ import {
   docDownloadHref,
   docFetchCredentials,
 } from "@/lib/blobPrivacy";
+import { openDocForViewing } from "@/lib/docViewer";
 import UploadIdentificationDrawer from "./UploadIdentificationDrawer";
 import UploadHomeInsuranceDrawer from "./UploadHomeInsuranceDrawer";
 import SubmitOnBehalfSection, { OnBehalfCoPerson } from "./SubmitOnBehalfSection";
@@ -1086,7 +1087,11 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
 
   // Single file picker shared by two flows:
   //   • REPLACE: existing task_responses row → PATCH with new url + name
-  //   • CREATE: no response yet → POST a new task_responses row
+  //     (single file only — it targets one specific row)
+  //   • CREATE: add file(s) to a field → POST one task_responses row per file.
+  //     A file field is NOT limited to one file — (task_id, field_id) is
+  //     deliberately non-unique server-side — so this is also the "add more"
+  //     path once files already exist, matching what the client portal allows.
   // For shared (synced) tasks both endpoints mirror across the
   // co-purchaser/co-seller family. APS uploads go through the dedicated
   // APS upload modal, not this path.
@@ -1100,13 +1105,20 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
   // create it's `field-<field.id>`.
   const [replacingFileBusy, setReplacingFileBusy] = useState<string | null>(null);
 
+  // The picker is shared, so `multiple` is toggled on the DOM node right
+  // before .click() — setting it from React state wouldn't have flushed yet.
+  const openFilePicker = (multiple: boolean) => {
+    const input = replacingFileInputRef.current;
+    if (!input) return;
+    input.multiple = multiple;
+    // Re-open the same input even if user picks the same filename twice.
+    input.value = "";
+    input.click();
+  };
+
   const triggerReplaceFile = (responseId: string) => {
     setFileUploadIntent({ kind: "replace", responseId, busyKey: responseId });
-    // Re-open the same input even if user picks the same filename twice.
-    if (replacingFileInputRef.current) {
-      replacingFileInputRef.current.value = "";
-      replacingFileInputRef.current.click();
-    }
+    openFilePicker(false);
   };
 
   const triggerUploadFile = (field: TaskFormField) => {
@@ -1115,65 +1127,75 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
       field,
       busyKey: `field-${field.id}`,
     });
-    if (replacingFileInputRef.current) {
-      replacingFileInputRef.current.value = "";
-      replacingFileInputRef.current.click();
-    }
+    openFilePicker(true);
   };
 
   const handleReplaceFilePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    // Replace targets one row, so it only ever consumes the first file.
+    const files = Array.from(e.target.files ?? []);
     const intent = fileUploadIntent;
-    if (!file || !intent) {
+    if (files.length === 0 || !intent) {
       setFileUploadIntent(null);
       return;
     }
+    const picked = intent.kind === "replace" ? files.slice(0, 1) : files;
     setReplacingFileBusy(intent.busyKey);
     try {
       const leadId = (rawDeal?.lead_id as string | undefined) ?? deal.id;
-      const pathname = `task-responses/${leadId}/${Date.now()}-${file.name}`;
-      const blob = await upload(pathname, file, {
-        access: BLOB_ACCESS,
-        handleUploadUrl: `/api/admin/deals/${deal.id}/uploadblobstorage/token`,
-        contentType: file.type,
-      });
+      let taskCompleted = false;
+      let mirroredCount = 0;
+      let uploadedCount = 0;
 
-      let res: Response;
-      if (intent.kind === "replace") {
-        res = await fetch("/api/admin/task-responses", {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            id: intent.responseId,
-            file_url: blob.url,
-            file_name: file.name,
-          }),
+      // Sequential on purpose: each POST mirrors to the family and may
+      // auto-complete the task, so parallel uploads would race on both.
+      for (const file of picked) {
+        const pathname = `task-responses/${leadId}/${Date.now()}-${file.name}`;
+        const blob = await upload(pathname, file, {
+          access: BLOB_ACCESS,
+          handleUploadUrl: `/api/admin/deals/${deal.id}/uploadblobstorage/token`,
+          contentType: file.type,
         });
-      } else {
-        if (!editingTask) throw new Error("No task open");
-        res = await fetch("/api/admin/task-responses", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            task_id: editingTask.id,
-            field_id: intent.field.id,
-            field_label: intent.field.label,
-            field_type: intent.field.field_type,
-            file_url: blob.url,
-            file_name: file.name,
-          }),
-        });
-      }
-      const pj = await res.json();
-      if (!res.ok || !pj.success) {
-        throw new Error(pj.error || (intent.kind === "replace" ? "Failed to replace file" : "Failed to upload file"));
+
+        let res: Response;
+        if (intent.kind === "replace") {
+          res = await fetch("/api/admin/task-responses", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              id: intent.responseId,
+              file_url: blob.url,
+              file_name: file.name,
+            }),
+          });
+        } else {
+          if (!editingTask) throw new Error("No task open");
+          res = await fetch("/api/admin/task-responses", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              task_id: editingTask.id,
+              field_id: intent.field.id,
+              field_label: intent.field.label,
+              field_type: intent.field.field_type,
+              file_url: blob.url,
+              file_name: file.name,
+            }),
+          });
+        }
+        const pj = await res.json();
+        if (!res.ok || !pj.success) {
+          const label = intent.kind === "replace" ? "Failed to replace file" : `Failed to upload ${file.name}`;
+          throw new Error(pj.error || label);
+        }
+        uploadedCount += 1;
+        if (pj.task_completed === true) taskCompleted = true;
+        if (typeof pj.mirrored === "number") mirroredCount += pj.mirrored;
       }
 
       // Refresh everything that surfaces a doc: edit modal list, the task
       // table's Doc column, and the View Documents modal. When the server
       // auto-completed the task (last required file filled), also refresh
       // tasks + milestones so the table row flips to Completed.
-      const taskCompleted = pj.task_completed === true;
       // Keep the open modal's Status dropdown in sync: when this upload was the
       // final required file, the server auto-completed the task, so reflect that
       // in the modal immediately instead of leaving the dropdown on "Pending".
@@ -1187,8 +1209,12 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
         ...(taskCompleted ? [refetchData()] : []),
       ]);
 
-      const mirroredCount = typeof pj.mirrored === "number" ? pj.mirrored : 0;
-      const baseMessage = intent.kind === "replace" ? "File replaced" : "File uploaded";
+      const baseMessage =
+        intent.kind === "replace"
+          ? "File replaced"
+          : uploadedCount === 1
+            ? "File uploaded"
+            : `${uploadedCount} files uploaded`;
       const suffix = taskCompleted ? " Task marked Completed." : "";
       showToast(
         mirroredCount > 0
@@ -1196,6 +1222,13 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
           : `${baseMessage}.${suffix}`,
       );
     } catch (err: any) {
+      // A mid-batch failure still leaves the earlier files saved — refresh so
+      // the modal shows exactly what made it through.
+      await Promise.all([
+        refreshEditTaskResponses(),
+        fetchTaskFileDocs(),
+        fetchDealDocuments(),
+      ]).catch(() => { });
       showToast(err?.message ?? "Failed to upload file", "error");
     } finally {
       setReplacingFileBusy(null);
@@ -2788,6 +2821,19 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
       }
       return false;
     });
+  };
+
+  // Open a stored file in a new tab for viewing. Linking straight at the stored
+  // URL downloads it instead: Vercel Blob serves documents with
+  // `content-disposition: attachment`, and HEIC (every iPhone ID) is not
+  // renderable at all. openDocForViewing fetches the bytes, converts HEIC to
+  // JPEG and shows an object URL, which the browser renders inline.
+  const viewDocFile = async (doc: any): Promise<void> => {
+    if (!doc?.file_url) return;
+    const opened = await openDocForViewing(doc);
+    if (!opened) {
+      showToast("Could not open the file — allow pop-ups and try again", "error");
+    }
   };
 
   // Download a single stored file. Fetch-then-blob so cross-origin storage
@@ -5589,6 +5635,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                                 href={docDownloadHref(doc.file_url)}
                                 target="_blank"
                                 rel="noopener noreferrer"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  viewDocFile(doc);
+                                }}
                                 className="text-xs font-semibold text-[#C10007] hover:underline shrink-0 ml-3"
                               >
                                 View
@@ -5658,6 +5708,11 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                           href={docDownloadHref(doc.file_url)}
                           target="_blank"
                           rel="noopener noreferrer"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            viewDocFile(doc);
+                          }}
                           className="inline-flex items-center justify-center w-8 h-8 rounded-md text-slate-500 hover:text-[#C10007] hover:bg-white transition-colors"
                           title="View"
                           aria-label={`View ${doc.file_name ?? "file"}`}
@@ -5901,6 +5956,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                                   href={docDownloadHref(doc.file_url)}
                                   target="_blank"
                                   rel="noopener noreferrer"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    viewDocFile(doc);
+                                  }}
                                   className="text-sm text-[#C10007] hover:underline truncate"
                                 >
                                   {doc.file_name || "View file"}
@@ -5966,9 +6025,12 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                             </p>
                             {/* Per-field file action. For APS tasks it opens
                                 the APS upload modal, which APPENDS more files
-                                (agreement + amendments) — so it always reads
-                                "Add"; for non-APS it replaces/uploads via the
-                                generic file-PATCH path. */}
+                                (agreement + amendments). For non-APS the same
+                                button ADDS files to the field — a file field
+                                can hold several (void cheque + direct deposit
+                                form, etc.), same as the client portal allows.
+                                Swapping an individual file is the per-file
+                                Replace control on each row below. */}
                             {isFile && !(editingTask && isHomeInsuranceTask(editingTask)) && (
                               isEditingApsTask ? (
                                 <button
@@ -5983,27 +6045,23 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                                 >
                                   <Upload size={12} /> Add
                                 </button>
-                              ) : fieldResponses.length > 0 ? (
-                                <button
-                                  type="button"
-                                  onClick={() => triggerReplaceFile(fieldResponses[0].id)}
-                                  disabled={replacingFileBusy === fieldResponses[0].id}
-                                  className="inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold text-[#C10007] border border-[#C10007] rounded hover:bg-[#FEF2F2] disabled:opacity-50"
-                                  title="Replace file"
-                                >
-                                  <Upload size={12} />
-                                  {replacingFileBusy === fieldResponses[0].id ? "Uploading…" : "Replace"}
-                                </button>
                               ) : (
                                 <button
                                   type="button"
                                   onClick={() => triggerUploadFile(field)}
                                   disabled={replacingFileBusy === `field-${field.id}`}
-                                  className="inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold text-white bg-[#C10007] rounded hover:bg-[#a30006] disabled:opacity-50"
-                                  title="Upload file"
+                                  className={`inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold rounded disabled:opacity-50 ${fieldResponses.length > 0
+                                    ? "text-[#C10007] border border-[#C10007] hover:bg-[#FEF2F2]"
+                                    : "text-white bg-[#C10007] hover:bg-[#a30006]"
+                                    }`}
+                                  title={fieldResponses.length > 0 ? "Add more files" : "Upload file"}
                                 >
                                   <Upload size={12} />
-                                  {replacingFileBusy === `field-${field.id}` ? "Uploading…" : "Upload"}
+                                  {replacingFileBusy === `field-${field.id}`
+                                    ? "Uploading…"
+                                    : fieldResponses.length > 0
+                                      ? "Add"
+                                      : "Upload"}
                                 </button>
                               )
                             )}
@@ -6020,6 +6078,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                                         href={docDownloadHref(r.file_url)}
                                         target="_blank"
                                         rel="noopener noreferrer"
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          viewDocFile(r);
+                                        }}
                                         className="text-sm text-[#C10007] hover:underline truncate"
                                       >
                                         {r.file_name || "View file"}
@@ -6039,6 +6101,20 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                                         title="Delete this file"
                                       >
                                         <Trash2 size={14} />
+                                      </button>
+                                    )}
+                                    {/* Swap out THIS file. The field-level
+                                        button adds files instead, so replacing
+                                        has to be addressed per row. */}
+                                    {!isEditingApsTask && !r.id.startsWith("tmp-") && (
+                                      <button
+                                        type="button"
+                                        onClick={() => triggerReplaceFile(r.id)}
+                                        disabled={replacingFileBusy === r.id}
+                                        className="shrink-0 ml-auto text-[11px] font-semibold text-gray-500 hover:text-[#C10007] disabled:opacity-50"
+                                        title="Replace this file"
+                                      >
+                                        {replacingFileBusy === r.id ? "Uploading…" : "Replace"}
                                       </button>
                                     )}
                                   </div>
@@ -6246,6 +6322,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                                 href={docDownloadHref(resp.file_url)}
                                 target="_blank"
                                 rel="noopener noreferrer"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  viewDocFile(resp);
+                                }}
                                 className="text-sm text-[#C10007] hover:underline truncate"
                               >
                                 {resp.file_name || "View file"}
@@ -6399,7 +6479,16 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                           <div className="flex items-center gap-2 mt-1">
                             <FileText size={14} className="text-[#C10007] shrink-0" />
                             {resp.file_url ? (
-                              <a href={docDownloadHref(resp.file_url)} target="_blank" rel="noopener noreferrer" className="text-sm text-[#C10007] hover:underline truncate">
+                              <a
+                                href={docDownloadHref(resp.file_url)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  viewDocFile(resp);
+                                }}
+                                className="text-sm text-[#C10007] hover:underline truncate"
+                              >
                                 {resp.file_name || "View file"}
                               </a>
                             ) : (

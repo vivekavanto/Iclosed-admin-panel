@@ -26,6 +26,7 @@ import { upload } from "@vercel/blob/client";
 import Button from "@/components/ui/Button";
 import { useIsLargeScreen } from "@/hooks/useMediaQuery";
 import { docDownloadHref, BLOB_ACCESS } from "@/lib/blobPrivacy";
+import { openDocForViewing } from "@/lib/docViewer";
 
 interface UploadIdentificationDrawerProps {
   open: boolean;
@@ -2033,6 +2034,13 @@ export default function UploadIdentificationDrawer({
                             href={docDownloadHref(doc.file_url)}
                             target="_blank"
                             rel="noopener noreferrer"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              // Stored URLs download rather than display (blob
+                              // attachment disposition, undecodable HEIC) —
+                              // openDocForViewing renders them inline instead.
+                              void openDocForViewing(doc);
+                            }}
                             className="text-xs font-semibold text-green-800 hover:underline truncate block"
                           >
                             {doc.file_name ?? "Document"}

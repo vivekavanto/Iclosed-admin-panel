@@ -17,6 +17,7 @@
 // out of the initial page bundle and only load when a download is triggered.
 
 import { docDownloadHref, docFetchCredentials } from "@/lib/blobPrivacy";
+import { isHeic, heicToJpegBytes } from "@/lib/heic";
 
 export interface PdfResponse {
   field_label?: string | null;
@@ -271,54 +272,6 @@ function detectKind(
   if (n.endsWith(".png") || ct.includes("png")) return "png";
   if (isHeic(name, contentType)) return "heic";
   return "other";
-}
-
-// iPhones photograph IDs as HEIC and the upload drawer accepts .heic, but
-// neither pdf-lib nor Chrome can decode it — a HEIC ID used to land in the
-// export as a "This file type can't be previewed inline" placeholder, i.e. an
-// identification PDF with no identification in it. Detected on the filename OR
-// the content type: Vercel Blob echoes back whatever the browser reported at
-// upload time, which for .heic is often a bare "application/octet-stream".
-function isHeic(name?: string | null, contentType?: string | null): boolean {
-  // Normalise before matching: this is called with either a stored file_name
-  // (which can carry stray whitespace) or, as a fallback, the blob URL (which
-  // can carry a ?query or #hash). A bare endsWith on the raw string misses both
-  // and the file would silently fall through as an unconvertible attachment.
-  const n = (name ?? "")
-    .trim()
-    .toLowerCase()
-    .split(/[?#]/)[0]
-    .trim();
-  const ct = (contentType ?? "").toLowerCase();
-  return (
-    n.endsWith(".heic") ||
-    n.endsWith(".heif") ||
-    ct.includes("heic") ||
-    ct.includes("heif")
-  );
-}
-
-// Decode HEIC to JPEG in the browser via libheif (WASM). Imported dynamically
-// because the decoder is a ~2.9MB chunk (the wasm is inlined as base64, so
-// there is no separate asset to serve); it downloads only when an export
-// actually contains a HEIC, and never on any other download. The `/csp` build
-// avoids `unsafe-eval`, so this keeps working when the CSP in next.config.ts is
-// switched from report-only to enforcing — that build spawns libheif in a
-// blob: worker, which is why the CSP carries `worker-src 'self' blob:`.
-// Returns null on failure so the caller can fall back to a placeholder page
-// rather than losing the whole PDF.
-async function heicToJpegBytes(bytes: Uint8Array): Promise<Uint8Array | null> {
-  try {
-    const { heicTo } = await import("heic-to/csp");
-    const jpegBlob = await heicTo({
-      blob: new Blob([bytes as unknown as BlobPart], { type: "image/heic" }),
-      type: "image/jpeg",
-      quality: 0.92,
-    });
-    return new Uint8Array(await jpegBlob.arrayBuffer());
-  } catch {
-    return null;
-  }
 }
 
 // Download a stored document, transparently converting HEIC to JPEG so every
