@@ -10,9 +10,9 @@ import { sendClerkDocumentsEmail } from "@/lib/sendClerkDocumentsEmail";
  *
  * Emails every client document on the file to the firm's conveyancing clerk
  * inbox — purchase@ / sale@ / both, chosen by the file's type. Each document
- * goes as its OWN attachment; the combined-PDF export ("Download All") is a
- * separate feature and is not used here, because merging breaks the source
- * documents' formatting.
+ * goes as its OWN attachment, never merged into a single PDF, because merging
+ * breaks the source documents' formatting. ("Download All" on the deal page
+ * packages the same originals as a ZIP.)
  *
  * Admin-only: gated by src/middleware.ts (everything under /api/admin/*).
  *

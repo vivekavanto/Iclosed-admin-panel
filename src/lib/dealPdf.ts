@@ -1,10 +1,15 @@
 // Client-side PDF generation for deal tasks.
 //
-// Two entry points:
+// Three entry points:
 //   • downloadTaskPdf(deal, task)        → one task's info + responses + its files
 //   • downloadDealPdf(deal, sections)    → the whole deal: every milestone, task,
 //                                          personal-info response, plus every
 //                                          uploaded document embedded inline.
+//   • downloadDealZip(deal, sections)    → the same coverage as downloadDealPdf,
+//                                          but packaged as a ZIP of separate
+//                                          files with each document kept in its
+//                                          original bytes. This is what the deal
+//                                          page's "Download All" button uses.
 //
 // The text report (task info + personal information) is laid out with jsPDF
 // because its line-wrapping/page-break handling is simple. The uploaded files
@@ -629,12 +634,30 @@ async function downloadBrandedTaskPdf(
   task: PdfTaskInput,
   fileName: string,
 ): Promise<void> {
+  const bytes = await buildBrandedTaskPdfBytes(deal, task);
+  triggerDownload(new Blob([bytes as BlobPart], { type: "application/pdf" }), fileName);
+}
+
+/** The branded single-task report as raw PDF bytes.
+ *
+ *  `includeFiles: false` renders the info block ONLY — no embedded attachments.
+ *  That's what the ZIP export wants: the uploaded documents go into the archive
+ *  as their own original files, so re-embedding them here would ship every
+ *  document twice. */
+async function buildBrandedTaskPdfBytes(
+  deal: PdfDealMeta,
+  task: PdfTaskInput,
+  opts: { includeFiles?: boolean } = {},
+): Promise<Uint8Array> {
+  const { includeFiles = true } = opts;
   const { jsPDF } = await import("jspdf");
   const doc = new jsPDF({ unit: "pt", format: "a4" });
   const g = pkgGeom(doc);
 
   const textResponses = (task.responses ?? []).filter((r) => r.field_type !== "file");
-  const fileResponses = (task.responses ?? []).filter((r) => r.field_type === "file" && r.file_url);
+  const fileResponses = includeFiles
+    ? (task.responses ?? []).filter((r) => r.field_type === "file" && r.file_url)
+    : [];
 
   // Collect the info block (heading band + key/value rows) up front so we can
   // size the spacing to fit it all onto a single page before drawing anything.
@@ -732,13 +755,16 @@ async function downloadBrandedTaskPdf(
   stampChrome(doc, deal);
 
   const reportBuf: ArrayBuffer = doc.output("arraybuffer");
+  if (inserts.length === 0) return new Uint8Array(reportBuf);
+
   const lib = await import("pdf-lib");
   let pdfDoc: any;
   try {
     pdfDoc = await lib.PDFDocument.load(reportBuf);
   } catch {
-    triggerDownload(new Blob([reportBuf], { type: "application/pdf" }), fileName);
-    return;
+    // pdf-lib couldn't re-open the jsPDF output — ship the text report alone
+    // rather than failing the whole download.
+    return new Uint8Array(reportBuf);
   }
 
   inserts.sort((a, b) => a.afterPage - b.afterPage);
@@ -757,8 +783,7 @@ async function downloadBrandedTaskPdf(
     }
   }
 
-  const out = await pdfDoc.save();
-  triggerDownload(new Blob([out as BlobPart], { type: "application/pdf" }), fileName);
+  return await pdfDoc.save();
 }
 
 // ═══════════════════════ Deal Package (branded layout) ═══════════════════════
@@ -1404,4 +1429,136 @@ export async function downloadDealPdf(
 
   const out = await pdfDoc.save();
   triggerDownload(new Blob([out as BlobPart], { type: "application/pdf" }), fileName);
+}
+
+// ═══════════════════════════════ ZIP export ═══════════════════════════════
+// "Download All" ships the file as a ZIP of SEPARATE files rather than the one
+// merged PDF downloadDealPdf builds. Merging re-encodes/flattens the source
+// documents and loses their own formatting (the same reason "Email to clerk"
+// attaches originals — see sendClerkDocumentsEmail.ts), so here every uploaded
+// document goes in byte-for-byte, exactly as it was uploaded.
+//
+// Form answers (Personal Information, Mortgage Representative Details…) have no
+// source file at all — they only ever existed as generated pages. Dropping them
+// would make the ZIP lossy against the old PDF, so each task carrying text
+// responses also gets its own small branded PDF, built with `includeFiles:
+// false` so its attachments aren't duplicated alongside the originals.
+//
+// downloadDealPdf is deliberately kept — the two take the SAME sections, so the
+// combined package is one call away if staff ever want it back.
+
+export interface DealZipResult {
+  /** Entries actually written to the archive. */
+  files: number;
+  /** Names of documents that couldn't be downloaded, so the caller can warn. */
+  failed: string[];
+}
+
+/** Zero-padded milestone index, so a file explorer sorts the folders in the
+ *  same order the deal page lists the milestones. */
+function zipFolderName(index: number, sec: PdfDealSection): string {
+  const title = sec.leadType ? `${sec.milestoneTitle} (${sec.leadType})` : sec.milestoneTitle;
+  return sanitizeFile(`${String(index).padStart(2, "0")} ${title || "Tasks"}`);
+}
+
+/** Split a file name into stem + lowercase extension (extension without a dot). */
+function splitExt(name: string): { stem: string; ext: string } {
+  const ext = extFromName(name);
+  return ext ? { stem: name.slice(0, -(ext.length + 1)), ext } : { stem: name, ext: "" };
+}
+
+function extForKind(kind: "pdf" | "jpg" | "png" | "other"): string {
+  return kind === "other" ? "" : kind;
+}
+
+/**
+ * Build and download every task's documents as a ZIP.
+ *
+ * Takes the SAME sections downloadDealPdf takes, so the two exports always cover
+ * the same tasks — only the packaging differs.
+ */
+export async function downloadDealZip(
+  deal: PdfDealMeta,
+  sections: PdfDealSection[],
+): Promise<DealZipResult> {
+  const JSZip = (await import("jszip")).default;
+  const zip = new JSZip();
+  const failed: string[] = [];
+  let files = 0;
+
+  // Two distinct files can legitimately share a name — "licence.jpg" from each
+  // co-purchaser, or the same task exported per person. Number the repeats
+  // instead of silently overwriting: a ZIP happily holds duplicate paths, and
+  // most extractors then keep only the last one.
+  const usedPaths = new Set<string>();
+  const uniquePath = (folder: string, base: string, ext: string): string => {
+    const suffix = ext ? `.${ext}` : "";
+    for (let n = 1; ; n++) {
+      const name = n === 1 ? `${base}${suffix}` : `${base} (${n})${suffix}`;
+      const path = `${folder}/${name}`;
+      if (!usedPaths.has(path)) {
+        usedPaths.add(path);
+        return path;
+      }
+    }
+  };
+
+  let sectionNo = 0;
+  for (const sec of sections) {
+    if (!sec.tasks || sec.tasks.length === 0) continue;
+    sectionNo++;
+    const folder = zipFolderName(sectionNo, sec);
+
+    for (const task of sec.tasks) {
+      const responses = task.responses ?? [];
+      const fileResponses = responses.filter((r) => r.field_type === "file" && r.file_url);
+      const textResponses = responses.filter((r) => r.field_type !== "file");
+      // Per-person tasks carry the owner's name so two co-purchasers' IDs are
+      // told apart at a glance — same naming as the per-task download.
+      const taskBase = sanitizeFile(
+        `${task.title || "Task"}${task.ownerName ? ` - ${task.ownerName}` : ""}`,
+      );
+
+      for (const r of fileResponses) {
+        const label = r.file_name || "Document";
+        const file = await fetchFile(r.file_url!);
+        if (!file) {
+          // Same contract as the PDF export: one unreachable blob degrades to a
+          // warning, it never fails the whole download.
+          failed.push(label);
+          continue;
+        }
+        const { stem, ext } = splitExt(sanitizeFile(label));
+        zip.file(
+          uniquePath(
+            folder,
+            `${taskBase} - ${stem}`,
+            ext || extForKind(detectKind(label, file.contentType)),
+          ),
+          file.bytes,
+        );
+        files++;
+      }
+
+      if (textResponses.length > 0) {
+        try {
+          const bytes = await buildBrandedTaskPdfBytes(deal, task, { includeFiles: false });
+          zip.file(uniquePath(folder, taskBase, "pdf"), bytes);
+          files++;
+        } catch {
+          failed.push(task.title || "Task details");
+        }
+      }
+    }
+  }
+
+  if (files === 0) return { files: 0, failed };
+
+  const blob = await zip.generateAsync({
+    type: "blob",
+    compression: "DEFLATE",
+    compressionOptions: { level: 6 },
+  });
+  triggerDownload(blob, `Deal ${sanitizeFile(deal.fileNumber)} - Documents.zip`);
+  return { files, failed };
 }

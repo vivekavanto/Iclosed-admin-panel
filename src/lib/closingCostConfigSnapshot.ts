@@ -111,13 +111,36 @@ export function configFromSnapshot(value: unknown): {
 
   const typeRow = (value.statement_type ?? null) as Record<string, unknown> | null;
   const key = toStatementTypeKey(typeRow?.type_key);
+  // Routed through the same reader the live path uses, so a snapshot missing a
+  // field fills from the code defaults rather than printing "undefined".
+  const statementType = statementTypeFromRow(typeRow, key);
 
   return {
     config: { ...value.firm },
-    // Routed through the same reader the live path uses, so a snapshot missing
-    // a field fills from the code defaults rather than printing "undefined".
-    statementType: statementTypeFromRow(typeRow, key),
+    statementType: { ...statementType, title: withoutRetiredTitleSuffix(statementType.title) },
   };
+}
+
+/**
+ * The one piece of a frozen snapshot that is NOT replayed verbatim.
+ *
+ * Every statement heading used to end "— RESIDENTIAL PURCHASE (ONTARIO)". The
+ * firm dropped it on 2026-08-12 (see the admin repo's
+ * migrations/2026-08-12-statement-title-drop-property-qualifier.sql), but a
+ * heading is frozen into `config_snapshot` at save time — so without this, the
+ * same file would print with the qualifier or without it depending on the date
+ * its estimate happened to be saved, and re-downloading an old draft would
+ * silently contradict the new one beside it.
+ *
+ * Matched as an exact retired suffix rather than "anything in brackets": a title
+ * a staff member deliberately writes in Settings must survive untouched. Nothing
+ * that describes MONEY is normalised here — figures, badges and disclaimers stay
+ * frozen — and the stored row is never rewritten, only what is rendered from it.
+ */
+const RETIRED_TITLE_SUFFIX = /\s*[—–-]\s*RESIDENTIAL\s+(?:PURCHASE|PROPERTY)\s*\(ONTARIO\)\s*$/i;
+
+export function withoutRetiredTitleSuffix(title: string): string {
+  return title.replace(RETIRED_TITLE_SUFFIX, "").trim();
 }
 
 // ─────────────────────────── the version stamp ───────────────────────────

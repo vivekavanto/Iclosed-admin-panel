@@ -36,47 +36,15 @@ export async function rateLimitOk(
   }
 }
 
-/**
- * As `rateLimitOk`, but FAILS CLOSED: a rate-limit check that errors blocks the
- * request instead of allowing it.
- *
- * Fail-open is the right default for an admin route — locking staff out of their
- * own tool over a database hiccup costs more than the limit protects. It is the
- * WRONG default for an unauthenticated endpoint with an outward side effect,
- * where "the limiter is broken" and "there is no limiter" are the same thing to
- * an abuser, and the only signal that the counter is down is the abuse itself.
- *
- * That is not hypothetical here: `check_rate_limit()` shipped without a
- * service_role GRANT and returned 42501 on every call, so every limit in this
- * app was a silent no-op until
- * migrations/2026-08-11-fix-rate-limit-permissions.sql. A caller that fails
- * closed turns that class of misconfiguration into a visible outage on one
- * button rather than an open relay.
- *
- * Use it only where the degraded state is acceptable — the public calculator
- * still renders and still downloads its PDF when this blocks the email button.
- */
-export async function rateLimitOkStrict(
-  key: string,
-  limit: number,
-  windowSeconds: number,
-): Promise<boolean> {
-  try {
-    const { data, error } = await supabaseAdmin.rpc("check_rate_limit", {
-      p_key: key,
-      p_limit: limit,
-      p_window_seconds: windowSeconds,
-    });
-    if (error) {
-      logger.error("[rateLimit] check_rate_limit failed (BLOCKING):", error.message);
-      return false; // fail closed
-    }
-    return data === true;
-  } catch (err) {
-    logger.error("[rateLimit] unexpected error (BLOCKING):", err);
-    return false; // fail closed
-  }
-}
+// A fail-CLOSED variant lived here for the public calculator, which has since
+// moved to the customer portal (iclosed_dev_web, src/lib/rateLimit.ts). Every
+// caller left in this app is behind the admin gate, where locking staff out of
+// their own tool over a database hiccup costs more than the limit protects — so
+// fail-open is the right and only default here.
+//
+// The GRANT that makes any of this work at all is
+// migrations/2026-08-11-fix-rate-limit-permissions.sql: without it
+// check_rate_limit() returns 42501 and every limit above is a silent no-op.
 
 /** First client IP from proxy headers, for keying limits by IP. */
 export function requestIp(req: Request): string {

@@ -265,7 +265,7 @@ const STATEMENT_TYPE_DEFAULTS: Record<StatementTypeKey, StatementTypeConfig> = {
   draft: {
     type_key: "draft",
     label: "Draft estimate",
-    title: "ESTIMATED CLOSING COSTS — RESIDENTIAL PURCHASE (ONTARIO)",
+    title: "ESTIMATED CLOSING COSTS",
     screen_heading: "ESTIMATED STATEMENT OF ACCOUNT",
     disclaimer_intro:
       "This is an estimate for planning purposes only. Final figures will be set out in the Statement of Account before closing.",
@@ -277,7 +277,7 @@ const STATEMENT_TYPE_DEFAULTS: Record<StatementTypeKey, StatementTypeConfig> = {
   final: {
     type_key: "final",
     label: "Final account",
-    title: "STATEMENT OF ACCOUNT — RESIDENTIAL PURCHASE (ONTARIO)",
+    title: "STATEMENT OF ACCOUNT",
     screen_heading: "STATEMENT OF ACCOUNT",
     disclaimer_intro:
       "Figures are final subject to the Statement of Adjustments settled on closing.",

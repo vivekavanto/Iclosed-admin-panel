@@ -168,7 +168,10 @@ test("configVersionOf: the cross-repo golden stamp", () => {
     { firm_key: "navawilson", label: "Nava Wilson", firm_name: "ACME" },
     DRAFT,
   );
-  assert.equal(configVersionOf(DEFAULT_RATES, snapshot), "v7.64b1ee0e");
+  // Moved from v7.64b1ee0e on 2026-08-12, when the statement title lost its
+  // "— RESIDENTIAL PURCHASE (ONTARIO)" qualifier. `DRAFT` is the default
+  // statement type, so a wording edit there is meant to move this stamp.
+  assert.equal(configVersionOf(DEFAULT_RATES, snapshot), "v7.c92cbeb6");
 });
 
 test("configVersionOf: moves when only the presentation moves", () => {

@@ -567,9 +567,11 @@ export function computeStatement(
   // One flat professional fee, charged whether or not there is a mortgage.
   // Title submission is billed separately, under Title Insurance above.
   //
-  // The sublabel still narrows on a cash purchase: it describes what the fee
-  // COVERS on this file, which genuinely differs, even though the amount no
-  // longer does.
+  // No sublabel. It used to read "purchase & mortgage" / "purchase" — a scope
+  // note from when the fee was two amounts that were added together. Now that it
+  // is ONE flat fee that does not move with the mortgage, spelling out the scope
+  // under the line invited exactly the question it used to answer ("so which
+  // part is the mortgage?") about a figure that no longer has parts.
   const legalFees = round2(rates.legalFees);
   const adminFee = round2(rates.adminFee);
 
@@ -578,7 +580,6 @@ export function computeStatement(
       key: "legal_fees",
       label: "Legal fees",
       amount: legalFees,
-      sublabel: hasMortgage ? "purchase & mortgage" : "purchase",
     },
     {
       key: "admin_fee",

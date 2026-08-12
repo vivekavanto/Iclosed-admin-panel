@@ -40,7 +40,7 @@ import {
 import { formatLocalDate, formatLocalDateTime } from "@/lib/formatDate";
 import {
   downloadTaskPdf,
-  downloadDealPdf,
+  downloadDealZip,
   type PdfDealMeta,
   type PdfTaskInput,
   type PdfDealSection,
@@ -3198,7 +3198,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
   // rows come back keyed to the primary deal's task id, which is exactly what
   // displayTasks uses, so the map lines up by task.id.
   const [responsesByTask, setResponsesByTask] = useState<Map<string, any[]>>(new Map());
-  const [downloadingDealPdf, setDownloadingDealPdf] = useState(false);
+  const [downloadingDealZip, setDownloadingDealZip] = useState(false);
   const [downloadingTaskId, setDownloadingTaskId] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -3434,9 +3434,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
    *
    * All the work is server-side (/api/admin/deals/[id]/email-to-clerk) — the
    * inbox is picked from the file type there, and the documents are attached as
-   * separate files rather than merged into the combined PDF that "Download All"
-   * produces. Confirmed first because it pushes client PII to an external
-   * mailbox and can't be recalled.
+   * separate files, for the same reason "Download All" zips them separately:
+   * merging mangles the source documents' own formatting. Confirmed first
+   * because it pushes client PII to an external mailbox and can't be recalled.
    */
   const handleEmailToClerk = async () => {
     const confirmed = window.confirm(
@@ -3465,8 +3465,18 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
     }
   };
 
-  const handleDownloadDealPdf = async () => {
-    setDownloadingDealPdf(true);
+  /**
+   * "Download All" — every task's documents as a ZIP of separate files.
+   *
+   * The sections are assembled exactly as the old combined-PDF export did (same
+   * milestone grouping, same "only tasks with data" rule); only the packaging
+   * changed. Merging everything into one PDF flattened the source documents and
+   * lost their own formatting, so each uploaded file now comes down in its
+   * original bytes, and tasks whose only content is form answers get a small
+   * PDF of their own so nothing that used to be in the package is dropped.
+   */
+  const handleDownloadDealZip = async () => {
+    setDownloadingDealZip(true);
     try {
       // Freshest responses so recently-saved edits are included.
       const fresh = await fetchFreshResponsesMap();
@@ -3532,11 +3542,24 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
         );
         return;
       }
-      await downloadDealPdf(buildPdfDealMeta(), sections);
+      const { files, failed } = await downloadDealZip(buildPdfDealMeta(), sections);
+      if (files === 0) {
+        showToast("None of this deal's documents could be downloaded", "error");
+        return;
+      }
+      // A blob that can't be fetched is skipped, not fatal — say so rather than
+      // letting the ZIP look complete when it isn't.
+      if (failed.length > 0) {
+        showToast(
+          `Downloaded ${files} file${files === 1 ? "" : "s"} — ${failed.length} could not be ` +
+          `retrieved: ${failed.slice(0, 3).join(", ")}${failed.length > 3 ? "…" : ""}`,
+          "error",
+        );
+      }
     } catch {
-      showToast("Could not generate the deal PDF", "error");
+      showToast("Could not build the documents ZIP", "error");
     } finally {
-      setDownloadingDealPdf(false);
+      setDownloadingDealZip(false);
     }
   };
 
@@ -4303,14 +4326,14 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                   export — show it only when at least one task is completed. */}
               {tasks.some((t) => t.status === "Completed") && (
               <button
-                onClick={handleDownloadDealPdf}
-                disabled={downloadingDealPdf}
+                onClick={handleDownloadDealZip}
+                disabled={downloadingDealZip}
                 className="bg-brand-primary text-white hover:bg-brand-primaryHover px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-colors shadow-sm disabled:opacity-60"
-                title="Download all tasks and documents as a single PDF"
+                title="Download every document as a separate file in a ZIP"
               >
-                {downloadingDealPdf ? (
+                {downloadingDealZip ? (
                   <>
-                    <Loader2 size={16} className="animate-spin" /> Preparing PDF…
+                    <Loader2 size={16} className="animate-spin" /> Preparing ZIP…
                   </>
                 ) : (
                   <>
@@ -4320,9 +4343,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
               </button>
               )}
               {/* Sends every uploaded document to the firm's clerk inbox as
-                  SEPARATE attachments — deliberately not the combined PDF above,
-                  which mangles the source documents' own formatting. Shown on
-                  the same condition as Download All. */}
+                  SEPARATE attachments, in their original formats — same
+                  packaging rule as the ZIP above. Shown on the same condition
+                  as Download All. */}
               {tasks.some((t) => t.status === "Completed") && (
               <button
                 onClick={handleEmailToClerk}

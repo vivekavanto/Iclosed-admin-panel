@@ -3,7 +3,6 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
-import { isPublicPath } from "@/lib/publicRoutes";
 import type { User } from "@supabase/supabase-js";
 
 interface AuthContextType {
@@ -31,10 +30,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const router = useRouter();
   const pathname = usePathname();
-
-  // The login page and the public surface are the two places an unauthenticated
-  // visitor is SUPPOSED to be, so neither may be bounced to /admin/login.
-  const staysWithoutSession = pathname === "/admin/login" || isPublicPath(pathname);
 
   useEffect(() => {
     let cancelled = false;
@@ -65,7 +60,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       verifyAndSet(session?.user ?? null).then(() => {
-        if (!cancelled && !session && !staysWithoutSession) {
+        if (!cancelled && !session && pathname !== "/admin/login") {
           router.push("/admin/login");
         }
       });
@@ -75,14 +70,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       cancelled = true;
       subscription.unsubscribe();
     };
-  }, [router, staysWithoutSession]);
+  }, [router, pathname]);
 
   // Redirect to login if not authenticated (or not authorized as admin)
   useEffect(() => {
-    if (!loading && !user && !staysWithoutSession) {
+    if (!loading && !user && pathname !== "/admin/login") {
       router.push("/admin/login");
     }
-  }, [loading, user, staysWithoutSession, router]);
+  }, [loading, user, pathname, router]);
 
   const signOut = async () => {
     await supabase.auth.signOut();

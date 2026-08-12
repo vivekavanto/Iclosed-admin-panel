@@ -19,8 +19,9 @@ import { withRetry } from "./retry";
 
 /**
  * Fires the back-office "this client is done" alert: when a client AND their
- * co-party have completed every client-visible task on the file, every active
- * admin gets an email and an in-app notification (sidebar bell).
+ * co-party have completed every client-visible task on the file, the clerk
+ * inbox gets an email (see DEFAULT_ALERT_TO / ALL_TASKS_ALERT_TO below) and
+ * every admin gets an in-app notification (sidebar bell).
  *
  * Scope of "all tasks":
  *   • The whole FAMILY, not one deal — a co-purchaser's outstanding ID upload
@@ -104,19 +105,23 @@ function joinNames(names: string[]): string {
 /**
  * Who gets the alert email.
  *
- * Defaults to EVERY active admin — the alert exists so whoever picks the file
- * up next sees it, and routing it to one tuning inbox meant the team never got
- * it. Override with ALL_TASKS_ALERT_TO:
+ * Routed to the clerk who picks the file up once the client is done, rather than
+ * to every active admin — the whole team being emailed on every completed file
+ * was noise, and the alert is also in the bell for everyone anyway.
  *
- *   ALL_TASKS_ALERT_TO="admins"                             → every active
- *                                                             admin_users row
+ * Override with ALL_TASKS_ALERT_TO:
+ *
+ *   ALL_TASKS_ALERT_TO="aliya@navawilson.law"               → that address
  *                                                             (the default)
  *   ALL_TASKS_ALERT_TO="ops@example.com,clerk@example.com"  → those addresses
+ *   ALL_TASKS_ALERT_TO="admins"                             → back to every
+ *                                                             active admin_users
+ *                                                             row
  *
  * The in-app notification is unaffected either way — it's a broadcast row, so
  * every admin still sees it in the bell regardless of who is emailed.
  */
-const DEFAULT_ALERT_TO = "admins";
+const DEFAULT_ALERT_TO = "aliya@navawilson.law";
 
 async function resolveRecipients(): Promise<string[]> {
   const configured = (process.env.ALL_TASKS_ALERT_TO ?? DEFAULT_ALERT_TO).trim();

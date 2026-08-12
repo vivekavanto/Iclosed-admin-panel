@@ -518,6 +518,28 @@ function bag(value: unknown): Bag {
   return value && typeof value === "object" ? (value as Bag) : {};
 }
 
+/**
+ * Lines whose stored sublabel is no longer printed, whatever the snapshot says.
+ *
+ * A snapshot is normally replayed verbatim — that is the whole point of freezing
+ * one, and it is why a disclaimer edit does not rewrite statements already sent.
+ * This is the deliberate exception. `legal_fees` used to carry a scope note
+ * ("purchase & mortgage" / "purchase") describing a fee that was two amounts
+ * added together; the fee became ONE flat charge, the note was dropped from
+ * `computeStatement` on 2026-08-12, and leaving it on the replay path would mean
+ * the same file printed with the note or without it depending on whether the
+ * estimate had been saved before that date.
+ *
+ * Values, badges and wording that describe MONEY stay frozen. This drops one
+ * retired annotation, and only from what is rendered — the stored row is
+ * untouched.
+ */
+const RETIRED_SUBLABEL_KEYS = new Set(["legal_fees"]);
+
+function isRetiredSublabel(key: string): boolean {
+  return RETIRED_SUBLABEL_KEYS.has(key);
+}
+
 export function snapshotToStatement(snapshot: unknown): Statement | null {
   if (!snapshot || typeof snapshot !== "object") return null;
   const s = bag(snapshot);
@@ -537,11 +559,14 @@ export function snapshotToStatement(snapshot: unknown): Statement | null {
         lines: Array.isArray(g.lines)
           ? (g.lines as unknown[]).map((rawLine) => {
               const l = bag(rawLine);
+              const key = String(l.key ?? "");
               return {
-                key: String(l.key ?? ""),
+                key,
                 label: String(l.label ?? ""),
                 amount: num(l.amount),
-                ...(l.sublabel ? { sublabel: String(l.sublabel) } : {}),
+                ...(l.sublabel && !isRetiredSublabel(key)
+                  ? { sublabel: String(l.sublabel) }
+                  : {}),
                 ...(l.badge ? { badge: String(l.badge) } : {}),
               };
             })

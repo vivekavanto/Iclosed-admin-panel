@@ -228,7 +228,7 @@ export async function generateClosingCostPdf(
 
   const firmName = text(config.firm_name, "NAVA WILSON PROFESSIONAL CORPORATION");
   doc.setTitle(
-    text(statementType?.title, "Estimated Closing Costs — Residential Purchase (Ontario)"),
+    text(statementType?.title, "Estimated Closing Costs"),
   );
   doc.setSubject("Purchase closing cost estimate");
   doc.setCreator(firmName);
@@ -294,7 +294,7 @@ export async function generateClosingCostPdf(
   y -= 30;
   const title = text(
     statementType?.title,
-    "ESTIMATED CLOSING COSTS — RESIDENTIAL PURCHASE (ONTARIO)",
+    "ESTIMATED CLOSING COSTS",
   );
   const TITLE_SIZE = 8;
   const TRACKING = 1.4;

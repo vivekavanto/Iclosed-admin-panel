@@ -1,11 +1,11 @@
 // "Email to clerk" — sends a file's whole client document package to the firm's
 // conveyancing clerks.
 //
-// Sits next to "Download All" on the deal page. Download All builds ONE combined
-// PDF; this deliberately does not. The clerks asked for the original files as
-// SEPARATE attachments because the combined PDF mangles the source documents'
-// own templates/formatting. So this reuses collectFamilyDocuments(), which
-// hands back each stored blob untouched.
+// Sits next to "Download All" on the deal page and follows the same rule: the
+// clerks asked for the original files as SEPARATE attachments, because merging
+// them into one PDF mangles the source documents' own templates/formatting.
+// (Download All zips them for the same reason.) So this reuses
+// collectFamilyDocuments(), which hands back each stored blob untouched.
 //
 // Routing: the clerk inbox is chosen by the file's type —
 //   Purchase        → CLERK_PURCHASE_EMAIL

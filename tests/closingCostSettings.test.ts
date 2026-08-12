@@ -128,7 +128,7 @@ test("firm and statement-type keys are guarded", () => {
 // ── statement types ────────────────────────────────────────────────────
 test("statement-type defaults preserve today's hard-coded strings", () => {
   const draft = defaultStatementType("draft");
-  assert.equal(draft.title, "ESTIMATED CLOSING COSTS — RESIDENTIAL PURCHASE (ONTARIO)");
+  assert.equal(draft.title, "ESTIMATED CLOSING COSTS");
   assert.equal(draft.screen_heading, "ESTIMATED STATEMENT OF ACCOUNT");
   assert.equal(draft.show_watermark, true);
   assert.equal(defaultStatementType("final").show_watermark, false);
