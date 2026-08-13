@@ -73,7 +73,9 @@ For EACH distinct identification document you find in the image/PDF, do the foll
 5. Extract the EXPIRY DATE in YYYY-MM-DD format, or null if not visible.
 
 Edge-case policy:
-- Passports are "single-sided". A passport BACK is still recognized as part of a valid passport.
+- EVERY acceptable ID is "front-and-back" required — never return "single-sided".
+- Passports need BOTH sides: the photo/bio-data page is the "front", the rear cover / signature / address page is the "back". A passport is only "is_complete": true when both are visible.
+- A passport back is often a plain cover or a near-blank page — still classify it as the passport's "back", not as an unidentifiable document.
 - Cards (Driver's License, PR Card, etc.) are "front-and-back" required.
 - Driver's license backs (with PDF417 barcode, magstripe) are VALID identification.
 - Users may scan multiple distinct IDs onto one file — return one entry per ID.

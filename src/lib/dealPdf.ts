@@ -663,13 +663,17 @@ async function buildBrandedTaskPdfBytes(
   // size the spacing to fit it all onto a single page before drawing anything.
   const bandTitle = task.ownerName || task.title || (textResponses.length > 0 ? "Details" : "Task");
   const bandLabel = task.ownerName ? task.title ?? undefined : undefined;
-  const rowData: Array<{ label: string; value: string }> = [];
+  const rowData: Array<{ label: string; value: string; heading?: string }> = [];
   if (task.ownerName) rowData.push({ label: "Name", value: task.ownerName });
   if (textResponses.length > 0) {
     for (const r of textResponses) {
       const label = (r.field_label || r.field_id || "Field").toString();
       const val = (r.value ?? "").toString().trim() || "—";
-      rowData.push({ label, value: val });
+      rowData.push({
+        label,
+        value: val,
+        ...(startsMailForwarding(label) ? { heading: MAIL_FORWARDING_HEADING } : {}),
+      });
     }
   } else if (!task.ownerName) {
     rowData.push({ label: "No client responses submitted.", value: "—" });
@@ -692,7 +696,13 @@ async function buildBrandedTaskPdfBytes(
   const blockHeight = (mm: Metric) =>
     mm.bandH +
     mm.bandGap +
-    rowData.reduce((sum, r) => sum + kvRowHeight(doc, r.label, r.value, mm.labelW, g.contentW, mm), 0);
+    rowData.reduce(
+      (sum, r) =>
+        sum +
+        (r.heading ? subheadingHeight(mm) : 0) +
+        kvRowHeight(doc, r.label, r.value, mm.labelW, g.contentW, mm),
+      0,
+    );
   let m = LADDER[LADDER.length - 1];
   for (const cand of LADDER) {
     if (blockHeight(cand) <= availH) {
@@ -711,9 +721,13 @@ async function buildBrandedTaskPdfBytes(
       if (y + m.bandH + m.bandGap > g.bottom) this.page();
       y = drawBand(doc, g, y, title, label, { h: m.bandH, gap: m.bandGap, titleSize: m.titleSize });
     },
-    kv(label: string, value: string) {
-      const h = kvRowHeight(doc, label, value, m.labelW, g.contentW, m);
+    kv(label: string, value: string, heading?: string) {
+      const h =
+        (heading ? subheadingHeight(m) : 0) +
+        kvRowHeight(doc, label, value, m.labelW, g.contentW, m);
+      // The heading and the row it introduces break to a new page together.
       if (y + h > g.bottom) this.page();
+      if (heading) y = drawSubheading(doc, g.M, y, heading, m);
       y = drawKvRow(doc, g.M, y, g.contentW, label, value, m.labelW, m);
     },
   };
@@ -722,7 +736,7 @@ async function buildBrandedTaskPdfBytes(
 
   flow.band(bandTitle, bandLabel);
   for (const r of rowData) {
-    flow.kv(r.label, r.value);
+    flow.kv(r.label, r.value, r.heading);
   }
 
   let docIdx = 0;
@@ -921,6 +935,37 @@ function drawKvRow(
   doc.setLineWidth(0.7);
   doc.line(x0, y + h, x0 + tableW, y + h);
   return y + h;
+}
+
+// Sub-heading inside a key/value table. The Personal Information form collects
+// the client's mail forwarding address as plain "Street Address / City / Postal
+// Code" fields, so — exactly like the deal page's task modal — a heading is
+// printed before the first of them to say what that address is for.
+const MAIL_FORWARDING_HEADING = "Mail forwarding address";
+
+function startsMailForwarding(label: string | null | undefined): boolean {
+  return (label ?? "").trim().toLowerCase() === "street address";
+}
+
+function subheadingHeight(m: KvMetric = {}): number {
+  const { size = 10.5, lhFactor = 1.35, padTop = 12, padBot = 12 } = m;
+  return padTop + size * lhFactor + padBot / 2;
+}
+
+function drawSubheading(
+  doc: JsPdfDoc,
+  x0: number,
+  y: number,
+  text: string,
+  m: KvMetric = {},
+): number {
+  const { size = 10.5, lhFactor = 1.35, padTop = 12, padBot = 12 } = m;
+  const lh = size * lhFactor;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(size);
+  doc.setTextColor(...PKG.ink);
+  doc.text(String(text ?? ""), x0, y + padTop + lh * 0.8);
+  return y + padTop + lh + padBot / 2;
 }
 
 // Gray band with a red left bar: bold title + optional letter-spaced label.
@@ -1305,12 +1350,15 @@ export async function downloadDealPdf(
       if (y + 62 > g.bottom) this.page();
       y = drawBand(doc, g, y, title, label);
     },
-    kv(label: string, value: string) {
-      const h = kvRowHeight(doc, label, value, 180, g.contentW);
+    kv(label: string, value: string, heading?: string) {
+      const h =
+        (heading ? subheadingHeight() : 0) + kvRowHeight(doc, label, value, 180, g.contentW);
+      // The heading and the row it introduces break to a new page together.
       if (y + h > g.bottom) {
         doc.addPage();
         y = g.top;
       }
+      if (heading) y = drawSubheading(doc, g.M, y, heading);
       y = drawKvRow(doc, g.M, y, g.contentW, label, value, 180);
     },
   };
@@ -1364,7 +1412,7 @@ export async function downloadDealPdf(
         for (const r of textResponses) {
           const label = (r.field_label || r.field_id || "Field").toString();
           const val = (r.value ?? "").toString().trim() || "—";
-          flow.kv(label, val);
+          flow.kv(label, val, startsMailForwarding(label) ? MAIL_FORWARDING_HEADING : undefined);
         }
       }
 

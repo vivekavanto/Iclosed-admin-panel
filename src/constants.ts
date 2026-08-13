@@ -242,6 +242,7 @@ export const NAV_ITEMS = [
   { label: 'Search', id: 'search', icon: 'Search' },
 { label: 'Tasks', id: 'tasks', icon: 'ListTodo' },
   { label: 'All Files', id: 'deals', icon: 'Files' },
+  { label: 'Calculator', id: 'calculator', icon: 'Calculator' },
   { 
     label: 'Templates', 
     id: 'templates', 

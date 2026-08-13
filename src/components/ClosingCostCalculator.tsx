@@ -4,7 +4,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link";
 import {
   ArrowLeft,
-  ChevronDown,
   Download,
   Loader2,
   Mail,
@@ -14,12 +13,9 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import {
-  DISCLAIMERS,
-  LINE_TOOLTIPS,
   computeStatement,
   ratesFromConfigRow,
   type ClosingCostInputs,
-  type StatementLine,
 } from "@/lib/closingCosts";
 import {
   FIRM_FEE_COLUMNS,
@@ -27,7 +23,22 @@ import {
   type StatementTypeConfig,
 } from "@/lib/closingCostSettings";
 import { formatCurrency, parseAmountInput } from "@/lib/formatCurrency";
-import { docDownloadHref } from "@/lib/blobPrivacy";
+import {
+  ADJUST_INPUTS,
+  ADJUST_PLACEHOLDERS,
+  OVERRIDE_FIELDS,
+} from "@/components/closingCost/adjustFields";
+import {
+  BigMoney,
+  ChoiceButton,
+  Collapsible,
+  PickerRow,
+  SmallMoney,
+  SmallText,
+  amountText,
+} from "@/components/closingCost/fields";
+import Letterhead from "@/components/closingCost/Letterhead";
+import StatementCard from "@/components/closingCost/StatementCard";
 
 // Staff-facing purchase closing-cost calculator for one file.
 //
@@ -42,42 +53,6 @@ const BRAND = "#C10007";
 
 const inputClass =
   "w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white";
-
-/**
- * Per-file rate overrides shown in the "Adjust fees" panel.
- *
- * Only the firm's own charges: these are deviations from the firm's standard
- * SCHEDULE, so they ride in `rate_overrides` and are frozen alongside the
- * effective rates. The land transfer tax, title premium and Statement of
- * Adjustments figure are also adjustable in the same panel, but they are
- * per-file INPUTS rather than rates, so they live on the estimate row itself —
- * see ADJUST_INPUTS below.
- *
- * The HST rate and the rebate caps are deliberately absent: they are statutory,
- * and a per-file "adjustment" to them produces a figure that is simply wrong
- * rather than merely different. They remain editable in Settings for everyone.
- */
-const OVERRIDE_FIELDS: Array<{ key: string; label: string }> = [
-  { key: "legal_title_submission", label: "FCT submission & review" },
-  { key: "reg_transfer", label: "Registration of transfer" },
-  { key: "reg_mortgage", label: "Registration of mortgage" },
-  { key: "teraview", label: "Teraview searches" },
-  { key: "sheriff", label: "Sheriff's certificates" },
-  { key: "legal_fees", label: "Legal fees" },
-  { key: "admin_fee", label: "Admin fee" },
-];
-
-/**
- * The adjustable per-file inputs, keyed by their FormState field. Rendered in
- * the same grid as the rate overrides so staff see one list of adjustable
- * numbers rather than an internal distinction they have no reason to care
- * about.
- */
-const ADJUST_INPUTS: Array<{ key: FormNumberKey; label: string }> = [
-  { key: "provincialLttOverride", label: "Ontario provincial LTT" },
-  { key: "municipalLttOverride", label: "Toronto municipal LTT" },
-  { key: "titlePremiumOverride", label: "Title insurance premium" },
-];
 
 type ConfigRow = Record<string, unknown>;
 
@@ -156,13 +131,6 @@ interface FormState {
   overrides: Record<string, string>;
 }
 
-/** The FormState fields the "Adjust fees" panel edits as plain dollar figures. */
-type FormNumberKey =
-  | "titlePremiumOverride"
-  | "provincialLttOverride"
-  | "municipalLttOverride"
-  | "propertyTaxAdjustment";
-
 const EMPTY_FORM: FormState = {
   firmKey: "",
   statementType: "draft",
@@ -183,12 +151,6 @@ const EMPTY_FORM: FormState = {
   overrides: {},
 };
 
-function amountText(v: unknown): string {
-  if (v === null || v === undefined || v === "") return "";
-  const n = Number(v);
-  return Number.isFinite(n) ? String(n) : "";
-}
-
 const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -199,8 +161,6 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
   const [panelOpen, setPanelOpen] = useState(false);
   const [fileDetailsOpen, setFileDetailsOpen] = useState(false);
   const [emailOpen, setEmailOpen] = useState(false);
-  /** Key of the statement line whose tooltip is showing; only ever one. */
-  const [tip, setTip] = useState<string | null>(null);
 
   const [deal, setDeal] = useState<DealSummary | null>(null);
   const [config, setConfig] = useState<ConfigRow | null>(null);
@@ -787,74 +747,6 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
   // page the same way it re-skins the PDF letterhead.
   const accent = String(activeConfig.brand_color || BRAND);
   const isDraft = form.statementType !== "final";
-  const firmName = String(activeConfig.firm_name || activeConfig.label || "");
-  const logoUrl = String(activeConfig.logo_url || "");
-  const todayStr = new Date().toLocaleDateString("en-CA", {
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  });
-
-  /** A line's tooltip copy, or null when it has none. */
-  const tipFor = (key: string) => LINE_TOOLTIPS[key] ?? null;
-
-  const tipHandlers = (key: string) => ({
-    onMouseEnter: () => setTip(key),
-    onMouseLeave: () => setTip((k) => (k === key ? null : k)),
-    onFocus: () => setTip(key),
-    onBlur: () => setTip((k) => (k === key ? null : k)),
-  });
-
-  /** One "label … amount" row, with its info bubble. */
-  const renderLine = (line: StatementLine, muted = false) => {
-    const copy = tipFor(line.key);
-    // A "not final yet" marker. The title premium carries its own badge from
-    // the calculation (it disappears the moment the real FCT quote is pasted in);
-    // the rest are only provisional while the statement is still a draft.
-    // The engine decides which lines are provisional, so the screen, the PDF
-    // and a frozen snapshot always agree. See CALC_VERSION 7.
-    const badge = line.badge ?? null;
-
-    return (
-      <div
-        key={line.key}
-        className={`flex items-baseline justify-between gap-3.5 py-1.5 text-[13.5px] ${
-          muted ? "text-gray-500" : "text-gray-900"
-        }`}
-      >
-        <span className="inline-flex max-w-[76%] flex-wrap items-center">
-          {line.label}
-          {badge && (
-            <span className="ml-1.5 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-amber-700">
-              {badge}
-            </span>
-          )}
-          {copy && (
-            <span className="relative ml-1.5 inline-flex">
-              <span
-                tabIndex={0}
-                role="note"
-                aria-label={copy}
-                {...tipHandlers(line.key)}
-                className="flex h-[15px] w-[15px] cursor-help items-center justify-center rounded-full text-[10px] font-bold"
-                style={{ backgroundColor: `${accent}1a`, color: accent }}
-              >
-                i
-              </span>
-              {tip === line.key && (
-                <span className="absolute bottom-6 left-1/2 z-20 w-[250px] -translate-x-1/2 rounded-[10px] bg-gray-900 px-3 py-2.5 text-[11.5px] font-normal leading-relaxed text-white shadow-xl">
-                  {copy}
-                </span>
-              )}
-            </span>
-          )}
-        </span>
-        <span className="whitespace-nowrap tabular-nums">
-          {formatCurrency(line.amount)}
-        </span>
-      </div>
-    );
-  };
 
   return (
     <div className="mx-auto max-w-[1120px] px-4 py-7 sm:px-6 lg:px-8">
@@ -936,38 +828,10 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
       )}
 
       {/* ── Letterhead ── every value from the firm's profile in Settings. */}
-      <div className="flex flex-wrap items-start justify-between gap-5 border-b border-gray-200 pb-4">
-        <div className="flex flex-col gap-1.5">
-          {logoUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={docDownloadHref(logoUrl)}
-              alt={firmName}
-              className="h-[30px] w-auto object-contain"
-            />
-          ) : (
-            <span className="text-2xl font-bold leading-none tracking-tight text-gray-900">
-              {firmName}
-            </span>
-          )}
-          <div className="text-[12.5px] leading-relaxed text-gray-500">
-            {String(activeConfig.firm_address || "")}
-            <br />
-            Tel: {String(activeConfig.firm_phone || "—")} · Fax:{" "}
-            {String(activeConfig.firm_fax || "—")} · HST #{" "}
-            {String(activeConfig.firm_hst_number || "—")}
-          </div>
-        </div>
-        <div className="text-right text-xs leading-loose text-gray-500">
-          <div>
-            File No.{" "}
-            <span className="font-semibold tabular-nums text-gray-900">
-              {form.fileNo || deal?.file_number || "—"}
-            </span>
-          </div>
-          <div>Prepared {todayStr}</div>
-        </div>
-      </div>
+      <Letterhead
+        config={activeConfig}
+        fileNo={form.fileNo || deal?.file_number || ""}
+      />
 
       <div className="mb-5 mt-6 max-w-[720px]">
         <h1 className="text-[30px] font-bold leading-tight tracking-tight text-gray-900">
@@ -1314,380 +1178,15 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
         </section>
 
         {/* ─────────────────────────── The statement ─────────────────────────── */}
-        <section className="rounded-2xl border border-gray-200 bg-white px-7 py-6 shadow-sm">
-          <div className="flex flex-wrap items-end justify-between gap-4 border-b border-gray-200 pb-3.5">
-            <div>
-              <h2 className="text-[17px] font-bold tracking-tight text-gray-900">
-                Closing costs
-              </h2>
-              <p className="mt-0.5 text-[12.5px] text-gray-500">
-                {isDraft
-                  ? "Draft estimate — for planning only, before your lender's instructions arrive."
-                  : "Final account — figures confirmed against your lender's mortgage instructions."}
-              </p>
-            </div>
-          </div>
-
-          {/* Rendered from the computed groups, so a line that does not apply —
-              no mortgage registration on a cash deal, no municipal tax outside
-              Toronto — is absent rather than shown as zero. */}
-          {statement.groups.map((group) => (
-            <div key={group.key}>
-              <h3
-                className="mb-1 mt-5 border-b border-gray-100 pb-1.5 text-[11px] font-bold uppercase tracking-[0.11em]"
-                style={{ color: accent }}
-              >
-                {group.title}
-              </h3>
-              {group.lines.map((line) =>
-                renderLine(line, line.amount < 0 || line.key.startsWith("rebate_")),
-              )}
-              {group.key === "legal" && (
-                <div className="mt-1.5 border-t border-dashed border-gray-200 pt-2">
-                  {renderLine({
-                    key: "hst",
-                    label: "HST",
-                    amount: statement.hst.amount,
-                  })}
-                </div>
-              )}
-            </div>
-          ))}
-
-          {statement.propertyTax && (
-            <div>
-              <h3
-                className="mb-1 mt-5 border-b border-gray-100 pb-1.5 text-[11px] font-bold uppercase tracking-[0.11em]"
-                style={{ color: accent }}
-              >
-                Adjustments
-              </h3>
-              {renderLine(statement.propertyTax)}
-            </div>
-          )}
-
-          <div className="mt-2 flex items-baseline justify-between gap-3.5 border-t border-gray-900 pt-2.5">
-            <span className="text-[13.5px] font-semibold text-gray-900">
-              Total closing costs
-            </span>
-            <span className="text-[14.5px] font-semibold tabular-nums text-gray-900">
-              {formatCurrency(statement.total)}
-            </span>
-          </div>
-
-          {/* Funds needed — the number the client actually acts on. */}
-          <div
-            className="mt-3.5 rounded-xl border p-4.5 px-5 py-4"
-            style={{ borderColor: `${accent}33`, backgroundColor: `${accent}0a` }}
-          >
-            <div
-              className="mb-2 text-[11px] font-bold uppercase tracking-[0.11em]"
-              style={{ color: accent }}
-            >
-              Funds you&apos;ll need on closing
-            </div>
-            <BalanceRow
-              label="Purchase price"
-              value={formatCurrency(statement.balance.purchasePrice)}
-            />
-            <BalanceRow
-              muted
-              label="less deposit already paid"
-              value={signedCurrency(-statement.balance.depositPaid)}
-            />
-            <BalanceRow
-              muted
-              label="less mortgage advance from your lender"
-              value={signedCurrency(-statement.balance.mortgageAmount)}
-            />
-            {statement.balance.propertyTaxAdjustment !== 0 && (
-              <BalanceRow
-                label="plus adjustments (above)"
-                value={signedCurrency(statement.balance.propertyTaxAdjustment)}
-              />
-            )}
-            <BalanceRow
-              label="plus closing costs (above)"
-              value={signedCurrency(statement.balance.closingCosts)}
-            />
-            <div
-              className="mt-2.5 flex items-baseline justify-between border-t pt-3"
-              style={{ borderColor: `${accent}33` }}
-            >
-              <span className="text-[14px] font-bold text-gray-900">
-                Estimated balance due on closing
-              </span>
-              <span
-                className="text-[22px] font-bold tabular-nums"
-                style={{ color: accent }}
-              >
-                {formatCurrency(statement.balance.balanceDue)}
-              </span>
-            </div>
-          </div>
-
-          <p className="mt-3.5 border-t border-gray-200 pt-3.5 text-[11.5px] leading-relaxed text-gray-500">
-            <strong className="text-gray-600">
-              {activeStatementType?.disclaimer_intro || DISCLAIMERS[0]}
-            </strong>{" "}
-            {DISCLAIMERS.slice(1).join(" ")}
-            {activeStatementType?.footer_note ? ` ${activeStatementType.footer_note}` : ""}
-          </p>
-        </section>
+        <StatementCard
+          statement={statement}
+          accent={accent}
+          isDraft={isDraft}
+          statementType={activeStatementType}
+        />
       </div>
     </div>
   );
 };
-
-/**
- * Lines that are still provisional while the statement is a draft.
- *
- * The title premium is NOT here — it carries its own badge from the calculation,
- * which disappears the moment the exact FCT quote is entered, and that is more
- * precise than "is this a draft".
- */
-/** Placeholder for each adjustable input: the figure it would replace. */
-const ADJUST_PLACEHOLDERS: Record<
-  FormNumberKey,
-  (s: ReturnType<typeof computeStatement>) => string
-> = {
-  provincialLttOverride: (s) => amountText(s.detail.provincialLTT),
-  municipalLttOverride: (s) => amountText(s.detail.municipalLTT),
-  titlePremiumOverride: (s) => amountText(s.detail.titlePremium),
-  propertyTaxAdjustment: (s) => amountText(s.detail.propertyTaxAdjustment),
-};
-
-/** "+ $1,200.00" / "– $50,000.00" / "—" for zero. */
-function signedCurrency(n: number): string {
-  const v = Math.round(n * 100) / 100;
-  if (v === 0) return "—";
-  return `${v < 0 ? "– " : "+ "}${formatCurrency(Math.abs(v))}`;
-}
-
-const BalanceRow: React.FC<{ label: string; value: string; muted?: boolean }> = ({
-  label,
-  value,
-  muted,
-}) => (
-  <div
-    className={`flex justify-between py-1 text-[13.5px] ${
-      muted ? "text-gray-500" : "text-gray-800"
-    }`}
-  >
-    <span>{label}</span>
-    <span className="tabular-nums">{value}</span>
-  </div>
-);
-
-/** A labelled row of mutually exclusive pill buttons. */
-const PickerRow: React.FC<{
-  label: string;
-  options: Array<{ value: string; label: string }>;
-  value: string;
-  accent: string;
-  onChange: (value: string) => void;
-}> = ({ label, options, value, accent, onChange }) => (
-  <div className="flex flex-col gap-1.5">
-    <span className="text-[11px] font-bold uppercase tracking-[0.09em] text-gray-400">
-      {label}
-    </span>
-    <div className="flex flex-wrap gap-1.5">
-      {options.map((opt) => (
-        <ChoiceButton
-          key={opt.value}
-          label={opt.label}
-          active={value === opt.value}
-          accent={accent}
-          onClick={() => onChange(opt.value)}
-        />
-      ))}
-    </div>
-  </div>
-);
-
-const ChoiceButton: React.FC<{
-  label: string;
-  active: boolean;
-  accent: string;
-  onClick: () => void;
-}> = ({ label, active, accent, onClick }) => (
-  <button
-    type="button"
-    onClick={onClick}
-    aria-pressed={active}
-    className={`rounded-lg border px-3 py-2 text-[12.5px] font-semibold transition ${
-      active ? "bg-red-50/50" : "border-gray-200 text-gray-600 hover:bg-gray-50"
-    }`}
-    style={active ? { borderColor: accent, color: accent } : undefined}
-  >
-    {label}
-  </button>
-);
-
-/** A dashed "— optional" disclosure block. */
-const Collapsible: React.FC<{
-  title: string;
-  badge?: string;
-  open: boolean;
-  onToggle: () => void;
-  children: React.ReactNode;
-}> = ({ title, badge, open, onToggle, children }) => (
-  <div className="flex flex-col gap-2 rounded-xl border border-dashed border-gray-200 bg-gray-50/60 px-3 py-2.5">
-    <button
-      type="button"
-      onClick={onToggle}
-      aria-expanded={open}
-      className="flex w-full items-center justify-between gap-2 text-left"
-    >
-      <span className="text-[10px] font-bold uppercase tracking-[0.09em] text-gray-400">
-        {title}{" "}
-        <span className="font-medium normal-case tracking-normal">— optional</span>
-        {badge && (
-          <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold normal-case tracking-normal text-amber-700">
-            {badge}
-          </span>
-        )}
-      </span>
-      <span className="inline-flex items-center gap-1 text-[10.5px] font-semibold text-gray-500">
-        {open ? "Hide" : "Add"}
-        <ChevronDown
-          size={12}
-          className={`transition-transform ${open ? "rotate-180" : ""}`}
-        />
-      </span>
-    </button>
-    {open && <div className="flex flex-col gap-2">{children}</div>}
-  </div>
-);
-
-/** The three headline amounts. */
-const BigMoney: React.FC<{
-  id: string;
-  label: string;
-  value: string;
-  accent: string;
-  hint?: string;
-  onChange: (value: string) => void;
-}> = ({ id, label, value, accent, hint, onChange }) => (
-  <div className="flex flex-col gap-1.5">
-    <label
-      htmlFor={id}
-      className="flex flex-wrap items-center gap-2 text-[13px] font-semibold text-gray-900"
-    >
-      {label}
-    </label>
-    <div className="relative flex items-center">
-      <span className="pointer-events-none absolute left-3.5 font-semibold text-gray-400">
-        $
-      </span>
-      <input
-        id={id}
-        type="text"
-        inputMode="decimal"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-xl border border-gray-200 bg-gray-50/40 py-3 pl-7 pr-3.5 text-base font-semibold tabular-nums text-gray-900 outline-none transition focus:bg-white"
-        onFocus={(e) => {
-          e.currentTarget.style.borderColor = accent;
-          e.currentTarget.style.boxShadow = `0 0 0 3px ${accent}22`;
-        }}
-        onBlur={(e) => {
-          e.currentTarget.style.borderColor = "";
-          e.currentTarget.style.boxShadow = "";
-        }}
-      />
-    </div>
-    {hint && <span className="text-[11.5px] text-gray-500">{hint}</span>}
-  </div>
-);
-
-/** A compact $ field for the Adjust fees grid. */
-const SmallMoney: React.FC<{
-  label: string;
-  value: string;
-  accent: string;
-  placeholder?: string;
-  allowNegative?: boolean;
-  /** Small chip beside the label, e.g. "Required" on a final account. */
-  badge?: string;
-  /** Draws the field as unanswered; the panel footer reads back the reason. */
-  invalid?: boolean;
-  onChange: (value: string) => void;
-}> = ({
-  label,
-  value,
-  accent,
-  placeholder,
-  allowNegative,
-  badge,
-  invalid,
-  onChange,
-}) => (
-  <div className="flex flex-col gap-1">
-    <label className="flex flex-wrap items-center gap-1.5 text-[10.5px] font-semibold leading-tight text-gray-600">
-      {label}
-      {badge && (
-        <span
-          className="rounded px-1 py-px text-[8.5px] font-bold uppercase tracking-wider"
-          style={{ backgroundColor: `${accent}18`, color: accent }}
-        >
-          {badge}
-        </span>
-      )}
-    </label>
-    <div className="relative flex items-center">
-      <span className="pointer-events-none absolute left-2 text-[11px] text-gray-400">
-        $
-      </span>
-      <input
-        type="text"
-        inputMode={allowNegative ? "text" : "decimal"}
-        value={value}
-        placeholder={placeholder}
-        aria-invalid={invalid || undefined}
-        onChange={(e) => onChange(e.target.value)}
-        className={`w-full rounded-lg border py-1.5 pl-5 pr-2 text-[12px] font-semibold tabular-nums text-gray-900 outline-none placeholder:font-normal placeholder:text-gray-300 ${
-          invalid ? "border-amber-400 bg-amber-50/40" : "border-gray-200 bg-white"
-        }`}
-        onFocus={(e) => {
-          e.currentTarget.style.borderColor = accent;
-          e.currentTarget.style.boxShadow = `0 0 0 3px ${accent}22`;
-        }}
-        onBlur={(e) => {
-          e.currentTarget.style.borderColor = "";
-          e.currentTarget.style.boxShadow = "";
-        }}
-      />
-    </div>
-  </div>
-);
-
-/** A compact text field for the File details block. */
-const SmallText: React.FC<{
-  label: string;
-  value: string;
-  accent: string;
-  placeholder?: string;
-  onChange: (value: string) => void;
-}> = ({ label, value, accent, placeholder, onChange }) => (
-  <div className="flex flex-col gap-1">
-    <label className="text-[11px] font-semibold text-gray-600">{label}</label>
-    <input
-      type="text"
-      value={value}
-      placeholder={placeholder}
-      onChange={(e) => onChange(e.target.value)}
-      className="w-full rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-[12px] text-gray-900 outline-none placeholder:text-gray-300"
-      onFocus={(e) => {
-        e.currentTarget.style.borderColor = accent;
-        e.currentTarget.style.boxShadow = `0 0 0 3px ${accent}22`;
-      }}
-      onBlur={(e) => {
-        e.currentTarget.style.borderColor = "";
-        e.currentTarget.style.boxShadow = "";
-      }}
-    />
-  </div>
-);
 
 export default ClosingCostCalculator;
