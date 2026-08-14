@@ -57,3 +57,21 @@ COMMENT ON COLUMN deals.cc_emails IS
 
 COMMENT ON TABLE partner_contacts IS
   'Additional people for a partner beyond partners.agent_email (the primary). CC''d on shared_with_agent emails for every file that partner referred.';
+
+-- ── 3. Grants ───────────────────────────────────────────────────────────────
+-- Supabase's default privileges do NOT reach freshly-created tables here, so
+-- even the service_role client hits "permission denied for table" (42501).
+-- Mirrors 2026-07-08-create-brokers-and-coupons.sql and
+-- 2026-07-30-closing-cost-calculator.sql.
+--
+-- This one fails QUIETLY without the grant, which is why it matters: agentCc.ts
+-- treats a partner_contacts error as "no contacts" so a missing migration can't
+-- block the client's email. Skip this and every additional CC is silently
+-- dropped with only a logger.warn to show for it, while
+-- /api/admin/partners/contacts returns a generic 500.
+GRANT ALL ON partner_contacts TO anon, authenticated, service_role;
+
+-- Admin-managed data. RLS ON with NO policies so the anon / authenticated
+-- grants above can't read or write it through the public key; the admin API
+-- uses the service_role key, which BYPASSES RLS and keeps working.
+ALTER TABLE partner_contacts ENABLE ROW LEVEL SECURITY;
