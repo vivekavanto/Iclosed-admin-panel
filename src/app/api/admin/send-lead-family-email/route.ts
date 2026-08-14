@@ -7,6 +7,8 @@ import { formatLeadTypeLabel, buildLeadAddressPartsForEmail } from "@/lib/leadEm
 import { guardServiceRequest } from "@/lib/verifyServiceSignature";
 import { get } from "@vercel/blob";
 import { isPrivateBlobUrl, blobTokenForUrl } from "@/lib/blobPrivacy";
+import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "@/lib/emailIdentity";
+import { buildAgentCcList } from "@/lib/agentCc";
 
 /**
  * POST /api/admin/send-lead-family-email
@@ -84,7 +86,7 @@ async function sendRetainerEmail(
     parent_lead_id: string | null;
     co_person_role: string | null;
   },
-  template: { name: string | null; subject: string | null; body: string },
+  template: { name: string | null; subject: string | null; body: string; shared_with_agent?: boolean | null },
   resend: Resend,
   fromEmail: string,
 ): Promise<RetainerSendResult> {
@@ -319,10 +321,29 @@ async function sendRetainerEmail(
     sideSuffix,
   );
 
+  // "Shared with agent?" retainer templates copy the file's CC list too. The
+  // partner/deal are resolved from this recipient's own deal so a co-purchaser
+  // gets the same partner contacts as the primary.
+  let cc: string[] | undefined;
+  if (template.shared_with_agent) {
+    const { data: dealRow } = await supabaseAdmin
+      .from("deals")
+      .select("id, partner_id")
+      .eq("lead_id", lead.id)
+      .maybeSingle();
+    const list = await buildAgentCcList({
+      partnerId: dealRow?.partner_id ?? null,
+      dealId: dealRow?.id ?? null,
+      exclude: [lead.email],
+    });
+    if (list.length > 0) cc = list;
+  }
+
   const { data: sendResult, error: sendError } = await resend.emails.send({
     from: fromEmail,
-    replyTo: "testing@iclosed.ca",
-    to: [lead.email],
+    replyTo: emailReplyTo(),
+    to: [normalizeRecipientEmail(lead.email)],
+    ...(cc ? { cc } : {}),
     subject: processedSubject,
     html: processedBody,
     attachments,
@@ -454,14 +475,21 @@ export async function POST(req: NextRequest) {
       ...((coLeads ?? []).map((l) => ({ ...l, role: "co-lead" as const }))),
     ];
 
-    // 4. Dedupe by lowercased email; drop rows with empty email.
+    // 4. Normalise each address, then dedupe by its lowercased form; drop rows
+    //    with empty email. Normalising here (not just in the dedupe key) means
+    //    the cleaned value is what actually gets sent to and reported back —
+    //    previously the key was trimmed but the raw column value was handed to
+    //    Supabase, so an address with trailing whitespace was rejected as
+    //    "invalid format" while looking perfectly fine in the UI.
     const seen = new Set<string>();
-    let recipients = family.filter((l) => {
-      const key = (l.email ?? "").trim().toLowerCase();
-      if (!key || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+    let recipients = family
+      .map((l) => ({ ...l, email: normalizeRecipientEmail(l.email) || null }))
+      .filter((l) => {
+        const key = (l.email ?? "").toLowerCase();
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
 
     // 4b. If the caller passed an explicit subset, restrict to those IDs.
     //     Every ID must belong to the resolved family — otherwise we'd let a
@@ -504,11 +532,16 @@ export async function POST(req: NextRequest) {
     //    and both fields so the retainer handler can render without refetching.
     let authType: "invite" | "recovery" | null = null;
     let templateName: string | null = null;
-    let templateRow: { name: string | null; subject: string | null; body: string } | null = null;
+    let templateRow: {
+      name: string | null;
+      subject: string | null;
+      body: string;
+      shared_with_agent: boolean | null;
+    } | null = null;
     if (template_id) {
       const { data: tmpl } = await supabaseAdmin
         .from("email_templates")
-        .select("name, subject, body")
+        .select("name, subject, body, shared_with_agent")
         .eq("id", template_id)
         .maybeSingle();
       templateName = tmpl?.name ?? null;
@@ -518,6 +551,7 @@ export async function POST(req: NextRequest) {
           name: tmpl.name ?? null,
           subject: tmpl.subject ?? null,
           body: tmpl.body,
+          shared_with_agent: tmpl.shared_with_agent ?? null,
         };
       }
     }
@@ -529,7 +563,7 @@ export async function POST(req: NextRequest) {
     // Lazy Resend client — only initialized when the retainer path actually
     // needs it. Skips the env-var requirement for non-retainer sends.
     let resendClient: Resend | null = null;
-    const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <support@iclosed.ca>";
+    const fromEmail = emailFrom();
     if (retainerMode) {
       if (!process.env.RESEND_API_KEY) {
         return NextResponse.json(
@@ -558,6 +592,10 @@ export async function POST(req: NextRequest) {
 
       if (authType) {
         // ── Auth-style template: generate a fresh Supabase action_link ──────
+        // Deliberately NOT CC'd, whatever the template's shared_with_agent flag
+        // says. These carry an activation / password-reset link that grants
+        // access to the client's portal account — copying an agent on one would
+        // hand them the client's login.
         const userData = {
           first_name: r.first_name ?? "",
           last_name: r.last_name ?? "",

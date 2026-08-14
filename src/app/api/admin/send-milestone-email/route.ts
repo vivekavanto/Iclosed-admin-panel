@@ -3,6 +3,7 @@ import supabaseAdmin from "@/lib/supabaseAdmin"
 import { Resend } from "resend"
 import { getFamilyDealIds } from "@/lib/familyDeals"
 import { guardServiceRequest } from "@/lib/verifyServiceSignature"
+import { emailFrom } from "@/lib/emailIdentity"
 import { maybeNotifyAllTasksComplete } from "@/lib/notifyAllTasksComplete"
 import { resolveMilestoneSide } from "@/lib/milestoneSide"
 import {
@@ -88,7 +89,7 @@ async function handlePortalRequest(body: Record<string, any>) {
     }
 
     const resend = new Resend(process.env.RESEND_API_KEY)
-    const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <support@iclosed.ca>"
+    const fromEmail = emailFrom();
 
     // Find all deals in the family (purchaser + co-purchasers)
     let allDealIds: string[] = deal_id ? [deal_id] : []
@@ -270,7 +271,7 @@ export async function POST(req: Request) {
         }
 
         const resend = new Resend(process.env.RESEND_API_KEY)
-        const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <support@iclosed.ca>"
+        const fromEmail = emailFrom();
 
         // On a Purchase & Sale file every family deal carries BOTH sides'
         // milestones, so a purchase-side stage ("Title Search", "Financing Firm ->

@@ -37,7 +37,14 @@ const securityHeaders = [
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: https://*.blob.vercel-storage.com",
       "font-src 'self' data:",
-      "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.blob.vercel-storage.com https://generativelanguage.googleapis.com https://api.resend.com",
+      "connect-src 'self' blob: data: https://*.supabase.co wss://*.supabase.co https://*.blob.vercel-storage.com https://generativelanguage.googleapis.com https://api.resend.com",
+      // HEIC identification photos are decoded to JPEG in the browser (heic-to
+      // → libheif/WASM) when building a deal or task PDF. libheif runs in a
+      // worker created from a blob: URL, which without this directive falls
+      // back to default-src 'self' and is refused — so HEIC IDs would silently
+      // drop back to a "could not be converted" placeholder the day this
+      // header is switched to enforcing.
+      "worker-src 'self' blob:",
     ].join("; "),
   },
 ];

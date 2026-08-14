@@ -30,6 +30,16 @@ interface Partner {
   created_at: string;
 }
 
+// Extra people belonging to a partner (partner_contacts). CC'd on the partner's
+// files alongside partners.agent_email, which remains the primary contact.
+interface PartnerContact {
+  id: string;
+  partner_id: string;
+  name: string | null;
+  email: string;
+  created_at: string;
+}
+
 // Mirrors the (555) 123-4567 formatter used across the admin forms.
 function formatPhone(value: string): string {
   const digits = value.replace(/\D/g, "").slice(0, 10);
@@ -73,7 +83,77 @@ const Partners: React.FC = () => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [sendingId, setSendingId] = useState<string | null>(null);
 
+  // Additional people for this partner. partners.agent_email above stays the
+  // PRIMARY contact; these are the extra ones (assistant, team inbox) who get
+  // CC'd alongside it on "Shared with agent" emails for the partner's files.
+  const [contacts, setContacts] = useState<PartnerContact[]>([]);
+  const [contactsLoading, setContactsLoading] = useState(false);
+  const [contactsError, setContactsError] = useState<string | null>(null);
+  const [newContact, setNewContact] = useState({ name: "", email: "" });
+  const [contactBusy, setContactBusy] = useState(false);
+
   const resetForm = () => setForm({ ...emptyForm });
+
+  const loadContacts = async (partnerId: string) => {
+    setContactsLoading(true);
+    setContactsError(null);
+    try {
+      const res = await fetch(
+        `/api/admin/partners/contacts?partner_id=${encodeURIComponent(partnerId)}`,
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      setContacts(data);
+    } catch (err) {
+      setContactsError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setContactsLoading(false);
+    }
+  };
+
+  const addContact = async () => {
+    const partnerId = form.id || createdPartner?.id;
+    if (!partnerId || !newContact.email.trim()) return;
+    setContactBusy(true);
+    setContactsError(null);
+    try {
+      const res = await fetch("/api/admin/partners/contacts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          partner_id: partnerId,
+          email: newContact.email.trim(),
+          name: newContact.name.trim() || null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "Failed to add contact");
+      setContacts((prev) => [...prev, data]);
+      setNewContact({ name: "", email: "" });
+    } catch (err) {
+      setContactsError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setContactBusy(false);
+    }
+  };
+
+  const removeContact = async (contactId: string) => {
+    setContactBusy(true);
+    setContactsError(null);
+    try {
+      const res = await fetch(
+        `/api/admin/partners/contacts?id=${encodeURIComponent(contactId)}`,
+        { method: "DELETE" },
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "Failed to remove contact");
+      setContacts((prev) => prev.filter((c) => c.id !== contactId));
+    } catch (err) {
+      setContactsError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setContactBusy(false);
+    }
+  };
 
   useEffect(() => {
     const load = async () => {
@@ -95,6 +175,9 @@ const Partners: React.FC = () => {
   const openCreate = () => {
     resetForm();
     setCreatedPartner(null);
+    setContacts([]);
+    setContactsError(null);
+    setNewContact({ name: "", email: "" });
     setIsModalOpen(true);
   };
 
@@ -108,12 +191,19 @@ const Partners: React.FC = () => {
       brokerage_name: p.brokerage_name ?? "",
     });
     setCreatedPartner(null);
+    setContacts([]);
+    setContactsError(null);
+    setNewContact({ name: "", email: "" });
     setIsModalOpen(true);
+    loadContacts(p.id);
   };
 
   const closeModal = () => {
     setIsModalOpen(false);
     setCreatedPartner(null);
+    setContacts([]);
+    setContactsError(null);
+    setNewContact({ name: "", email: "" });
     resetForm();
   };
 
@@ -599,6 +689,116 @@ const Partners: React.FC = () => {
                         onChange={(e) => setForm((p) => ({ ...p, agent_phone: formatPhone(e.target.value) }))}
                       />
                     </div>
+                  </div>
+
+                  {/* Additional CC contacts. Needs a saved partner to attach to,
+                      so on the create flow we point the admin at Edit instead of
+                      buffering rows client-side and inventing a second save path. */}
+                  <div className="rounded-lg border border-slate-200 px-4 py-4">
+                    <div className="flex items-start gap-2 mb-1">
+                      <Mail size={16} className="text-slate-400 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-sm font-semibold text-gray-800">
+                          Additional contacts
+                        </p>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          CC&apos;d alongside the email above on every
+                          &ldquo;Shared with agent&rdquo; email for this
+                          partner&apos;s files.
+                        </p>
+                      </div>
+                    </div>
+
+                    {!form.id ? (
+                      <p className="text-xs text-slate-400 italic mt-3">
+                        Save the partner first, then reopen it to add contacts.
+                      </p>
+                    ) : (
+                      <div className="mt-3 space-y-2">
+                        {contactsLoading && (
+                          <p className="text-xs text-slate-400">Loading…</p>
+                        )}
+
+                        {!contactsLoading && contacts.length === 0 && (
+                          <p className="text-xs text-slate-400 italic">
+                            No additional contacts yet.
+                          </p>
+                        )}
+
+                        {contacts.map((c) => (
+                          <div
+                            key={c.id}
+                            className="flex items-center gap-2 rounded-lg bg-slate-50 border border-slate-100 px-3 py-2"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-semibold text-slate-800 truncate">
+                                {c.email}
+                              </p>
+                              {c.name && (
+                                <p className="text-xs text-slate-500 truncate">{c.name}</p>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => removeContact(c.id)}
+                              disabled={contactBusy}
+                              title="Remove contact"
+                              className="p-1.5 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-50"
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          </div>
+                        ))}
+
+                        <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-2 pt-1">
+                          <input
+                            type="email"
+                            placeholder="assistant@brokerage.com"
+                            className={inputClasses}
+                            value={newContact.email}
+                            onChange={(e) =>
+                              setNewContact((p) => ({ ...p, email: e.target.value }))
+                            }
+                            onKeyDown={(e) => {
+                              // The surrounding <form> submits the PARTNER on Enter,
+                              // which would close the modal mid-edit. Intercept it.
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                addContact();
+                              }
+                            }}
+                          />
+                          <input
+                            type="text"
+                            placeholder="Name (optional)"
+                            className={inputClasses}
+                            value={newContact.name}
+                            onChange={(e) =>
+                              setNewContact((p) => ({ ...p, name: e.target.value }))
+                            }
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                addContact();
+                              }
+                            }}
+                          />
+                          <button
+                            type="button"
+                            onClick={addContact}
+                            disabled={contactBusy || !newContact.email.trim()}
+                            className="px-4 py-2.5 rounded-xl border border-[#C10007] text-[#C10007] text-sm font-semibold hover:bg-[#FEF2F2] disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                          >
+                            <Plus size={15} className="inline -mt-0.5 mr-1" />
+                            Add
+                          </button>
+                        </div>
+
+                        {contactsError && (
+                          <p className="text-xs font-semibold text-red-600">{contactsError}</p>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   {/* Referral code — auto-generated on create, read-only on edit */}

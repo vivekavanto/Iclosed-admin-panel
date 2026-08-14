@@ -558,17 +558,15 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
       alert("This client has not signed into the portal yet — cannot log into their view.");
       return;
     }
-    // SEC-006 step-up: re-confirm the admin's own password before impersonating.
-    const stepUpPassword = window.prompt(
-      "Security check: re-enter YOUR admin password to log in as this client.",
-    );
-    if (!stepUpPassword) return;
+    // No password prompt: an authenticated admin session is enough (the
+    // SEC-006 step-up was removed by business decision). The server still
+    // audits every impersonation.
     setImpersonatingId(deal.id);
     try {
       const res = await fetch("/api/admin/impersonate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ authUserId: d.authUserId, stepUpPassword }),
+        body: JSON.stringify({ authUserId: d.authUserId }),
       });
       const json = await res.json();
       if (!res.ok || !json.url) throw new Error(json.error || "Failed to generate link");

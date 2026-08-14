@@ -1,6 +1,8 @@
 // Emails a partner their referral code via Resend. Mirrors the inline Resend
-// pattern in convertLead.ts (RESEND_API_KEY, RESEND_FROM_EMAIL fallback,
-// replyTo: testing@iclosed.ca).
+// pattern in convertLead.ts (RESEND_API_KEY, plus the shared from/reply-to
+// addresses from emailIdentity.ts).
+
+import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "./emailIdentity";
 
 interface PartnerLike {
   agent_name?: string | null;
@@ -24,7 +26,7 @@ export async function sendPartnerCodeEmail(
 
   const { Resend } = await import("resend");
   const resend = new Resend(process.env.RESEND_API_KEY);
-  const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <support@iclosed.ca>";
+  const fromEmail = emailFrom();
 
   const html = `
     <div style="font-family: Arial, Helvetica, sans-serif; color: #1e293b; max-width: 520px; margin: 0 auto;">
@@ -49,8 +51,8 @@ export async function sendPartnerCodeEmail(
   try {
     await resend.emails.send({
       from: fromEmail,
-      replyTo: "testing@iclosed.ca",
-      to: [email],
+      replyTo: emailReplyTo(),
+      to: [normalizeRecipientEmail(email)],
       subject: `Your iClosed referral code: ${code}`,
       html,
     });

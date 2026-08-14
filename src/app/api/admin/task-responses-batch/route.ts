@@ -13,6 +13,11 @@ import { recalcMilestonesForFamily } from "@/lib/recalcMilestones";
  * task completed unless `draft` is true. Kept separate from the existing
  * /api/admin/task-responses route (which takes one response at a time) so the
  * admin's other flows are untouched.
+ *
+ * `responses` may be empty: the drawer re-syncs the FULL identification doc
+ * list after every add/replace/delete, and deleting the last document leaves
+ * nothing to insert. An empty batch is a delete-only operation and never marks
+ * the task completed — a task with zero responses isn't done.
  */
 export async function POST(req: Request) {
   try {
@@ -30,7 +35,7 @@ export async function POST(req: Request) {
       draft?: boolean;
     };
 
-    if (!task_id || !Array.isArray(responses) || responses.length === 0) {
+    if (!task_id || !Array.isArray(responses)) {
       return NextResponse.json(
         { success: false, error: "task_id and responses[] are required" },
         { status: 400 },
@@ -49,15 +54,17 @@ export async function POST(req: Request) {
       file_name: r.file_name ?? null,
     }));
 
-    const { error: insertError } = await supabaseAdmin
-      .from("task_responses")
-      .insert(rows);
+    if (rows.length > 0) {
+      const { error: insertError } = await supabaseAdmin
+        .from("task_responses")
+        .insert(rows);
 
-    if (insertError) {
-      return NextResponse.json({ success: false, error: insertError.message }, { status: 400 });
+      if (insertError) {
+        return NextResponse.json({ success: false, error: insertError.message }, { status: 400 });
+      }
     }
 
-    if (!draft) {
+    if (!draft && rows.length > 0) {
       await supabaseAdmin
         .from("tasks")
         .update({

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { rateLimitOk, requestIp } from "@/lib/rateLimit";
 import { getActingAdmin } from "@/lib/getActingAdmin";
+import { readBlobDocument, BlobDocumentError } from "@/lib/blobDocument";
 
 const GEMINI_MODEL = "gemini-3.1-flash-lite";
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
@@ -241,6 +242,62 @@ function parseGeminiJson(text: string): IdentificationResult {
   };
 }
 
+/**
+ * Get the bytes to classify, from either request shape:
+ *
+ *   1. JSON  { file_url, file_name?, mime_type? }  ← preferred
+ *      The browser uploaded the document straight to Vercel Blob, so only the
+ *      URL is posted here (a few hundred bytes) and the bytes are read back
+ *      server-side. This is what allows documents above Vercel's ~4.5 MB
+ *      request-body cap to be identified at all — a 4.5–10 MB PDF used to be
+ *      rejected by the platform before this handler ever ran, which surfaced in
+ *      the drawer as a bare "Unable to process".
+ *
+ *   2. multipart/form-data with a `file`  ← legacy, unchanged
+ *
+ * Everything after this point — the prompt, the model, inline_data, the parser,
+ * the acceptable-ID whitelist, side/expiry/confidence handling — is identical
+ * for both modes. Only the byte SOURCE differs.
+ */
+async function loadDocument(
+  req: Request,
+): Promise<{ bytes: Buffer; mimeType: string }> {
+  const contentType = (req.headers.get("content-type") || "").toLowerCase();
+
+  if (contentType.includes("application/json")) {
+    const body = (await req.json()) as Record<string, unknown>;
+    const fileUrl = typeof body.file_url === "string" ? body.file_url : "";
+    if (!fileUrl) {
+      throw new BlobDocumentError("No file_url provided.", 400);
+    }
+
+    const { bytes, meta } = await readBlobDocument(fileUrl);
+    // Prefer the stored blob's own content type; fall back to what the client
+    // reported, then to the generic type so the SUPPORTED_MIME_TYPES check can
+    // reject it with a clear message.
+    const mimeType =
+      meta.contentType && meta.contentType !== "application/octet-stream"
+        ? meta.contentType
+        : typeof body.mime_type === "string" && body.mime_type
+          ? body.mime_type
+          : "application/octet-stream";
+
+    return { bytes, mimeType };
+  }
+
+  const formData = await req.formData();
+  const file = formData.get("file");
+  if (!file || !(file instanceof File)) {
+    throw new BlobDocumentError("No file provided.", 400);
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  return {
+    bytes: Buffer.from(arrayBuffer),
+    mimeType: file.type || "application/octet-stream",
+  };
+}
+
 export async function POST(req: Request) {
   try {
     const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_GEMINI_API_KEY;
@@ -259,13 +316,22 @@ export async function POST(req: Request) {
       );
     }
 
-    const formData = await req.formData();
-    const file = formData.get("file");
-    if (!file || !(file instanceof File)) {
-      return NextResponse.json({ success: false, error: "No file provided." }, { status: 400 });
+    // Two input modes — see loadDocument(). The JSON/blob-URL mode is what the
+    // drawer uses now; the multipart mode is kept for any existing caller.
+    let doc: { bytes: Buffer; mimeType: string };
+    try {
+      doc = await loadDocument(req);
+    } catch (err: unknown) {
+      if (err instanceof BlobDocumentError) {
+        return NextResponse.json(
+          { success: false, error: err.message },
+          { status: err.status },
+        );
+      }
+      throw err;
     }
 
-    const mimeType = file.type || "application/octet-stream";
+    const mimeType = doc.mimeType;
     if (!SUPPORTED_MIME_TYPES.has(mimeType.toLowerCase())) {
       return NextResponse.json(
         { success: false, error: `Unsupported file type for identification: ${mimeType}.` },
@@ -273,8 +339,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const arrayBuffer = await file.arrayBuffer();
-    const base64Data = Buffer.from(arrayBuffer).toString("base64");
+    const base64Data = doc.bytes.toString("base64");
 
     const body = {
       contents: [{

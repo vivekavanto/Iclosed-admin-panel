@@ -3,6 +3,7 @@ import supabaseAdmin from '@/lib/supabaseAdmin';
 import { isUuid } from '@/lib/isUuid';
 import { recordAudit } from '@/lib/recordAudit';
 import { getActingAdmin } from '@/lib/getActingAdmin';
+import { normalizeRecipientEmail } from '@/lib/emailIdentity';
 
 // Admin data must always be live — never serve a cached leads list, otherwise
 // an edited phone/name/etc. can keep showing the old value after a refresh.
@@ -173,7 +174,11 @@ export async function PUT(req: NextRequest) {
     // sharing one email — co-client cascades key off exactly that — so a
     // uniqueness check would break normal editing. Format is the safe guard.)
     if (updateData.email != null) {
-      const email = String(updateData.email).trim();
+      // normalizeRecipientEmail, not a bare trim(): `\s` in the regex below
+      // doesn't match zero-width characters, so a pasted U+200B would pass
+      // validation, save cleanly, and then blow up at send time with Supabase's
+      // opaque "invalid format" error.
+      const email = normalizeRecipientEmail(String(updateData.email));
       const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!EMAIL_RE.test(email)) {
         return NextResponse.json(
@@ -352,14 +357,29 @@ export async function DELETE(req: Request) {
     return NextResponse.json({ error: "Invalid lead id" }, { status: 400 });
   }
 
-  // Soft-delete the primary lead and every co-lead in the same family in one
-  // call. The OR predicate matches the lead itself plus any row whose
-  // parent_lead_id points at it, so deleting a primary lead hides the whole
-  // co-purchaser/co-seller group from the listing in one shot.
-  const { error } = await supabaseAdmin
-    .from("leads")
-    .update({ is_deleted: true })
-    .or(`id.eq.${id},parent_lead_id.eq.${id}`);
+  // Soft-delete the primary lead and every co-lead in the same family: the lead
+  // itself, plus any row whose parent_lead_id points at it, so deleting a
+  // primary hides the whole co-purchaser/co-seller group from the listing.
+  //
+  // Two statements, NOT one `.or(id.eq.X,parent_lead_id.eq.X)`: an OR filter on
+  // a WRITE fails on the production Supabase project with
+  // `42703: column leads.parent_lead_id does not exist` (older PostgREST there
+  // than on dev), so the combined form deleted nothing in prod and returned a
+  // 500. Keep OR filters to reads.
+  let error: { message: string } | null = null;
+  for (const [column, value] of [
+    ["id", id],
+    ["parent_lead_id", id],
+  ] as const) {
+    const { error: updateError } = await supabaseAdmin
+      .from("leads")
+      .update({ is_deleted: true })
+      .eq(column, value);
+    if (updateError) {
+      error = updateError;
+      break;
+    }
+  }
 
   if (error) {
     return NextResponse.json(

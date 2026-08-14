@@ -51,6 +51,7 @@ import {
   docDownloadHref,
   docFetchCredentials,
 } from "@/lib/blobPrivacy";
+import { openDocForViewing } from "@/lib/docViewer";
 import UploadIdentificationDrawer from "./UploadIdentificationDrawer";
 import UploadHomeInsuranceDrawer from "./UploadHomeInsuranceDrawer";
 import SubmitOnBehalfSection, { OnBehalfCoPerson } from "./SubmitOnBehalfSection";
@@ -262,6 +263,78 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
     } finally {
       setSavingLockbox(false);
     }
+  };
+
+  // Per-file CC list (deals.cc_emails) — extra people copied on this file's
+  // "Shared with agent" emails, on top of the referral partner's own contacts.
+  // Mirrored across the family by the PATCH route, so it's one list per file.
+  // Same local-state-plus-router.refresh() approach as the lock box editor above.
+  const serverCcEmails = ((rawDeal?.cc_emails as string[] | null | undefined) ?? []);
+  const serverCcKey = serverCcEmails.join("\n");
+  const [ccEmails, setCcEmails] = useState<string[]>(serverCcEmails);
+  const [syncedCcKey, setSyncedCcKey] = useState(serverCcKey);
+  const [newCcEmail, setNewCcEmail] = useState("");
+  const [savingCc, setSavingCc] = useState(false);
+  // Re-sync during render rather than in an effect: the server value arrives as
+  // a fresh array every render, so an effect keyed on it would loop. Comparing a
+  // joined key means we only reset local state when the contents actually change
+  // (React's documented "adjust state when props change" pattern).
+  if (syncedCcKey !== serverCcKey) {
+    setSyncedCcKey(serverCcKey);
+    setCcEmails(serverCcEmails);
+  }
+
+  // One writer for both add and remove — the column is written whole, so a
+  // partial update would silently drop the other entries.
+  const saveCcEmails = async (next: string[]) => {
+    setSavingCc(true);
+    try {
+      const res = await fetch(`/api/admin/deals/${deal.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cc_emails: next }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || "Failed to save CC list");
+      setCcEmails(next);
+      setNewCcEmail("");
+      showToast("CC list saved");
+      router.refresh();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Failed to save CC list", "error");
+    } finally {
+      setSavingCc(false);
+    }
+  };
+
+  // Addresses this file is already CC'd on via its referral partner
+  // (partners.agent_email + partner_contacts). Resolved server-side by the deal
+  // GET because they live on the partner, not the deal — see partnerCcAddresses.
+  const partnerCc = ((rawDeal?.partner_cc_emails as
+    | { email: string; partner: string; source: "agent_email" | "partner_contacts" }[]
+    | null
+    | undefined) ?? []);
+
+  const addCcEmail = () => {
+    const email = newCcEmail.trim();
+    if (!email) return;
+    // Client-side dupe guards only; the route re-validates, re-checks the
+    // partner's own addresses and de-dupes.
+    if (ccEmails.some((e) => e.toLowerCase() === email.toLowerCase())) {
+      showToast("That address is already on the CC list", "error");
+      return;
+    }
+    const viaPartner = partnerCc.find(
+      (p) => p.email.toLowerCase() === email.toLowerCase(),
+    );
+    if (viaPartner) {
+      showToast(
+        `Already copied via referral partner ${viaPartner.partner} — no need to add it here`,
+        "error",
+      );
+      return;
+    }
+    saveCcEmails([...ccEmails, email]);
   };
 
   // Documents modal state
@@ -1055,7 +1128,11 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
 
   // Single file picker shared by two flows:
   //   • REPLACE: existing task_responses row → PATCH with new url + name
-  //   • CREATE: no response yet → POST a new task_responses row
+  //     (single file only — it targets one specific row)
+  //   • CREATE: add file(s) to a field → POST one task_responses row per file.
+  //     A file field is NOT limited to one file — (task_id, field_id) is
+  //     deliberately non-unique server-side — so this is also the "add more"
+  //     path once files already exist, matching what the client portal allows.
   // For shared (synced) tasks both endpoints mirror across the
   // co-purchaser/co-seller family. APS uploads go through the dedicated
   // APS upload modal, not this path.
@@ -1069,13 +1146,20 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
   // create it's `field-<field.id>`.
   const [replacingFileBusy, setReplacingFileBusy] = useState<string | null>(null);
 
+  // The picker is shared, so `multiple` is toggled on the DOM node right
+  // before .click() — setting it from React state wouldn't have flushed yet.
+  const openFilePicker = (multiple: boolean) => {
+    const input = replacingFileInputRef.current;
+    if (!input) return;
+    input.multiple = multiple;
+    // Re-open the same input even if user picks the same filename twice.
+    input.value = "";
+    input.click();
+  };
+
   const triggerReplaceFile = (responseId: string) => {
     setFileUploadIntent({ kind: "replace", responseId, busyKey: responseId });
-    // Re-open the same input even if user picks the same filename twice.
-    if (replacingFileInputRef.current) {
-      replacingFileInputRef.current.value = "";
-      replacingFileInputRef.current.click();
-    }
+    openFilePicker(false);
   };
 
   const triggerUploadFile = (field: TaskFormField) => {
@@ -1084,65 +1168,75 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
       field,
       busyKey: `field-${field.id}`,
     });
-    if (replacingFileInputRef.current) {
-      replacingFileInputRef.current.value = "";
-      replacingFileInputRef.current.click();
-    }
+    openFilePicker(true);
   };
 
   const handleReplaceFilePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    // Replace targets one row, so it only ever consumes the first file.
+    const files = Array.from(e.target.files ?? []);
     const intent = fileUploadIntent;
-    if (!file || !intent) {
+    if (files.length === 0 || !intent) {
       setFileUploadIntent(null);
       return;
     }
+    const picked = intent.kind === "replace" ? files.slice(0, 1) : files;
     setReplacingFileBusy(intent.busyKey);
     try {
       const leadId = (rawDeal?.lead_id as string | undefined) ?? deal.id;
-      const pathname = `task-responses/${leadId}/${Date.now()}-${file.name}`;
-      const blob = await upload(pathname, file, {
-        access: BLOB_ACCESS,
-        handleUploadUrl: `/api/admin/deals/${deal.id}/uploadblobstorage/token`,
-        contentType: file.type,
-      });
+      let taskCompleted = false;
+      let mirroredCount = 0;
+      let uploadedCount = 0;
 
-      let res: Response;
-      if (intent.kind === "replace") {
-        res = await fetch("/api/admin/task-responses", {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            id: intent.responseId,
-            file_url: blob.url,
-            file_name: file.name,
-          }),
+      // Sequential on purpose: each POST mirrors to the family and may
+      // auto-complete the task, so parallel uploads would race on both.
+      for (const file of picked) {
+        const pathname = `task-responses/${leadId}/${Date.now()}-${file.name}`;
+        const blob = await upload(pathname, file, {
+          access: BLOB_ACCESS,
+          handleUploadUrl: `/api/admin/deals/${deal.id}/uploadblobstorage/token`,
+          contentType: file.type,
         });
-      } else {
-        if (!editingTask) throw new Error("No task open");
-        res = await fetch("/api/admin/task-responses", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            task_id: editingTask.id,
-            field_id: intent.field.id,
-            field_label: intent.field.label,
-            field_type: intent.field.field_type,
-            file_url: blob.url,
-            file_name: file.name,
-          }),
-        });
-      }
-      const pj = await res.json();
-      if (!res.ok || !pj.success) {
-        throw new Error(pj.error || (intent.kind === "replace" ? "Failed to replace file" : "Failed to upload file"));
+
+        let res: Response;
+        if (intent.kind === "replace") {
+          res = await fetch("/api/admin/task-responses", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              id: intent.responseId,
+              file_url: blob.url,
+              file_name: file.name,
+            }),
+          });
+        } else {
+          if (!editingTask) throw new Error("No task open");
+          res = await fetch("/api/admin/task-responses", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              task_id: editingTask.id,
+              field_id: intent.field.id,
+              field_label: intent.field.label,
+              field_type: intent.field.field_type,
+              file_url: blob.url,
+              file_name: file.name,
+            }),
+          });
+        }
+        const pj = await res.json();
+        if (!res.ok || !pj.success) {
+          const label = intent.kind === "replace" ? "Failed to replace file" : `Failed to upload ${file.name}`;
+          throw new Error(pj.error || label);
+        }
+        uploadedCount += 1;
+        if (pj.task_completed === true) taskCompleted = true;
+        if (typeof pj.mirrored === "number") mirroredCount += pj.mirrored;
       }
 
       // Refresh everything that surfaces a doc: edit modal list, the task
       // table's Doc column, and the View Documents modal. When the server
       // auto-completed the task (last required file filled), also refresh
       // tasks + milestones so the table row flips to Completed.
-      const taskCompleted = pj.task_completed === true;
       // Keep the open modal's Status dropdown in sync: when this upload was the
       // final required file, the server auto-completed the task, so reflect that
       // in the modal immediately instead of leaving the dropdown on "Pending".
@@ -1156,8 +1250,12 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
         ...(taskCompleted ? [refetchData()] : []),
       ]);
 
-      const mirroredCount = typeof pj.mirrored === "number" ? pj.mirrored : 0;
-      const baseMessage = intent.kind === "replace" ? "File replaced" : "File uploaded";
+      const baseMessage =
+        intent.kind === "replace"
+          ? "File replaced"
+          : uploadedCount === 1
+            ? "File uploaded"
+            : `${uploadedCount} files uploaded`;
       const suffix = taskCompleted ? " Task marked Completed." : "";
       showToast(
         mirroredCount > 0
@@ -1165,6 +1263,13 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
           : `${baseMessage}.${suffix}`,
       );
     } catch (err: any) {
+      // A mid-batch failure still leaves the earlier files saved — refresh so
+      // the modal shows exactly what made it through.
+      await Promise.all([
+        refreshEditTaskResponses(),
+        fetchTaskFileDocs(),
+        fetchDealDocuments(),
+      ]).catch(() => { });
       showToast(err?.message ?? "Failed to upload file", "error");
     } finally {
       setReplacingFileBusy(null);
@@ -2755,17 +2860,15 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
       showToast("This client has not signed in yet — cannot impersonate.", "error");
       return;
     }
-    // SEC-006 step-up: re-confirm the admin's own password before impersonating.
-    const stepUpPassword = window.prompt(
-      "Security check: re-enter YOUR admin password to log in as this client.",
-    );
-    if (!stepUpPassword) return;
+    // No password prompt: an authenticated admin session is enough (the
+    // SEC-006 step-up was removed by business decision). The server still
+    // audits every impersonation.
     setImpersonatingId(person.id);
     try {
       const res = await fetch("/api/admin/impersonate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: person.lead_email, stepUpPassword }),
+        body: JSON.stringify({ email: person.lead_email }),
       });
       const json = await res.json();
       if (!res.ok || !json.url) {
@@ -2901,6 +3004,19 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
       }
       return false;
     });
+  };
+
+  // Open a stored file in a new tab for viewing. Linking straight at the stored
+  // URL downloads it instead: Vercel Blob serves documents with
+  // `content-disposition: attachment`, and HEIC (every iPhone ID) is not
+  // renderable at all. openDocForViewing fetches the bytes, converts HEIC to
+  // JPEG and shows an object URL, which the browser renders inline.
+  const viewDocFile = async (doc: any): Promise<void> => {
+    if (!doc?.file_url) return;
+    const opened = await openDocForViewing(doc);
+    if (!opened) {
+      showToast("Could not open the file — allow pop-ups and try again", "error");
+    }
   };
 
   // Download a single stored file. Fetch-then-blob so cross-origin storage
@@ -3222,17 +3338,90 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deal.id, includeFamilyTasks]);
 
+  // Every family member's identification documents, keyed by lead_id, read
+  // straight from lead_corporate_docs. task_responses is NOT a reliable index
+  // of these — "Save draft", "Replace" and "Clone from previous deal" write
+  // only to lead_corporate_docs — so both the download gate below and the PDF
+  // export consult this map instead of inferring ID documents from responses.
+  // Fetched for the whole family in one call (and re-fetched before a download)
+  // rather than via /api/admin/lead-docs?deal_id=, which dedupes by file_name
+  // and would hide one person's file when two members upload the same name.
+  const [idDocsByLead, setIdDocsByLead] = useState<Map<string, IdDocRow[]>>(new Map());
+
+  // Returns the freshly-fetched map, or null on failure so callers fall back to
+  // the last good state rather than treating a hiccup as "this lead has no ID".
+  const fetchIdDocsFor = async (
+    leadIdsKey: string,
+  ): Promise<Map<string, IdDocRow[]> | null> => {
+    if (!leadIdsKey) return null;
+    try {
+      const res = await fetch(
+        `/api/admin/lead-identification-docs?lead_ids=${encodeURIComponent(leadIdsKey)}`,
+      );
+      const data = await res.json();
+      if (!data?.success) return null;
+      return new Map<string, IdDocRow[]>(
+        Object.entries((data.docs_by_lead ?? {}) as Record<string, IdDocRow[]>),
+      );
+    } catch {
+      return null;
+    }
+  };
+
+  // Refresh + publish to state. Used before a download so an ID uploaded in
+  // this session is picked up without a page refresh.
+  const fetchIdDocsByLead = async (): Promise<Map<string, IdDocRow[]> | null> => {
+    const map = await fetchIdDocsFor(familyLeadIdsKey);
+    if (map) setIdDocsByLead(map);
+    return map;
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const map = await fetchIdDocsFor(familyLeadIdsKey);
+      if (!cancelled && map) setIdDocsByLead(map);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [familyLeadIdsKey]);
+
+  // The identification documents belonging to an ID task's own person. Family
+  // views list one ID row per person, so scoping by the task's owner keeps a
+  // co-purchaser's documents off the primary's export (and vice versa).
+  const taskIdentificationDocs = (
+    task: DisplayTask,
+    idDocMap?: Map<string, IdDocRow[]>,
+  ): IdDocRow[] => {
+    const ownerLeadId = (task.ownerLeadId as string | null) ?? primaryLeadId;
+    if (!ownerLeadId) return [];
+    return (idDocMap ?? idDocsByLead).get(ownerLeadId) ?? [];
+  };
+
   // Does this task have any downloadable data (client responses or files)?
-  // Drives whether the per-task PDF button is shown.
+  // Drives whether the per-task PDF button is shown, and which tasks make it
+  // into the "Download All" package.
   //
-  // `respMap` overrides the responses held in state. Callers that just fetched
-  // a fresh map MUST pass it: setResponsesByTask() doesn't take effect until the
-  // next render, so reading state here would judge every task against the
-  // pre-fetch snapshot — empty if the page's own fetch hasn't landed yet.
-  const taskHasData = (task: DisplayTask, respMap?: Map<string, any[]>): boolean => {
+  // `respMap` / `idDocMap` override the maps held in state. Callers that just
+  // fetched fresh ones MUST pass them: setResponsesByTask() doesn't take effect
+  // until the next render, so reading state here would judge every task against
+  // the pre-fetch snapshot — empty if the page's own fetch hasn't landed yet.
+  const taskHasData = (
+    task: DisplayTask,
+    respMap?: Map<string, any[]>,
+    idDocMap?: Map<string, IdDocRow[]>,
+  ): boolean => {
     if (task.isTemplate) return false;
     const source = respMap ?? responsesByTask;
-    return (source.get(task.id)?.length ?? 0) > 0 || getTaskFileDocs(task).length > 0;
+    if ((source.get(task.id)?.length ?? 0) > 0) return true;
+    if (getTaskFileDocs(task).length > 0) return true;
+    // An ID task whose documents were never mirrored into task_responses still
+    // has data to export — without this it was silently dropped from the deal
+    // package and showed no download button of its own.
+    return (
+      isIdentificationTask(task) &&
+      taskIdentificationDocs(task, idDocMap).some((d) => !!d.file_url)
+    );
   };
 
   // Deal-level metadata reused by both PDF entry points.
@@ -3338,9 +3527,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
   const buildPdfTaskInput = async (
     task: DisplayTask,
     respMap?: Map<string, any[]>,
+    idDocMap?: Map<string, IdDocRow[]>,
   ): Promise<PdfTaskInput> => {
     const source = respMap ?? responsesByTask;
-    const responses = [...(source.get(task.id) ?? [])];
+    let responses = [...(source.get(task.id) ?? [])];
     const seenFileUrls = new Set(
       responses.filter((r) => r.field_type === "file" && r.file_url).map((r) => r.file_url),
     );
@@ -3348,6 +3538,45 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
       if (d.field_type === "file" && d.file_url && !seenFileUrls.has(d.file_url)) {
         responses.push(d);
         seenFileUrls.add(d.file_url);
+      }
+    }
+
+    // Identification tasks: lead_corporate_docs (doc_type='identification') is
+    // the source of truth, not task_responses. Several flows write only there —
+    // "Save draft", "Replace", "Clone from previous deal" — and the batch
+    // endpoint deletes-then-inserts, so a task's response rows are routinely
+    // missing or stale. Reading them alone produced an ID PDF containing just
+    // the client's name and no documents at all.
+    //
+    // When the lead has ID docs we treat that list as authoritative: file rows
+    // whose blob is no longer one of them are dropped (a replaced or deleted
+    // document that left its response row behind), and any doc without a
+    // response row is added. If the lookup comes back empty we leave the
+    // responses untouched rather than blanking a task whose files are only
+    // recorded there.
+    if (isIdentificationTask(task)) {
+      const idDocs = taskIdentificationDocs(task, idDocMap);
+      const liveUrls = new Set(
+        idDocs.map((d) => d.file_url).filter((u): u is string => !!u),
+      );
+      if (liveUrls.size > 0) {
+        responses = responses.filter(
+          (r) => r.field_type !== "file" || (r.file_url && liveUrls.has(r.file_url)),
+        );
+        const attached = new Set(
+          responses.filter((r) => r.field_type === "file").map((r) => r.file_url),
+        );
+        for (const d of idDocs) {
+          if (!d.file_url || attached.has(d.file_url)) continue;
+          responses.push({
+            field_id: null,
+            field_label: formatIdDocLabel(d.custom_type),
+            field_type: "file",
+            file_url: d.file_url,
+            file_name: d.file_name,
+          });
+          attached.add(d.file_url);
+        }
       }
     }
 
@@ -3410,11 +3639,15 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
   const handleDownloadTaskPdf = async (task: DisplayTask) => {
     setDownloadingTaskId(task.id);
     try {
-      // Pull the latest responses so a just-saved value (e.g. a co-person's
-      // employer phone) is included even without a page refresh.
-      const fresh = await fetchFreshResponsesMap();
+      // Pull the latest responses and ID documents so a just-saved value (e.g.
+      // a co-person's employer phone) or a just-uploaded ID is included even
+      // without a page refresh.
+      const [fresh, freshIdDocs] = await Promise.all([
+        fetchFreshResponsesMap(),
+        fetchIdDocsByLead(),
+      ]);
       if (fresh) setResponsesByTask(fresh);
-      const taskInput = await buildPdfTaskInput(task, fresh ?? undefined);
+      const taskInput = await buildPdfTaskInput(task, fresh ?? undefined, freshIdDocs ?? undefined);
       await downloadTaskPdf(buildPdfDealMeta(), taskInput);
     } catch {
       showToast("Could not generate the task PDF", "error");
@@ -3478,15 +3711,22 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
   const handleDownloadDealZip = async () => {
     setDownloadingDealZip(true);
     try {
-      // Freshest responses so recently-saved edits are included.
-      const fresh = await fetchFreshResponsesMap();
+      // Freshest responses and ID documents so recently-saved edits and uploads
+      // are included without a page refresh.
+      const [fresh, freshIdDocs] = await Promise.all([
+        fetchFreshResponsesMap(),
+        fetchIdDocsByLead(),
+      ]);
       if (fresh) setResponsesByTask(fresh);
       // Filter the SAME rows the task table renders (resolved leadType) against
-      // the freshly-fetched responses — not the raw rows against state, which
-      // reports "no tasks" whenever the page's own response fetch hasn't landed.
+      // the freshly-fetched responses and ID documents — not the raw rows against
+      // state, which reports "no tasks" whenever the page's own fetch hasn't
+      // landed.
       const realTasks = dedupeTasksByTemplate(tasks).flatMap((t) => {
         const row = toDisplayRow(t);
-        return row && taskHasData(row, fresh ?? undefined) ? [row] : [];
+        return row && taskHasData(row, fresh ?? undefined, freshIdDocs ?? undefined)
+          ? [row]
+          : [];
       });
       const milestoneOrder = (m: Milestone) => m.orderIndex ?? Number.MAX_SAFE_INTEGER;
       const orderedMilestones = [...milestones].sort((a, b) => milestoneOrder(a) - milestoneOrder(b));
@@ -3499,7 +3739,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
         if (milestoneTasks.length === 0) continue;
         milestoneTasks.forEach((t) => usedTaskIds.add(t.id));
         const builtTasks = await Promise.all(
-          milestoneTasks.map((t) => buildPdfTaskInput(t, fresh ?? undefined)),
+          milestoneTasks.map((t) =>
+            buildPdfTaskInput(t, fresh ?? undefined, freshIdDocs ?? undefined),
+          ),
         );
         sections.push({
           milestoneTitle: m.title,
@@ -3524,7 +3766,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
         for (const [ownerDealId, ownerTasks] of byOwner) {
           const person = ownerDealId ? familyPeople.find((p) => p.id === ownerDealId) : undefined;
           const built = await Promise.all(
-            ownerTasks.map((t) => buildPdfTaskInput(t, fresh ?? undefined)),
+            ownerTasks.map((t) =>
+              buildPdfTaskInput(t, fresh ?? undefined, freshIdDocs ?? undefined),
+            ),
           );
           sections.push({
             milestoneTitle: person?.lead_name || "Other Tasks",
@@ -4980,6 +5224,113 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
               </div>
             );
           })()}
+
+          {/* Email CC — extra people copied on this file's "Shared with agent"
+              emails. Always shown (not gated on hasPartner) because a one-off CC
+              is exactly the case where no referral partner exists. */}
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+            <h3 className="font-bold text-slate-800 text-sm mb-1">Email CC</h3>
+            <p className="text-xs text-slate-500 mb-4 leading-relaxed">
+              Copied on this file&apos;s &ldquo;Shared with agent&rdquo; emails, in
+              addition to the referral partner&apos;s own contacts. Activation and
+              password-reset emails are never CC&apos;d.
+            </p>
+
+            <div className="space-y-2">
+              {/* Inherited from the referral partner (partners.agent_email +
+                  partner_contacts). Read-only here: they belong to the partner
+                  and apply to every file it referred, so removing one is a
+                  Partners-page decision, not a per-file one. Listed so the panel
+                  shows the whole CC line — otherwise these arrive on an email
+                  while the file claims "No extra CC addresses". */}
+              {partnerCc.length > 0 && (
+                <div className="space-y-2 pb-1">
+                  {partnerCc.map((p) => (
+                    <div
+                      key={p.email}
+                      className="flex items-center gap-2 bg-slate-50/60 border border-dashed border-slate-200 rounded-lg px-3 py-2"
+                      title={`Copied via referral partner ${p.partner} — manage in Partners`}
+                    >
+                      <span className="text-xs font-bold text-slate-500 truncate flex-1">
+                        {p.email}
+                      </span>
+                      <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide shrink-0">
+                        {p.partner}
+                      </span>
+                    </div>
+                  ))}
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    From the referral partner — edit these under Partners.
+                  </p>
+                </div>
+              )}
+
+              {ccEmails.length === 0 && (
+                <p className="text-xs text-slate-400 italic">
+                  No extra CC addresses for this file.
+                </p>
+              )}
+
+              {ccEmails.map((email) => {
+                // Saved on the file AND carried by the partner. New ones are
+                // rejected, but an entry from before that rule (or added to the
+                // partner afterwards) can still be here — flag it so the admin
+                // knows removing it costs nothing.
+                const alsoViaPartner = partnerCc.find(
+                  (p) => p.email.toLowerCase() === email.toLowerCase(),
+                );
+                return (
+                <div
+                  key={email}
+                  className="flex items-center gap-2 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2"
+                >
+                  <span className="text-xs font-bold text-slate-800 truncate flex-1">
+                    {email}
+                    {alsoViaPartner && (
+                      <span className="block text-[10px] font-semibold text-amber-600 normal-case">
+                        Duplicate — already copied via {alsoViaPartner.partner}
+                      </span>
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => saveCcEmails(ccEmails.filter((e) => e !== email))}
+                    disabled={savingCc}
+                    title="Remove from CC"
+                    className="p-1 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-50"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+                );
+              })}
+
+              <div className="flex gap-2 pt-1">
+                <input
+                  type="email"
+                  placeholder="someone@example.com"
+                  value={newCcEmail}
+                  onChange={(e) => setNewCcEmail(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      addCcEmail();
+                    }
+                  }}
+                  disabled={savingCc}
+                  className="flex-1 min-w-0 px-3 py-1.5 text-xs border border-slate-300 rounded-md focus:border-brand-primary outline-none disabled:opacity-60"
+                />
+                <button
+                  type="button"
+                  onClick={addCcEmail}
+                  disabled={savingCc || !newCcEmail.trim()}
+                  className="px-3 py-1.5 text-xs font-semibold text-white bg-[#C10007] rounded-md hover:bg-[#a30006] disabled:opacity-60 whitespace-nowrap"
+                >
+                  {savingCc ? "Saving…" : "Add"}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       {showStageForm && (
@@ -5658,6 +6009,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                                 href={docDownloadHref(doc.file_url)}
                                 target="_blank"
                                 rel="noopener noreferrer"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  viewDocFile(doc);
+                                }}
                                 className="text-xs font-semibold text-[#C10007] hover:underline shrink-0 ml-3"
                               >
                                 View
@@ -5727,6 +6082,11 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                           href={docDownloadHref(doc.file_url)}
                           target="_blank"
                           rel="noopener noreferrer"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            viewDocFile(doc);
+                          }}
                           className="inline-flex items-center justify-center w-8 h-8 rounded-md text-slate-500 hover:text-[#C10007] hover:bg-white transition-colors"
                           title="View"
                           aria-label={`View ${doc.file_name ?? "file"}`}
@@ -6151,6 +6511,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                                   href={docDownloadHref(doc.file_url)}
                                   target="_blank"
                                   rel="noopener noreferrer"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    viewDocFile(doc);
+                                  }}
                                   className="text-sm text-[#C10007] hover:underline truncate"
                                 >
                                   {doc.file_name || "View file"}
@@ -6233,9 +6597,12 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                             </p>
                             {/* Per-field file action. For APS tasks it opens
                                 the APS upload modal, which APPENDS more files
-                                (agreement + amendments) — so it always reads
-                                "Add"; for non-APS it replaces/uploads via the
-                                generic file-PATCH path. */}
+                                (agreement + amendments). For non-APS the same
+                                button ADDS files to the field — a file field
+                                can hold several (void cheque + direct deposit
+                                form, etc.), same as the client portal allows.
+                                Swapping an individual file is the per-file
+                                Replace control on each row below. */}
                             {isFile && !(editingTask && isHomeInsuranceTask(editingTask)) && (
                               isEditingApsTask ? (
                                 <button
@@ -6250,27 +6617,23 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                                 >
                                   <Upload size={12} /> Add
                                 </button>
-                              ) : fieldResponses.length > 0 ? (
-                                <button
-                                  type="button"
-                                  onClick={() => triggerReplaceFile(fieldResponses[0].id)}
-                                  disabled={replacingFileBusy === fieldResponses[0].id}
-                                  className="inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold text-[#C10007] border border-[#C10007] rounded hover:bg-[#FEF2F2] disabled:opacity-50"
-                                  title="Replace file"
-                                >
-                                  <Upload size={12} />
-                                  {replacingFileBusy === fieldResponses[0].id ? "Uploading…" : "Replace"}
-                                </button>
                               ) : (
                                 <button
                                   type="button"
                                   onClick={() => triggerUploadFile(field)}
                                   disabled={replacingFileBusy === `field-${field.id}`}
-                                  className="inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold text-white bg-[#C10007] rounded hover:bg-[#a30006] disabled:opacity-50"
-                                  title="Upload file"
+                                  className={`inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold rounded disabled:opacity-50 ${fieldResponses.length > 0
+                                    ? "text-[#C10007] border border-[#C10007] hover:bg-[#FEF2F2]"
+                                    : "text-white bg-[#C10007] hover:bg-[#a30006]"
+                                    }`}
+                                  title={fieldResponses.length > 0 ? "Add more files" : "Upload file"}
                                 >
                                   <Upload size={12} />
-                                  {replacingFileBusy === `field-${field.id}` ? "Uploading…" : "Upload"}
+                                  {replacingFileBusy === `field-${field.id}`
+                                    ? "Uploading…"
+                                    : fieldResponses.length > 0
+                                      ? "Add"
+                                      : "Upload"}
                                 </button>
                               )
                             )}
@@ -6287,6 +6650,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                                         href={docDownloadHref(r.file_url)}
                                         target="_blank"
                                         rel="noopener noreferrer"
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          viewDocFile(r);
+                                        }}
                                         className="text-sm text-[#C10007] hover:underline truncate"
                                       >
                                         {r.file_name || "View file"}
@@ -6306,6 +6673,20 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                                         title="Delete this file"
                                       >
                                         <Trash2 size={14} />
+                                      </button>
+                                    )}
+                                    {/* Swap out THIS file. The field-level
+                                        button adds files instead, so replacing
+                                        has to be addressed per row. */}
+                                    {!isEditingApsTask && !r.id.startsWith("tmp-") && (
+                                      <button
+                                        type="button"
+                                        onClick={() => triggerReplaceFile(r.id)}
+                                        disabled={replacingFileBusy === r.id}
+                                        className="shrink-0 ml-auto text-[11px] font-semibold text-gray-500 hover:text-[#C10007] disabled:opacity-50"
+                                        title="Replace this file"
+                                      >
+                                        {replacingFileBusy === r.id ? "Uploading…" : "Replace"}
                                       </button>
                                     )}
                                   </div>
@@ -6513,6 +6894,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                                 href={docDownloadHref(resp.file_url)}
                                 target="_blank"
                                 rel="noopener noreferrer"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  viewDocFile(resp);
+                                }}
                                 className="text-sm text-[#C10007] hover:underline truncate"
                               >
                                 {resp.file_name || "View file"}
@@ -6671,7 +7056,16 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                           <div className="flex items-center gap-2 mt-1">
                             <FileText size={14} className="text-[#C10007] shrink-0" />
                             {resp.file_url ? (
-                              <a href={docDownloadHref(resp.file_url)} target="_blank" rel="noopener noreferrer" className="text-sm text-[#C10007] hover:underline truncate">
+                              <a
+                                href={docDownloadHref(resp.file_url)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  viewDocFile(resp);
+                                }}
+                                className="text-sm text-[#C10007] hover:underline truncate"
+                              >
                                 {resp.file_name || "View file"}
                               </a>
                             ) : (

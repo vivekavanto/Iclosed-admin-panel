@@ -3,6 +3,8 @@ import supabaseAdmin from "./supabaseAdmin";
 import { logger } from "./logger";
 import { getFamilyDealIds } from "./familyDeals";
 import { formatLeadTypeLabel, buildLeadAddressForEmail } from "./leadEmailAddress";
+import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "./emailIdentity";
+import { buildAgentCcList } from "./agentCc";
 import {
     resolveLeadRecipientSide,
     resolveMilestoneSide,
@@ -155,29 +157,48 @@ function joinNames(names: string[]): string {
 }
 
 /**
- * "Shared with agent?" templates CC the referral partner — once for the whole
- * family now, not once per person. An address already in `to` is dropped so a
+ * "Shared with agent?" templates CC everyone attached to the file — once for the
+ * whole family now, not once per person: the partner's primary agent, any
+ * additional `partner_contacts`, and each deal's own `cc_emails`
+ * (see buildAgentCcList).
+ *
+ * The union runs over EVERY recipient's deal, not just the anchor's: a partner
+ * contact or one-off CC attached to a single deal in the family must still be
+ * copied on the one merged email. Addresses already in `to` are dropped so a
  * client who is also the referring agent doesn't get a duplicate copy.
  */
 async function resolveAgentCc(
     template: { shared_with_agent?: boolean | null },
-    partnerId: string | null | undefined,
+    recipients: MilestoneRecipient[],
     toAddresses: string[],
 ): Promise<string[]> {
-    if (!template.shared_with_agent || !partnerId) return [];
+    if (!template.shared_with_agent) return [];
 
-    const { data: partner } = await supabaseAdmin
-        .from("partners")
-        .select("agent_email")
-        .eq("id", partnerId)
-        .eq("is_deleted", false)
-        .maybeSingle();
+    // One buildAgentCcList call per distinct (partner, deal) pair in the family.
+    const pairs = new Map<string, { partnerId: string | null; dealId: string | null }>();
+    for (const r of recipients) {
+        const partnerId = r.deal?.partner_id ?? r.lead?.partner_id ?? null;
+        const dealId = r.deal?.id ?? null;
+        pairs.set(`${partnerId ?? ""}|${dealId ?? ""}`, { partnerId, dealId });
+    }
 
-    const agentEmail = partner?.agent_email?.trim();
-    if (!agentEmail) return [];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const { partnerId, dealId } of pairs.values()) {
+        const list = await buildAgentCcList({
+            partnerId,
+            dealId,
+            exclude: toAddresses,
+        });
+        for (const addr of list) {
+            const key = addr.toLowerCase();
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push(addr);
+        }
+    }
 
-    const inTo = new Set(toAddresses.map((a) => a.trim().toLowerCase()));
-    return inTo.has(agentEmail.toLowerCase()) ? [] : [agentEmail];
+    return out;
 }
 
 /**
@@ -397,16 +418,12 @@ export async function sendCombinedMilestoneEmail(opts: {
         processedSubject = processedSubject.replace(/\{\{\s*file_number\s*\}\}/gi, fileNumber);
         processedSubject = processedSubject.replace(/\{\{\s*side_suffix\s*\}\}/gi, sideSuffix);
 
-        const to = recipients.map((r) => r.email);
-        const cc = await resolveAgentCc(
-            template,
-            deal.partner_id ?? lead?.partner_id ?? null,
-            to,
-        );
+        const to = recipients.map((r) => normalizeRecipientEmail(r.email)).filter(Boolean);
+        const cc = await resolveAgentCc(template, recipients, to);
 
         const { data: sendResult, error: sendError } = await resend.emails.send({
             from: fromEmail,
-            replyTo: "testing@iclosed.ca",
+            replyTo: emailReplyTo(),
             to,
             ...(cc.length ? { cc } : {}),
             subject: processedSubject,
@@ -419,7 +436,7 @@ export async function sendCombinedMilestoneEmail(opts: {
 
         logger.info(
             `[Milestone Email] Sent to ${to.join(", ")}` +
-            `${cc.length ? ` (cc agent: ${cc.join(", ")})` : template.shared_with_agent ? " (shared_with_agent on, but no partner email on deal — no cc)" : ""}` +
+            `${cc.length ? ` (cc ${cc.length}: ${cc.join(", ")})` : template.shared_with_agent ? " (shared_with_agent on, but no cc addresses on file — no cc)" : ""}` +
             `, milestone: "${milestone?.title ?? ""}", id: ${sendResult?.id}`,
         );
 
@@ -468,7 +485,7 @@ export async function dispatchAutoCompleteMilestoneEmails(
     }
 
     const resend = new Resend(process.env.RESEND_API_KEY);
-    const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <support@iclosed.ca>";
+    const fromEmail = emailFrom();
 
     // One send per stage, not per party: every family member's copy of the same
     // auto-completed stage collapses into a single group.

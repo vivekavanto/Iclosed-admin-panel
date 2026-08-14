@@ -5,6 +5,8 @@ import { isUuid } from "@/lib/isUuid";
 import { recordAudit } from "@/lib/recordAudit";
 import { getActingAdmin } from "@/lib/getActingAdmin";
 import { FILE_NUMBER_REGEX, FILE_NUMBER_HINT } from "@/lib/fileNumber";
+import { normalizeRecipientEmail } from "@/lib/emailIdentity";
+import { partnerCcAddresses } from "@/lib/partnerCcAddresses";
 
 const supabase = supabaseAdmin;
 
@@ -42,6 +44,11 @@ export async function GET(
       .maybeSingle();
     data.referral_partner = partner ?? null;
   }
+
+  // Addresses this file is CC'd on via the partner rather than via
+  // deals.cc_emails. Surfaced so the Email CC panel can show the complete CC
+  // line instead of only its own editable half.
+  data.partner_cc_emails = await partnerCcAddresses(id);
 
   // Resolve "account created" (last_sign_in_at) for the current lead and
   // every family member. Mirrors the All Files list so the detail page
@@ -409,6 +416,10 @@ const EDITABLE_DEAL_COLUMNS = new Set([
   "price",
   "outstanding_undertakings",
   "outstanding_requisitions",
+  // Extra people CC'd on this file's "Shared with agent" emails, on top of the
+  // referral partner's own contacts. A file-level property, so it mirrors
+  // across the family below — one file, one CC list.
+  "cc_emails",
 ]);
 
 const ALLOWED_TYPES = new Set([
@@ -443,6 +454,7 @@ const MIRROR_DEAL_COLUMNS = new Set([
   "price",
   "outstanding_undertakings",
   "outstanding_requisitions",
+  "cc_emails",
 ]);
 
 const DATE_COLUMNS = new Set([
@@ -490,6 +502,87 @@ export async function PATCH(
         { success: false, error: `Invalid status: ${value}` },
         { status: 400 },
       );
+    }
+    // cc_emails: validate and clean here rather than at send time. A bad
+    // address makes Resend reject the WHOLE send, so it must never reach the
+    // column — the send-side helper drops malformed entries defensively, but
+    // the admin should find out at save time, not by an email silently not
+    // arriving.
+    if (key === "cc_emails") {
+      if (!Array.isArray(value)) {
+        return NextResponse.json(
+          { success: false, error: "cc_emails must be an array" },
+          { status: 400 },
+        );
+      }
+      if (value.length > 20) {
+        return NextResponse.json(
+          { success: false, error: "cc_emails: at most 20 addresses" },
+          { status: 400 },
+        );
+      }
+      const seen = new Set<string>();
+      const cleaned: string[] = [];
+      for (const entry of value) {
+        const email = normalizeRecipientEmail(
+          typeof entry === "string" ? entry : "",
+        );
+        if (!email) continue;
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          return NextResponse.json(
+            { success: false, error: `Invalid CC email address: ${email}` },
+            { status: 400 },
+          );
+        }
+        const dedupeKey = email.toLowerCase();
+        if (seen.has(dedupeKey)) continue;
+        seen.add(dedupeKey);
+        cleaned.push(email);
+      }
+
+      // Reject an address the referral partner already carries. The send-side
+      // helper unions partner agent_email + partner_contacts + this column and
+      // de-dupes, so re-adding one here copies nobody new — it just puts the
+      // address in two places, where removing it from the file appears to do
+      // nothing. Only NEW entries are checked: an address already stored on the
+      // deal (added before this rule, or added to the partner afterwards) stays
+      // editable, otherwise the admin could never save the list again to
+      // remove it.
+      const existing = new Set<string>();
+      {
+        const { data: current } = await supabase
+          .from("deals")
+          .select("cc_emails")
+          .eq("id", id)
+          .maybeSingle();
+        for (const e of (current?.cc_emails as string[] | null) ?? []) {
+          existing.add(normalizeRecipientEmail(e).toLowerCase());
+        }
+      }
+      const added = cleaned.filter((e) => !existing.has(e.toLowerCase()));
+      if (added.length > 0) {
+        const fromPartner = await partnerCcAddresses(id);
+        const byEmail = new Map(
+          fromPartner.map((p) => [p.email.toLowerCase(), p]),
+        );
+        for (const email of added) {
+          const hit = byEmail.get(email.toLowerCase());
+          if (hit) {
+            return NextResponse.json(
+              {
+                success: false,
+                error:
+                  `${email} is already copied on this file through referral partner ` +
+                  `${hit.partner}${hit.source === "agent_email" ? " (partner agent email)" : " (partner contact)"} — no need to add it here.`,
+              },
+              { status: 400 },
+            );
+          }
+        }
+      }
+
+      updates[key] = cleaned;
+      continue;
     }
     if (DATE_COLUMNS.has(key)) {
       // Empty strings on date columns must be sent as null so Postgres accepts them.

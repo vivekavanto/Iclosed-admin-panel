@@ -1,49 +1,35 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { recordAudit } from "@/lib/recordAudit";
 import { getActingAdmin } from "@/lib/getActingAdmin";
 
-// Admin-only impersonation (SEC-006). Requires the acting admin to re-confirm
-// their password (step-up) and records an audit row. The customer is NOT
-// notified. Uses supabaseAdmin.auth.admin.generateLink to mint the magic link
-// server-side.
+// Admin-only impersonation. An authenticated admin session is the only thing
+// required: src/middleware.ts gates every /api/admin/* route on a valid session
+// with app_metadata.role === "admin", and the acting admin is recorded in the
+// audit log below.
+//
+// SEC-006 originally added a password step-up on top of that (re-enter your own
+// password on every impersonation). It was removed by business decision — staff
+// open client portals constantly and the extra prompt was blocking day-to-day
+// work. Accepted trade-off: anyone holding a live admin session (an unlocked
+// machine, a stolen session cookie) can now open client portals without knowing
+// the admin's password. The audit trail is what remains, so it must stay intact.
+//
+// The customer is NOT notified. Uses supabaseAdmin.auth.admin.generateLink to
+// mint the magic link server-side.
 export async function POST(req: Request) {
   try {
     const body = (await req.json()) as {
       email?: string;
       authUserId?: string;
-      stepUpPassword?: string;
     };
 
-    // ── SEC-006 step-up: the acting admin must re-enter their OWN password ──
-    // so a merely-open (or hijacked) admin session can't silently take over a
-    // customer account. We verify the password with a throwaway anon client
-    // that never persists a session.
     const actor = await getActingAdmin();
     if (!actor.email) {
       return NextResponse.json(
         { error: "Could not identify the acting admin" },
         { status: 401 },
       );
-    }
-    if (!body.stepUpPassword || typeof body.stepUpPassword !== "string") {
-      return NextResponse.json(
-        { error: "Password confirmation required", stepUpRequired: true },
-        { status: 401 },
-      );
-    }
-    const verifier = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      { auth: { persistSession: false, autoRefreshToken: false } },
-    );
-    const { error: pwErr } = await verifier.auth.signInWithPassword({
-      email: actor.email,
-      password: body.stepUpPassword,
-    });
-    if (pwErr) {
-      return NextResponse.json({ error: "Password is incorrect" }, { status: 401 });
     }
 
     let email = body.email;
@@ -97,7 +83,9 @@ export async function POST(req: Request) {
     // decision): clients must not be told when staff view their portal.
     // Transparency is covered by the audit trail below instead.
 
-    // SEC-006 / CMP-004: record WHO impersonated WHOM, when, from where.
+    // SEC-006 / CMP-004: record WHO impersonated WHOM, when, from where. With
+    // the password step-up removed this audit row is the ONLY control on
+    // impersonation — never make it best-effort or drop fields from it.
     await recordAudit({
       action: "impersonate",
       actorEmail: actor.email,
@@ -107,7 +95,7 @@ export async function POST(req: Request) {
       metadata: {
         target_email: email,
         auth_user_id: body.authUserId ?? null,
-        step_up: true,
+        step_up: false,
       },
       req,
     });
