@@ -1,9 +1,11 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import QuickClosingCostCalculator from "@/components/QuickClosingCostCalculator";
-
-// /admin/calculator — the standalone closing-cost calculator, reachable from the
-// sidebar so every clerk has it without opening a file first.
+// The calculator moved to /closing-cost-calculator, which serves staff and the
+// clerks the link is shared with from ONE page — see that route for why.
+//
+// This stays behind as a redirect so the sidebar entry people have used, and any
+// bookmark of it, still lands somewhere. Delete once nobody is reaching for the
+// old address.
 export default function CalculatorPage() {
-  return <QuickClosingCostCalculator />;
+  redirect("/closing-cost-calculator");
 }

@@ -39,7 +39,11 @@ const ROUTE_MAP: Record<string, string> = {
   dashboard: "/admin/dashboard",
   tasks: "/admin/tasks",
   deals: "/admin/deals",
-  calculator: "/admin/calculator",
+  // Outside /admin on purpose: the calculator is ONE page, shared with clerks
+  // who have no login (src/lib/publicRoutes.ts). Staff reach it from here and
+  // get it inside the usual shell; a clerk opens the same URL and gets the page
+  // on its own.
+  calculator: "/closing-cost-calculator",
   templates: "/admin/templates",
   "stage-templates": "/admin/templates",
   "task-templates": "/admin/templates/tasks",

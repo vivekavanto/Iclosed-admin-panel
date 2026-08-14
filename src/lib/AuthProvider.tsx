@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { isPublicRoute } from "@/lib/publicRoutes";
 import type { User } from "@supabase/supabase-js";
 
 interface AuthContextType {
@@ -60,7 +61,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       verifyAndSet(session?.user ?? null).then(() => {
-        if (!cancelled && !session && pathname !== "/admin/login") {
+        if (
+          !cancelled &&
+          !session &&
+          pathname !== "/admin/login" &&
+          !isPublicRoute(pathname)
+        ) {
           router.push("/admin/login");
         }
       });
@@ -72,9 +78,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, [router, pathname]);
 
-  // Redirect to login if not authenticated (or not authorized as admin)
+  // Redirect to login if not authenticated (or not authorized as admin).
+  // Public pages (src/lib/publicRoutes.ts) are exempt: a visitor there has no
+  // session by design, and bouncing them to /admin/login is the one thing that
+  // page must never do.
   useEffect(() => {
-    if (!loading && !user && pathname !== "/admin/login") {
+    if (!loading && !user && pathname !== "/admin/login" && !isPublicRoute(pathname)) {
       router.push("/admin/login");
     }
   }, [loading, user, pathname, router]);

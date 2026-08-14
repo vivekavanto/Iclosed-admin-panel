@@ -30,7 +30,7 @@ import {
 import Letterhead from "@/components/closingCost/Letterhead";
 import StatementCard from "@/components/closingCost/StatementCard";
 
-// The standalone closing-cost calculator at /admin/calculator.
+// The standalone closing-cost calculator.
 //
 // Same controls and the same statement as a deal's closing-cost page — it is
 // literally the same components — but attached to NO file. Nothing is written:
@@ -43,8 +43,19 @@ import StatementCard from "@/components/closingCost/StatementCard";
 // meaningful when there is a file to record it against and a portal for them to
 // see it in. Issuing lives on the deal page, where it belongs. Here a clerk can
 // print the working, and that is all.
+//
+// It lives at ONE address — /closing-cost-calculator — which is outside /admin
+// and needs no login. Staff open it from the sidebar and get it inside the usual
+// shell; the clerks the link is shared with open the same URL and get the page on
+// its own. One page, one API pair (/api/calculator/*), so there is no second copy
+// of the tool to drift out of step with this one.
 
 const BRAND = "#C10007";
+
+// NOT under /api/admin, so src/middleware.ts does not gate them: the same
+// endpoints answer a logged-in admin and a clerk with no session.
+const CONFIG_URL = "/api/calculator/config";
+const PDF_URL = "/api/calculator/pdf";
 
 type ConfigRow = Record<string, unknown>;
 
@@ -138,7 +149,7 @@ const QuickClosingCostCalculator: React.FC = () => {
     setLoading(true);
     setLoadError(null);
     try {
-      const res = await fetch("/api/admin/calculator/config");
+      const res = await fetch(CONFIG_URL);
       const data = await res.json();
       if (!res.ok || !data?.success) {
         throw new Error(data?.error || "Could not load the closing-cost settings");
@@ -319,7 +330,7 @@ const QuickClosingCostCalculator: React.FC = () => {
 
     setDownloading(true);
     try {
-      const res = await fetch("/api/admin/calculator/pdf", {
+      const res = await fetch(PDF_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -423,11 +434,17 @@ const QuickClosingCostCalculator: React.FC = () => {
         </div>
       )}
 
-      {/* Sticky under AppHeader (h-14), matching the deal page's action bar so
-          the two calculators feel like one tool. The chip is the important part:
-          it says, permanently and in the place a clerk would look for a "Saved"
-          badge, that this page never saves. */}
-      <div className="sticky top-14 z-20 -mx-4 mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 bg-slate-50/95 px-4 py-2.5 backdrop-blur sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
+      {/* Sticks below AppHeader for a signed-in admin and to the top of the
+          window for a clerk, who has no header above them — ClientLayout sets
+          --app-header-h only when it renders the staff shell, so this one rule
+          covers both. Matches the deal page's action bar so the calculators feel
+          like one tool. The chip is the important part: it says, permanently and
+          in the place a clerk would look for a "Saved" badge, that this page
+          never saves. */}
+      <div
+        style={{ top: "var(--app-header-h, 0px)" }}
+        className="sticky z-20 -mx-4 mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 bg-slate-50/95 px-4 py-2.5 backdrop-blur sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8"
+      >
         <span className="text-xs font-semibold text-gray-500">
           Quick calculator — not attached to a file
         </span>

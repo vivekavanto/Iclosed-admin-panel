@@ -6661,34 +6661,33 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                                     ) : (
                                       <span className="text-sm text-gray-500 truncate">{r.file_name}</span>
                                     )}
-                                    {/* Per-file delete for APS — removes just
-                                        this file from lead_corporate_docs +
-                                        task_responses. */}
-                                    {isEditingApsTask && r.file_url && (
-                                      <button
-                                        type="button"
-                                        onClick={() => handleApsDocFileDelete(r.file_url)}
-                                        disabled={deletingApsDocUrl === r.file_url}
-                                        className="text-gray-400 hover:text-[#C10007] disabled:opacity-50 shrink-0 ml-auto"
-                                        title="Delete this file"
-                                      >
-                                        <Trash2 size={14} />
-                                      </button>
-                                    )}
-                                    {/* Swap out THIS file. The field-level
-                                        button adds files instead, so replacing
-                                        has to be addressed per row. */}
-                                    {!isEditingApsTask && !r.id.startsWith("tmp-") && (
-                                      <button
-                                        type="button"
-                                        onClick={() => triggerReplaceFile(r.id)}
-                                        disabled={replacingFileBusy === r.id}
-                                        className="shrink-0 ml-auto text-[11px] font-semibold text-gray-500 hover:text-[#C10007] disabled:opacity-50"
-                                        title="Replace this file"
-                                      >
-                                        {replacingFileBusy === r.id ? "Uploading…" : "Replace"}
-                                      </button>
-                                    )}
+                                    {/* Per-file delete, matching the trash icon
+                                        on every other document list (the
+                                        identification drawer, the Documents
+                                        popup). Swapping a file is delete +
+                                        the field-level Add button above.
+                                        APS files live in lead_corporate_docs
+                                        and are removed server-side right away —
+                                        the bridge would otherwise resurrect
+                                        them; any other file row is a plain
+                                        task_response, so it is staged like the
+                                        rest of the modal and deleted on save. */}
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        isEditingApsTask && r.file_url
+                                          ? handleApsDocFileDelete(r.file_url)
+                                          : markResponseDeleted(r.id)
+                                      }
+                                      disabled={
+                                        isEditingApsTask && deletingApsDocUrl === r.file_url
+                                      }
+                                      className="text-gray-400 hover:text-[#C10007] disabled:opacity-50 shrink-0 ml-auto"
+                                      title="Delete this file"
+                                      aria-label={`Delete ${r.file_name ?? "file"}`}
+                                    >
+                                      <Trash2 size={14} />
+                                    </button>
                                   </div>
                                 ))}
                               </div>
