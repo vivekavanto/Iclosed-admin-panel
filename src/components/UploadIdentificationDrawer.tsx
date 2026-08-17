@@ -1553,6 +1553,14 @@ export default function UploadIdentificationDrawer({
       setGlobalError("Please upload at least 2 identification documents.");
       return;
     }
+    // Both sides of every ID are required — see `hasIncompleteIds`.
+    if (hasIncompleteIds) {
+      setGlobalError(
+        `Both sides of every ID are required before submitting — ${missingSidesSummary}. Upload the missing page (for a passport, the rear/signature page) or remove that document.`,
+      );
+      verificationStatusRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
 
     setUploading(true);
     setGlobalError(null);
@@ -1626,6 +1634,13 @@ export default function UploadIdentificationDrawer({
     }
     if (selected.length < 2) {
       setGlobalError("Please upload at least 2 identification documents.");
+      return;
+    }
+    if (hasIncompleteIds) {
+      setGlobalError(
+        `Both sides of every ID are required before submitting — ${missingSidesSummary}. Upload the missing page (for a passport, the rear/signature page) or remove that document.`,
+      );
+      verificationStatusRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
       return;
     }
     setShowConfirmModal(true);
@@ -1754,6 +1769,35 @@ export default function UploadIdentificationDrawer({
     }
   }
 
+  // Fold previously-uploaded (draft) documents into the same analysis: a side
+  // saved on an earlier visit still counts, so finishing a draft never asks for
+  // a page that is already on file. Existing docs aren't in `selected` — their
+  // type/side is encoded in `custom_type` (e.g. "Driver's License_front").
+  for (const doc of existing) {
+    const ct = doc.custom_type;
+    if (!ct) continue;
+    // Skip rows that carry no detected document type: the generic
+    // "identification" fallback and the legacy/manual label keys.
+    if (ct === "identification") continue;
+    if (LABEL_OPTIONS.some((o) => o.value === ct)) continue;
+
+    const match = /^(.*)_(front-and-back|front|back)$/i.exec(ct);
+    const type = match ? match[1] : ct;
+    // No side suffix means the side was never established — detection returned
+    // "unknown", or the row predates side tracking. Reading that as
+    // "front-and-back" would let a lone passport photo page re-hydrate as a
+    // complete ID and slip past the both-sides check, so it stays unknown and
+    // the missing page is asked for again.
+    const side = match ? match[2].toLowerCase() : "unknown";
+    detectedDocs.push({
+      type,
+      side,
+      sideRequirement: "front-and-back",
+      isComplete: side === "front-and-back",
+      fileId: doc.id,
+    });
+  }
+
   // Group by document type
   const docTypeGroups = detectedDocs.reduce<Record<string, typeof detectedDocs>>((acc, doc) => {
     const key = doc.type;
@@ -1777,6 +1821,24 @@ export default function UploadIdentificationDrawer({
   // Count complete documents (both sides present)
   const completeDocCount = docAnalysis.filter(d => d.complete).length;
   const incompleteDocCount = docAnalysis.filter(d => !d.complete).length;
+
+  // Every acceptable ID needs both sides — a passport's rear/signature page
+  // included. A half-provided ID is a HARD BLOCK on submission: identity cannot
+  // be verified from one side of a document, so this is no longer softened into
+  // a "you can still submit" nudge. To submit without the missing page, the
+  // incomplete file has to be removed — then that ID isn't being submitted at all.
+  const incompleteIds = docAnalysis.filter((d) => !d.complete);
+  const hasIncompleteIds = incompleteIds.length > 0;
+
+  // "back", "front", or "front & back" — the page(s) still owed for an ID.
+  function describeMissingSides(doc: { hasFront: boolean; hasBack: boolean }): string {
+    if (!doc.hasFront && !doc.hasBack) return "front & back";
+    return doc.hasFront ? "back" : "front";
+  }
+
+  const missingSidesSummary = incompleteIds
+    .map((d) => `${d.type} (missing ${describeMissingSides(d)})`)
+    .join(", ");
 
   // A back side is often a near-blank page (a passport's rear cover, a card
   // reverse) that the classifier can't identify on its own. Once we've already
@@ -1814,13 +1876,16 @@ export default function UploadIdentificationDrawer({
 
   const hasPendingDetection = selected.some(s => s.detecting);
 
-  // Allow upload as long as we have at least 2 files and analysis has finished.
-  // Invalid / expired / incomplete IDs are surfaced as warnings but do not block
-  // submission (e.g. the primary user uploading on behalf of their spouse).
-  const canUpload =
-    selected.length >= 2 &&
-    !uploading &&
-    !hasPendingDetection;
+  // Submission needs at least 2 files, finished analysis, and — the part that is
+  // not negotiable — every recognised ID complete on both sides. That last rule
+  // is enforced in handleUploadClick / handleUpload; invalid, expired, or
+  // fewer-than-two IDs stay warnings so staff can still submit on a client's
+  // behalf, but a missing side is not one of those warnings.
+  //
+  // Display-only flag for the verification card: are the submission REQUIREMENTS
+  // met, ignoring transient uploading / pending-detection states? Two verified
+  // IDs is the target the card counts towards; a missing side is what blocks.
+  const readyToSubmit = completeDocCount >= 2 && !hasIncompleteIds;
 
   return (
     <>
@@ -2238,7 +2303,7 @@ export default function UploadIdentificationDrawer({
               ref={verificationStatusRef}
               className={[
                 "rounded-xl border overflow-hidden bg-white",
-                completeDocCount >= 2
+                readyToSubmit
                   ? "border-green-200"
                   : "border-red-300 border-t-4 border-t-[#C10007]",
               ].join(" ")}
@@ -2246,9 +2311,9 @@ export default function UploadIdentificationDrawer({
               {/* Status Header */}
               <div className={[
                 "px-4 py-3 flex items-center gap-3",
-                completeDocCount >= 2 ? "bg-green-50 border-b border-green-100" : "bg-white",
+                readyToSubmit ? "bg-green-50 border-b border-green-100" : "bg-white",
               ].join(" ")}>
-                {completeDocCount >= 2 ? (
+                {readyToSubmit ? (
                   <>
                     <div className="w-8 h-8 rounded-full bg-green-500 flex items-center justify-center flex-shrink-0">
                       <CheckCircle2 size={18} className="text-white" strokeWidth={2.5} />
@@ -2267,9 +2332,13 @@ export default function UploadIdentificationDrawer({
                     </div>
                     <div>
                       <p className="text-sm font-bold text-gray-900">
-                        {completeDocCount === 0
-                          ? "2 Government IDs Recommended"
-                          : "1 More Government ID Recommended"}
+                        {hasIncompleteIds
+                          ? incompleteIds.length === 1
+                            ? `${incompleteIds[0].type} — ${describeMissingSides(incompleteIds[0])} required`
+                            : "Both Sides of Every ID Required"
+                          : completeDocCount === 0
+                            ? "2 Government IDs Recommended"
+                            : "1 More Government ID Recommended"}
                       </p>
                       <p className="text-xs text-gray-900">
                         {completeDocCount}/2 verified
@@ -2306,12 +2375,19 @@ export default function UploadIdentificationDrawer({
                 </div>
               )}
 
-              {/* Action hint for incomplete state */}
-              {completeDocCount < 2 && (
+              {/* Action hint for incomplete state. A missing side is stated as a
+                  requirement, not a suggestion — it blocks submission. */}
+              {!readyToSubmit && (
                 <div className="px-4 py-2.5 bg-white border-t border-gray-100">
-                  <p className="text-xs text-gray-900">
-                    {incompleteDocCount > 0 && completeDocCount < 2
-                      ? "You can still submit — upload the missing side or a different ID for best results."
+                  <p
+                    className={
+                      hasIncompleteIds
+                        ? "text-xs text-[#C10007] font-semibold"
+                        : "text-xs text-gray-900"
+                    }
+                  >
+                    {hasIncompleteIds
+                      ? `Upload the ${describeMissingSides(incompleteIds[0])} of the ${incompleteIds[0].type} to continue — both sides of every ID are required before you can submit. For a passport that means the photo page and the rear/signature page. Alternatively, remove that document.`
                       : completeDocCount === 0
                         ? "You can still submit — for best results upload the front and back of each ID (for a passport, the photo page and the back page)."
                         : "You can still submit — upload one more government ID to complete verification."
@@ -2381,13 +2457,9 @@ export default function UploadIdentificationDrawer({
             fullWidth
             disabled={selected.length === 0 || hasPendingDetection || savingDraft}
             loading={uploading}
-            onClick={() => {
-              if (canUpload) {
-                handleUploadClick();
-              } else {
-                verificationStatusRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-              }
-            }}
+            // Stays clickable while blocked so the click can say WHY and scroll
+            // to the details; handleUploadClick re-checks and refuses to submit.
+            onClick={handleUploadClick}
             className="sm:flex-1"
           >
             {selected.length === 0
@@ -2396,7 +2468,11 @@ export default function UploadIdentificationDrawer({
                 ? "Analyzing..."
                 : selected.length < 2
                   ? "Add at Least 2 Documents"
-                  : `Upload ${selected.length} Document${selected.length > 1 ? "s" : ""}`}
+                  : hasIncompleteIds
+                    ? incompleteIds.length === 1
+                      ? `Add ${describeMissingSides(incompleteIds[0])} of ${incompleteIds[0].type}`
+                      : "Add Missing ID Sides"
+                    : `Upload ${selected.length} Document${selected.length > 1 ? "s" : ""}`}
           </Button>
         </div>
       </div>
