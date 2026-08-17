@@ -1129,7 +1129,8 @@ export interface Database {
             | "textarea"
             | "file"
             | "checkbox"
-            | "number";
+            | "number"
+            | "note";
           label: string;
           placeholder: string | null;
           required: boolean | null;
@@ -1149,7 +1150,8 @@ export interface Database {
             | "textarea"
             | "file"
             | "checkbox"
-            | "number";
+            | "number"
+            | "note";
           label: string;
           placeholder?: string | null;
           required?: boolean | null;
@@ -1169,7 +1171,8 @@ export interface Database {
             | "textarea"
             | "file"
             | "checkbox"
-            | "number";
+            | "number"
+            | "note";
           label?: string;
           placeholder?: string | null;
           required?: boolean | null;

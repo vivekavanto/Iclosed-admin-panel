@@ -2,6 +2,13 @@
 
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { X, Loader2, AlertCircle, CheckCircle2, UserCog } from "lucide-react";
+import AddressAutocomplete from "./shared/AddressAutocomplete";
+import {
+  formatPostalCode,
+  isCityField,
+  isPostalCodeField,
+  isStreetAddressField,
+} from "@/lib/addressFields";
 
 /**
  * Personal-information task popup for a co-purchaser / co-seller, opened from
@@ -90,6 +97,8 @@ const inputBase =
 const inputNormal =
   "border-gray-200 focus:border-[#C10007] focus:ring-2 focus:ring-[#C10007]/10";
 const inputError = "border-[#C10007] ring-2 ring-[#C10007]/10";
+// Same box, left-padded to clear AddressAutocomplete's pin icon.
+const inputWithIcon = inputBase.replace("px-4", "pl-9 pr-4");
 
 /* ── custom select (fixed-position dropdown, ported from the web popup) ── */
 function CustomSelect({
@@ -298,7 +307,11 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
           if (row) {
             existingByField[field.id] = row;
             if (row.value != null) {
-              preValues[field.id] = isPhoneField(field) ? formatPhone(row.value) : row.value;
+              preValues[field.id] = isPhoneField(field)
+                ? formatPhone(row.value)
+                : isPostalCodeField(field.label)
+                  ? formatPostalCode(row.value)
+                  : row.value;
             }
           }
         }
@@ -337,9 +350,38 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
   }, [open, saving, onClose, embedded]);
 
   function setValue(field: FormField, raw: string) {
-    const v = isPhoneField(field) ? formatPhone(raw) : raw;
+    const v = isPhoneField(field)
+      ? formatPhone(raw)
+      : isPostalCodeField(field.label)
+        ? formatPostalCode(raw)
+        : raw;
     setValues((prev) => ({ ...prev, [field.id]: v }));
     if (errors[field.id]) setErrors((prev) => ({ ...prev, [field.id]: "" }));
+  }
+
+  // Google Places pick on the Street Address field also fills the City and
+  // Postal Code fields beside it (found by label, as in the portal). Google
+  // omits components it doesn't have — never blank what was already typed.
+  function applyAddressSelection(
+    streetField: FormField,
+    address: { street: string; city: string; postalCode: string },
+  ) {
+    const textFields = fields.filter((f) => f.field_type === "text");
+    const cityField = textFields.find((f) => isCityField(f.label));
+    const postalField = textFields.find((f) => isPostalCodeField(f.label));
+
+    const filled: Record<string, string> = { [streetField.id]: address.street };
+    if (cityField && address.city) filled[cityField.id] = address.city;
+    if (postalField && address.postalCode) {
+      filled[postalField.id] = formatPostalCode(address.postalCode);
+    }
+
+    setValues((prev) => ({ ...prev, ...filled }));
+    setErrors((prev) => {
+      const next = { ...prev };
+      for (const id of Object.keys(filled)) next[id] = "";
+      return next;
+    });
   }
 
   function validate(): boolean {
@@ -677,6 +719,11 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
 
               const isMailForwardingStart =
                 (field.label || "").trim().toLowerCase() === "street address";
+              // Street Address gets Google Places suggestions — picking one
+              // also fills the City / Postal Code fields beside it, the same
+              // behaviour the client sees in the portal.
+              const isStreet =
+                field.field_type === "text" && isStreetAddressField(field.label);
               return (
                 <Fragment key={field.id}>
                   {isMailForwardingStart && (
@@ -684,6 +731,21 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
                   )}
                   <div>
                   {labelEl}
+                  {isStreet ? (
+                    <AddressAutocomplete
+                      value={values[field.id] ?? ""}
+                      onChange={(v) => setValue(field, v)}
+                      onSelect={(address) => applyAddressSelection(field, address)}
+                      placeholder={field.placeholder ?? "123 Main Street"}
+                      hasError={hasError}
+                      // Mailing address, not the property — allow all of Canada.
+                      restrictToOntario={false}
+                      inputClassName={[
+                        inputWithIcon,
+                        hasError ? inputError : inputNormal,
+                      ].join(" ")}
+                    />
+                  ) : (
                   <input
                     type={inputType}
                     value={values[field.id] ?? ""}
@@ -691,6 +753,7 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
                     placeholder={field.placeholder ?? ""}
                     className={[inputBase, hasError ? inputError : inputNormal].join(" ")}
                   />
+                  )}
                   {hasError && (
                     <p className="mt-1.5 flex items-center gap-1 text-xs text-[#C10007]">
                       <AlertCircle size={11} />
