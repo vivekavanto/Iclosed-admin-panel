@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { formatPostalCode } from "@/lib/addressFields";
 import {
   History,
   Mail,
@@ -1546,7 +1547,9 @@ const Leads: React.FC = () => {
                     type="text"
                     className={inputClasses}
                     value={isEditing ? editForm.addressPostalCode : (selectedLead.addressPostalCode ?? "")}
-                    onChange={(e) => updateEditField("addressPostalCode", e.target.value)}
+                    onChange={(e) =>
+                      updateEditField("addressPostalCode", formatPostalCode(e.target.value))
+                    }
                     readOnly={!isEditing}
                     placeholder="e.g. M1B 3C6"
                   />
@@ -1643,7 +1646,12 @@ const Leads: React.FC = () => {
                         type="text"
                         className={inputClasses}
                         value={isEditing ? editForm.sellingAddressPostalCode : (selectedLead.sellingAddressPostalCode ?? "")}
-                        onChange={(e) => updateEditField("sellingAddressPostalCode", e.target.value)}
+                        onChange={(e) =>
+                          updateEditField(
+                            "sellingAddressPostalCode",
+                            formatPostalCode(e.target.value),
+                          )
+                        }
                         readOnly={!isEditing}
                         placeholder="e.g. M1B 3C6"
                       />

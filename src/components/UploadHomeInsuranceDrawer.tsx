@@ -40,24 +40,26 @@ const POLICY_CHECKLIST = [
   "Lender listed as mortgagee (if applicable)",
 ];
 
-const CONDO_RECOMMENDATIONS = [
-  {
-    title: "Unit Coverage:",
-    desc: "Covers improvements, fixtures, and personal property within your unit",
-  },
-  {
-    title: "Contents Insurance:",
-    desc: "Protects your personal belongings and furniture",
-  },
-  {
-    title: "Loss Assessment Coverage:",
-    desc: "Covers special assessments from the condo corporation",
-  },
-  {
-    title: "Additional Living Expenses:",
-    desc: "Covers temporary accommodation if your unit becomes uninhabitable",
-  },
-];
+// Hidden for now — condominium recommendations are not shown on the home
+// insurance policy upload.
+// const CONDO_RECOMMENDATIONS = [
+//   {
+//     title: "Unit Coverage:",
+//     desc: "Covers improvements, fixtures, and personal property within your unit",
+//   },
+//   {
+//     title: "Contents Insurance:",
+//     desc: "Protects your personal belongings and furniture",
+//   },
+//   {
+//     title: "Loss Assessment Coverage:",
+//     desc: "Covers special assessments from the condo corporation",
+//   },
+//   {
+//     title: "Additional Living Expenses:",
+//     desc: "Covers temporary accommodation if your unit becomes uninhabitable",
+//   },
+// ];
 
 export default function UploadHomeInsuranceDrawer({
   open,
@@ -251,7 +253,8 @@ export default function UploadHomeInsuranceDrawer({
             </ul>
           </div>
 
-          {/* Condominium Insurance Recommendations */}
+          {/* Condominium Insurance Recommendations — hidden for now */}
+          {/*
           <div>
             <h3 className="text-sm font-bold text-gray-900 mb-1">
               Condominium Insurance Recommendations
@@ -271,6 +274,7 @@ export default function UploadHomeInsuranceDrawer({
               ))}
             </ul>
           </div>
+          */}
 
           {/* Upload Section */}
           <div>

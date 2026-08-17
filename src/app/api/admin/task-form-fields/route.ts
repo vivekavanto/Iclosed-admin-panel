@@ -9,6 +9,9 @@ import supabaseAdmin from "@/lib/supabaseAdmin";
  * modal so it can render every field the client-facing form shows —
  * filled or empty — letting admins complete or correct submissions on
  * behalf of the user.
+ *
+ * `note` fields are excluded — they collect no answer, so on the admin side
+ * they would render as stray empty inputs.
  */
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
@@ -25,6 +28,7 @@ export async function GET(req: Request) {
     .from("task_form_fields")
     .select("id, task_template_id, field_type, label, placeholder, required, order_index, options")
     .eq("task_template_id", taskTemplateId)
+    .neq("field_type", "note")
     .order("order_index", { ascending: true });
 
   if (error) {

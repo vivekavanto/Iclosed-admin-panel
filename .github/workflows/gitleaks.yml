@@ -11,6 +11,10 @@ on:
 jobs:
   gitleaks:
     runs-on: ubuntu-latest
+    # pull-requests is needed to list the PR's commits, and to comment on a hit.
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
         with:

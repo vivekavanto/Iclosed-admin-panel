@@ -60,6 +60,13 @@ import ClonePreviousDealDrawer from "./ClonePreviousDealDrawer";
 import EditDealModal from "./EditDealModal";
 import PostClosureDocuments from "./PostClosureDocuments";
 import AddCoClientModal from "./AddCoClientModal";
+import AddressAutocomplete from "./shared/AddressAutocomplete";
+import {
+  formatPostalCode,
+  isCityField,
+  isPostalCodeField,
+  isStreetAddressField,
+} from "@/lib/addressFields";
 
 interface DealDetailProps {
   deal: Deal;
@@ -262,6 +269,43 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
       showToast(err?.message ?? "Failed to save lock box code", "error");
     } finally {
       setSavingLockbox(false);
+    }
+  };
+
+  // Internal file note (deals.admin_note) — same value as the Notes column on
+  // All Files. Mirrored across the family by the PATCH route.
+  const initialAdminNote = (rawDeal?.admin_note as string | null | undefined) ?? "";
+  const [adminNoteValue, setAdminNoteValue] = useState<string>(initialAdminNote);
+  const [adminNoteDraft, setAdminNoteDraft] = useState<string>(initialAdminNote);
+  const [savingAdminNote, setSavingAdminNote] = useState(false);
+  useEffect(() => {
+    const v = (rawDeal?.admin_note as string | null | undefined) ?? "";
+    setAdminNoteValue(v);
+    setAdminNoteDraft(v);
+  }, [rawDeal?.admin_note]);
+  const adminNoteDirty =
+    adminNoteDraft.trim() !== (adminNoteValue ?? "").trim();
+  const saveAdminNote = async () => {
+    const next = adminNoteDraft.trim();
+    if (!adminNoteDirty) return;
+    setSavingAdminNote(true);
+    try {
+      const res = await fetch(`/api/admin/deals/${deal.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        // An emptied box clears the column rather than storing "".
+        body: JSON.stringify({ admin_note: next || null }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success)
+        throw new Error(data.error || "Failed to save note");
+      setAdminNoteValue(next);
+      showToast(next ? "Note saved" : "Note cleared");
+      void onDealChanged?.();
+    } catch (err: any) {
+      showToast(err?.message ?? "Failed to save note", "error");
+    } finally {
+      setSavingAdminNote(false);
     }
   };
 
@@ -791,10 +835,12 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
     // open the single-party drawer for THAT person — same design as the customer
     // portal — instead of a multi-party accordion. Scoped to the row's owner so
     // uploads/answers land on the right person.
+    // Personal Info opens it on single-person files too, so the task always
+    // shows the clean form instead of the generic Edit Task fields.
     if (
       !task.isTemplate &&
-      familyMemberCount > 1 &&
-      (isIdentificationTask(task) || isPersonalInfoTask(task))
+      (isPersonalInfoTask(task) ||
+        (familyMemberCount > 1 && isIdentificationTask(task)))
     ) {
       const ownerLead = (task.ownerLeadId as string | null) ?? primaryLeadId;
       if (isIdentificationTask(task)) {
@@ -1062,6 +1108,24 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
     }
   };
 
+  // A Google Places pick also fills the City / Postal Code siblings, found by
+  // label. Skips components Google omits, so nothing already typed is blanked.
+  const applyAddressSelection = (
+    streetField: TaskFormField,
+    address: { street: string; city: string; postalCode: string },
+  ) => {
+    setFieldValue(streetField, address.street);
+
+    const textFields = editTaskFormFields.filter((f) => f.field_type === "text");
+    const cityField = textFields.find((f) => isCityField(f.label));
+    const postalField = textFields.find((f) => isPostalCodeField(f.label));
+
+    if (cityField && address.city) setFieldValue(cityField, address.city);
+    if (postalField && address.postalCode) {
+      setFieldValue(postalField, formatPostalAsTyped(address.postalCode));
+    }
+  };
+
   // Auto-format a North American phone number as the admin types so the
   // input mirrors the placeholder shape (e.g. "(416) 555-1234"). Strips
   // everything non-numeric, caps at 10 digits, and re-inserts punctuation
@@ -1075,33 +1139,12 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
     return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
   };
 
-  // Postal code fields (Canadian) are detected by label, not field_type.
-  // The template lists postal as a plain `text` field with label like
-  // "Postal Code" / "Zip Code".
-  const isPostalField = (field: TaskFormField): boolean => {
-    return /postal|zip/.test(field.label.toLowerCase());
-  };
+  // Postal fields are detected by label, not field_type — the template lists
+  // postal as a plain `text` field.
+  const isPostalField = (field: TaskFormField): boolean =>
+    isPostalCodeField(field.label);
 
-  // Auto-format a Canadian postal code (A1A 1A1) as the admin types:
-  // uppercases, drops chars in the wrong position-class (letter vs digit),
-  // inserts the space after the 3rd char. Accepts an already-formatted
-  // value as a no-op. Caps at 6 alphanumerics.
-  const formatPostalAsTyped = (raw: string): string => {
-    const positions = ["L", "D", "L", "D", "L", "D"] as const;
-    const chars = raw.toUpperCase().split("");
-    const valid: string[] = [];
-    for (const c of chars) {
-      if (valid.length >= 6) break;
-      if (!/[A-Z0-9]/.test(c)) continue;
-      const expected = positions[valid.length];
-      if ((expected === "L" && /[A-Z]/.test(c)) || (expected === "D" && /[0-9]/.test(c))) {
-        valid.push(c);
-      }
-      // else: silently skip — user typed a letter in a digit slot or vice versa
-    }
-    if (valid.length <= 3) return valid.join("");
-    return `${valid.slice(0, 3).join("")} ${valid.slice(3).join("")}`;
-  };
+  const formatPostalAsTyped = formatPostalCode;
 
   // Parse the `options` jsonb on a select field into an array of {value,label}.
   // Tolerates either ["A","B"] or [{value, label}] shapes.
@@ -5333,6 +5376,43 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
           </div>
         </div>
       </div>
+      {/* Notes — deals.admin_note, the same note the All Files list shows. */}
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mt-8">
+        <div className="flex items-center justify-between gap-3 mb-2">
+          <h3 className="font-bold text-slate-800 text-sm">Notes</h3>
+          <span className="text-[11px] text-slate-400">
+            {adminNoteDraft.trim().length}/500
+          </span>
+        </div>
+        <p className="text-xs text-slate-500 mb-3">Internal only</p>
+        <textarea
+          value={adminNoteDraft}
+          onChange={(e) => setAdminNoteDraft(e.target.value)}
+          maxLength={500}
+          rows={3}
+          placeholder="e.g. Waiting on lender commitment — closing moved to the 30th"
+          className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg resize-none focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] bg-white"
+        />
+        {adminNoteDirty && (
+          <div className="flex items-center justify-end gap-2 mt-2">
+            <button
+              onClick={() => setAdminNoteDraft(adminNoteValue)}
+              disabled={savingAdminNote}
+              className="px-3 py-1.5 text-xs font-semibold text-slate-600 border border-slate-200 rounded-md hover:bg-slate-50 disabled:opacity-60"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={saveAdminNote}
+              disabled={savingAdminNote}
+              className="px-3 py-1.5 text-xs font-semibold text-white bg-[#C10007] rounded-md hover:bg-[#a30006] disabled:opacity-60 whitespace-nowrap"
+            >
+              {savingAdminNote ? "Saving…" : "Save note"}
+            </button>
+          </div>
+        )}
+      </div>
+
       {showStageForm && (
         <div
           role="dialog"
@@ -6740,6 +6820,32 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                               const isPhone =
                                 field.field_type === "phone" || labelMentionsPhone;
                               const isPostal = isPostalField(field);
+                              // Street Address gets Google Places suggestions.
+                              if (
+                                field.field_type === "text" &&
+                                isStreetAddressField(field.label)
+                              ) {
+                                return (
+                                  <div className="mt-2">
+                                    <AddressAutocomplete
+                                      value={currentValue}
+                                      onChange={(v) => setFieldValue(field, v)}
+                                      onSelect={(address) =>
+                                        applyAddressSelection(field, address)
+                                      }
+                                      placeholder={field.placeholder ?? "123 Main Street"}
+                                      hasError={Boolean(editTaskFieldErrors[field.id])}
+                                      // Mailing address, not the property — allow all of Canada.
+                                      restrictToOntario={false}
+                                      inputClassName={`w-full pl-9 pr-4 py-3 text-sm border rounded-lg bg-white focus:outline-none focus:border-[#C10007] focus:ring-1 focus:ring-[#C10007] ${
+                                        editTaskFieldErrors[field.id]
+                                          ? "border-[#C10007]"
+                                          : "border-gray-200"
+                                      }`}
+                                    />
+                                  </div>
+                                );
+                              }
                               const formatter = isPhone
                                 ? formatPhoneAsTyped
                                 : isPostal
