@@ -359,9 +359,8 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
     if (errors[field.id]) setErrors((prev) => ({ ...prev, [field.id]: "" }));
   }
 
-  // Google Places pick on the Street Address field also fills the City and
-  // Postal Code fields beside it (found by label, as in the portal). Google
-  // omits components it doesn't have — never blank what was already typed.
+  // A Google Places pick also fills the City / Postal Code siblings, found by
+  // label. Skips components Google omits, so nothing already typed is blanked.
   function applyAddressSelection(
     streetField: FormField,
     address: { street: string; city: string; postalCode: string },
@@ -719,9 +718,7 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
 
               const isMailForwardingStart =
                 (field.label || "").trim().toLowerCase() === "street address";
-              // Street Address gets Google Places suggestions — picking one
-              // also fills the City / Postal Code fields beside it, the same
-              // behaviour the client sees in the portal.
+              // Street Address gets Google Places suggestions.
               const isStreet =
                 field.field_type === "text" && isStreetAddressField(field.label);
               return (

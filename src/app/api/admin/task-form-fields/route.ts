@@ -10,10 +10,8 @@ import supabaseAdmin from "@/lib/supabaseAdmin";
  * filled or empty — letting admins complete or correct submissions on
  * behalf of the user.
  *
- * `note` fields are excluded: they are read-only explanatory blurbs shown
- * to the client in the portal (e.g. "Understanding Joint Tenants vs Tenants
- * in Common"). They collect no answer, so on the admin side they would
- * render as stray empty inputs.
+ * `note` fields are excluded — they collect no answer, so on the admin side
+ * they would render as stray empty inputs.
  */
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);

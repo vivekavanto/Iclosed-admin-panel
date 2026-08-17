@@ -3,15 +3,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { MapPin, Loader2 } from "lucide-react";
 
-/**
- * Google Places address input. Ported from the customer portal
- * (`src/components/intake/AddressAutocomplete.tsx` in `iclosed-customer-application`)
- * so an admin filling a form on a client's behalf gets the same suggestions —
- * and the same parsed Street / City / Postal Code — the client sees.
- *
- * Needs NEXT_PUBLIC_GOOGLE_PLACES_API_KEY. Without it the input still works as
- * a plain text box; only the suggestions are lost.
- */
+// Google Places address input, ported from the customer portal. Needs
+// NEXT_PUBLIC_GOOGLE_PLACES_API_KEY; without it this is a plain text box.
 
 interface SelectedAddress {
   street: string;

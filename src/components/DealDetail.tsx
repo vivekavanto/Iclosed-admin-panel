@@ -1108,11 +1108,8 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
     }
   };
 
-  // Fill the City / Postal Code fields that sit alongside a Street Address
-  // field when the admin picks a Google Places suggestion. Siblings are found
-  // by label (they are plain `text` rows in task_form_fields), matching how
-  // the customer portal wires the same three fields together. Google omits
-  // components it doesn't have — never blank a value the admin already typed.
+  // A Google Places pick also fills the City / Postal Code siblings, found by
+  // label. Skips components Google omits, so nothing already typed is blanked.
   const applyAddressSelection = (
     streetField: TaskFormField,
     address: { street: string; city: string; postalCode: string },
@@ -6823,9 +6820,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                               const isPhone =
                                 field.field_type === "phone" || labelMentionsPhone;
                               const isPostal = isPostalField(field);
-                              // Street Address gets Google Places suggestions —
-                              // picking one also fills City / Postal Code, the
-                              // same behaviour the client sees in the portal.
+                              // Street Address gets Google Places suggestions.
                               if (
                                 field.field_type === "text" &&
                                 isStreetAddressField(field.label)
