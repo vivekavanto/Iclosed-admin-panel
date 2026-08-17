@@ -279,6 +279,22 @@ async function dispatchAlert(
     deal.property_address ||
     deal.selling_property_address ||
     "";
+  // Street line only — "2615 Ellesmere Road", not the full
+  // "2615 Ellesmere Road, Toronto, ON, M1H 2S6". Subject lines truncate in an
+  // inbox list, so the part that identifies the file has to come first.
+  //
+  // Derived from the SAME joined strings rather than read off the lead columns,
+  // so it inherits buildLeadAddressPartsForEmail's family-side fallbacks (a
+  // co-lead holding the sale side, etc). joinAddress there glues street, city,
+  // province and postal with ", ", so the first segment is the street.
+  const streetOf = (joined: string) => (joined.split(",")[0] ?? "").trim();
+  const propertyStreet =
+    [streetOf(addressParts.purchase), streetOf(addressParts.selling)]
+      .filter(Boolean)
+      .join(" and ") ||
+    streetOf(deal.property_address ?? "") ||
+    streetOf(deal.selling_property_address ?? "") ||
+    "";
   // "Purchase of 12 King St, Toronto, ON" / "Purchase of X and Sale of Y".
   const transaction =
     renderTransactionPhrase(addressParts, leadTypeLabel) ||
@@ -366,6 +382,7 @@ async function dispatchAlert(
     party_summary: partySummary,
     transaction,
     property_address: propertyAddress,
+    property_street: propertyStreet,
     closing_date: closingDate,
     file_number: fileNumber,
     lead_type: leadTypeLabel,

@@ -266,6 +266,9 @@ export interface Database {
           // send time (see src/lib/agentCc.ts). Applies only to templates with
           // shared_with_agent = true; never to auth emails.
           cc_emails: string[];
+          // Internal "where is this file at" note, typed on the All Files list.
+          // Admin-only: never rendered to the client or read by a template.
+          admin_note: string | null;
         };
         Insert: {
           id?: string;
@@ -294,6 +297,7 @@ export interface Database {
           source?: string | null;
           partner_id?: string | null;
           cc_emails?: string[];
+          admin_note?: string | null;
         };
         Update: {
           id?: string;
@@ -322,6 +326,7 @@ export interface Database {
           source?: string | null;
           partner_id?: string | null;
           cc_emails?: string[];
+          admin_note?: string | null;
         };
         Relationships: [
           {

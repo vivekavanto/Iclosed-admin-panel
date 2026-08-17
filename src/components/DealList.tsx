@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { Deal, DealType, DealStatus } from '../types';
@@ -116,10 +116,34 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   // list API only returns the Steps count, not the task titles, so we lazy-fetch
   // the deal's tasks from /api/admin/tasks the first time a row is expanded and
   // cache them in pendingTasks keyed by deal id.
+  //
+  // Once a file has NO pending tasks the panel switches to the next incomplete
+  // milestones (Title Search, Mortgage Instructions, …) — "what's next on this
+  // file" is the question the panel is really answering, and an empty task list
+  // stops answering it. Those are fetched only in that case.
   const [expandedDealId, setExpandedDealId] = useState<string | null>(null);
   const [pendingTasks, setPendingTasks] = useState<
-    Record<string, { loading: boolean; error: boolean; tasks: { id: string; title: string; status: string }[] }>
+    Record<
+      string,
+      {
+        loading: boolean;
+        error: boolean;
+        tasks: { id: string; title: string; status: string }[];
+        nextMilestones: { id: string; title: string; status: string; leadType: string | null }[];
+      }
+    >
   >({});
+
+  // ── Inline file note ───────────────────────────────────────────────────────
+  // Which row's note is being edited, its draft text, and the in-flight save.
+  const [noteEditId, setNoteEditId] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState('');
+  const [noteSavingId, setNoteSavingId] = useState<string | null>(null);
+  const [noteError, setNoteError] = useState<string | null>(null);
+  // Enter and Escape have already decided the outcome; the blur that follows
+  // (the input unmounts) must not save again — or, after Escape, save the
+  // text the admin just abandoned.
+  const noteSkipBlurRef = useRef(false);
 
   // ── Referral agent (partner) linking ───────────────────────────────────────
   // Intake was the only place that could originally attach an agent, so a file
@@ -218,34 +242,133 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
     }
   }, []);
 
+  // Loads what the panel shows for one file: the open tasks exactly as the file
+  // page lists them, or — when none are open — the next incomplete milestones.
+  const loadFileProgress = useCallback(async (dealId: string) => {
+    // The handful of fields the panel reads off each API row.
+    type TaskRow = {
+      id: string;
+      title: string | null;
+      status: string | null;
+      role_type: string | null;
+      order_index: number | null;
+      owner_name?: string | null;
+    };
+    type MilestoneRow = {
+      id: string;
+      title: string | null;
+      status: string | null;
+      stage_templates?: { lead_type: string | null } | null;
+    };
+    try {
+      // include_family=1 returns the same rows the deal page renders: the
+      // primary's shared tasks plus EVERY person's personal tasks, each
+      // annotated with its owner. Without it the panel shows one collapsed
+      // "Personal Information" for a 3-person file instead of one per person.
+      // Every row in this list is a primary deal (co-client rows are filtered
+      // out), which is exactly where the family view applies.
+      const res = await fetch(`/api/admin/tasks?deal_id=${dealId}&include_family=1`);
+      if (!res.ok) throw new Error('Failed to load tasks');
+      const data: TaskRow[] = await res.json();
+
+      // "Pending" = not Completed (matches the Steps count's open remainder).
+      // Admin-role rows are the office's own records, not client steps — the
+      // Steps count excludes them, so the panel must too or the two disagree.
+      const pending = (data || [])
+        .filter((t) => (t?.role_type ?? '').toLowerCase() !== 'admin')
+        .filter((t) => t?.status !== 'Completed')
+        // order_index is the file's own task sequence, so the chips read in the
+        // same order as the deal page's Tasks table. Unordered rows fall last.
+        .sort(
+          (a, b) =>
+            (a?.order_index ?? Number.MAX_SAFE_INTEGER) -
+            (b?.order_index ?? Number.MAX_SAFE_INTEGER),
+        )
+        .map((t) => {
+          // The owner name is rendered, never stored on the title — same as the
+          // deal page's "<task> - <name>".
+          const base = t.title?.trim() || 'Untitled task';
+          const owner = (t.owner_name ?? '').trim();
+          return {
+            id: String(t.id),
+            title: owner ? `${base} - ${owner}` : base,
+            status: t.status || 'Pending',
+          };
+        });
+
+      let nextMilestones: { id: string; title: string; status: string; leadType: string | null }[] = [];
+      if (pending.length === 0) {
+        // Milestones are already ordered by order_index (the canonical stage
+        // sequence) by the API, so the first three open ones ARE the next three.
+        // Family milestones mirror by stage, so the primary's rows speak for the
+        // whole file.
+        const msRes = await fetch(`/api/admin/milestones?deal_id=${dealId}`);
+        if (msRes.ok) {
+          const ms: MilestoneRow[] = await msRes.json();
+          nextMilestones = (ms || [])
+            .filter((m) => m?.status !== 'Completed')
+            .slice(0, 3)
+            .map((m) => ({
+              id: String(m.id),
+              title: m.title?.trim() || 'Untitled milestone',
+              status: m.status || 'Pending',
+              leadType: m.stage_templates?.lead_type ?? null,
+            }));
+        }
+      }
+
+      setPendingTasks((p) => ({
+        ...p,
+        [dealId]: { loading: false, error: false, tasks: pending, nextMilestones },
+      }));
+    } catch {
+      setPendingTasks((p) => ({
+        ...p,
+        [dealId]: { loading: false, error: true, tasks: [], nextMilestones: [] },
+      }));
+    }
+  }, []);
+
   const togglePendingTasks = useCallback((dealId: string) => {
     setExpandedDealId((prev) => (prev === dealId ? null : dealId));
     // Fetch once per deal, then serve from cache on subsequent expands.
     setPendingTasks((prev) => {
       if (prev[dealId]) return prev;
-      // Kick off the fetch (outside the state update is impossible here without
-      // a ref, so we mark loading and fire the request in a microtask).
-      fetch(`/api/admin/tasks?deal_id=${dealId}`)
-        .then((res) => {
-          if (!res.ok) throw new Error('Failed to load tasks');
-          return res.json();
-        })
-        .then((data: any[]) => {
-          // "Pending" = not Completed (matches the Steps count's open remainder).
-          const pending = (data || [])
-            .filter((t) => t?.status !== 'Completed')
-            .map((t) => ({
-              id: String(t.id),
-              title: t.title?.trim() || 'Untitled task',
-              status: t.status || 'Pending',
-            }));
-          setPendingTasks((p) => ({ ...p, [dealId]: { loading: false, error: false, tasks: pending } }));
-        })
-        .catch(() => {
-          setPendingTasks((p) => ({ ...p, [dealId]: { loading: false, error: true, tasks: [] } }));
-        });
-      return { ...prev, [dealId]: { loading: true, error: false, tasks: [] } };
+      loadFileProgress(dealId);
+      return { ...prev, [dealId]: { loading: true, error: false, tasks: [], nextMilestones: [] } };
     });
+  }, [loadFileProgress]);
+
+  // Save the inline file note. The server mirrors admin_note across the
+  // co-purchaser/co-seller family (one file, one note), so the row this list
+  // shows — always the primary — is the only one that needs patching here.
+  // A no-op edit skips the request entirely.
+  const saveNote = useCallback(async (deal: Deal, text: string) => {
+    const next = text.trim().slice(0, 500);
+    const current = ((deal as Deal & { adminNote?: string | null }).adminNote ?? '').trim();
+    setNoteEditId(null);
+    if (next === current) return;
+
+    setNoteSavingId(deal.id);
+    setNoteError(null);
+    try {
+      const res = await fetch(`/api/admin/deals/${deal.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ admin_note: next || null }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.error || 'Failed to save the note.');
+      }
+      setDeals((prev) =>
+        prev.map((d) => (d.id === deal.id ? ({ ...d, adminNote: next || null } as Deal) : d)),
+      );
+    } catch (err) {
+      setNoteError(err instanceof Error ? err.message : 'Failed to save the note.');
+    } finally {
+      setNoteSavingId(null);
+    }
   }, []);
 
   const fetchDeals = useCallback(() => {
@@ -290,6 +413,8 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           // Linking an agent applies to everyone on the file, so the list needs
           // the lead id to find the sibling rows and patch them too.
           leadId: d.lead_id ?? null,
+          // Internal, admin-only "where is this file at" note (Notes column).
+          adminNote: d.admin_note ?? null,
         } as Deal & {
           authUserId: string | null;
           isCoPurchaser: boolean;
@@ -314,6 +439,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           referralAgentName: string | null;
           referralAgentCompany: string | null;
           leadId: string | null;
+          adminNote: string | null;
         }));
         setDeals(mapped);
       })
@@ -427,6 +553,9 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
         // Family / flag labels so "co-purchaser", "co-seller", "flagged"
         // surface the rows that have those badges.
         flagsStr,
+        // The admin's own note, so "waiting on lender" finds every file the
+        // admin marked that way — the main reason to keep notes in a column.
+        d.adminNote ?? '',
       ]
         .filter(Boolean)
         .join(' ')
@@ -837,6 +966,26 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
         </div>
       )}
 
+      {/* A failed note save. Surfaced here (not in the cell) because the edit
+          box is already closed by then — silently dropping the text would look
+          like it saved. */}
+      {noteError && (
+        <div className="px-4 sm:px-6 pb-3">
+          <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg border text-sm font-medium bg-red-50 border-red-200 text-red-700">
+            <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" />
+            <span className="flex-1">{noteError}</span>
+            <button
+              type="button"
+              onClick={() => setNoteError(null)}
+              className="text-xl leading-none font-bold opacity-40 hover:opacity-100"
+              aria-label="Dismiss"
+            >
+              &times;
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="overflow-x-auto">
         {/* Responsive table (priority: responsiveness at every width):
             - table-fixed + the colgroup percentages below keep the columns
@@ -856,16 +1005,17 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
               so the column collapses). Visible widths sum to 100%. */}
           <colgroup>
             <col style={{ width: '4%' }} />{/* Row number */}
-            <col style={{ width: '8%' }} />{/* Account status */}
-            <col style={{ width: '7%' }} />{/* File No. */}
-            <col style={{ width: '13%' }} />{/* Client Name */}
-            <col style={{ width: '13%' }} />{/* Address */}
+            <col style={{ width: '7%' }} />{/* Account status */}
+            <col style={{ width: '6%' }} />{/* File No. */}
+            <col style={{ width: '12%' }} />{/* Client Name */}
+            <col style={{ width: '11%' }} />{/* Address */}
             <col style={{ width: '8%' }} />{/* Closing date */}
-            <col style={{ width: '11%' }} />{/* Progress */}
+            <col style={{ width: '10%' }} />{/* Progress */}
             <col style={{ width: '6%' }} />{/* Lawyer */}
             <col style={{ width: '6%' }} />{/* Clerk */}
-            <col style={{ width: '9%' }} />{/* Agent */}
-            <col style={{ width: '8%' }} />{/* Account created */}
+            <col style={{ width: '8%' }} />{/* Agent */}
+            <col style={{ width: '7%' }} />{/* Account created */}
+            <col style={{ width: '8%' }} />{/* Notes */}
             <col style={{ width: '0%' }} />{/* Requisition date (hidden) */}
             <col style={{ width: '0%' }} />{/* File name (hidden) */}
             <col style={{ width: '7%' }} />{/* Actions */}
@@ -896,6 +1046,8 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
               <th className="px-2 py-1.5">Clerk</th>
               <th className="px-2 py-1.5">Agent</th>
               <th className="px-2 py-1.5">Account created</th>
+              {/* Free-text status the admin keeps by hand — see the cell below. */}
+              <th className="px-2 py-1.5">Notes</th>
               {/* Requisition date column hidden per request — kept (not deleted) to avoid breaking anything. */}
               <th className="px-2 py-1.5 hidden">Requisition date</th>
               {/* File name column hidden per request — kept (not deleted) to avoid breaking anything. */}
@@ -1134,6 +1286,71 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       <span className="text-slate-300" title="Client has not signed up yet">—</span>
                     )}
                   </td>
+                  {/* Notes — where the file is at, in the admin's own words.
+                      Click to edit in place: Enter or blur saves, Escape
+                      cancels. Clicking must not open the file, hence
+                      stopPropagation on the row's onClick. */}
+                  <td className="px-2 py-1.5">
+                    {(() => {
+                      const note =
+                        (deal as Deal & { adminNote?: string | null }).adminNote ?? '';
+                      if (noteEditId === deal.id) {
+                        return (
+                          <input
+                            autoFocus
+                            value={noteDraft}
+                            maxLength={500}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => setNoteDraft(e.target.value)}
+                            onBlur={() => {
+                              if (noteSkipBlurRef.current) {
+                                noteSkipBlurRef.current = false;
+                                return;
+                              }
+                              saveNote(deal, noteDraft);
+                            }}
+                            onKeyDown={(e) => {
+                              e.stopPropagation();
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                noteSkipBlurRef.current = true;
+                                saveNote(deal, noteDraft);
+                              } else if (e.key === 'Escape') {
+                                e.preventDefault();
+                                noteSkipBlurRef.current = true;
+                                setNoteEditId(null);
+                              }
+                            }}
+                            placeholder="e.g. waiting on lender"
+                            className="w-full rounded border border-brand-primary/60 px-1.5 py-0.5 text-[11px] text-slate-700 outline-none focus:ring-1 focus:ring-brand-primary/40"
+                          />
+                        );
+                      }
+                      return (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setNoteError(null);
+                            setNoteDraft(note);
+                            setNoteEditId(deal.id);
+                          }}
+                          disabled={noteSavingId === deal.id}
+                          title={note ? `${note} — click to edit` : 'Add a note on where this file is at'}
+                          className={`inline-flex max-w-full items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-left transition-colors ${
+                            note
+                              ? 'text-slate-700 hover:bg-brand-light/40 hover:text-brand-primary'
+                              : 'text-slate-300 hover:bg-brand-light/40 hover:text-brand-primary'
+                          }`}
+                        >
+                          {noteSavingId === deal.id ? (
+                            <Loader2 size={12} className="animate-spin flex-shrink-0" />
+                          ) : null}
+                          <span className="truncate">{note || 'Add note'}</span>
+                        </button>
+                      );
+                    })()}
+                  </td>
                   {/* Requisition date column hidden per request — kept (not deleted). */}
                   <td className="px-2 py-1.5 hidden">{formatDate(deal.requisitionDate)}</td>
                   {/* File name column hidden per request — kept (not deleted). */}
@@ -1182,7 +1399,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                 </tr>
                 {expandedDealId === deal.id && (
                   <tr className="bg-brand-light/10 border-b border-slate-100">
-                    <td colSpan={14} className="px-2 py-1.5">
+                    <td colSpan={15} className="px-2 py-1.5">
                       {(() => {
                         const entry = pendingTasks[deal.id];
                         if (!entry || entry.loading) {
@@ -1191,8 +1408,48 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                         if (entry.error) {
                           return <span className="text-xs text-red-500">Failed to load pending tasks.</span>;
                         }
+                        // Every task done → the panel answers "what's next?"
+                        // with the next incomplete milestones instead.
                         if (entry.tasks.length === 0) {
-                          return <span className="text-xs text-green-600 font-medium">✓ No pending tasks — all steps completed.</span>;
+                          if (entry.nextMilestones.length === 0) {
+                            return (
+                              <span className="text-xs text-green-600 font-medium">
+                                ✓ All tasks and milestones completed.
+                              </span>
+                            );
+                          }
+                          return (
+                            <div className="flex flex-col gap-2">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                                <span className="text-green-600">✓ All tasks completed</span>
+                                {' · '}next milestone{entry.nextMilestones.length > 1 ? 's' : ''} for {deal.fileNumber || 'this file'}
+                              </span>
+                              <div className="flex flex-wrap gap-1.5">
+                                {entry.nextMilestones.map((m, i) => (
+                                  <span
+                                    key={m.id}
+                                    className="inline-flex items-center gap-1.5 bg-white border border-slate-200 rounded-full px-2.5 py-1 text-[11px] text-slate-700"
+                                    title={m.status}
+                                  >
+                                    <span className="text-[9px] font-bold text-slate-400">{i + 1}</span>
+                                    {/* A Purchase & Sale file carries both sides'
+                                        stages, so name the side or the sequence
+                                        reads as one confused list. */}
+                                    {isCombined && m.leadType && (
+                                      <span
+                                        className={`text-[9px] font-black uppercase tracking-widest ${
+                                          m.leadType.toLowerCase() === 'sale' ? 'text-orange-600' : 'text-blue-600'
+                                        }`}
+                                      >
+                                        {m.leadType}
+                                      </span>
+                                    )}
+                                    {m.title}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          );
                         }
                         return (
                           <div className="flex flex-col gap-2">
@@ -1220,7 +1477,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                 </React.Fragment>
               );
             }) : (
-              <tr><td colSpan={14} className="px-6 py-12 text-center text-slate-500"><p>No files found.</p></td></tr>
+              <tr><td colSpan={15} className="px-6 py-12 text-center text-slate-500"><p>No files found.</p></td></tr>
             )}
           </tbody>
         </table>

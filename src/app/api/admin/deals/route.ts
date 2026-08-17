@@ -38,7 +38,7 @@ async function getAuthSignInMap(): Promise<Map<string, string>> {
 export async function GET() {
   const { data, error } = await supabase
     .from("deals")
-    .select("*, tasks(id, status, is_deleted, role_type), leads(id, parent_lead_id, first_name, last_name, email, co_person_role, address_street, address_unit, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code, clients(id, auth_user_id, citizenship_status))")
+    .select("*, tasks(id, status, is_deleted, role_type, is_shared), leads(id, parent_lead_id, is_deleted, first_name, last_name, email, co_person_role, address_street, address_unit, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code, clients(id, auth_user_id, citizenship_status))")
     .or("source.is.null,source.neq.bulk_import")
     .eq("is_deleted", false)
     .order("created_at", { ascending: false });
@@ -122,24 +122,67 @@ export async function GET() {
     }
   }
 
-  const result = deals.map((deal: any) => {
-    // Exclude soft-deleted tasks so the Steps count matches the deal-detail
-    // page, the customer portal, and the pending-tasks panel — all of which
-    // filter is_deleted=false. Without this, a soft-deleted (never-completed)
-    // task inflates totalTasks, so a fully-completed file shows e.g. 9/11.
-    //
-    // Admin-role rows are excluded for the same reason: they are the office's
-    // own records (the client's mirrored closing-cost estimate among them), not
-    // steps the client has to work through, and counting them as a finished
-    // step would flatter every file's progress.
-    const tasks = (deal.tasks ?? []).filter(
-      (t: any) => !t.is_deleted && (t.role_type ?? "").toLowerCase() !== "admin",
-    );
-    const totalTasks = tasks.length;
-    const completedTasks = tasks.filter((t: any) => t.status === "Completed").length;
-    const lead = deal.leads as any;
+  // Every deal in a co-purchaser/co-seller family, keyed by the family's ROOT
+  // lead id, so a primary row can count the whole file's tasks (below) rather
+  // than only its own person's.
+  const familyDealsByRootLead = new Map<string, any[]>();
+  for (const deal of deals) {
+    const lead = (deal as any).leads as any;
+    const rootLeadId = lead?.parent_lead_id ?? lead?.id;
+    if (!rootLeadId) continue;
+    // Skip a co-client whose lead was soft-deleted: getFamilyDealIds (which the
+    // tasks API uses) drops them, so counting their tasks here would put the
+    // Steps count above what the panel and the deal page list.
+    if (lead?.is_deleted) continue;
+    const arr = familyDealsByRootLead.get(rootLeadId) ?? [];
+    arr.push(deal);
+    familyDealsByRootLead.set(rootLeadId, arr);
+  }
 
+  // Exclude soft-deleted tasks so the Steps count matches the deal-detail
+  // page, the customer portal, and the pending-tasks panel — all of which
+  // filter is_deleted=false. Without this, a soft-deleted (never-completed)
+  // task inflates totalTasks, so a fully-completed file shows e.g. 9/11.
+  //
+  // Admin-role rows are excluded for the same reason: they are the office's
+  // own records (the client's mirrored closing-cost estimate among them), not
+  // steps the client has to work through, and counting them as a finished
+  // step would flatter every file's progress.
+  const isCountableTask = (t: any) =>
+    !t.is_deleted && (t.role_type ?? "").toLowerCase() !== "admin";
+
+  const result = deals.map((deal: any) => {
+    const lead = deal.leads as any;
     const isCoPurchaser = !!lead?.parent_lead_id;
+
+    // Steps count a FILE, not a person. The list hides co-client rows, so the
+    // primary's count has to span the family — otherwise a 3-person file whose
+    // 9 tasks the deal page lists reads as 1/5 here (one collapsed set).
+    //
+    // The counted set mirrors /api/admin/tasks?include_family=1 exactly, which
+    // is what the deal page and the pending-tasks panel render: the primary's
+    // SHARED tasks once (they are mirrored onto every family deal, so counting
+    // each copy would multiply them) plus EVERY person's personal tasks.
+    // A single-person file reduces to "all of its own tasks" — unchanged.
+    const familyDeals =
+      !isCoPurchaser && lead?.id
+        ? familyDealsByRootLead.get(lead.id) ?? [deal]
+        : [deal];
+    const countedTasks = [
+      ...((deal.tasks ?? []) as any[]).filter(
+        (t) => isCountableTask(t) && t.is_shared === true,
+      ),
+      ...familyDeals.flatMap((d: any) =>
+        ((d.tasks ?? []) as any[]).filter(
+          (t) => isCountableTask(t) && t.is_shared !== true,
+        ),
+      ),
+    ];
+    const totalTasks = countedTasks.length;
+    const completedTasks = countedTasks.filter(
+      (t: any) => t.status === "Completed",
+    ).length;
+
     const hasCoPurchasers = lead ? primaryLeadIds.has(lead.id) : false;
 
     const { tasks: _tasks, leads: _leads, ...rest } = deal;

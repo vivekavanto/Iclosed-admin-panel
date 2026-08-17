@@ -35,6 +35,7 @@ const EMAIL_VARIABLES = [
   { key: "{{ email }}", description: "Client's email address" },
   { key: "{{ lead_address }}", description: "Formatted address string" },
   { key: "{{ property_address }}", description: "Short alias for formatted address" },
+  { key: "{{ property_street }}", description: "Street line only, no city/postal (All Tasks Completed alert)" },
   { key: "{{ lockbox_code }}", description: "Property lock box code (Purchase files)" },
   { key: "{{ lead.lockbox_code }}", description: "Property lock box code (namespaced form)" },
   { key: "{{ lead.address_line1 }}", description: "Address line 1" },

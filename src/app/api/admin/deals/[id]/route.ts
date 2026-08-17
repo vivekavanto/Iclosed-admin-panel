@@ -420,6 +420,10 @@ const EDITABLE_DEAL_COLUMNS = new Set([
   // referral partner's own contacts. A file-level property, so it mirrors
   // across the family below — one file, one CC list.
   "cc_emails",
+  // Internal free-text note on where the file is at, typed inline on the All
+  // Files list. Never shown to the client and not readable from any email
+  // template. File-level, so it mirrors across the family below.
+  "admin_note",
 ]);
 
 const ALLOWED_TYPES = new Set([
@@ -455,7 +459,12 @@ const MIRROR_DEAL_COLUMNS = new Set([
   "outstanding_undertakings",
   "outstanding_requisitions",
   "cc_emails",
+  "admin_note",
 ]);
+
+// Cap the note at the API rather than the column type, so an existing longer
+// value can never block an unrelated edit to the same deal.
+const ADMIN_NOTE_MAX = 500;
 
 const DATE_COLUMNS = new Set([
   "closing_date",
@@ -502,6 +511,33 @@ export async function PATCH(
         { success: false, error: `Invalid status: ${value}` },
         { status: 400 },
       );
+    }
+    // admin_note: a blank note clears the column rather than storing "" — the
+    // list renders null and "" identically, and null keeps the "no note yet"
+    // state a single value.
+    if (key === "admin_note") {
+      if (value === null || value === undefined || value === "") {
+        updates[key] = null;
+        continue;
+      }
+      if (typeof value !== "string") {
+        return NextResponse.json(
+          { success: false, error: "admin_note must be a string" },
+          { status: 400 },
+        );
+      }
+      const trimmed = value.trim();
+      if (trimmed.length > ADMIN_NOTE_MAX) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `Note is too long (max ${ADMIN_NOTE_MAX} characters).`,
+          },
+          { status: 400 },
+        );
+      }
+      updates[key] = trimmed || null;
+      continue;
     }
     // cc_emails: validate and clean here rather than at send time. A bad
     // address makes Resend reject the WHOLE send, so it must never reach the

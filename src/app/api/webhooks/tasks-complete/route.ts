@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { maybeNotifyAllTasksComplete } from "@/lib/notifyAllTasksComplete";
 import { guardServiceRequest } from "@/lib/verifyServiceSignature";
 import { isUuid } from "@/lib/isUuid";
@@ -45,14 +45,27 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const result = await maybeNotifyAllTasksComplete(dealId);
-
-    return NextResponse.json({
-      success: true,
-      notified: result.notified,
-      reason: result.reason,
-      emailed_to: result.emailedTo ?? 0,
+    // Acknowledge first, alert after. The portal calls this from inside the
+    // client's own task submission, and the alert downloads the family's whole
+    // document package (up to 20MB) before Resend sends it — holding the client
+    // on a spinner for that, or worse having their request time out, is not
+    // acceptable. `after()` runs it once the response is flushed.
+    //
+    // The caller therefore learns only that the trigger was ACCEPTED, never
+    // whether an email went out. That is the right contract here: the decision
+    // ("is the family actually finished?") and the idempotency claim both live
+    // in maybeNotifyAllTasksComplete, which never throws and logs its own
+    // outcome. A caller that got `notified:false` could do nothing with it.
+    after(async () => {
+      const result = await maybeNotifyAllTasksComplete(dealId);
+      logger.info(
+        `[tasks-complete] deal=${dealId} notified=${result.notified}` +
+          `${result.reason ? ` reason=${result.reason}` : ""}` +
+          ` emailed=${result.emailedTo ?? 0}`,
+      );
     });
+
+    return NextResponse.json({ success: true, accepted: true });
   } catch (err: unknown) {
     logger.error("POST /api/webhooks/tasks-complete error:", err);
     // Don't leak internals to an unauthenticated caller.
