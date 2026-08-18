@@ -3771,55 +3771,88 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
           ? [row]
           : [];
       });
+      // ONE FOLDER PER TASK, not per milestone.
+      //
+      // On a family file the same task exists once per person (Personal
+      // Information, Identification), and the firm files those by task AND
+      // person — "Identification - Ravi Anand Maharajh", "Identification -
+      // Preetha Jayanthan". The old layout filed the primary's copy under a
+      // milestone folder and everyone else's under a folder named after them, so
+      // two people's IDs landed in different places. Shared tasks (APS, Home
+      // Insurance…) keep the bare task title, and the "(Purchase)" /
+      // "(Co-Purchaser)" qualifier is gone: the whole ZIP is one file, so naming
+      // the side on every folder added nothing.
+      //
+      // Order follows the deal page — milestone order, then task order within a
+      // milestone — with each person's copy of a task kept together, primary
+      // first. A co-person's tasks hang off THEIR deal's milestones, so they
+      // never match one of the primary's milestone ids; they're matched to the
+      // primary's copy by task template instead and slotted in beside it.
       const milestoneOrder = (m: Milestone) => m.orderIndex ?? Number.MAX_SAFE_INTEGER;
       const orderedMilestones = [...milestones].sort((a, b) => milestoneOrder(a) - milestoneOrder(b));
-      const sections: PdfDealSection[] = [];
+      const taskOrder = (t: DisplayTask) => t.orderIndex ?? Number.MAX_SAFE_INTEGER;
+
+      const primaryTasks: DisplayTask[] = [];
       const usedTaskIds = new Set<string>();
       for (const m of orderedMilestones) {
         const milestoneTasks = realTasks
           .filter((t) => t.milestoneId === m.id)
-          .sort((a, b) => (a.orderIndex ?? Number.MAX_SAFE_INTEGER) - (b.orderIndex ?? Number.MAX_SAFE_INTEGER));
-        if (milestoneTasks.length === 0) continue;
-        milestoneTasks.forEach((t) => usedTaskIds.add(t.id));
-        const builtTasks = await Promise.all(
-          milestoneTasks.map((t) =>
-            buildPdfTaskInput(t, fresh ?? undefined, freshIdDocs ?? undefined),
-          ),
-        );
-        sections.push({
-          milestoneTitle: m.title,
-          leadType: m.leadType ?? null,
-          tasks: builtTasks,
-        });
-      }
-      // Tasks the milestone pass didn't claim. In the unified family view that's
-      // every co-client's personal task: their milestones live on THEIR deal row,
-      // so `t.milestoneId` never matches one of the primary's milestones loaded
-      // above. Lumping them under "Other Tasks" hid whose paperwork it was, so
-      // they're grouped per person and the section is titled with that person's
-      // name and role ("Pavithra Testing — Co-Purchaser"). Anything with no
-      // resolvable owner (a manually-added, unlinked task) keeps the old label.
-      const orphanTasks = realTasks.filter((t) => !usedTaskIds.has(t.id));
-      if (orphanTasks.length > 0) {
-        const byOwner = new Map<string, DisplayTask[]>();
-        for (const t of orphanTasks) {
-          const key = t.ownerDealId ?? "";
-          byOwner.set(key, [...(byOwner.get(key) ?? []), t]);
-        }
-        for (const [ownerDealId, ownerTasks] of byOwner) {
-          const person = ownerDealId ? familyPeople.find((p) => p.id === ownerDealId) : undefined;
-          const built = await Promise.all(
-            ownerTasks.map((t) =>
-              buildPdfTaskInput(t, fresh ?? undefined, freshIdDocs ?? undefined),
-            ),
-          );
-          sections.push({
-            milestoneTitle: person?.lead_name || "Other Tasks",
-            leadType: person?.role || null,
-            tasks: built,
-          });
+          .sort((a, b) => taskOrder(a) - taskOrder(b));
+        for (const t of milestoneTasks) {
+          primaryTasks.push(t);
+          usedTaskIds.add(t.id);
         }
       }
+
+      // What a task is a copy OF. Template id when there is one; the title
+      // otherwise, so a manually-added twin still pairs up.
+      const peerKey = (t: DisplayTask) =>
+        t.taskTemplateId ?? `title:${(t.title ?? "").toLowerCase().trim()}`;
+      // Family order (primary first) — familyPeople is already in that order.
+      const personRank = (t: DisplayTask) => {
+        const idx = familyPeople.findIndex((p) => p.id === t.ownerDealId);
+        return idx === -1 ? Number.MAX_SAFE_INTEGER : idx;
+      };
+
+      const primaryKeys = new Set(primaryTasks.map(peerKey));
+      const peersByKey = new Map<string, DisplayTask[]>();
+      const unmatched: DisplayTask[] = [];
+      for (const t of realTasks) {
+        if (usedTaskIds.has(t.id)) continue;
+        const key = peerKey(t);
+        if (primaryKeys.has(key)) peersByKey.set(key, [...(peersByKey.get(key) ?? []), t]);
+        else unmatched.push(t);
+      }
+      for (const list of peersByKey.values()) list.sort((a, b) => personRank(a) - personRank(b));
+      unmatched.sort((a, b) => personRank(a) - personRank(b) || taskOrder(a) - taskOrder(b));
+
+      const orderedTasks: DisplayTask[] = [];
+      for (const t of primaryTasks) {
+        orderedTasks.push(t);
+        orderedTasks.push(...(peersByKey.get(peerKey(t)) ?? []));
+      }
+      orderedTasks.push(...unmatched);
+
+      // How many people have a copy of each task. The person's name is added to
+      // the folder only when there IS more than one — that's what makes
+      // "Identification - Ravi Anand Maharajh" / "Identification - Preetha
+      // Jayanthan" a matched pair, while a task only one person carries stays
+      // plain ("Closing Cost Estimator"). Every FILE inside still carries the
+      // owner's name, so nothing is ambiguous once the folder is open.
+      const copies = new Map<string, number>();
+      for (const t of orderedTasks) copies.set(peerKey(t), (copies.get(peerKey(t)) ?? 0) + 1);
+
+      const sections: PdfDealSection[] = await Promise.all(
+        orderedTasks.map(async (t) => {
+          const built = await buildPdfTaskInput(t, fresh ?? undefined, freshIdDocs ?? undefined);
+          const nameIt = (copies.get(peerKey(t)) ?? 1) > 1 && !!built.ownerName;
+          return {
+            milestoneTitle: nameIt ? `${built.title} - ${built.ownerName}` : built.title,
+            leadType: null,
+            tasks: [built],
+          };
+        }),
+      );
       if (sections.length === 0) {
         showToast(
           tasks.length === 0
