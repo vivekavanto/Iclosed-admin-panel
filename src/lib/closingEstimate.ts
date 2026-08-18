@@ -90,6 +90,17 @@ export interface EstimateInputPayload {
   /** The client-facing document flavour — NOT the workflow status. */
   statement_type: StatementTypeKey | null;
   rate_overrides: RateOverrides;
+  /**
+   * Per-line ESTIMATE chips, from the "Is estimate" checkboxes.
+   *
+   * NULL means "not specified" and lets computeStatement fall back to the
+   * behaviour that predates the checkboxes, so an estimate saved before they
+   * existed reads back exactly as it was issued. See ClosingCostInputs.
+   */
+  title_premium_is_estimate: boolean | null;
+  teraview_is_estimate: boolean | null;
+  sheriff_is_estimate: boolean | null;
+  property_tax_is_estimate: boolean | null;
 }
 
 const MAX_AMOUNT = 1_000_000_000; // $1B — well past any residential purchase
@@ -242,6 +253,11 @@ export function parseEstimatePayload(
     }
   }
 
+  // A missing key is "not specified" (null), NOT false — a stale browser tab
+  // that predates the checkboxes must not silently strip every chip.
+  const flag = (raw: unknown): boolean | null =>
+    raw === undefined || raw === null ? null : raw === true;
+
   return {
     payload: {
       purchase_price: parsed.purchase_price,
@@ -260,6 +276,10 @@ export function parseEstimatePayload(
       firm_key: isFirmKey(rawFirm) ? rawFirm : null,
       statement_type: isStatementTypeKey(rawType) ? rawType : null,
       rate_overrides: overrides,
+      title_premium_is_estimate: flag(body.title_premium_is_estimate),
+      teraview_is_estimate: flag(body.teraview_is_estimate),
+      sheriff_is_estimate: flag(body.sheriff_is_estimate),
+      property_tax_is_estimate: flag(body.property_tax_is_estimate),
     },
   };
 }
@@ -365,6 +385,11 @@ export function buildEstimateRow(
     // A final account states charges actually incurred, so nothing on it is
     // badged as an estimate.
     isFinalAccount: payload.statement_type === "final",
+    // null → undefined: "not specified", so each line keeps its legacy default.
+    titlePremiumIsEstimate: payload.title_premium_is_estimate ?? undefined,
+    teraviewIsEstimate: payload.teraview_is_estimate ?? undefined,
+    sheriffIsEstimate: payload.sheriff_is_estimate ?? undefined,
+    propertyTaxIsEstimate: payload.property_tax_is_estimate ?? undefined,
   };
 
   const statement = computeStatement(inputs, rates);
@@ -389,6 +414,10 @@ export function buildEstimateRow(
       closing_date: payload.closing_date,
       firm_key: payload.firm_key,
       statement_type: payload.statement_type,
+      title_premium_is_estimate: payload.title_premium_is_estimate,
+      teraview_is_estimate: payload.teraview_is_estimate,
+      sheriff_is_estimate: payload.sheriff_is_estimate,
+      property_tax_is_estimate: payload.property_tax_is_estimate,
       // Frozen snapshots. `rate_overrides` is kept alongside the effective rates
       // so the settings page's values and the per-file deviations stay
       // distinguishable when re-opening an estimate.
@@ -478,6 +507,7 @@ export function statementToSnapshot(s: Statement): Record<string, unknown> {
           label: s.propertyTax.label,
           amount: s.propertyTax.amount,
           ...(s.propertyTax.sublabel ? { sublabel: s.propertyTax.sublabel } : {}),
+          ...(s.propertyTax.badge ? { badge: s.propertyTax.badge } : {}),
         }
       : null,
     balance: {
@@ -587,6 +617,9 @@ export function snapshotToStatement(snapshot: unknown): Statement | null {
             label: String(p.label ?? "Property tax adjustment"),
             amount: num(p.amount),
             ...(p.sublabel ? { sublabel: String(p.sublabel) } : {}),
+            // Absent on every snapshot written before the chip was carried
+            // through, which correctly reads back as "no chip".
+            ...(p.badge ? { badge: String(p.badge) } : {}),
           };
         })()
       : null,

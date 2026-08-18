@@ -121,6 +121,23 @@ export interface ClosingCostInputs {
    * Defaults to false — a statement is a draft unless it says otherwise.
    */
   isFinalAccount?: boolean;
+  /**
+   * Per-line control of the ESTIMATE chip, one flag per provisional line —
+   * staff tick "Is estimate" in the Adjust fees panel.
+   *
+   * UNDEFINED means "nobody has said", and each line then falls back to the
+   * behaviour that predates the checkboxes: the title premium is badged unless
+   * a premium override was entered (a pasted quote is not an estimate), and the
+   * other three are badged. So an old saved estimate, and any caller that
+   * doesn't set them, renders exactly as before.
+   *
+   * `isFinalAccount` still wins over all four: nothing on a final account is
+   * provisional, whatever the boxes say.
+   */
+  titlePremiumIsEstimate?: boolean;
+  teraviewIsEstimate?: boolean;
+  sheriffIsEstimate?: boolean;
+  propertyTaxIsEstimate?: boolean;
 }
 
 export interface StatementLine {
@@ -511,10 +528,12 @@ export function computeStatement(
     label: "First Canadian Title — premium",
     amount: titlePremium,
   };
-  // The badge is what tells the client this figure is not yet the real quote —
-  // so it must disappear the moment a staff member pastes the actual one, and
-  // on a final account where nothing is provisional.
-  if (!hasOverride && estimateBadge) titleLine.badge = estimateBadge;
+  // The badge is what tells the client this figure is not yet the real quote.
+  // Unticked, it disappears; left alone, it defaults to the old rule — gone the
+  // moment a staff member pastes the actual quote, and gone on a final account
+  // where nothing is provisional.
+  const titleIsEstimate = inputs.titlePremiumIsEstimate ?? !hasOverride;
+  if (titleIsEstimate && estimateBadge) titleLine.badge = estimateBadge;
 
   // The firm's charge for preparing and submitting the title insurance
   // application. Shown under Title Insurance rather than inside the legal fee
@@ -551,7 +570,9 @@ export function computeStatement(
       key: "teraview",
       label: "Teraview — title searches & review",
       amount: teraview,
-      ...(estimateBadge ? { badge: estimateBadge } : {}),
+      ...(estimateBadge && inputs.teraviewIsEstimate !== false
+        ? { badge: estimateBadge }
+        : {}),
     },
     {
       key: "sheriff",
@@ -559,7 +580,9 @@ export function computeStatement(
       sublabel:
         "searches confirming no judgments or liens are registered against the parties",
       amount: sheriff,
-      ...(estimateBadge ? { badge: estimateBadge } : {}),
+      ...(estimateBadge && inputs.sheriffIsEstimate !== false
+        ? { badge: estimateBadge }
+        : {}),
     },
   );
 
@@ -625,7 +648,9 @@ export function computeStatement(
           amount: propertyTax,
           sublabel:
             "confirmed once we receive the Statement of Adjustments from the seller's lawyer",
-          ...(estimateBadge ? { badge: estimateBadge } : {}),
+          ...(estimateBadge && inputs.propertyTaxIsEstimate !== false
+            ? { badge: estimateBadge }
+            : {}),
         };
 
   // ── Totals ──
@@ -660,7 +685,7 @@ export function computeStatement(
       torontoRebate: torRebate,
       netLTT: round2(provincial + municipal - ontRebate - torRebate),
       titlePremium,
-      titlePremiumIsEstimate: !hasOverride,
+      titlePremiumIsEstimate: titleIsEstimate,
       legalFees,
       registrations: round2(regTransfer + regMortgage),
       taxableBase,

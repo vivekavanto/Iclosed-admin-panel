@@ -46,6 +46,28 @@ export const ADJUST_INPUTS: Array<{ key: FormNumberKey; label: string }> = [
   { key: "titlePremiumOverride", label: "Title insurance premium" },
 ];
 
+/**
+ * The four provisional lines, and the form field that says whether each one is
+ * still an estimate.
+ *
+ * Keyed by the "Adjust fees" field they sit under — `titlePremiumOverride` and
+ * `propertyTaxAdjustment` are ADJUST_INPUTS-style per-file inputs, `teraview`
+ * and `sheriff` are OVERRIDE_FIELDS rate keys. Nothing else is badgeable:
+ * registrations and the firm's own fees are known amounts.
+ */
+export type EstimateFlagKey =
+  | "titlePremiumIsEstimate"
+  | "teraviewIsEstimate"
+  | "sheriffIsEstimate"
+  | "propertyTaxIsEstimate";
+
+export const ESTIMATE_FLAG_BY_FIELD: Record<string, EstimateFlagKey> = {
+  titlePremiumOverride: "titlePremiumIsEstimate",
+  teraview: "teraviewIsEstimate",
+  sheriff: "sheriffIsEstimate",
+  propertyTaxAdjustment: "propertyTaxIsEstimate",
+};
+
 /** Placeholder for each adjustable input: the figure it would replace. */
 export const ADJUST_PLACEHOLDERS: Record<
   FormNumberKey,
