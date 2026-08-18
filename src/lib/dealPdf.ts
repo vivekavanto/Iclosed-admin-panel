@@ -1584,10 +1584,14 @@ export async function downloadDealZip(
       const responses = task.responses ?? [];
       const fileResponses = responses.filter((r) => r.field_type === "file" && r.file_url);
       const textResponses = responses.filter((r) => r.field_type !== "file");
-      // Per-person tasks carry the owner's name so two co-purchasers' IDs are
-      // told apart at a glance — same naming as the per-task download.
+      // File number first, then the task, then the owner: the firm files and
+      // searches by file number, and per-person tasks carry the owner's name so
+      // two co-purchasers' IDs are told apart at a glance. Same convention as
+      // the clerk email's attachments (see familyDocuments.packageFileName).
       const taskBase = sanitizeFile(
-        `${task.title || "Task"}${task.ownerName ? ` - ${task.ownerName}` : ""}`,
+        [deal.fileNumber, task.title || "Task", task.ownerName]
+          .filter(Boolean)
+          .join(" - "),
       );
 
       for (const r of fileResponses) {

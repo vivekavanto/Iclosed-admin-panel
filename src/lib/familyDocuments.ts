@@ -69,9 +69,90 @@ export interface FamilyDocumentPackage {
 
 interface CandidateDoc {
   fileUrl: string;
+  /** The name the recipient sees — see packageFileName(). */
   fileName: string;
   /** Sort key — client task uploads are the most relevant, so they attach first. */
   priority: number;
+}
+
+/** Context used to rename documents into the firm's filing convention. */
+export interface DocumentNaming {
+  /**
+   * File number the package belongs to, e.g. "26S-0356". Omit it and documents
+   * keep the name they were uploaded under — every caller that doesn't pass one
+   * behaves exactly as before.
+   */
+  fileNumber?: string | null;
+}
+
+/** Strip characters that break a filename on Windows/macOS or in a mail client. */
+function sanitizeNamePart(value: string): string {
+  return value
+    .replace(/[\\/:*?"<>|]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Split "passport.jpg" into { stem: "passport", ext: "jpg" }. */
+function splitExt(name: string): { stem: string; ext: string } {
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0 || dot === name.length - 1) return { stem: name, ext: "" };
+  const ext = name.slice(dot + 1);
+  // Only a short alphanumeric tail counts as an extension, so "Smith, J. Jr"
+  // doesn't lose "Jr".
+  if (!/^[A-Za-z0-9]{1,5}$/.test(ext)) return { stem: name, ext: "" };
+  return { stem: name.slice(0, dot), ext };
+}
+
+/**
+ * "26S-0356 - Photo Identification - Pavithra Kumar.jpg"
+ *
+ * Clerks file by FILE NUMBER and search by client name, so the name the file
+ * was uploaded under ("IMG_4821.jpg", "1759923628_1759.pdf") is replaced with
+ * `<file number> - <task name> - <client name>`, keeping the original
+ * extension. Two files from the same task and person collide by design —
+ * dedupe() numbers the repeats.
+ *
+ * Falls back to the original name whenever there is nothing to build from.
+ */
+function packageFileName(opts: {
+  fileNumber?: string | null;
+  taskName?: string | null;
+  clientName?: string | null;
+  originalName: string;
+}): string {
+  const parts = [opts.fileNumber, opts.taskName, opts.clientName]
+    .map((part) => sanitizeNamePart(part ?? ""))
+    .filter(Boolean);
+  if (parts.length === 0) return opts.originalName;
+  const { ext } = splitExt(opts.originalName);
+  return ext ? `${parts.join(" - ")}.${ext}` : parts.join(" - ");
+}
+
+/** Readable "task name" for a document that hangs off a lead rather than a task. */
+function docTypeLabel(docType: string | null | undefined): string {
+  const key = String(docType ?? "").toLowerCase().trim();
+  if (!key) return "";
+  const known: Record<string, string> = {
+    aps: "Agreement of Purchase and Sale",
+    aps_purchase: "Agreement of Purchase and Sale",
+    aps_sale: "Agreement of Purchase and Sale",
+    identification: "Identification",
+    retainer_agreement: "Retainer Agreement",
+    home_insurance: "Home Insurance",
+    final_report: "Final Report",
+  };
+  if (known[key]) return known[key];
+  return key
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+/** APS rows keep their uploaded name — see the naming note on collectFamilyDocuments. */
+function isApsDocType(docType: string | null | undefined): boolean {
+  return String(docType ?? "").toLowerCase().trim().startsWith("aps");
 }
 
 /** Pull a stored document's bytes, whichever blob store it lives in. */
@@ -145,14 +226,23 @@ function dedupe(docs: CandidateDoc[]): CandidateDoc[] {
  * Best-effort by contract, like the alert that calls it: any failure to read a
  * table or a blob degrades that document to a link, and never throws.
  *
+ * NAMING: pass `naming.fileNumber` and every document is renamed to
+ * `<file number> - <task name> - <client name>.<ext>` so the recipient can file
+ * and search them. TWO exceptions keep the name they were uploaded under:
+ * anything uploaded against the APS task (task_templates.is_aps_task — the APS
+ * itself and its supporting documents) and any lead_corporate_docs row whose
+ * doc_type starts with "aps". The firm files those by their own reference.
+ *
  * @param familyDealIds every deal in the family (from getFamilyDealIds)
  * @param familyLeadIds every lead in the family (root + co-persons)
  * @param baseUrl absolute admin origin, for building links to non-attached docs
+ * @param naming file-number context for renaming; omit to keep uploaded names
  */
 export async function collectFamilyDocuments(
   familyDealIds: string[],
   familyLeadIds: string[],
   baseUrl: string,
+  naming: DocumentNaming = {},
 ): Promise<FamilyDocumentPackage> {
   const empty: FamilyDocumentPackage = {
     attachments: [],
@@ -164,63 +254,142 @@ export async function collectFamilyDocuments(
   const candidates: CandidateDoc[] = [];
 
   try {
-    // Task ids first — task_responses is keyed by task, not deal.
+    // Task ids first — task_responses is keyed by task, not deal. The task's
+    // title and its deal's client are what the renamed files are built from.
     const { data: tasks } = familyDealIds.length
       ? await supabaseAdmin
           .from("tasks")
-          .select("id")
+          .select("id, title, deal_id, task_template_id")
           .in("deal_id", familyDealIds)
           .eq("is_deleted", false)
       : { data: [] };
     const taskIds = (tasks ?? []).map((t) => t.id);
+    const templateIds = Array.from(
+      new Set((tasks ?? []).map((t) => t.task_template_id).filter(Boolean)),
+    ) as string[];
 
-    const [{ data: responses }, { data: corporate }, { data: identification }] =
-      await Promise.all([
+    const [
+      { data: responses },
+      { data: corporate },
+      { data: identification },
+      { data: apsTemplates },
+      { data: dealRows },
+      { data: leadRows },
+    ] = await Promise.all([
         taskIds.length
           ? supabaseAdmin
               .from("task_responses")
-              .select("file_url, file_name, field_label")
+              .select("task_id, file_url, file_name, field_label")
               .in("task_id", taskIds)
               .eq("field_type", "file")
           : Promise.resolve({ data: [] }),
         familyLeadIds.length
           ? supabaseAdmin
               .from("lead_corporate_docs")
-              .select("file_url, file_name, doc_type, custom_type")
+              .select("lead_id, file_url, file_name, doc_type, custom_type")
               .in("lead_id", familyLeadIds)
           : Promise.resolve({ data: [] }),
         familyLeadIds.length
           ? supabaseAdmin
               .from("lead_identification_docs")
-              .select("file_url, file_name")
+              .select("lead_id, file_url, file_name")
               .in("lead_id", familyLeadIds)
+          : Promise.resolve({ data: [] }),
+        templateIds.length
+          ? supabaseAdmin
+              .from("task_templates")
+              .select("id")
+              .in("id", templateIds)
+              .eq("is_aps_task", true)
+          : Promise.resolve({ data: [] }),
+        familyDealIds.length
+          ? supabaseAdmin.from("deals").select("id, lead_id").in("id", familyDealIds)
+          : Promise.resolve({ data: [] }),
+        familyLeadIds.length
+          ? supabaseAdmin
+              .from("leads")
+              .select("id, first_name, last_name")
+              .in("id", familyLeadIds)
           : Promise.resolve({ data: [] }),
       ]);
 
+    const leadNameById = new Map<string, string>(
+      (leadRows ?? []).map((l) => [
+        l.id as string,
+        `${l.first_name ?? ""} ${l.last_name ?? ""}`.trim(),
+      ]),
+    );
+    const clientNameByDeal = new Map<string, string>(
+      (dealRows ?? []).map((d) => [
+        d.id as string,
+        (d.lead_id ? leadNameById.get(d.lead_id as string) : "") ?? "",
+      ]),
+    );
+    const apsTemplateIds = new Set((apsTemplates ?? []).map((t) => t.id as string));
+    const taskById = new Map(
+      (tasks ?? []).map((t) => [
+        t.id as string,
+        {
+          title: (t.title as string) ?? "",
+          clientName: clientNameByDeal.get(t.deal_id as string) ?? "",
+          isAps: t.task_template_id
+            ? apsTemplateIds.has(t.task_template_id as string)
+            : false,
+        },
+      ]),
+    );
+
     (responses ?? []).forEach((r, i) => {
       if (!r.file_url) return;
+      const original = r.file_name || r.field_label || fallbackName(r.file_url, i);
+      const task = taskById.get(r.task_id as string);
       candidates.push({
         fileUrl: r.file_url,
-        fileName: r.file_name || r.field_label || fallbackName(r.file_url, i),
+        // The APS and everything else uploaded against the APS task keep the
+        // name they arrived with — the firm files those by their own reference.
+        fileName: task?.isAps
+          ? original
+          : packageFileName({
+              fileNumber: naming.fileNumber,
+              taskName: task?.title,
+              clientName: task?.clientName,
+              originalName: original,
+            }),
         priority: 0,
       });
     });
 
     (corporate ?? []).forEach((d, i) => {
       if (!d.file_url) return;
+      const original =
+        d.file_name || d.custom_type || d.doc_type || fallbackName(d.file_url, i);
       candidates.push({
         fileUrl: d.file_url,
-        fileName:
-          d.file_name || d.custom_type || d.doc_type || fallbackName(d.file_url, i),
+        fileName: isApsDocType(d.doc_type)
+          ? original
+          : packageFileName({
+              fileNumber: naming.fileNumber,
+              // No task behind these rows — the doc type is the closest thing to
+              // a task name ("Retainer Agreement", "Identification").
+              taskName: docTypeLabel(d.doc_type),
+              clientName: leadNameById.get(d.lead_id as string),
+              originalName: original,
+            }),
         priority: 1,
       });
     });
 
     (identification ?? []).forEach((d, i) => {
       if (!d.file_url) return;
+      const original = d.file_name || fallbackName(d.file_url, i);
       candidates.push({
         fileUrl: d.file_url,
-        fileName: d.file_name || fallbackName(d.file_url, i),
+        fileName: packageFileName({
+          fileNumber: naming.fileNumber,
+          taskName: "Identification",
+          clientName: leadNameById.get(d.lead_id as string),
+          originalName: original,
+        }),
         priority: 2,
       });
     });
