@@ -109,18 +109,13 @@ const PostClosureDocuments: React.FC<{ dealId: string }> = ({ dealId }) => {
     }
   };
 
+  // Sends on the click, with no confirm step. The button names the action, the
+  // recipients are listed in the panel above it, and the toast reports who
+  // received it — a second dialog only added a click.
   const handleEmail = async () => {
     const withEmail = recipients.filter((r) => r.email?.trim());
     if (withEmail.length === 0) {
       showToast("No client on this file has an email address", "error");
-      return;
-    }
-    const names = withEmail.map((r) => `${r.name || "Client"} <${r.email}>`).join("\n");
-    if (
-      !window.confirm(
-        `Email the final reporting package to:\n\n${names}\n\nThey go on ONE email together, with the documents attached.`,
-      )
-    ) {
       return;
     }
 
