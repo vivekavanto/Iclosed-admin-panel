@@ -16,6 +16,7 @@ import { logger } from "./logger";
 import { withRetry } from "./retry";
 import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "./emailIdentity";
 import { buildAgentCcList } from "./agentCc";
+import { loadDealTemplateFacts, type DealFactValues } from "./dealTemplateFacts";
 
 export type WelcomeEmailResult = {
   success: boolean;
@@ -79,11 +80,16 @@ export async function interpolate(
   text: string,
   lead: any,
   fileNumber: string | null = null,
-  opts: { escape?: boolean } = {},
+  opts: { escape?: boolean; facts?: DealFactValues } = {},
 ): Promise<string> {
   // escape=true for HTML bodies (default); callers pass escape:false for the
   // plain-text subject line so escaped entities don't show literally.
   const escape = opts.escape !== false;
+  // File-level values ({{ transaction }}, {{ closing_date }}, {{ party_summary }},
+  // {{ task_count }}…) so a template written for one of the AUTOMATIC senders
+  // still renders when an admin sends that same row by hand. Callers that
+  // interpolate a body and a subject pass `facts` so the lookup runs once.
+  const facts = opts.facts ?? (await loadDealTemplateFacts(lead));
   const firstName = lead.first_name ?? "";
   const lastName = lead.last_name ?? "";
   const fullName = `${firstName} ${lastName}`.trim();
@@ -118,12 +124,30 @@ export async function interpolate(
   const role = computeRole(lead);
   const propertyRoleRow = role ? `Your Role: ${role}` : "";
 
+  // Street line on its own — "2615 Ellesmere Road", not the full
+  // "2615 Ellesmere Road, Toronto, Ontario, M5E 0G1". Taken from the same joined
+  // strings as `address` so it inherits the family-side fallbacks; joinAddress
+  // glues street, city, province and postal with ", ", so segment one is the
+  // street.
+  const streetOf = (joined: string) => (joined.split(",")[0] ?? "").trim();
+  const propertyStreet = addressParts.treatAsCombined
+    ? [streetOf(addressParts.purchase), streetOf(addressParts.selling)]
+        .filter(Boolean)
+        .join(" and ")
+    : streetOf(address);
+
   // Normalized placeholder → value lookup. Keys are lowercased and have any
   // leading dot stripped, so every spacing/case/alias variant the old map listed
   // explicitly (user.*, client.*, short-form, {{NAME}}, {{LEAD_TYPE}},
   // {{CLIENT_ADDRESS}}) collapses to one entry. The single-pass renderer trims
   // and lowercases each token before lookup, so whitespace tolerance is built in.
   const values: Record<string, string> = {
+    // File-level facts first, so anything below (this RECIPIENT's own name,
+    // address, file number) wins on a name they both define.
+    ...facts,
+    // Side-aware phrase — "Sale of 2615 Ellesmere Road, Toronto, Ontario".
+    "transaction": transactionPhrase,
+    "property_street": propertyStreet,
     "user.first_name": firstName,
     "client.first_name": firstName,
     "first_name": firstName,
@@ -296,7 +320,10 @@ export async function sendWelcomeEmail(
   const rawBody = decodeTemplateBraces(template.body)
     .replace(/ /g, " ");
 
-  const emailBody = await interpolate(rawBody, lead, fileNumber);
+  // One lookup for the whole send — interpolate() runs twice (body + subject).
+  const facts = await loadDealTemplateFacts(lead);
+
+  const emailBody = await interpolate(rawBody, lead, fileNumber, { facts });
 
   // No HTML wrapper / logo injection — the DB template owns its layout.
   // Admins can include their own logo or footer inside the template body.
@@ -311,6 +338,7 @@ export async function sendWelcomeEmail(
   // Subject is plain text — don't HTML-escape (single-pass still applies).
   const subject = await interpolate(rawSubject, lead, fileNumber, {
     escape: false,
+    facts,
   });
 
   // 7. Send
