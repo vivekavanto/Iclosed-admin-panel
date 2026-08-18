@@ -197,6 +197,54 @@ export interface Statement {
   };
 }
 
+/**
+ * The name of every line item, in one place.
+ *
+ * The same fee is named on five surfaces — the admin adjust-fees panel, the
+ * closing-cost settings page, the statement card, the PDF and the customer
+ * portal — and they had drifted into five spellings of the same thing
+ * ("Teraview searches" / "Teraview — searches & review" / "Teraview — title
+ * searches & review"). A client comparing the portal against the PDF, or a
+ * staff member comparing a field against the line it moves, has to see the
+ * same words. Keyed by StatementLine.key; every surface reads from here rather
+ * than typing its own.
+ */
+export const LINE_LABELS = {
+  ltt_provincial: "Ontario provincial land transfer tax",
+  rebate_ontario: "less: Ontario first-time buyer rebate",
+  ltt_municipal: "Toronto municipal land transfer tax",
+  rebate_toronto: "less: Toronto first-time buyer rebate",
+  title_premium: "First Canadian Title — premium",
+  title_submission: "First Canadian Title — submission & review",
+  reg_transfer: "Registration of transfer",
+  reg_mortgage: "Registration of mortgage",
+  teraview: "Teraview — title searches & review",
+  sheriff: "Sheriff's certificates",
+  legal_fees: "Legal fees",
+  admin_fee: "Admin fee",
+  hst: "HST",
+  property_tax_adjustment: "Property tax & common expense adjustments",
+} as const;
+
+/**
+ * The totals and the funds-required rows, named once for the same reason.
+ *
+ * `closing_costs` deliberately repeats the word "total": it is the figure
+ * printed against LINE_TOTAL_LABEL immediately above it, and naming the two
+ * differently is what made the balance look like it was built from something
+ * other than the statement.
+ */
+export const BALANCE_LABELS = {
+  total: "Total closing costs",
+  purchase_price: "Purchase price",
+  deposit: "less deposit already paid",
+  mortgage: "less mortgage advance from your lender",
+  closing_costs: "plus total closing costs",
+  adjustment_charge: "plus property tax & common expense adjustments",
+  adjustment_credit: "less property tax & common expense credit",
+  balance_due: "Estimated balance due on closing",
+} as const;
+
 export const DEFAULT_LTT_TIERS: Tier[] = [
   [55000, 0.005],
   [250000, 0.01],
@@ -211,11 +259,14 @@ export const DEFAULT_MLTT_TIERS: Tier[] = [
   [400000, 0.015],
   [2000000, 0.02],
   [3000000, 0.025],
-  [4000000, 0.035],
-  [5000000, 0.045],
-  [10000000, 0.055],
-  [20000000, 0.065],
-  [null, 0.075],
+  // Graduated luxury rates from the 17 Dec 2025 council amendment, in force
+  // for conveyances registered on or after 1 Apr 2026. They apply to
+  // residential property with one or two single-family residences.
+  [4000000, 0.044],
+  [5000000, 0.0545],
+  [10000000, 0.065],
+  [20000000, 0.0755],
+  [null, 0.086],
 ];
 
 /** Mirrors the closing_cost_config column defaults exactly. */
@@ -490,27 +541,27 @@ export function computeStatement(
   const lttLines: StatementLine[] = [
     {
       key: "ltt_provincial",
-      label: "Ontario provincial land transfer tax",
+      label: LINE_LABELS.ltt_provincial,
       amount: provincial,
     },
   ];
   if (isFirstTimeBuyer) {
     lttLines.push({
       key: "rebate_ontario",
-      label: "less: Ontario first-time buyer rebate",
+      label: LINE_LABELS.rebate_ontario,
       amount: -ontRebate,
     });
   }
   if (isToronto) {
     lttLines.push({
       key: "ltt_municipal",
-      label: "Toronto municipal land transfer tax",
+      label: LINE_LABELS.ltt_municipal,
       amount: municipal,
     });
     if (isFirstTimeBuyer) {
       lttLines.push({
         key: "rebate_toronto",
-        label: "less: Toronto first-time buyer rebate",
+        label: LINE_LABELS.rebate_toronto,
         amount: -torRebate,
       });
     }
@@ -525,7 +576,7 @@ export function computeStatement(
 
   const titleLine: StatementLine = {
     key: "title_premium",
-    label: "First Canadian Title — premium",
+    label: LINE_LABELS.title_premium,
     amount: titlePremium,
   };
   // The badge is what tells the client this figure is not yet the real quote.
@@ -542,7 +593,7 @@ export function computeStatement(
   const titleSubmission = round2(rates.legalTitleSubmission);
   const titleSubmissionLine: StatementLine = {
     key: "title_submission",
-    label: "First Canadian Title Insurance — submission & review",
+    label: LINE_LABELS.title_submission,
     amount: titleSubmission,
   };
 
@@ -553,12 +604,12 @@ export function computeStatement(
   const sheriff = round2(rates.sheriff);
 
   const thirdPartyLines: StatementLine[] = [
-    { key: "reg_transfer", label: "Registration of Transfer", amount: regTransfer },
+    { key: "reg_transfer", label: LINE_LABELS.reg_transfer, amount: regTransfer },
   ];
   if (hasMortgage) {
     thirdPartyLines.push({
       key: "reg_mortgage",
-      label: "Registration of Mortgage",
+      label: LINE_LABELS.reg_mortgage,
       amount: regMortgage,
     });
   }
@@ -568,7 +619,7 @@ export function computeStatement(
   thirdPartyLines.push(
     {
       key: "teraview",
-      label: "Teraview — title searches & review",
+      label: LINE_LABELS.teraview,
       amount: teraview,
       ...(estimateBadge && inputs.teraviewIsEstimate !== false
         ? { badge: estimateBadge }
@@ -576,7 +627,7 @@ export function computeStatement(
     },
     {
       key: "sheriff",
-      label: "Sheriff's Certificates",
+      label: LINE_LABELS.sheriff,
       sublabel:
         "searches confirming no judgments or liens are registered against the parties",
       amount: sheriff,
@@ -601,12 +652,12 @@ export function computeStatement(
   const legalLines: StatementLine[] = [
     {
       key: "legal_fees",
-      label: "Legal fees",
+      label: LINE_LABELS.legal_fees,
       amount: legalFees,
     },
     {
       key: "admin_fee",
-      label: "Admin fee",
+      label: LINE_LABELS.admin_fee,
       amount: adminFee,
       sublabel: "software, storage, banking, courier & administrative charges",
     },
@@ -644,7 +695,7 @@ export function computeStatement(
       ? null
       : {
           key: "property_tax_adjustment",
-          label: "Property tax & common expense adjustments",
+          label: LINE_LABELS.property_tax_adjustment,
           amount: propertyTax,
           sublabel:
             "confirmed once we receive the Statement of Adjustments from the seller's lawyer",
@@ -665,7 +716,7 @@ export function computeStatement(
     calcVersion: CALC_VERSION,
     groups,
     hst: {
-      label: `HST @ ${formatRatePercent(rates.hstRate)} on taxable fees & disbursements`,
+      label: `${LINE_LABELS.hst} @ ${formatRatePercent(rates.hstRate)} on taxable fees & disbursements`,
       amount: hstAmount,
     },
     total,

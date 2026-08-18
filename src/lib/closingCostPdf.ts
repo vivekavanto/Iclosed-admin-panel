@@ -31,7 +31,7 @@ import {
 // Explicit `.ts` extensions: this module is reachable from the node --test
 // loader, which will not resolve an extensionless specifier. Same reason
 // closingCostConfig.ts and closingEstimate.ts write them.
-import { DISCLAIMERS, type Statement } from "./closingCosts.ts";
+import { BALANCE_LABELS, DISCLAIMERS, type Statement } from "./closingCosts.ts";
 import { hexToRgb01, type StatementTypeConfig } from "./closingCostSettings.ts";
 import { blobTokenForUrl, isPrivateBlobUrl } from "./blobPrivacy.ts";
 
@@ -439,14 +439,26 @@ export async function generateClosingCostPdf(
     }
   }
 
-  // HST closes the fee section it is charged on.
+  // HST closes the fee section it is charged on — but below a rule of its own,
+  // because it is a tax ON those fees, not another fee. Printed flush against
+  // the last line of "Legal & Admin Fees" it read as one more fee in that list.
+  // Dashed, not solid: solid hairlines already mean "new section" here.
+  y -= 3;
+  page.drawLine({
+    start: { x: M, y },
+    end: { x: rightEdge, y },
+    thickness: 0.5,
+    color: HAIR,
+    dashArray: [2, 2],
+  });
+  y -= 12;
   drawRow(statement.hst.label, statement.hst.amount);
 
   // ── Total ──
   y -= 3;
   rule(y, INK, 0.8);
   y -= 13;
-  page.drawText("Total legal fees, taxes & disbursements", {
+  page.drawText(BALANCE_LABELS.total, {
     x: M,
     y,
     size: 9,
@@ -475,19 +487,23 @@ export async function generateClosingCostPdf(
   // Only the deductions are greyed. They are money the client has already found
   // or that the lender is bringing, so they read as relief; everything else is
   // money they still have to produce.
-  drawRow("Purchase price", b.purchasePrice);
-  drawRow("less deposit already paid", -b.depositPaid, { muted: true });
-  drawRow("less mortgage advance from lender", -b.mortgageAmount, { muted: true });
+  drawRow(BALANCE_LABELS.purchase_price, b.purchasePrice);
+  drawRow(BALANCE_LABELS.deposit, -b.depositPaid, { muted: true });
+  drawRow(BALANCE_LABELS.mortgage, -b.mortgageAmount, { muted: true });
+  // Closing costs before adjustments, matching the order of the statement
+  // above: the client has just read the itemised costs and their total, so the
+  // total repeats here first and the Statement of Adjustments item — the one
+  // figure that is still to be confirmed — follows it.
+  drawRow(BALANCE_LABELS.closing_costs, b.closingCosts);
   if (b.propertyTaxAdjustment !== 0) {
     // Signed, so a seller in arrears reads as a credit rather than a charge.
     drawRow(
       b.propertyTaxAdjustment > 0
-        ? "plus property tax & common expense adjustments"
-        : "less property tax & common expense credit",
+        ? BALANCE_LABELS.adjustment_charge
+        : BALANCE_LABELS.adjustment_credit,
       b.propertyTaxAdjustment,
     );
   }
-  drawRow("plus total closing costs", b.closingCosts);
 
   // The one figure the whole page exists to give. Its label sits in INK like
   // every other label; the AMOUNT is the only thing on the statement printed in
@@ -495,7 +511,7 @@ export async function generateClosingCostPdf(
   y -= 2;
   rule(y, INK, 0.5);
   y -= 15;
-  page.drawText("Estimated balance due on closing", {
+  page.drawText(BALANCE_LABELS.balance_due, {
     x: M,
     y,
     size: 10,

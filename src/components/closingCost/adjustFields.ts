@@ -1,4 +1,4 @@
-import type { computeStatement } from "@/lib/closingCosts";
+import { LINE_LABELS, type computeStatement } from "@/lib/closingCosts";
 import { amountText } from "./fields";
 
 // The contents of the "Adjust fees" panel, shared by the per-deal calculator and
@@ -18,14 +18,17 @@ import { amountText } from "./fields";
  * and a per-file "adjustment" to them produces a figure that is simply wrong
  * rather than merely different. They remain editable in Settings for everyone.
  */
+// Labels come from LINE_LABELS so a field is named exactly like the line it
+// moves — staff adjusting "Teraview — title searches & review" should not have
+// to work out that it is the field called "Teraview searches".
 export const OVERRIDE_FIELDS: Array<{ key: string; label: string }> = [
-  { key: "legal_title_submission", label: "FCT submission & review" },
-  { key: "reg_transfer", label: "Registration of transfer" },
-  { key: "reg_mortgage", label: "Registration of mortgage" },
-  { key: "teraview", label: "Teraview searches" },
-  { key: "sheriff", label: "Sheriff's certificates" },
-  { key: "legal_fees", label: "Legal fees" },
-  { key: "admin_fee", label: "Admin fee" },
+  { key: "legal_title_submission", label: LINE_LABELS.title_submission },
+  { key: "reg_transfer", label: LINE_LABELS.reg_transfer },
+  { key: "reg_mortgage", label: LINE_LABELS.reg_mortgage },
+  { key: "teraview", label: LINE_LABELS.teraview },
+  { key: "sheriff", label: LINE_LABELS.sheriff },
+  { key: "legal_fees", label: LINE_LABELS.legal_fees },
+  { key: "admin_fee", label: LINE_LABELS.admin_fee },
 ];
 
 /** The form fields the "Adjust fees" panel edits as plain dollar figures. */
@@ -41,9 +44,9 @@ export type FormNumberKey =
  * rather than an internal distinction they have no reason to care about.
  */
 export const ADJUST_INPUTS: Array<{ key: FormNumberKey; label: string }> = [
-  { key: "provincialLttOverride", label: "Ontario provincial LTT" },
-  { key: "municipalLttOverride", label: "Toronto municipal LTT" },
-  { key: "titlePremiumOverride", label: "Title insurance premium" },
+  { key: "provincialLttOverride", label: LINE_LABELS.ltt_provincial },
+  { key: "municipalLttOverride", label: LINE_LABELS.ltt_municipal },
+  { key: "titlePremiumOverride", label: LINE_LABELS.title_premium },
 ];
 
 /**

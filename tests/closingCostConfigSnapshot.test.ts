@@ -169,9 +169,11 @@ test("configVersionOf: the cross-repo golden stamp", () => {
     DRAFT,
   );
   // Moved from v7.64b1ee0e on 2026-08-12, when the statement title lost its
-  // "— RESIDENTIAL PURCHASE (ONTARIO)" qualifier. `DRAFT` is the default
-  // statement type, so a wording edit there is meant to move this stamp.
-  assert.equal(configVersionOf(DEFAULT_RATES, snapshot), "v7.c92cbeb6");
+  // "— RESIDENTIAL PURCHASE (ONTARIO)" qualifier, and from v7.c92cbeb6 on
+  // 2026-08-18, when Toronto's graduated MLTT rates took effect — a rate change
+  // is exactly what this stamp exists to distinguish. `DRAFT` is the default
+  // statement type, so a wording edit there moves it too.
+  assert.equal(configVersionOf(DEFAULT_RATES, snapshot), "v7.5d7e2998");
 });
 
 test("configVersionOf: moves when only the presentation moves", () => {
