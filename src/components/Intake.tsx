@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
+import { formatPostalCode } from '@/lib/addressFields';
 import { 
   User, 
   Building2, 
@@ -690,7 +691,7 @@ const Intake: React.FC = () => {
                         ...data,
                         address: {
                           ...data.address,
-                          postalCode: e.target.value,
+                          postalCode: formatPostalCode(e.target.value),
                         },
                       })
                     }
