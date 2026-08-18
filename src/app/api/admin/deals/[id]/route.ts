@@ -414,6 +414,9 @@ const EDITABLE_DEAL_COLUMNS = new Set([
   "opening_date",
   "requisition_date",
   "price",
+  // Deposit already paid on the purchase. Seeded from the lead at conversion,
+  // then owned by the file — same relationship price has to leads.price.
+  "deposit_amount",
   "outstanding_undertakings",
   "outstanding_requisitions",
   // Extra people CC'd on this file's "Shared with agent" emails, on top of the
@@ -456,6 +459,7 @@ const MIRROR_DEAL_COLUMNS = new Set([
   "opening_date",
   "requisition_date",
   "price",
+  "deposit_amount",
   "outstanding_undertakings",
   "outstanding_requisitions",
   "cc_emails",

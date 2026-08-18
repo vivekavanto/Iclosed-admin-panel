@@ -264,7 +264,9 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
         firmKey: seed?.firm_key || data.default_firm_key || "",
         statementType: seed?.statement_type || "draft",
         price: seed ? amountText(seed.purchase_price) : amountText(prefill.purchase_price),
-        deposit: seed ? amountText(seed.deposit_paid) : "",
+        // A saved estimate's own figure always wins — including a deliberately
+        // cleared one. Only a brand-new estimate takes the intake deposit.
+        deposit: seed ? amountText(seed.deposit_paid) : amountText(prefill.deposit_paid),
         mortgage: mortgageText,
         isToronto: seed ? Boolean(seed.is_toronto) : Boolean(prefill.is_toronto),
         isFirstTimeBuyer: seed

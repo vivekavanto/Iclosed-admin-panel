@@ -74,9 +74,13 @@ interface LeadUser {
   lead_type?: string;
   // Transaction amounts captured at intake. `price` is the PURCHASE price
   // (text column on leads); `sellingPrice` is the SALE price (numeric column),
-  // only populated on combined Purchase & Sale files.
+  // only populated on combined Purchase & Sale files. The deposits are the
+  // amounts already paid on each side (both numeric columns) — blank means the
+  // client didn't give one, which is NOT the same as zero.
   price?: string;
   sellingPrice?: string;
+  depositAmount?: string;
+  sellingDepositAmount?: string;
   created_at?: string;
   service?: string;
   subService?: string;
@@ -209,12 +213,14 @@ const Leads: React.FC = () => {
     | "addressPostalCode"
     | "addressProvince"
     | "price"
+    | "depositAmount"
     | "sellingAddressStreet"
     | "sellingAddressUnit"
     | "sellingAddressCity"
     | "sellingAddressProvince"
     | "sellingAddressPostalCode"
     | "sellingPrice"
+    | "sellingDepositAmount"
   >;
   const buildEditForm = (l: LeadUser): LeadEditForm => ({
     firstName: l.firstName ?? "",
@@ -227,12 +233,14 @@ const Leads: React.FC = () => {
     addressPostalCode: l.addressPostalCode ?? "",
     addressProvince: l.addressProvince ?? "",
     price: l.price ?? "",
+    depositAmount: l.depositAmount ?? "",
     sellingAddressStreet: l.sellingAddressStreet ?? "",
     sellingAddressUnit: l.sellingAddressUnit ?? "",
     sellingAddressCity: l.sellingAddressCity ?? "",
     sellingAddressProvince: l.sellingAddressProvince ?? "",
     sellingAddressPostalCode: l.sellingAddressPostalCode ?? "",
     sellingPrice: l.sellingPrice ?? "",
+    sellingDepositAmount: l.sellingDepositAmount ?? "",
   });
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<LeadEditForm>({
@@ -246,12 +254,14 @@ const Leads: React.FC = () => {
     addressPostalCode: "",
     addressProvince: "",
     price: "",
+    depositAmount: "",
     sellingAddressStreet: "",
     sellingAddressUnit: "",
     sellingAddressCity: "",
     sellingAddressProvince: "",
     sellingAddressPostalCode: "",
     sellingPrice: "",
+    sellingDepositAmount: "",
   });
   const [savingEdit, setSavingEdit] = useState(false);
   const [editResult, setEditResult] = useState<{
@@ -499,9 +509,12 @@ const Leads: React.FC = () => {
     status: l.status ?? "New",
     lead_type: l.lead_type,
     price: l.price,
-    // selling_price is numeric in the DB — stringify so the edit form (all text
-    // inputs) can round-trip it without a type mismatch.
+    // selling_price and both deposits are numeric in the DB — stringify so the
+    // edit form (all text inputs) can round-trip them without a type mismatch.
     sellingPrice: l.selling_price != null ? String(l.selling_price) : undefined,
+    depositAmount: l.deposit_amount != null ? String(l.deposit_amount) : undefined,
+    sellingDepositAmount:
+      l.selling_deposit_amount != null ? String(l.selling_deposit_amount) : undefined,
     created_at: l.created_at,
     service: l.service,
     subService: l.sub_service,
@@ -1555,20 +1568,42 @@ const Leads: React.FC = () => {
                   />
                 </div>
               </div>
-              {/* Transaction amount for this property (leads.price). Formatted
-                  for reading, raw for editing so the admin edits the digits. */}
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                  {isSaleOnly ? "Sale Price" : "Purchase Price"}
-                </label>
-                <input
-                  type="text"
-                  className={inputClasses}
-                  value={isEditing ? (editForm.price ?? "") : formatPriceDisplay(selectedLead.price)}
-                  onChange={(e) => updateEditField("price", e.target.value)}
-                  readOnly={!isEditing}
-                  placeholder="e.g. 850000"
-                />
+              {/* Transaction amounts for this property — the price
+                  (leads.price) and the deposit already paid
+                  (leads.deposit_amount), which the client gives at intake and
+                  the closing-cost estimator prefills from. Formatted for
+                  reading, raw for editing so the admin edits the digits. */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                    {isSaleOnly ? "Sale Price" : "Purchase Price"}
+                  </label>
+                  <input
+                    type="text"
+                    className={inputClasses}
+                    value={isEditing ? (editForm.price ?? "") : formatPriceDisplay(selectedLead.price)}
+                    onChange={(e) => updateEditField("price", e.target.value)}
+                    readOnly={!isEditing}
+                    placeholder="e.g. 850000"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                    Deposit Amount
+                  </label>
+                  <input
+                    type="text"
+                    className={inputClasses}
+                    value={
+                      isEditing
+                        ? (editForm.depositAmount ?? "")
+                        : formatPriceDisplay(selectedLead.depositAmount)
+                    }
+                    onChange={(e) => updateEditField("depositAmount", e.target.value)}
+                    readOnly={!isEditing}
+                    placeholder="e.g. 50000"
+                  />
+                </div>
               </div>
             </div>
           )}
@@ -1657,21 +1692,43 @@ const Leads: React.FC = () => {
                       />
                     </div>
                   </div>
-                  {/* Sale side amount (leads.selling_price) — only combined
-                      Purchase & Sale files carry one, which is why it lives in
-                      this section rather than alongside the purchase price. */}
-                  <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                      Sale Price
-                    </label>
-                    <input
-                      type="text"
-                      className={inputClasses}
-                      value={isEditing ? (editForm.sellingPrice ?? "") : formatPriceDisplay(selectedLead.sellingPrice)}
-                      onChange={(e) => updateEditField("sellingPrice", e.target.value)}
-                      readOnly={!isEditing}
-                      placeholder="e.g. 720000"
-                    />
+                  {/* Sale side amounts (leads.selling_price /
+                      leads.selling_deposit_amount) — only combined Purchase &
+                      Sale files carry them, which is why they live in this
+                      section rather than alongside the purchase figures. */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                        Sale Price
+                      </label>
+                      <input
+                        type="text"
+                        className={inputClasses}
+                        value={isEditing ? (editForm.sellingPrice ?? "") : formatPriceDisplay(selectedLead.sellingPrice)}
+                        onChange={(e) => updateEditField("sellingPrice", e.target.value)}
+                        readOnly={!isEditing}
+                        placeholder="e.g. 720000"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                        Deposit Amount
+                      </label>
+                      <input
+                        type="text"
+                        className={inputClasses}
+                        value={
+                          isEditing
+                            ? (editForm.sellingDepositAmount ?? "")
+                            : formatPriceDisplay(selectedLead.sellingDepositAmount)
+                        }
+                        onChange={(e) =>
+                          updateEditField("sellingDepositAmount", e.target.value)
+                        }
+                        readOnly={!isEditing}
+                        placeholder="e.g. 25000"
+                      />
+                    </div>
                   </div>
                 </div>
               )}

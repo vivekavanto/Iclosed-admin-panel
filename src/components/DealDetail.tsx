@@ -4207,6 +4207,22 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                   </div>
                 </div>
               )}
+              {typeof rawDeal?.deposit_amount === "number" &&
+                rawDeal.deposit_amount > 0 && (
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400">
+                    <FileText size={14} />
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase font-bold text-slate-400 tracking-wider leading-none mb-1">
+                      Deposit
+                    </p>
+                    <p className="font-bold text-sm text-slate-900 leading-none">
+                      ${Number(rawDeal.deposit_amount).toLocaleString()}
+                    </p>
+                  </div>
+                </div>
+              )}
               {(rawDeal?.file_name as string | null | undefined) && (
                 <div className="flex items-center gap-2">
                   <div className="w-8 h-8 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400">
