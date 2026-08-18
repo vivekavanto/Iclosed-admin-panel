@@ -118,7 +118,7 @@ const PostClosureDocuments: React.FC<{ dealId: string }> = ({ dealId }) => {
     const names = withEmail.map((r) => `${r.name || "Client"} <${r.email}>`).join("\n");
     if (
       !window.confirm(
-        `Email the final reporting package to:\n\n${names}\n\nEach client receives their own copy with the documents attached.`,
+        `Email the final reporting package to:\n\n${names}\n\nThey go on ONE email together, with the documents attached.`,
       )
     ) {
       return;

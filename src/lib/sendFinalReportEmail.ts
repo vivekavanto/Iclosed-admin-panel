@@ -4,12 +4,18 @@
 // — NOT in this file. Staff reword it from Templates → Emails without a deploy,
 // and marking that template inactive is a real off-switch for the send.
 //
-// One email PER RECIPIENT rather than one shared email, so {{ user.first_name }}
-// actually names the person reading it. On a Purchase & Sale file each
-// co-person is only party to their own side, so both the address shown and the
-// documents attached are scoped by `recipientSide` — the same rule the retainer
-// sender uses (send-lead-family-email), which honours the authoritative
-// `co_person_role`.
+// ONE email to everyone who gets the same package, with every address in `to` —
+// not one email each. Three co-purchasers on a file used to receive three
+// separate copies of an identical email, which reads to a client like a mistake.
+// {{ user.first_name }} then names all of them ("Aliya, Rehana and John"), the
+// same way a combined milestone email does (see sendMilestoneEmail).
+//
+// Recipients are grouped by the package they are entitled to, NOT lumped
+// together unconditionally. On a Purchase & Sale file each co-person is party
+// to their own side only, so the documents attached — and the address shown —
+// are scoped by `recipientSide`, honouring the authoritative `co_person_role`
+// the same way the retainer sender does. Two people owed different documents
+// therefore still get two emails; two people owed the same one get one.
 
 import { get } from "@vercel/blob";
 import supabaseAdmin from "./supabaseAdmin";
@@ -65,6 +71,14 @@ export interface FinalReportSendResult {
   failed: Array<{ email: string; error: string }>;
   /** Set when nothing could be attempted at all. */
   error?: string;
+}
+
+/** "Alice" / "Alice and Bob" / "Alice, Bob and Carol". */
+function joinNames(names: string[]): string {
+  const clean = names.map((n) => n.trim()).filter(Boolean);
+  if (clean.length === 0) return "";
+  if (clean.length === 1) return clean[0];
+  return `${clean.slice(0, -1).join(", ")} and ${clean[clean.length - 1]}`;
 }
 
 /** Pull a stored document's bytes, whichever blob store it lives in. */
@@ -146,36 +160,85 @@ export async function sendFinalReportEmail(opts: {
 
   const sentDocIds = new Set<string>();
 
+  // ── Who shares an email ──
+  // The package a person is entitled to decides it: everyone owed the SAME
+  // documents is on one email together. On a single-side file that is the whole
+  // family; on a Purchase & Sale file the purchase side and the sale side are
+  // owed different documents, so they stay apart.
+  type Group = {
+    leads: RecipientLead[];
+    documents: typeof documents;
+  };
+  const groups = new Map<string, Group>();
+
   for (const lead of targets) {
-    const email = (lead.email ?? "").trim();
+    const parts = await buildLeadAddressPartsForEmail(lead);
+    const side = parts.recipientSide;
+
+    // Scope to the side this person is party to. An untagged document is legacy
+    // and applies to any side. If scoping would leave nothing — mis-tagged data
+    // — fall back to everything rather than silently sending an email with no
+    // package attached.
+    let scoped = documents;
+    if (side !== "combined") {
+      const bySide = documents.filter((d) => {
+        const s = (d.side ?? "").toLowerCase().trim();
+        return s === side || s === "";
+      });
+      if (bySide.length > 0) scoped = bySide;
+    }
+
+    // Keyed by the documents themselves rather than by side: two sides that
+    // resolve to the same package (a file with only untagged documents) belong
+    // on one email, and two people on the same side with different packages
+    // could never share one.
+    const key = scoped
+      .map((d) => d.id)
+      .sort()
+      .join("|");
+    const existing = groups.get(key);
+    if (existing) existing.leads.push(lead);
+    else groups.set(key, { leads: [lead], documents: scoped });
+  }
+
+  for (const group of groups.values()) {
+    // The primary anchors the address and leads the greeting — the same
+    // convention the combined milestone email uses. A co-person's row can hold
+    // only their own side, so reading the address off the primary keeps it
+    // whole.
+    const ordered = [...group.leads].sort((a, b) => {
+      const aPrimary = a.parent_lead_id ? 1 : 0;
+      const bPrimary = b.parent_lead_id ? 1 : 0;
+      return aPrimary - bPrimary;
+    });
+    const anchor = ordered[0];
+    const emails = ordered.map((l) => (l.email ?? "").trim()).filter(Boolean);
+    // The same person twice — a co-client sharing their partner's inbox —
+    // would otherwise put one address in `to` twice.
+    const to = Array.from(new Set(emails.map((e) => e.toLowerCase()))).map(
+      (lower) => emails.find((e) => e.toLowerCase() === lower) as string,
+    );
+
     try {
-      const parts = await buildLeadAddressPartsForEmail(lead);
-      const side = parts.recipientSide;
-
-      // Scope to the side this person is party to. An untagged document is
-      // legacy and applies to any side. If scoping would leave nothing —
-      // mis-tagged data — fall back to everything rather than silently
-      // sending an email with no package attached.
-      let scoped = documents;
-      if (side !== "combined") {
-        const bySide = documents.filter((d) => {
-          const s = (d.side ?? "").toLowerCase().trim();
-          return s === side || s === "";
-        });
-        if (bySide.length > 0) scoped = bySide;
-      }
-
       const attachments: Array<{ filename: string; content: Buffer }> = [];
-      for (const doc of scoped) {
+      for (const doc of group.documents) {
         attachments.push({
           filename: doc.file_name || "final-report.pdf",
           content: await downloadDoc(doc.file_url as string),
         });
       }
 
-      const leadAddress = await buildLeadAddressForEmail(lead);
-      const firstName = (lead.first_name ?? "").trim();
-      const fullName = `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim();
+      const leadAddress = await buildLeadAddressForEmail(anchor);
+      // "Aliya" / "Aliya and Rehana" / "Aliya, Rehana and John". Surnames dedupe
+      // — a married couple is "Hanief", not "Hanief and Hanief" — while first
+      // names never do: two people who share one still need both listed.
+      const firstName = joinNames(ordered.map((l) => (l.first_name ?? "").trim()));
+      const lastName = joinNames(
+        Array.from(new Set(ordered.map((l) => (l.last_name ?? "").trim()).filter(Boolean))),
+      );
+      const fullName = joinNames(
+        ordered.map((l) => `${l.first_name ?? ""} ${l.last_name ?? ""}`.trim()),
+      );
 
       // Keys are matched lowercased with leading dots stripped, so
       // "{{ user.first_name }}" resolves against "user.first_name".
@@ -183,7 +246,7 @@ export async function sendFinalReportEmail(opts: {
         lead_address: leadAddress,
         property_address: leadAddress,
         "user.first_name": firstName,
-        "user.last_name": (lead.last_name ?? "").trim(),
+        "user.last_name": lastName,
         "user.full_name": fullName,
         first_name: firstName,
         full_name: fullName,
@@ -207,18 +270,22 @@ export async function sendFinalReportEmail(opts: {
       await resend.emails.send({
         from: fromEmail,
         replyTo: emailReplyTo(),
-        to: [email],
+        to,
         subject,
         html,
         attachments,
       });
 
-      for (const doc of scoped) sentDocIds.add(doc.id);
-      result.sent.push({ email, documents: attachments.length });
+      for (const doc of group.documents) sentDocIds.add(doc.id);
+      // One entry per ADDRESS, not per email sent: the audit log, the toast and
+      // the "emailed to" stamp all read as "who received the package".
+      for (const email of to) {
+        result.sent.push({ email, documents: attachments.length });
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Could not send the email";
-      logger.error(`[FinalReport] send failed for ${email}:`, message);
-      result.failed.push({ email, error: message });
+      logger.error(`[FinalReport] send failed for ${to.join(", ")}:`, message);
+      for (const email of to) result.failed.push({ email, error: message });
     }
   }
 
