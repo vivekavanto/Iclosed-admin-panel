@@ -43,7 +43,7 @@ import {
   downloadDealZip,
   type PdfDealMeta,
   type PdfTaskInput,
-  type PdfDealSection,
+  type PdfCombinedGroup,
 } from "@/lib/dealPdf";
 import { upload } from "@vercel/blob/client";
 import {
@@ -3709,19 +3709,16 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
    * Send every uploaded document on the file to the conveyancing clerk.
    *
    * All the work is server-side (/api/admin/deals/[id]/email-to-clerk) — the
-   * inbox is picked from the file type there, and the documents are attached as
-   * separate files, for the same reason "Download All" zips them separately:
-   * merging mangles the source documents' own formatting. Confirmed first
-   * because it pushes client PII to an external mailbox and can't be recalled.
+   * inbox is picked from the file type there, and the package is assembled the
+   * same way "Download All" assembles the ZIP: identification and personal
+   * information merged into one PDF each, everything else attached in its
+   * original format.
+   *
+   * Sends on the click — no confirm dialog, same as the final report. The send
+   * is still audited server-side (it pushes client PII to an external mailbox),
+   * and the toast reports what actually went out.
    */
   const handleEmailToClerk = async () => {
-    const confirmed = window.confirm(
-      "Email all client documents on this file to the clerk?\n\n" +
-      "They will be sent as separate attachments to the purchase and/or sale " +
-      "clerk inbox, based on the file type.",
-    );
-    if (!confirmed) return;
-
     setEmailingClerk(true);
     try {
       const res = await fetch(`/api/admin/deals/${deal.id}/email-to-clerk`, { method: "POST" });
@@ -3731,8 +3728,13 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
         return;
       }
       const linkedNote = data.linked > 0 ? ` (${data.linked} sent as links — too large to attach)` : "";
+      const mergedCount = (data.identification > 0 ? 1 : 0) + (data.personalInfo > 0 ? 1 : 0);
+      const mergedNote =
+        mergedCount > 0
+          ? ` — IDs and personal information combined into ${mergedCount} PDF${mergedCount === 1 ? "" : "s"}`
+          : "";
       showToast(
-        `Sent ${data.attached} document${data.attached === 1 ? "" : "s"} to ${data.recipients.join(", ")}${linkedNote}`,
+        `Sent ${data.attached} attachment${data.attached === 1 ? "" : "s"} to ${data.recipients.join(", ")}${mergedNote}${linkedNote}`,
       );
     } catch (err: any) {
       showToast(err?.message ?? "Failed to email the documents", "error");
@@ -3742,14 +3744,18 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
   };
 
   /**
-   * "Download All" — every task's documents as a ZIP of separate files.
+   * "Download All" — the deal package as a ZIP of PDFs, one per task, flat.
    *
-   * The sections are assembled exactly as the old combined-PDF export did (same
-   * milestone grouping, same "only tasks with data" rule); only the packaging
-   * changed. Merging everything into one PDF flattened the source documents and
-   * lost their own formatting, so each uploaded file now comes down in its
-   * original bytes, and tasks whose only content is form answers get a small
-   * PDF of their own so nothing that used to be in the package is dropped.
+   * The tasks are assembled exactly as the old combined-PDF export did (same
+   * milestone ordering, same "only tasks with data" rule); only the packaging
+   * changed. The clerks who read these asked for PDFs rather than folders —
+   * clicking into a folder per task, then a file per document, is what costs
+   * them time — so every task becomes ONE PDF with its form answers rendered and
+   * all of its uploads merged in behind them.
+   *
+   * Identification and personal information merge one step further, across every
+   * party on the file: all the IDs in one PDF, all the personal information in
+   * another. Same two documents the "Email to Clerk" send attaches.
    */
   const handleDownloadDealZip = async () => {
     setDownloadingDealZip(true);
@@ -3771,17 +3777,17 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
           ? [row]
           : [];
       });
-      // ONE FOLDER PER TASK, not per milestone.
+      // ONE PDF PER TASK, not per milestone.
       //
-      // On a family file the same task exists once per person (Personal
-      // Information, Identification), and the firm files those by task AND
-      // person — "Identification - Ravi Anand Maharajh", "Identification -
-      // Preetha Jayanthan". The old layout filed the primary's copy under a
-      // milestone folder and everyone else's under a folder named after them, so
-      // two people's IDs landed in different places. Shared tasks (APS, Home
-      // Insurance…) keep the bare task title, and the "(Purchase)" /
+      // On a family file the same task exists once per person, and the firm
+      // files those by task AND person — "Mortgage Details - Ravi Anand
+      // Maharajh", "Mortgage Details - Preetha Jayanthan". Shared tasks (APS,
+      // Home Insurance…) keep the bare task title, and the "(Purchase)" /
       // "(Co-Purchaser)" qualifier is gone: the whole ZIP is one file, so naming
-      // the side on every folder added nothing.
+      // the side on every entry added nothing.
+      //
+      // (Identification and personal information don't reach this per-task
+      // layout — they are split off below and merged across the family.)
       //
       // Order follows the deal page — milestone order, then task order within a
       // milestone — with each person's copy of a task kept together, primary
@@ -3833,27 +3839,61 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
       }
       orderedTasks.push(...unmatched);
 
-      // How many people have a copy of each task. The person's name is added to
-      // the folder only when there IS more than one — that's what makes
-      // "Identification - Ravi Anand Maharajh" / "Identification - Preetha
-      // Jayanthan" a matched pair, while a task only one person carries stays
-      // plain ("Closing Cost Estimator"). Every FILE inside still carries the
-      // owner's name, so nothing is ambiguous once the folder is open.
-      const copies = new Map<string, number>();
-      for (const t of orderedTasks) copies.set(peerKey(t), (copies.get(peerKey(t)) ?? 0) + 1);
+      // Identification and personal information leave the folder layout and are
+      // MERGED instead — one PDF holding every party's ID, one holding every
+      // party's personal information. The clerks read those across all parties
+      // at once, so they merge ACROSS the family instead of being one PDF per
+      // person. They're taken out of the per-task list below so nothing is
+      // packaged twice. orderedTasks is already primary-first, so each merged
+      // document lists the parties in family order.
+      const isFamilyMergedTask = (t: DisplayTask) =>
+        isIdentificationTask(t) || isPersonalInfoTask(t);
 
-      const sections: PdfDealSection[] = await Promise.all(
-        orderedTasks.map(async (t) => {
-          const built = await buildPdfTaskInput(t, fresh ?? undefined, freshIdDocs ?? undefined);
-          const nameIt = (copies.get(peerKey(t)) ?? 1) > 1 && !!built.ownerName;
-          return {
-            milestoneTitle: nameIt ? `${built.title} - ${built.ownerName}` : built.title,
-            leadType: null,
-            tasks: [built],
+      const toGroup = async (
+        title: string,
+        mode: PdfCombinedGroup["mode"],
+        members: DisplayTask[],
+      ): Promise<PdfCombinedGroup | null> =>
+        members.length === 0
+          ? null
+          : {
+            title,
+            mode,
+            tasks: await Promise.all(
+              members.map((t) =>
+                buildPdfTaskInput(t, fresh ?? undefined, freshIdDocs ?? undefined),
+              ),
+            ),
           };
-        }),
-      );
-      if (sections.length === 0) {
+
+      // How many people carry a copy of each remaining task. The person's name
+      // goes in the PDF's name only when there IS more than one — that's what
+      // makes "Mortgage Details - Ravi Anand Maharajh" / "Mortgage Details -
+      // Preetha Jayanthan" a matched pair, while a task only one person carries
+      // stays plain ("Closing Cost Estimator").
+      const perTaskTasks = orderedTasks.filter((t) => !isFamilyMergedTask(t));
+      const copies = new Map<string, number>();
+      for (const t of perTaskTasks) copies.set(peerKey(t), (copies.get(peerKey(t)) ?? 0) + 1);
+
+      // Every entry in the ZIP is one PDF: the two family-wide documents first,
+      // then one per remaining task with all of its uploads merged into it.
+      const groups = (
+        await Promise.all([
+          toGroup("Identification", "documents", orderedTasks.filter(isIdentificationTask)),
+          toGroup("Personal Information", "details", orderedTasks.filter(isPersonalInfoTask)),
+          ...perTaskTasks.map(async (t): Promise<PdfCombinedGroup> => {
+            const built = await buildPdfTaskInput(t, fresh ?? undefined, freshIdDocs ?? undefined);
+            const nameIt = (copies.get(peerKey(t)) ?? 1) > 1 && !!built.ownerName;
+            return {
+              title: nameIt ? `${built.title} - ${built.ownerName}` : built.title,
+              mode: "details",
+              tasks: [built],
+            };
+          }),
+        ])
+      ).filter((g): g is PdfCombinedGroup => g !== null);
+
+      if (groups.length === 0) {
         showToast(
           tasks.length === 0
             ? "This deal's tasks are still loading — try again in a moment"
@@ -3862,7 +3902,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
         );
         return;
       }
-      const { files, failed } = await downloadDealZip(buildPdfDealMeta(), sections);
+      const { files, failed } = await downloadDealZip(buildPdfDealMeta(), groups);
       if (files === 0) {
         showToast("None of this deal's documents could be downloaded", "error");
         return;
@@ -4659,13 +4699,14 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
             <h2 className="text-lg font-bold text-slate-900">Tasks</h2>
             <div className="flex items-center gap-2">
               {/* "Download All" only makes sense once there's finished work to
-                  export — show it only when at least one task is completed. */}
+                  export — show it only when at least one task is completed.
+                  Ships a ZIP of PDFs, one per task; see handleDownloadDealZip. */}
               {tasks.some((t) => t.status === "Completed") && (
               <button
                 onClick={handleDownloadDealZip}
                 disabled={downloadingDealZip}
                 className="bg-brand-primary text-white hover:bg-brand-primaryHover px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-colors shadow-sm disabled:opacity-60"
-                title="Download every document as a separate file in a ZIP"
+                title="Download a ZIP of PDFs — one per task, with all IDs in one PDF and all personal information in another"
               >
                 {downloadingDealZip ? (
                   <>
@@ -4678,16 +4719,17 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                 )}
               </button>
               )}
-              {/* Sends every uploaded document to the firm's clerk inbox as
-                  SEPARATE attachments, in their original formats — same
-                  packaging rule as the ZIP above. Shown on the same condition
-                  as Download All. */}
+              {/* Sends the whole document package to the firm's clerk inbox,
+                  packaged exactly like the ZIP above: identification and
+                  personal information merged into one PDF each, every other
+                  document attached in its original format. Shown on the same
+                  condition as Download All. */}
               {tasks.some((t) => t.status === "Completed") && (
               <button
                 onClick={handleEmailToClerk}
                 disabled={emailingClerk}
                 className="bg-white text-brand-primary border border-brand-primary hover:bg-brand-light px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-colors shadow-sm disabled:opacity-60"
-                title="Email all client documents to the purchase / sale clerk"
+                title="Email all client documents to the purchase / sale clerk — IDs in one PDF, personal information in another"
               >
                 {emailingClerk ? (
                   <>

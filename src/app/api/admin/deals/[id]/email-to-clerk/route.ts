@@ -9,10 +9,13 @@ import { sendClerkDocumentsEmail } from "@/lib/sendClerkDocumentsEmail";
  * POST /api/admin/deals/[id]/email-to-clerk
  *
  * Emails every client document on the file to the firm's conveyancing clerk
- * inbox — purchase@ / sale@ / both, chosen by the file's type. Each document
- * goes as its OWN attachment, never merged into a single PDF, because merging
- * breaks the source documents' formatting. ("Download All" on the deal page
- * packages the same originals as a ZIP.)
+ * inbox — purchase@ / sale@ / both, chosen by the file's type.
+ *
+ * The clerks asked for the per-person paperwork MERGED, so identification and
+ * personal information go out as two combined PDFs — every party's ID in one,
+ * every party's details in the other. Every other document keeps its own
+ * attachment and its original formatting, which merging would break.
+ * ("Download All" on the deal page packages the file exactly the same way.)
  *
  * Admin-only: gated by src/middleware.ts (everything under /api/admin/*).
  *
@@ -51,6 +54,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         recipients: result.recipients,
         attached: result.attached,
         linked: result.linked,
+        identification: result.identification,
+        personalInfo: result.personalInfo,
       },
       req,
     });
@@ -60,6 +65,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       recipients: result.recipients,
       attached: result.attached,
       linked: result.linked,
+      identification: result.identification,
+      personalInfo: result.personalInfo,
     });
   } catch (err) {
     logger.error(`POST /api/admin/deals/${id}/email-to-clerk error:`, err);

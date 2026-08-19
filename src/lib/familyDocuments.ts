@@ -83,6 +83,18 @@ export interface DocumentNaming {
    * behaves exactly as before.
    */
   fileNumber?: string | null;
+  /**
+   * Blob URLs the caller has already packaged another way — the identification
+   * documents merged into the clerk email's combined PDF, for instance. Skipped
+   * here so the same file isn't also attached on its own.
+   */
+  excludeUrls?: Set<string>;
+  /**
+   * Attachment allowance left for this package. Defaults to the full
+   * ATTACHMENT_BUDGET_BYTES; a caller that has already spent part of the
+   * email's budget (again: the combined PDFs) passes what remains.
+   */
+  budgetBytes?: number;
 }
 
 /** Strip characters that break a filename on Windows/macOS or in a mail client. */
@@ -156,7 +168,7 @@ function isApsDocType(docType: string | null | undefined): boolean {
 }
 
 /** Pull a stored document's bytes, whichever blob store it lives in. */
-async function downloadDoc(fileUrl: string): Promise<Buffer> {
+export async function downloadDoc(fileUrl: string): Promise<Buffer> {
   if (isPrivateBlobUrl(fileUrl)) {
     const result = await get(fileUrl, {
       access: "private",
@@ -398,8 +410,11 @@ export async function collectFamilyDocuments(
     return empty;
   }
 
-  const docs = dedupe(candidates);
+  const exclude = naming.excludeUrls;
+  const docs = dedupe(candidates).filter((d) => !exclude?.has(d.fileUrl));
   if (docs.length === 0) return empty;
+
+  const budget = naming.budgetBytes ?? ATTACHMENT_BUDGET_BYTES;
 
   const attachments: EmailAttachment[] = [];
   const linked: LinkedDocument[] = [];
@@ -417,7 +432,7 @@ export async function collectFamilyDocuments(
   };
 
   for (const doc of docs) {
-    if (attachedBytes >= ATTACHMENT_BUDGET_BYTES) {
+    if (attachedBytes >= budget) {
       linkFor(doc, "budget");
       continue;
     }
@@ -427,7 +442,7 @@ export async function collectFamilyDocuments(
         linkFor(doc, "too_large");
         continue;
       }
-      if (attachedBytes + content.byteLength > ATTACHMENT_BUDGET_BYTES) {
+      if (attachedBytes + content.byteLength > budget) {
         linkFor(doc, "budget");
         continue;
       }

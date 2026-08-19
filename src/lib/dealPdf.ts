@@ -5,11 +5,15 @@
 //   • downloadDealPdf(deal, sections)    → the whole deal: every milestone, task,
 //                                          personal-info response, plus every
 //                                          uploaded document embedded inline.
-//   • downloadDealZip(deal, sections)    → the same coverage as downloadDealPdf,
-//                                          but packaged as a ZIP of separate
-//                                          files with each document kept in its
-//                                          original bytes. This is what the deal
-//                                          page's "Download All" button uses.
+//   • downloadDealZip(deal, groups)      → the same coverage, packaged as a ZIP
+//                                          of PDFs — one per group, flat, no
+//                                          folders. This is what the deal page's
+//                                          "Download All" button uses. Each
+//                                          group is built by
+//                                          buildCombinedPdfBytes, so a task with
+//                                          several uploads becomes one PDF, and
+//                                          identification / personal information
+//                                          merge across every party on the file.
 //
 // The text report (task info + personal information) is laid out with jsPDF
 // because its line-wrapping/page-break handling is simple. The uploaded files
@@ -272,12 +276,17 @@ function ascii(str: string): string {
 function detectKind(
   name?: string | null,
   contentType?: string | null,
-): "pdf" | "jpg" | "png" | "heic" | "other" {
+): "pdf" | "jpg" | "png" | "webp" | "heic" | "other" {
   const n = (name ?? "").toLowerCase();
   const ct = (contentType ?? "").toLowerCase();
   if (n.endsWith(".pdf") || ct.includes("pdf")) return "pdf";
   if (n.endsWith(".jpg") || n.endsWith(".jpeg") || ct.includes("jpeg") || ct.includes("jpg")) return "jpg";
   if (n.endsWith(".png") || ct.includes("png")) return "png";
+  // WEBP is on the upload allow-list (uploadValidation.ts) and the browser
+  // decodes it natively, so it renders like any other image. It matters more
+  // now than it used to: the ZIP is PDFs only, so a format we can't draw is a
+  // document the clerk simply doesn't get.
+  if (n.endsWith(".webp") || ct.includes("webp")) return "webp";
   if (isHeic(name, contentType)) return "heic";
   return "other";
 }
@@ -661,26 +670,45 @@ async function downloadBrandedTaskPdf(
   triggerDownload(new Blob([bytes as BlobPart], { type: "application/pdf" }), fileName);
 }
 
-/** The branded single-task report as raw PDF bytes.
- *
- *  `includeFiles: false` renders the info block ONLY — no embedded attachments.
- *  That's what the ZIP export wants: the uploaded documents go into the archive
- *  as their own original files, so re-embedding them here would ship every
- *  document twice. */
+/** An uploaded PDF whose own pages are spliced into the generated report once
+ *  jsPDF hands it over to pdf-lib. */
+interface PdfInsert {
+  afterPage: number;
+  bytes: Uint8Array;
+}
+
+/** The branded single-task report as raw PDF bytes: the task's info block, then
+ *  every file attached to it (images rendered, uploaded PDFs merged in). */
 async function buildBrandedTaskPdfBytes(
   deal: PdfDealMeta,
   task: PdfTaskInput,
-  opts: { includeFiles?: boolean } = {},
 ): Promise<Uint8Array> {
-  const { includeFiles = true } = opts;
   const { jsPDF } = await import("jspdf");
   const doc = new jsPDF({ unit: "pt", format: "a4" });
-  const g = pkgGeom(doc);
 
+  const fileResponses = (task.responses ?? []).filter(
+    (r) => r.field_type === "file" && r.file_url,
+  );
+
+  const inserts: PdfInsert[] = [];
+  drawTaskInfoBlock(doc, task);
+  await drawTaskFiles(doc, task, fileResponses, inserts);
+  stampChrome(doc, deal);
+  return mergeInserts(doc, inserts);
+}
+
+/**
+ * Draw one task's info block — the heading band and its key/value rows —
+ * starting at the top of the CURRENT page, breaking to further pages if it
+ * doesn't fit.
+ *
+ * Split out of buildBrandedTaskPdfBytes so the combined exports
+ * (buildCombinedPdfBytes) can lay several people's blocks into one document
+ * without duplicating the sizing ladder below.
+ */
+function drawTaskInfoBlock(doc: JsPdfDoc, task: PdfTaskInput): void {
+  const g = pkgGeom(doc);
   const textResponses = (task.responses ?? []).filter((r) => r.field_type !== "file");
-  const fileResponses = includeFiles
-    ? (task.responses ?? []).filter((r) => r.field_type === "file" && r.file_url)
-    : [];
 
   // Collect the info block (heading band + key/value rows) up front so we can
   // size the spacing to fit it all onto a single page before drawing anything.
@@ -755,42 +783,78 @@ async function buildBrandedTaskPdfBytes(
     },
   };
 
-  const inserts: Array<{ afterPage: number; bytes: Uint8Array }> = [];
-
   flow.band(bandTitle, bandLabel);
   for (const r of rowData) {
     flow.kv(r.label, r.value, r.heading);
   }
+}
 
+/**
+ * Render a task's uploaded files into the document: images onto their own
+ * styled page, uploaded PDFs queued in `inserts` for splicing, and anything
+ * unreadable as a note page so the package is never silently lossy.
+ *
+ * `fileLabels` captions each image with the DOCUMENT's own label ("Driver's
+ * Licence") instead of the task title — what the combined identification PDF
+ * wants, where every page belongs to the same task and the useful distinction
+ * is which piece of ID it is.
+ *
+ * Returns how many files produced real content, and the names of any whose blob
+ * could not be downloaded, so the caller can warn rather than ship a short
+ * package that looks complete.
+ */
+async function drawTaskFiles(
+  doc: JsPdfDoc,
+  task: PdfTaskInput,
+  fileResponses: PdfResponse[],
+  inserts: PdfInsert[],
+  opts: { fileLabels?: boolean } = {},
+): Promise<{ embedded: number; failed: string[] }> {
+  let embedded = 0;
+  const failed: string[] = [];
   let docIdx = 0;
   const totalFiles = fileResponses.length;
+
   for (const r of fileResponses) {
     docIdx++;
     const fname = r.file_name || "Document";
+    const sublabel = opts.fileLabels
+      ? String(r.field_label || r.file_name || "")
+      : task.ownerName
+        ? task.title
+        : "";
     const file = await fetchFile(r.file_url!, r.file_name);
     if (file) {
       const kind = detectKind(r.file_name, file.contentType);
-      if (kind === "jpg" || kind === "png") {
+      if (kind === "jpg" || kind === "png" || kind === "webp") {
         const img = await loadImageEl(file.bytes, kind);
         if (img) {
-          pkgImagePage(doc, task.ownerName || task.title || "Document", task.ownerName ? task.title : "", img, kind === "png" ? "PNG" : "JPEG");
+          const fmt = kind === "png" ? "PNG" : kind === "webp" ? "WEBP" : "JPEG";
+          pkgImagePage(doc, task.ownerName || task.title || "Document", sublabel ?? "", img, fmt);
+          embedded++;
           continue;
         }
         pkgNotePage(doc, docIdx, totalFiles, task.title || "Document", fname, "This image could not be rendered. It remains available via its original link.");
       } else if (kind === "pdf") {
         // No title/placeholder page — the uploaded PDF's own pages are merged in
-        // right here (phase B below).
+        // right here (by mergeInserts below).
         inserts.push({ afterPage: doc.getNumberOfPages(), bytes: file.bytes });
+        embedded++;
       } else {
         pkgNotePage(doc, docIdx, totalFiles, task.title || "Document", fname, unembeddableNote(kind));
       }
     } else {
+      failed.push(fname);
       pkgNotePage(doc, docIdx, totalFiles, task.title || "Document", fname, "This file could not be downloaded for embedding (it may require sign-in or block cross-origin access). It remains available via its original link.");
     }
   }
 
-  stampChrome(doc, deal);
+  return { embedded, failed };
+}
 
+/** Hand the jsPDF report to pdf-lib and splice every queued attachment in after
+ *  the page it was recorded against. */
+async function mergeInserts(doc: JsPdfDoc, inserts: PdfInsert[]): Promise<Uint8Array> {
   const reportBuf: ArrayBuffer = doc.output("arraybuffer");
   if (inserts.length === 0) return new Uint8Array(reportBuf);
 
@@ -804,9 +868,9 @@ async function buildBrandedTaskPdfBytes(
     return new Uint8Array(reportBuf);
   }
 
-  inserts.sort((a, b) => a.afterPage - b.afterPage);
+  const ordered = [...inserts].sort((a, b) => a.afterPage - b.afterPage);
   let offset = 0;
-  for (const ins of inserts) {
+  for (const ins of ordered) {
     try {
       const copied = await copyEmbeddedPages(lib, pdfDoc, ins.bytes);
       let at = ins.afterPage + offset;
@@ -821,6 +885,141 @@ async function buildBrandedTaskPdfBytes(
   }
 
   return await pdfDoc.save();
+}
+
+// ═════════════════════════ combined (merged) exports ═════════════════════════
+// The conveyancing clerks asked for the deal package to arrive as PDFs rather
+// than folders: opening a folder per task, and then a file per document, is what
+// costs them time. So a group here is whatever should end up as ONE PDF —
+//
+//   • one task and everything uploaded against it (an APS plus its schedules;
+//     three pages of a mortgage statement), or
+//   • the same per-person task across EVERY party on the file, which is what
+//     identification and personal information use: all the IDs in one document,
+//     all the personal information in another.
+//
+// The cost is real and accepted: merging re-encodes images and copies an
+// uploaded PDF's pages out of their original container, so a source document's
+// own formatting is no longer guaranteed byte-for-byte. The clerks weighed that
+// against the click count and chose this. "View Documents" on the deal page
+// still serves every original untouched.
+
+/** A set of tasks whose content is merged into ONE PDF. */
+export interface PdfCombinedGroup {
+  /** File-name stem inside the ZIP, e.g. "Identification". */
+  title: string;
+  /**
+   * "documents" merges the uploaded files only — an image per page, an uploaded
+   *   PDF's pages copied in — which is what identification wants.
+   * "details" renders each task's info block (its form answers), when it has
+   *   any, and then the files attached to it. That's what personal information
+   *   and every ordinary task want.
+   */
+  mode: "documents" | "details";
+  /** One entry per task — or per person, when the same task is merged across the
+   *  family; in that case family order, primary first. */
+  tasks: PdfTaskInput[];
+}
+
+export interface CombinedPdfResult {
+  bytes: Uint8Array;
+  /** Source documents actually merged in. */
+  documents: number;
+  /** Names of documents whose blob could not be downloaded. */
+  failed: string[];
+}
+
+/**
+ * Merge a group of per-person tasks into a single PDF.
+ *
+ * Returns null when the group turned out to hold nothing renderable, so the
+ * caller can omit the file rather than ship an empty one.
+ */
+export async function buildCombinedPdfBytes(
+  deal: PdfDealMeta,
+  group: PdfCombinedGroup,
+): Promise<CombinedPdfResult | null> {
+  const { jsPDF } = await import("jspdf");
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const inserts: PdfInsert[] = [];
+  const failed: string[] = [];
+  let documents = 0;
+  // Whether anything has been drawn on jsPDF's own first page. In "documents"
+  // mode on a single-person file nothing is — pkgImagePage/pkgNotePage each
+  // start a new page — so it is deleted at the end rather than shipped blank.
+  let usedFirstPage = false;
+
+  // More than one person on the file: each person's documents get a divider page
+  // carrying their name, so a merged PDF (whose pages are copied in verbatim and
+  // therefore can't be captioned) is still attributable.
+  const multiPerson = group.tasks.length > 1;
+
+  for (const task of group.tasks) {
+    const responses = task.responses ?? [];
+    const fileResponses = responses.filter((r) => r.field_type === "file" && r.file_url);
+    const textResponses = responses.filter((r) => r.field_type !== "file");
+
+    if (group.mode === "details") {
+      // Nothing to say for this person — skip them rather than printing a band
+      // over an empty table.
+      if (textResponses.length === 0 && fileResponses.length === 0) continue;
+      // Only the ANSWERS earn an info block. A task that is purely an upload
+      // (APS, home insurance, a void cheque) would otherwise open with a page
+      // saying "No client responses submitted." in front of the document the
+      // clerk actually wants.
+      if (textResponses.length > 0) {
+        if (usedFirstPage) doc.addPage();
+        drawTaskInfoBlock(doc, task);
+        usedFirstPage = true;
+      }
+    } else if (multiPerson && fileResponses.length > 0) {
+      if (usedFirstPage) doc.addPage();
+      pkgPersonDivider(doc, task.ownerName || task.title || "Documents", group.title);
+      usedFirstPage = true;
+    }
+
+    if (fileResponses.length === 0) continue;
+    const result = await drawTaskFiles(doc, task, fileResponses, inserts, {
+      fileLabels: group.mode === "documents",
+    });
+    documents += result.embedded;
+    failed.push(...result.failed);
+  }
+
+  if (!usedFirstPage) {
+    if (doc.getNumberOfPages() === 1) {
+      // Every page in this group came from an uploaded PDF (or there was nothing
+      // at all) — jsPDF drew none of its own, so there is no report to splice
+      // into. Merge the sources on their own rather than leading with a blank.
+      if (inserts.length === 0) return null;
+      const lib = await import("pdf-lib");
+      const out = await lib.PDFDocument.create();
+      for (const ins of inserts) {
+        try {
+          const copied = await copyEmbeddedPages(lib, out, ins.bytes);
+          for (const p of copied) out.addPage(p);
+        } catch {
+          /* skip a source that can't be read, keep the rest */
+        }
+      }
+      if (out.getPageCount() === 0) return null;
+      return { bytes: await out.save(), documents, failed };
+    }
+    doc.deletePage(1);
+    // Every recorded position shifts up with it; 0 means "insert at the front".
+    for (const ins of inserts) ins.afterPage = Math.max(0, ins.afterPage - 1);
+  }
+
+  stampChrome(doc, deal);
+  return { bytes: await mergeInserts(doc, inserts), documents, failed };
+}
+
+/** A person's name across the top of the CURRENT page, introducing the documents
+ *  that follow. The caller owns the page break — jsPDF's own first page is still
+ *  blank the first time round, and adding another would ship it empty. */
+function pkgPersonDivider(doc: JsPdfDoc, name: string, sectionTitle: string) {
+  const g = pkgGeom(doc);
+  drawBand(doc, g, g.top, name, sectionTitle);
 }
 
 // ═══════════════════════ Deal Package (branded layout) ═══════════════════════
@@ -877,10 +1076,13 @@ function splitAddress(addr?: string | null): { title: string; locality: string }
   return { title: raw.slice(0, ci).trim(), locality: raw.slice(ci + 1).trim() };
 }
 
-async function loadImageEl(bytes: Uint8Array, kind: "jpg" | "png"): Promise<HTMLImageElement | null> {
+async function loadImageEl(
+  bytes: Uint8Array,
+  kind: "jpg" | "png" | "webp",
+): Promise<HTMLImageElement | null> {
   try {
     const blob = new Blob([bytes as unknown as BlobPart], {
-      type: kind === "png" ? "image/png" : "image/jpeg",
+      type: kind === "png" ? "image/png" : kind === "webp" ? "image/webp" : "image/jpeg",
     });
     const url = URL.createObjectURL(blob);
     const img = new Image();
@@ -1264,7 +1466,7 @@ function pkgImagePage(
   heading: string,
   sublabel: string,
   img: HTMLImageElement,
-  fmt: "JPEG" | "PNG",
+  fmt: "JPEG" | "PNG" | "WEBP",
 ) {
   doc.addPage();
   const g = pkgGeom(doc);
@@ -1503,20 +1705,25 @@ export async function downloadDealPdf(
 }
 
 // ═══════════════════════════════ ZIP export ═══════════════════════════════
-// "Download All" ships the file as a ZIP of SEPARATE files rather than the one
-// merged PDF downloadDealPdf builds. Merging re-encodes/flattens the source
-// documents and loses their own formatting (the same reason "Email to clerk"
-// attaches originals — see sendClerkDocumentsEmail.ts), so here every uploaded
-// document goes in byte-for-byte, exactly as it was uploaded.
+// "Download All" ships the deal package as a ZIP of PDFs — one per task, flat,
+// no folders.
 //
-// Form answers (Personal Information, Mortgage Representative Details…) have no
-// source file at all — they only ever existed as generated pages. Dropping them
-// would make the ZIP lossy against the old PDF, so each task carrying text
-// responses also gets its own small branded PDF, built with `includeFiles:
-// false` so its attachments aren't duplicated alongside the originals.
+// It used to ship a folder per task holding each uploaded document in its
+// original bytes, on the reasoning that merging flattens a source document's own
+// formatting. The clerks who actually read these packages asked for the
+// opposite: clicking into a folder per task, and then into a file per document,
+// is what costs them time. So every task is now ONE PDF — its form answers
+// rendered, its uploaded documents merged in behind them (an image per page, an
+// uploaded PDF's pages copied in verbatim) — and identification and personal
+// information go further still, merging ACROSS parties into one document each.
 //
-// downloadDealPdf is deliberately kept — the two take the SAME sections, so the
-// combined package is one call away if staff ever want it back.
+// A two-person purchase file that used to extract as a dozen folders now
+// extracts as a handful of PDFs, opened by double-clicking rather than by
+// navigating.
+//
+// All the work is buildCombinedPdfBytes; this function only names the entries
+// and zips them. downloadDealPdf is deliberately kept — it builds the same
+// coverage as ONE document, if staff ever want that instead of a ZIP.
 
 export interface DealZipResult {
   /** Entries actually written to the archive. */
@@ -1525,109 +1732,62 @@ export interface DealZipResult {
   failed: string[];
 }
 
-/** Zero-padded milestone index, so a file explorer sorts the folders in the
- *  same order the deal page lists the milestones. */
-function zipFolderName(index: number, sec: PdfDealSection): string {
-  const title = sec.leadType ? `${sec.milestoneTitle} (${sec.leadType})` : sec.milestoneTitle;
-  return sanitizeFile(`${String(index).padStart(2, "0")} ${title || "Tasks"}`);
-}
-
-/** Split a file name into stem + lowercase extension (extension without a dot). */
-function splitExt(name: string): { stem: string; ext: string } {
-  const ext = extFromName(name);
-  return ext ? { stem: name.slice(0, -(ext.length + 1)), ext } : { stem: name, ext: "" };
-}
-
-function extForKind(kind: ReturnType<typeof detectKind>): string {
-  return kind === "other" ? "" : kind;
-}
-
 /**
- * Build and download every task's documents as a ZIP.
+ * Build and download the deal package as a ZIP of PDFs.
  *
- * Takes the SAME sections downloadDealPdf takes, so the two exports always cover
- * the same tasks — only the packaging differs.
+ * One entry per group, in the order given and numbered so a file explorer lists
+ * them the way the deal page does. A group that turns out to hold nothing
+ * renderable is skipped rather than shipped as an empty PDF, and it doesn't burn
+ * a number.
  */
 export async function downloadDealZip(
   deal: PdfDealMeta,
-  sections: PdfDealSection[],
+  groups: PdfCombinedGroup[],
 ): Promise<DealZipResult> {
   const JSZip = (await import("jszip")).default;
   const zip = new JSZip();
   const failed: string[] = [];
   let files = 0;
 
-  // Two distinct files can legitimately share a name — "licence.jpg" from each
-  // co-purchaser, or the same task exported per person. Number the repeats
-  // instead of silently overwriting: a ZIP happily holds duplicate paths, and
-  // most extractors then keep only the last one.
-  const usedPaths = new Set<string>();
-  const uniquePath = (folder: string, base: string, ext: string): string => {
-    const suffix = ext ? `.${ext}` : "";
+  // Two entries can legitimately want the same name — one task carried by two
+  // people we have no name for. Number the repeats instead of silently
+  // overwriting: a ZIP happily holds duplicate paths, and most extractors then
+  // keep only the last one.
+  const usedNames = new Set<string>();
+  const uniqueName = (base: string): string => {
     for (let n = 1; ; n++) {
-      const name = n === 1 ? `${base}${suffix}` : `${base} (${n})${suffix}`;
-      const path = `${folder}/${name}`;
-      if (!usedPaths.has(path)) {
-        usedPaths.add(path);
-        return path;
+      const name = n === 1 ? `${base}.pdf` : `${base} (${n}).pdf`;
+      if (!usedNames.has(name)) {
+        usedNames.add(name);
+        return name;
       }
     }
   };
 
-  let sectionNo = 0;
-  for (const sec of sections) {
-    if (!sec.tasks || sec.tasks.length === 0) continue;
-    sectionNo++;
-    const folder = zipFolderName(sectionNo, sec);
+  let index = 0;
+  for (const group of groups) {
+    if (!group.tasks || group.tasks.length === 0) continue;
 
-    for (const task of sec.tasks) {
-      const responses = task.responses ?? [];
-      const fileResponses = responses.filter((r) => r.field_type === "file" && r.file_url);
-      const textResponses = responses.filter((r) => r.field_type !== "file");
-      // File number first, then the task, then the owner: the firm files and
-      // searches by file number, and per-person tasks carry the owner's name so
-      // two co-purchasers' IDs are told apart at a glance. Same convention as
-      // the clerk email's attachments (see familyDocuments.packageFileName).
-      const taskBase = sanitizeFile(
-        [deal.fileNumber, task.title || "Task", task.ownerName]
-          .filter(Boolean)
-          .join(" - "),
-      );
-
-      for (const r of fileResponses) {
-        const label = r.file_name || "Document";
-        // Pass the stored name so a HEIC upload is converted to JPEG here too —
-        // the ZIP is opened on Windows more often than anywhere else, and the
-        // extension below follows the converted bytes.
-        const file = await fetchFile(r.file_url!, r.file_name);
-        if (!file) {
-          // Same contract as the PDF export: one unreachable blob degrades to a
-          // warning, it never fails the whole download.
-          failed.push(label);
-          continue;
-        }
-        const { stem, ext } = splitExt(sanitizeFile(label));
-        zip.file(
-          uniquePath(
-            folder,
-            `${taskBase} - ${stem}`,
-            ext || extForKind(detectKind(label, file.contentType)),
-          ),
-          file.bytes,
-        );
-        files++;
-      }
-
-      if (textResponses.length > 0) {
-        try {
-          const bytes = await buildBrandedTaskPdfBytes(deal, task, { includeFiles: false });
-          zip.file(uniquePath(folder, taskBase, "pdf"), bytes);
-          files++;
-        } catch {
-          failed.push(task.title || "Task details");
-        }
-      }
+    let result: CombinedPdfResult | null = null;
+    try {
+      result = await buildCombinedPdfBytes(deal, group);
+    } catch {
+      // One group that can't be built must not cost the rest of the archive.
+      failed.push(group.title);
+      continue;
     }
+    if (!result) continue;
+
+    failed.push(...result.failed);
+    index++;
+    // The file number rides on every entry: these are extracted and dragged
+    // around individually, and the firm files by file number.
+    const base = sanitizeFile(
+      `${String(index).padStart(2, "0")} ` +
+        [deal.fileNumber, group.title].filter(Boolean).join(" - "),
+    );
+    zip.file(uniqueName(base), result.bytes);
+    files++;
   }
 
   if (files === 0) return { files: 0, failed };
