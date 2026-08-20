@@ -38,13 +38,10 @@ import {
   NON_CITIZEN_FLAG_TOOLTIP,
 } from "@/lib/isNonCitizenFlagged";
 import { formatLocalDate, formatLocalDateTime } from "@/lib/formatDate";
-import {
-  downloadTaskPdf,
-  downloadDealZip,
-  type PdfDealMeta,
-  type PdfTaskInput,
-  type PdfCombinedGroup,
-} from "@/lib/dealPdf";
+// The per-task download button still renders in the browser. The whole-file
+// package ("Download All") moved to /api/admin/deals/[id]/package so it shares
+// one builder with "Email to Clerk" — see handleDownloadDealZip.
+import { downloadTaskPdf, type PdfDealMeta, type PdfTaskInput } from "@/lib/dealPdf";
 import { upload } from "@vercel/blob/client";
 import {
   BLOB_ACCESS,
@@ -3757,161 +3754,52 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
    * party on the file: all the IDs in one PDF, all the personal information in
    * another. Same two documents the "Email to Clerk" send attaches.
    */
+  /**
+   * "Download All" — the deal package as a ZIP of PDFs, one per entry, flat.
+   *
+   * The package itself is built SERVER-SIDE by /api/admin/deals/[id]/package,
+   * which is the same builder "Email to Clerk" attaches. It used to be assembled
+   * here in the browser from React state, matched to tasks by id, template and
+   * title; a stored document the matcher couldn't place — a lead_corporate_docs
+   * row with no task_id whose title no longer matched its task — was silently
+   * missing from the ZIP while arriving perfectly well on the clerk's email. One
+   * builder, one enumeration, no divergence.
+   *
+   * Each entry is ONE PDF: a task's answers with every file uploaded against it
+   * merged in behind them (so a multi-file void cheque or property tax bill is a
+   * single document), plus identification and personal information merged across
+   * every party on the file.
+   */
   const handleDownloadDealZip = async () => {
     setDownloadingDealZip(true);
     try {
-      // Freshest responses and ID documents so recently-saved edits and uploads
-      // are included without a page refresh.
-      const [fresh, freshIdDocs] = await Promise.all([
-        fetchFreshResponsesMap(),
-        fetchIdDocsByLead(),
-      ]);
-      if (fresh) setResponsesByTask(fresh);
-      // Filter the SAME rows the task table renders (resolved leadType) against
-      // the freshly-fetched responses and ID documents — not the raw rows against
-      // state, which reports "no tasks" whenever the page's own fetch hasn't
-      // landed.
-      const realTasks = dedupeTasksByTemplate(tasks).flatMap((t) => {
-        const row = toDisplayRow(t);
-        return row && taskHasData(row, fresh ?? undefined, freshIdDocs ?? undefined)
-          ? [row]
-          : [];
-      });
-      // ONE PDF PER TASK, not per milestone.
-      //
-      // On a family file the same task exists once per person, and the firm
-      // files those by task AND person — "Mortgage Details - Ravi Anand
-      // Maharajh", "Mortgage Details - Preetha Jayanthan". Shared tasks (APS,
-      // Home Insurance…) keep the bare task title, and the "(Purchase)" /
-      // "(Co-Purchaser)" qualifier is gone: the whole ZIP is one file, so naming
-      // the side on every entry added nothing.
-      //
-      // (Identification and personal information don't reach this per-task
-      // layout — they are split off below and merged across the family.)
-      //
-      // Order follows the deal page — milestone order, then task order within a
-      // milestone — with each person's copy of a task kept together, primary
-      // first. A co-person's tasks hang off THEIR deal's milestones, so they
-      // never match one of the primary's milestone ids; they're matched to the
-      // primary's copy by task template instead and slotted in beside it.
-      const milestoneOrder = (m: Milestone) => m.orderIndex ?? Number.MAX_SAFE_INTEGER;
-      const orderedMilestones = [...milestones].sort((a, b) => milestoneOrder(a) - milestoneOrder(b));
-      const taskOrder = (t: DisplayTask) => t.orderIndex ?? Number.MAX_SAFE_INTEGER;
-
-      const primaryTasks: DisplayTask[] = [];
-      const usedTaskIds = new Set<string>();
-      for (const m of orderedMilestones) {
-        const milestoneTasks = realTasks
-          .filter((t) => t.milestoneId === m.id)
-          .sort((a, b) => taskOrder(a) - taskOrder(b));
-        for (const t of milestoneTasks) {
-          primaryTasks.push(t);
-          usedTaskIds.add(t.id);
-        }
-      }
-
-      // What a task is a copy OF. Template id when there is one; the title
-      // otherwise, so a manually-added twin still pairs up.
-      const peerKey = (t: DisplayTask) =>
-        t.taskTemplateId ?? `title:${(t.title ?? "").toLowerCase().trim()}`;
-      // Family order (primary first) — familyPeople is already in that order.
-      const personRank = (t: DisplayTask) => {
-        const idx = familyPeople.findIndex((p) => p.id === t.ownerDealId);
-        return idx === -1 ? Number.MAX_SAFE_INTEGER : idx;
-      };
-
-      const primaryKeys = new Set(primaryTasks.map(peerKey));
-      const peersByKey = new Map<string, DisplayTask[]>();
-      const unmatched: DisplayTask[] = [];
-      for (const t of realTasks) {
-        if (usedTaskIds.has(t.id)) continue;
-        const key = peerKey(t);
-        if (primaryKeys.has(key)) peersByKey.set(key, [...(peersByKey.get(key) ?? []), t]);
-        else unmatched.push(t);
-      }
-      for (const list of peersByKey.values()) list.sort((a, b) => personRank(a) - personRank(b));
-      unmatched.sort((a, b) => personRank(a) - personRank(b) || taskOrder(a) - taskOrder(b));
-
-      const orderedTasks: DisplayTask[] = [];
-      for (const t of primaryTasks) {
-        orderedTasks.push(t);
-        orderedTasks.push(...(peersByKey.get(peerKey(t)) ?? []));
-      }
-      orderedTasks.push(...unmatched);
-
-      // Identification and personal information leave the folder layout and are
-      // MERGED instead — one PDF holding every party's ID, one holding every
-      // party's personal information. The clerks read those across all parties
-      // at once, so they merge ACROSS the family instead of being one PDF per
-      // person. They're taken out of the per-task list below so nothing is
-      // packaged twice. orderedTasks is already primary-first, so each merged
-      // document lists the parties in family order.
-      const isFamilyMergedTask = (t: DisplayTask) =>
-        isIdentificationTask(t) || isPersonalInfoTask(t);
-
-      const toGroup = async (
-        title: string,
-        mode: PdfCombinedGroup["mode"],
-        members: DisplayTask[],
-      ): Promise<PdfCombinedGroup | null> =>
-        members.length === 0
-          ? null
-          : {
-            title,
-            mode,
-            tasks: await Promise.all(
-              members.map((t) =>
-                buildPdfTaskInput(t, fresh ?? undefined, freshIdDocs ?? undefined),
-              ),
-            ),
-          };
-
-      // How many people carry a copy of each remaining task. The person's name
-      // goes in the PDF's name only when there IS more than one — that's what
-      // makes "Mortgage Details - Ravi Anand Maharajh" / "Mortgage Details -
-      // Preetha Jayanthan" a matched pair, while a task only one person carries
-      // stays plain ("Closing Cost Estimator").
-      const perTaskTasks = orderedTasks.filter((t) => !isFamilyMergedTask(t));
-      const copies = new Map<string, number>();
-      for (const t of perTaskTasks) copies.set(peerKey(t), (copies.get(peerKey(t)) ?? 0) + 1);
-
-      // Every entry in the ZIP is one PDF: the two family-wide documents first,
-      // then one per remaining task with all of its uploads merged into it.
-      const groups = (
-        await Promise.all([
-          toGroup("Identification", "documents", orderedTasks.filter(isIdentificationTask)),
-          toGroup("Personal Information", "details", orderedTasks.filter(isPersonalInfoTask)),
-          ...perTaskTasks.map(async (t): Promise<PdfCombinedGroup> => {
-            const built = await buildPdfTaskInput(t, fresh ?? undefined, freshIdDocs ?? undefined);
-            const nameIt = (copies.get(peerKey(t)) ?? 1) > 1 && !!built.ownerName;
-            return {
-              title: nameIt ? `${built.title} - ${built.ownerName}` : built.title,
-              mode: "details",
-              tasks: [built],
-            };
-          }),
-        ])
-      ).filter((g): g is PdfCombinedGroup => g !== null);
-
-      if (groups.length === 0) {
-        showToast(
-          tasks.length === 0
-            ? "This deal's tasks are still loading — try again in a moment"
-            : "No tasks with responses or documents to download",
-          "error",
-        );
+      const res = await fetch(`/api/admin/deals/${deal.id}/package`, { method: "POST" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showToast(data?.error ?? "Could not build the documents ZIP", "error");
         return;
       }
-      const { files, failed } = await downloadDealZip(buildPdfDealMeta(), groups);
-      if (files === 0) {
-        showToast("None of this deal's documents could be downloaded", "error");
-        return;
-      }
-      // A blob that can't be fetched is skipped, not fatal — say so rather than
-      // letting the ZIP look complete when it isn't.
+
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") ?? "";
+      const named = /filename="([^"]+)"/.exec(disposition)?.[1];
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = named || `Deal ${deal.fileNumber ?? "Documents"} - Documents.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // Revoked on the next tick so the click has already started the save.
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+
+      // A blob that couldn't be fetched is skipped, not fatal — say so rather
+      // than letting the ZIP look complete when it isn't.
+      const failedRaw = decodeURIComponent(res.headers.get("X-Package-Failed") ?? "");
+      const failed = failedRaw ? failedRaw.split(", ").filter(Boolean) : [];
       if (failed.length > 0) {
         showToast(
-          `Downloaded ${files} file${files === 1 ? "" : "s"} — ${failed.length} could not be ` +
+          `Downloaded — ${failed.length} document${failed.length === 1 ? "" : "s"} could not be ` +
           `retrieved: ${failed.slice(0, 3).join(", ")}${failed.length > 3 ? "…" : ""}`,
           "error",
         );

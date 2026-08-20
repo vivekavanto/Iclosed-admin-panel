@@ -1,22 +1,27 @@
 // "Email to clerk" — sends a file's whole client document package to the firm's
 // conveyancing clerks.
 //
-// Sits next to "Download All" on the deal page and packages the file the same
-// way it does, in two halves:
+// Sits next to "Download All" on the deal page and sends exactly what that
+// button downloads: both are built by src/lib/dealPackage.ts, so the email and
+// the ZIP can no longer disagree about what is on a file.
 //
 //   • IDENTIFICATION and PERSONAL INFORMATION arrive MERGED — one PDF holding
 //     every party's ID, one holding every party's personal information. The
 //     clerks read those across all parties at once, and a two-person file used
-//     to mean six separate files to open. buildCombinedClerkDocs() builds them.
-//   • EVERYTHING ELSE (APS, mortgage, insurance…) still travels as its own
-//     original file, because merging those mangles the source documents' own
-//     templates/formatting. collectFamilyDocuments() hands back each stored blob
-//     untouched — only RENAMED into the firm's filing convention (see the naming
-//     note below).
+//     to mean six separate files to open.
+//   • EVERY OTHER TASK arrives as ONE PDF — its answers, then every file
+//     uploaded against it merged in behind them. A void cheque or property tax
+//     bill uploaded in three parts is one attachment, not three.
 //
-// An ID that can't be merged server-side (HEIC, a progressive JPEG) is left out
-// of the combined PDF and stays in this email as its own attachment, so the
-// clerk never loses a document — see CombinedClerkDocs.consumedUrls.
+// A document that can't be embedded server-side (HEIC, a Word file, a blob that
+// won't download) is deliberately NOT reported as consumed, so it stays in this
+// email as its own original attachment and the clerk never loses a document —
+// see PackageDoc.skipped and collectFamilyDocuments' excludeUrls below.
+//
+// NOTE — merging costs the source documents their own filenames and their
+// byte-for-byte formatting, the APS included; it used to be attached under the
+// name it was uploaded with. "View Documents" on the deal page still serves
+// every original untouched.
 //
 // Routing: the clerk inbox is chosen by the file's type —
 //   Purchase        → CLERK_PURCHASE_EMAIL
@@ -48,8 +53,9 @@ import {
   ATTACHMENT_BUDGET_BYTES,
   collectFamilyDocuments,
   renderLinkedDocsHtml,
+  type EmailAttachment,
 } from "./familyDocuments";
-import { buildCombinedClerkDocs, type ClerkPerson } from "./clerkCombinedDocs";
+import { buildDealPackage, sanitizeEntryName } from "./dealPackage";
 import { formatLeadTypeLabel, buildLeadAddressPartsForEmail, renderTransactionPhrase } from "./leadEmailAddress";
 import { decodeTemplateBraces, renderTemplateSafe, type TemplateValue } from "./renderEmailTemplate";
 import { logger } from "./logger";
@@ -213,6 +219,7 @@ function renderBody(f: ClerkEmailFacts): string {
 function renderPackageSummaryHtml(pkg: {
   identification: number;
   personalInfo: number;
+  taskPdfs: number;
   separate: number;
 }): string {
   const items: string[] = [];
@@ -226,6 +233,12 @@ function renderPackageSummaryHtml(pkg: {
     items.push(
       `<strong>Personal Information</strong> — ${pkg.personalInfo === 1 ? "the client's" : `all ${pkg.personalInfo} clients'`} ` +
         `details in one PDF`,
+    );
+  }
+  if (pkg.taskPdfs > 0) {
+    items.push(
+      `${pkg.taskPdfs} task PDF${pkg.taskPdfs === 1 ? "" : "s"} — each holding that ` +
+        `task's answers and every document uploaded against it`,
     );
   }
   if (pkg.separate > 0) {
@@ -351,27 +364,54 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
   const clientNameList = [clientName, ...coPartyNames].filter(Boolean);
   const clientNames = joinNames(clientNameList) || clientName || "Client";
 
-  // Primary first — the order the parties appear inside both merged PDFs.
-  const people: ClerkPerson[] = [
-    ...(primaryLead ? [{ leadId: primaryLead.id as string, name: clientName }] : []),
-    ...coParties.map((l) => ({ leadId: l.id as string, name: fullName(l) })),
-  ];
+  // THE package — the same entries "Download All" ships as a ZIP: identification
+  // merged, personal information merged, and one PDF per task holding its
+  // answers and every file uploaded against it. Building both exports from
+  // src/lib/dealPackage.ts is what stops the email and the ZIP disagreeing about
+  // what is on a file.
+  const pkg = await buildDealPackage(dealId);
+  if (!pkg) return { ...empty, error: "Deal not found" };
 
-  // The two merged PDFs: every party's ID in one, every party's personal
-  // information in the other.
-  const combined = await buildCombinedClerkDocs({ dealIds, people, fileNumber });
+  // Spend the attachment budget on package entries in order, and let anything
+  // that doesn't fit fall back to its ORIGINAL documents below — those can be
+  // linked when they're too large, which a generated PDF cannot.
+  const stem = fileNumber ? `${fileNumber} - ` : "";
+  const packageAttachments: EmailAttachment[] = [];
+  const consumedByEmail = new Set<string>();
+  let packageBytes = 0;
+  // Entries that are neither of the two family-wide documents — the per-task
+  // PDFs, which is what the body's "Attached:" breakdown counts separately.
+  let taskPdfCount = 0;
+  for (const entry of pkg.entries) {
+    if (packageBytes + entry.bytes.byteLength > ATTACHMENT_BUDGET_BYTES) {
+      logger.warn(
+        `[ClerkDocuments] entry "${entry.title}" (${entry.bytes.byteLength} bytes) exceeds the ` +
+          `attachment budget — its source documents are attached or linked separately instead`,
+      );
+      continue;
+    }
+    packageBytes += entry.bytes.byteLength;
+    packageAttachments.push({
+      filename: `${stem}${sanitizeEntryName(entry.title)}.pdf`,
+      content: Buffer.from(entry.bytes),
+    });
+    if (entry.title !== "Identification" && entry.title !== "Personal Information") {
+      taskPdfCount++;
+    }
+    for (const url of entry.consumedUrls) consumedByEmail.add(url);
+  }
 
-  // Everything else, each in its own original bytes and renamed to
-  // "<file number> - <task name> - <client name>" (APS uploads excepted). The
-  // IDs now inside the merged PDF are excluded so nothing is sent twice, and
-  // what the merge already spent comes off the attachment budget.
+  // Whatever the package could NOT embed — a HEIC ID, a Word document, a blob
+  // that wouldn't download, an entry too large to attach — still travels as its
+  // own original file, renamed into the firm's filing convention. A clerk never
+  // loses a document to a merge failure.
   const docs = await collectFamilyDocuments(dealIds, familyLeadIds, adminBaseUrl(), {
     fileNumber,
-    excludeUrls: combined.consumedUrls,
-    budgetBytes: Math.max(0, ATTACHMENT_BUDGET_BYTES - combined.bytes),
+    excludeUrls: consumedByEmail,
+    budgetBytes: Math.max(0, ATTACHMENT_BUDGET_BYTES - packageBytes),
   });
 
-  const attachments = [...combined.attachments, ...docs.attachments];
+  const attachments = [...packageAttachments, ...docs.attachments];
   if (attachments.length === 0 && docs.linked.length === 0) {
     return { ...empty, error: "There are no uploaded documents on this file yet" };
   }
@@ -435,8 +475,8 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
     attached_count: String(attachments.length),
     linked_count: String(docs.linked.length),
     document_count: String(attachments.length + docs.linked.length),
-    identification_count: String(combined.identificationDocs),
-    personal_info_count: String(combined.personalInfoPeople),
+    identification_count: String(pkg.identificationDocs),
+    personal_info_count: String(pkg.personalInfoPeople),
     separate_count: String(docs.attachments.length),
     deal_url: dealUrl,
   };
@@ -456,8 +496,9 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
       ? renderTemplateSafe(decodeTemplateBraces(template.body), resolve)
       : renderBody(facts)) +
     renderPackageSummaryHtml({
-      identification: combined.identificationDocs,
-      personalInfo: combined.personalInfoPeople,
+      identification: pkg.identificationDocs,
+      personalInfo: pkg.personalInfoPeople,
+      taskPdfs: taskPdfCount,
       separate: docs.attachments.length,
     }) +
     renderLinkedDocsHtml(docs.linked);
@@ -497,9 +538,9 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
   logger.info(
     `[ClerkDocuments] sent deal=${dealId} file=${fileNumber} to=${recipients.join(", ")} ` +
       `template=${template ? "db" : "built-in"} ` +
-      `attached=${attachments.length} (merged ids=${combined.identificationDocs}, ` +
-      `personal info for ${combined.personalInfoPeople}, separate=${docs.attachments.length}) ` +
-      `linked=${docs.linked.length}`,
+      `attached=${attachments.length} (merged ids=${pkg.identificationDocs}, ` +
+      `personal info for ${pkg.personalInfoPeople}, task pdfs=${taskPdfCount}, ` +
+      `separate=${docs.attachments.length}) linked=${docs.linked.length}`,
   );
 
   return {
@@ -507,7 +548,7 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
     recipients,
     attached: attachments.length,
     linked: docs.linked.length,
-    identification: combined.identificationDocs,
-    personalInfo: combined.personalInfoPeople,
+    identification: pkg.identificationDocs,
+    personalInfo: pkg.personalInfoPeople,
   };
 }

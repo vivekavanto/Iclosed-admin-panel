@@ -11,11 +11,14 @@ import { sendClerkDocumentsEmail } from "@/lib/sendClerkDocumentsEmail";
  * Emails every client document on the file to the firm's conveyancing clerk
  * inbox — purchase@ / sale@ / both, chosen by the file's type.
  *
- * The clerks asked for the per-person paperwork MERGED, so identification and
- * personal information go out as two combined PDFs — every party's ID in one,
- * every party's details in the other. Every other document keeps its own
- * attachment and its original formatting, which merging would break.
- * ("Download All" on the deal page packages the file exactly the same way.)
+ * The clerks asked for the paperwork MERGED: identification and personal
+ * information go out as two combined PDFs — every party's ID in one, every
+ * party's details in the other — and every other task goes out as one PDF
+ * holding its answers and every file uploaded against it. Anything that can't be
+ * embedded still travels as its own original file.
+ *
+ * "Download All" on the deal page ships the identical package as a ZIP; both are
+ * built by src/lib/dealPackage.ts.
  *
  * Admin-only: gated by src/middleware.ts (everything under /api/admin/*).
  *
