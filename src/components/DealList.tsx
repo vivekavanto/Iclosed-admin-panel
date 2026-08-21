@@ -1001,24 +1001,31 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           {/* colgroup is the single source of truth for column widths. With
               table-fixed, the header and every body row inherit these exact
               percentages, so columns stay perfectly aligned at any browser
-              zoom. The two hidden columns get 0% (their cells are display:none,
-              so the column collapses). Visible widths sum to 100%. */}
+              zoom.
+
+              ORDER MATTERS: a hidden cell (display:none) is dropped from the
+              row entirely, so the remaining cells map onto the cols in order.
+              The hidden columns' entries therefore have to sit at the END of
+              this list — otherwise Notes/Actions inherit their 0% widths.
+              Visible widths sum to 100%. */}
           <colgroup>
             <col style={{ width: '4%' }} />{/* Row number */}
-            <col style={{ width: '7%' }} />{/* Account status */}
-            <col style={{ width: '6%' }} />{/* File No. */}
-            <col style={{ width: '12%' }} />{/* Client Name */}
-            <col style={{ width: '11%' }} />{/* Address */}
+            <col style={{ width: '6%' }} />{/* Account status */}
+            <col style={{ width: '7%' }} />{/* File No. */}
+            <col style={{ width: '14%' }} />{/* Client Name */}
+            <col style={{ width: '16%' }} />{/* Address */}
             <col style={{ width: '8%' }} />{/* Closing date */}
             <col style={{ width: '10%' }} />{/* Progress */}
             <col style={{ width: '6%' }} />{/* Lawyer */}
             <col style={{ width: '6%' }} />{/* Clerk */}
-            <col style={{ width: '8%' }} />{/* Agent */}
-            <col style={{ width: '7%' }} />{/* Account created */}
-            <col style={{ width: '8%' }} />{/* Notes */}
-            <col style={{ width: '0%' }} />{/* Requisition date (hidden) */}
-            <col style={{ width: '0%' }} />{/* File name (hidden) */}
+            <col style={{ width: '16%' }} />{/* Notes */}
             <col style={{ width: '7%' }} />{/* Actions */}
+            {/* Hidden columns — Agent, Account created, Requisition date, File
+                name. Their cells are display:none, so these collapse to 0%. */}
+            <col style={{ width: '0%' }} />
+            <col style={{ width: '0%' }} />
+            <col style={{ width: '0%' }} />
+            <col style={{ width: '0%' }} />
           </colgroup>
           <thead>
             <tr className="bg-white text-slate-800 text-xs font-bold border-b border-slate-200">
@@ -1044,8 +1051,10 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
               <th className="px-2 py-1.5">Progress</th>
               <th className="px-2 py-1.5">Lawyer</th>
               <th className="px-2 py-1.5">Clerk</th>
-              <th className="px-2 py-1.5">Agent</th>
-              <th className="px-2 py-1.5">Account created</th>
+              {/* Agent column hidden per request — kept (not deleted) to avoid breaking anything. */}
+              <th className="px-2 py-1.5 hidden">Agent</th>
+              {/* Account created column hidden per request — kept (not deleted) to avoid breaking anything. */}
+              <th className="px-2 py-1.5 hidden">Account created</th>
               {/* Free-text status the admin keeps by hand — see the cell below. */}
               <th className="px-2 py-1.5">Notes</th>
               {/* Requisition date column hidden per request — kept (not deleted) to avoid breaking anything. */}
@@ -1240,8 +1249,9 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                   </td>
                   {/* Agent — the referral partner, and the entry point for
                       attaching one after intake. Clicking must not open the file,
-                      hence stopPropagation on the row's onClick. */}
-                  <td className="px-2 py-1.5">
+                      hence stopPropagation on the row's onClick.
+                      Hidden per request — kept (not deleted) to avoid breaking anything. */}
+                  <td className="px-2 py-1.5 hidden">
                     {(() => {
                       const label = agentLabel(deal);
                       return (
@@ -1274,7 +1284,8 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       );
                     })()}
                   </td>
-                  <td className="px-2 py-1.5">
+                  {/* Account created — hidden per request, kept (not deleted). */}
+                  <td className="px-2 py-1.5 hidden">
                     {(deal as any).accountCreatedAt ? (
                       <span
                         className="text-xs text-slate-700"
@@ -1290,7 +1301,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       Click to edit in place: Enter or blur saves, Escape
                       cancels. Clicking must not open the file, hence
                       stopPropagation on the row's onClick. */}
-                  <td className="px-2 py-1.5">
+                  <td className="px-2 py-1.5 align-middle">
                     {(() => {
                       const note =
                         (deal as Deal & { adminNote?: string | null }).adminNote ?? '';
@@ -1337,16 +1348,16 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                           }}
                           disabled={noteSavingId === deal.id}
                           title={note ? `${note} — click to edit` : 'Add a note on where this file is at'}
-                          className={`inline-flex max-w-full items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-left transition-colors ${
+                          className={`inline-flex w-full max-w-full items-start gap-1 rounded px-1.5 py-0.5 text-[11px] leading-snug text-left transition-colors ${
                             note
                               ? 'text-slate-700 hover:bg-brand-light/40 hover:text-brand-primary'
                               : 'text-slate-300 hover:bg-brand-light/40 hover:text-brand-primary'
                           }`}
                         >
                           {noteSavingId === deal.id ? (
-                            <Loader2 size={12} className="animate-spin flex-shrink-0" />
+                            <Loader2 size={12} className="animate-spin mt-0.5 flex-shrink-0" />
                           ) : null}
-                          <span className="truncate">{note || 'Add note'}</span>
+                          <span className="whitespace-normal break-words">{note || 'Add note'}</span>
                         </button>
                       );
                     })()}
