@@ -27,6 +27,12 @@ import Button from "@/components/ui/Button";
 import { useIsLargeScreen } from "@/hooks/useMediaQuery";
 import { docDownloadHref, BLOB_ACCESS } from "@/lib/blobPrivacy";
 import { openDocForViewing } from "@/lib/docViewer";
+import {
+  analyseIdSides,
+  completeIdTypes,
+  describeMissingSides,
+  idSubmissionBlocker,
+} from "@/lib/idDocumentRules";
 
 interface UploadIdentificationDrawerProps {
   open: boolean;
@@ -170,7 +176,8 @@ const ACCEPTABLE_ID_TYPES = [
 ];
 
 // Every acceptable ID needs both sides — passports included: the photo/bio-data
-// page is the front, the rear cover / signature page is the back.
+// page is the front, and the second side is the signature page (NOT the blank
+// rear cover — the signature page is the one the firm needs).
 type ManualSide = "front" | "back" | "front-and-back";
 
 const LABEL_OPTIONS: { value: LabelKey; text: string }[] = [
@@ -596,7 +603,7 @@ function AcceptableDocumentsSection() {
           <span className="font-bold text-[#C10007]">two different government-issued photo IDs</span>{" "}
           from the list below for identity verification. Upload{" "}
           <span className="font-semibold text-gray-700">both sides</span> of each one — for a
-          passport, that&rsquo;s the photo/info page and the back page.
+          passport, that&rsquo;s the photo/info page and the signature page.
         </p>
 
         <div className="grid grid-cols-2 gap-x-4 gap-y-2">
@@ -1549,15 +1556,11 @@ export default function UploadIdentificationDrawer({
       setGlobalError("Missing lead. Please refresh and try again.");
       return;
     }
-    if (selected.length < 2) {
-      setGlobalError("Please upload at least 2 identification documents.");
-      return;
-    }
-    // Both sides of every ID are required — see `hasIncompleteIds`.
-    if (hasIncompleteIds) {
-      setGlobalError(
-        `Both sides of every ID are required before submitting — ${missingSidesSummary}. Upload the missing page (for a passport, the rear/signature page) or remove that document.`,
-      );
+    // Both sides of every ID, and two DIFFERENT types of ID — see
+    // `blockingReason`. Neither is negotiable: identity can't be verified from
+    // one side of a document, nor from a single piece of identification.
+    if (blockingReason) {
+      setGlobalError(blockingReason);
       verificationStatusRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
       return;
     }
@@ -1632,14 +1635,8 @@ export default function UploadIdentificationDrawer({
       setGlobalError("Missing lead. Please refresh and try again.");
       return;
     }
-    if (selected.length < 2) {
-      setGlobalError("Please upload at least 2 identification documents.");
-      return;
-    }
-    if (hasIncompleteIds) {
-      setGlobalError(
-        `Both sides of every ID are required before submitting — ${missingSidesSummary}. Upload the missing page (for a passport, the rear/signature page) or remove that document.`,
-      );
+    if (blockingReason) {
+      setGlobalError(blockingReason);
       verificationStatusRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
       return;
     }
@@ -1798,43 +1795,19 @@ export default function UploadIdentificationDrawer({
     });
   }
 
-  // Group by document type
-  const docTypeGroups = detectedDocs.reduce<Record<string, typeof detectedDocs>>((acc, doc) => {
-    const key = doc.type;
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(doc);
-    return acc;
-  }, {});
+  // Side coverage per document TYPE, and what stops this set being submitted.
+  // Both rules live in src/lib/idDocumentRules.ts so they can be tested: every
+  // ID complete on both sides, and two DIFFERENT types of ID. analyseIdSides
+  // groups by type, which is what makes the second rule bite — a driver's
+  // licence photographed front and back is one piece of identification, not two.
+  const docAnalysis = analyseIdSides(detectedDocs);
+  const completeDocs = completeIdTypes(docAnalysis);
+  const completeDocCount = completeDocs.length;
+  const incompleteDocCount = docAnalysis.length - completeDocCount;
 
-  // Analyze each document type for side coverage. Every ID type needs both
-  // sides, so completeness is purely "did we see the front and the back" —
-  // either as two files or as one image holding both.
-  const docAnalysis: { type: string; hasFront: boolean; hasBack: boolean; hasBothSides: boolean; complete: boolean }[] = [];
-  for (const [type, docs] of Object.entries(docTypeGroups)) {
-    const hasFront = docs.some(d => d.side === "front");
-    const hasBack = docs.some(d => d.side === "back");
-    const hasBothSides = docs.some(d => d.side === "front-and-back");
-    const complete = hasBothSides || (hasFront && hasBack);
-    docAnalysis.push({ type, hasFront, hasBack, hasBothSides, complete });
-  }
-
-  // Count complete documents (both sides present)
-  const completeDocCount = docAnalysis.filter(d => d.complete).length;
-  const incompleteDocCount = docAnalysis.filter(d => !d.complete).length;
-
-  // Every acceptable ID needs both sides — a passport's rear/signature page
-  // included. A half-provided ID is a HARD BLOCK on submission: identity cannot
-  // be verified from one side of a document, so this is no longer softened into
-  // a "you can still submit" nudge. To submit without the missing page, the
-  // incomplete file has to be removed — then that ID isn't being submitted at all.
-  const incompleteIds = docAnalysis.filter((d) => !d.complete);
+  const blocker = idSubmissionBlocker(docAnalysis);
+  const incompleteIds = blocker?.kind === "incomplete-sides" ? blocker.incomplete : [];
   const hasIncompleteIds = incompleteIds.length > 0;
-
-  // "back", "front", or "front & back" — the page(s) still owed for an ID.
-  function describeMissingSides(doc: { hasFront: boolean; hasBack: boolean }): string {
-    if (!doc.hasFront && !doc.hasBack) return "front & back";
-    return doc.hasFront ? "back" : "front";
-  }
 
   const missingSidesSummary = incompleteIds
     .map((d) => `${d.type} (missing ${describeMissingSides(d)})`)
@@ -1876,16 +1849,30 @@ export default function UploadIdentificationDrawer({
 
   const hasPendingDetection = selected.some(s => s.detecting);
 
-  // Submission needs at least 2 files, finished analysis, and — the part that is
-  // not negotiable — every recognised ID complete on both sides. That last rule
-  // is enforced in handleUploadClick / handleUpload; invalid, expired, or
-  // fewer-than-two IDs stay warnings so staff can still submit on a client's
-  // behalf, but a missing side is not one of those warnings.
+  // TWO DIFFERENT TYPES of government ID are required — a hard block, not a
+  // nudge. A driver's licence uploaded as a front file and a back file is ONE
+  // ID; it used to satisfy the old "at least 2 files" gate and let a client
+  // submit a single piece of identification.
+  const needsSecondIdType = blocker?.kind === "needs-second-type";
+
+  /** Why submission is refused, in the order the client can act on it. */
+  const blockingReason: string | null = hasIncompleteIds
+    ? `Both sides of every ID are required before submitting — ${missingSidesSummary}. Upload the missing page (for a passport, the signature page) or remove that document.`
+    : needsSecondIdType
+      ? completeDocCount === 0
+        ? "Two different types of government ID are required — for example a driver's licence and a passport."
+        : `Two DIFFERENT types of government ID are required. ${completeDocs[0].type} is complete — add a second, different ID (a passport, PR card or similar).`
+      : null;
+
+  // Submission needs finished analysis, every recognised ID complete on both
+  // sides, and two distinct complete IDs. Those last two are enforced in
+  // handleUploadClick / handleUpload; invalid or expired IDs stay warnings so
+  // staff can still submit on a client's behalf, but a missing side and a
+  // missing second ID are not among those warnings.
   //
   // Display-only flag for the verification card: are the submission REQUIREMENTS
-  // met, ignoring transient uploading / pending-detection states? Two verified
-  // IDs is the target the card counts towards; a missing side is what blocks.
-  const readyToSubmit = completeDocCount >= 2 && !hasIncompleteIds;
+  // met, ignoring transient uploading / pending-detection states?
+  const readyToSubmit = !blockingReason;
 
   return (
     <>
@@ -2337,8 +2324,8 @@ export default function UploadIdentificationDrawer({
                             ? `${incompleteIds[0].type} — ${describeMissingSides(incompleteIds[0])} required`
                             : "Both Sides of Every ID Required"
                           : completeDocCount === 0
-                            ? "2 Government IDs Recommended"
-                            : "1 More Government ID Recommended"}
+                            ? "2 Government IDs Required"
+                            : "A Second, Different ID Is Required"}
                       </p>
                       <p className="text-xs text-gray-900">
                         {completeDocCount}/2 verified
@@ -2364,9 +2351,9 @@ export default function UploadIdentificationDrawer({
                         <span>
                           {doc.complete
                             ? doc.hasBothSides
-                              ? " — front & back in one image"
+                              ? " — both sides in one image"
                               : " — both sides verified"
-                            : ` — missing ${!doc.hasFront && !doc.hasBack ? "front & back" : !doc.hasFront ? "front" : "back"}`
+                            : ` — missing ${describeMissingSides(doc)}`
                           }
                         </span>
                       </div>
@@ -2375,22 +2362,16 @@ export default function UploadIdentificationDrawer({
                 </div>
               )}
 
-              {/* Action hint for incomplete state. A missing side is stated as a
-                  requirement, not a suggestion — it blocks submission. */}
-              {!readyToSubmit && (
+              {/* Action hint. Nothing is shown for a half-provided ID: the header
+                  and the per-document line above already name the page still owed,
+                  and the submit button repeats it — a paragraph here just said the
+                  same thing a third time. */}
+              {!readyToSubmit && !hasIncompleteIds && (
                 <div className="px-4 py-2.5 bg-white border-t border-gray-100">
-                  <p
-                    className={
-                      hasIncompleteIds
-                        ? "text-xs text-[#C10007] font-semibold"
-                        : "text-xs text-gray-900"
-                    }
-                  >
-                    {hasIncompleteIds
-                      ? `Upload the ${describeMissingSides(incompleteIds[0])} of the ${incompleteIds[0].type} to continue — both sides of every ID are required before you can submit. For a passport that means the photo page and the rear/signature page. Alternatively, remove that document.`
-                      : completeDocCount === 0
-                        ? "You can still submit — for best results upload the front and back of each ID (for a passport, the photo page and the back page)."
-                        : "You can still submit — upload one more government ID to complete verification."
+                  <p className="text-xs text-gray-900">
+                    {completeDocCount === 0
+                      ? "Upload two different types of government ID, both sides of each (for a passport, the photo page and the signature page)."
+                      : `${completeDocs[0].type} is verified. A second, DIFFERENT type of ID is still required — two sides of the same document count as one ID.`
                     }
                   </p>
                 </div>
@@ -2466,12 +2447,14 @@ export default function UploadIdentificationDrawer({
               ? "Upload Documents"
               : hasPendingDetection
                 ? "Analyzing..."
-                : selected.length < 2
-                  ? "Add at Least 2 Documents"
-                  : hasIncompleteIds
-                    ? incompleteIds.length === 1
-                      ? `Add ${describeMissingSides(incompleteIds[0])} of ${incompleteIds[0].type}`
-                      : "Add Missing ID Sides"
+                : hasIncompleteIds
+                  ? incompleteIds.length === 1
+                    ? `Add ${describeMissingSides(incompleteIds[0])} of ${incompleteIds[0].type}`
+                    : "Add Missing ID Sides"
+                  : needsSecondIdType
+                    ? completeDocCount === 0
+                      ? "Add 2 Government IDs"
+                      : "Add a Second Type of ID"
                     : `Upload ${selected.length} Document${selected.length > 1 ? "s" : ""}`}
           </Button>
         </div>
@@ -2629,7 +2612,9 @@ export default function UploadIdentificationDrawer({
                     <ShieldCheck size={14} className="flex-shrink-0 mt-0.5" />
                     <span>
                       Both sides are required. For a passport, upload the photo/info page as the
-                      front and the back page as the back.
+                      front and the signature page as the back — not the blank rear cover. If one
+                      photo shows the passport open with the signature page beside the photo page,
+                      choose <span className="font-semibold">Both Sides</span>.
                     </span>
                   </div>
                 )}

@@ -26,6 +26,7 @@ import { formatCurrency, parseAmountInput } from "@/lib/formatCurrency";
 import {
   ADJUST_INPUTS,
   ADJUST_PLACEHOLDERS,
+  ESTIMATE_FLAG_BY_FIELD,
   OVERRIDE_FIELDS,
 } from "@/components/closingCost/adjustFields";
 import {
@@ -68,6 +69,11 @@ interface EstimateRow {
   municipal_ltt_override?: number | string | null;
   property_tax_adjustment?: number | string | null;
   file_no_display: string | null;
+  /** null = never set; the calculation then falls back to its legacy default. */
+  title_premium_is_estimate?: boolean | null;
+  teraview_is_estimate?: boolean | null;
+  sheriff_is_estimate?: boolean | null;
+  property_tax_is_estimate?: boolean | null;
   purchasers?: string | null;
   property_address?: string | null;
   closing_date?: string | null;
@@ -127,6 +133,15 @@ interface FormState {
   purchasers: string;
   propertyAddress: string;
   closingDate: string;
+  /**
+   * Whether each provisional line still carries the ESTIMATE chip — the four
+   * "Is estimate" checkboxes in the Adjust fees panel. They drive the chip on
+   * screen, in the PDF and in the client's copy.
+   */
+  titlePremiumIsEstimate: boolean;
+  teraviewIsEstimate: boolean;
+  sheriffIsEstimate: boolean;
+  propertyTaxIsEstimate: boolean;
   /** key → typed text; blank means "use the firm standard". */
   overrides: Record<string, string>;
 }
@@ -148,6 +163,10 @@ const EMPTY_FORM: FormState = {
   purchasers: "",
   propertyAddress: "",
   closingDate: "",
+  titlePremiumIsEstimate: true,
+  teraviewIsEstimate: true,
+  sheriffIsEstimate: true,
+  propertyTaxIsEstimate: true,
   overrides: {},
 };
 
@@ -254,6 +273,14 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
 
       const mortgageText = seed ? amountText(seed.mortgage_amount) : "";
 
+      // A saved estimate's own answer wins. NULL means it was saved before the
+      // checkboxes existed (or by a caller that doesn't set them), so fall back
+      // to what the calculation used to do on its own: the title premium is an
+      // estimate until someone pastes the real quote, the other three always.
+      const titleOverrideText = seed ? amountText(seed.title_premium_override) : "";
+      const savedFlag = (v: boolean | null | undefined, fallback: boolean) =>
+        v === null || v === undefined ? fallback : v === true;
+
       // The firm's planning figure for the Statement of Adjustments, from
       // Settings → Closing costs. It seeds a NEW estimate only: once an estimate
       // exists its own figure wins, including a deliberately-cleared one, so
@@ -264,7 +291,16 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
         firmKey: seed?.firm_key || data.default_firm_key || "",
         statementType: seed?.statement_type || "draft",
         price: seed ? amountText(seed.purchase_price) : amountText(prefill.purchase_price),
-        deposit: seed ? amountText(seed.deposit_paid) : "",
+        // A saved estimate's own figure always wins — including a deliberately
+        // cleared one. Only a brand-new estimate takes the intake deposit.
+        deposit: seed ? amountText(seed.deposit_paid) : amountText(prefill.deposit_paid),
+        titlePremiumIsEstimate: savedFlag(
+          seed?.title_premium_is_estimate,
+          titleOverrideText === "",
+        ),
+        teraviewIsEstimate: savedFlag(seed?.teraview_is_estimate, true),
+        sheriffIsEstimate: savedFlag(seed?.sheriff_is_estimate, true),
+        propertyTaxIsEstimate: savedFlag(seed?.property_tax_is_estimate, true),
         mortgage: mortgageText,
         isToronto: seed ? Boolean(seed.is_toronto) : Boolean(prefill.is_toronto),
         isFirstTimeBuyer: seed
@@ -413,6 +449,22 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
     [statementTypes, form.statementType],
   );
 
+  /**
+   * The "Is estimate" checkbox for a field, or undefined when that field has
+   * none. Hidden on a final account: nothing there is provisional, so a chip
+   * cannot appear whatever the box says, and showing a dead control would
+   * suggest otherwise. The saved state is left alone so switching back to a
+   * draft restores the ticks.
+   */
+  const estimateBox = (fieldKey: string) => {
+    const flag = ESTIMATE_FLAG_BY_FIELD[fieldKey];
+    if (!flag || form.statementType === "final") return undefined;
+    return {
+      checked: form[flag],
+      onChange: (checked: boolean) => update(flag, checked),
+    };
+  };
+
   const inputs: ClosingCostInputs = useMemo(
     () => ({
       price: parseAmountInput(form.price) ?? 0,
@@ -426,6 +478,14 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
       provincialLttOverride: parseAmountInput(form.provincialLttOverride),
       municipalLttOverride: parseAmountInput(form.municipalLttOverride),
       propertyTaxAdjustment: parseAmountInput(form.propertyTaxAdjustment),
+      // A final account states charges actually incurred, so nothing on it is
+      // badged. The preview used to omit this and badged a final account that
+      // the saved statement and the PDF did not — mirrors buildEstimateRow.
+      isFinalAccount: form.statementType === "final",
+      titlePremiumIsEstimate: form.titlePremiumIsEstimate,
+      teraviewIsEstimate: form.teraviewIsEstimate,
+      sheriffIsEstimate: form.sheriffIsEstimate,
+      propertyTaxIsEstimate: form.propertyTaxIsEstimate,
     }),
     [form],
   );
@@ -446,6 +506,10 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
       provincial_ltt_override: inputs.provincialLttOverride,
       municipal_ltt_override: inputs.municipalLttOverride,
       property_tax_adjustment: inputs.propertyTaxAdjustment,
+      title_premium_is_estimate: form.titlePremiumIsEstimate,
+      teraview_is_estimate: form.teraviewIsEstimate,
+      sheriff_is_estimate: form.sheriffIsEstimate,
+      property_tax_is_estimate: form.propertyTaxIsEstimate,
       file_no_display: form.fileNo || null,
       purchasers: form.purchasers || null,
       property_address: form.propertyAddress || null,
@@ -1040,6 +1104,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
                   value={form[field.key]}
                   accent={accent}
                   placeholder={ADJUST_PLACEHOLDERS[field.key](statement)}
+                  estimate={estimateBox(field.key)}
                   onChange={(v) => update(field.key, v)}
                 />
               ))}
@@ -1050,6 +1115,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
                   value={form.overrides[field.key] ?? ""}
                   accent={accent}
                   placeholder={amountText(activeConfig[field.key])}
+                  estimate={estimateBox(field.key)}
                   onChange={(v) => setOverride(field.key, v)}
                 />
               ))}
@@ -1061,6 +1127,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
                 placeholder={ADJUST_PLACEHOLDERS.propertyTaxAdjustment(statement)}
                 badge={form.statementType === "final" ? "Required" : undefined}
                 invalid={finalNeedsPropertyTax}
+                estimate={estimateBox("propertyTaxAdjustment")}
                 onChange={updatePropertyTax}
               />
             </div>

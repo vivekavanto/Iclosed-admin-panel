@@ -75,8 +75,11 @@ For EACH distinct identification document you find in the image/PDF, do the foll
 
 Edge-case policy:
 - EVERY acceptable ID is "front-and-back" required — never return "single-sided".
-- Passports need BOTH sides: the photo/bio-data page is the "front", the rear cover / signature / address page is the "back". A passport is only "is_complete": true when both are visible.
-- A passport back is often a plain cover or a near-blank page — still classify it as the passport's "back", not as an unidentifiable document.
+- Passports need BOTH sides: the photo/bio-data page is the "front", the SIGNATURE page is the "back". A passport is only "is_complete": true when both are visible.
+- ⚠️ A passport is very often photographed OPEN, as a two-page spread. If ONE image shows the signature page AND the photo/bio-data page side by side, that is BOTH sides — return "side": "front-and-back" and "is_complete": true. Do NOT return "front" just because the bio-data page is the more prominent half. This is the single most common passport mistake: look at the WHOLE image, both halves, before deciding.
+- How to recognise the signature page: it carries the words "Signature of bearer" / "Signature du titulaire" (or the equivalent in the issuing country's language), usually above a handwritten signature and a line of small print about the passport being invalid unless signed. A visible handwritten signature on the page facing the bio-data page means the signature page IS present.
+- Only return "front" for a passport when the signature page is genuinely absent from the image — i.e. you can see the bio-data page alone, with no facing page or with a facing page that is blank/unrelated.
+- A passport back is sometimes a plain cover or a near-blank page — still classify it as the passport's "back", not as an unidentifiable document.
 - Cards (Driver's License, PR Card, etc.) are "front-and-back" required.
 - Driver's license backs (with PDF417 barcode, magstripe) are VALID identification.
 - Users may scan multiple distinct IDs onto one file — return one entry per ID.

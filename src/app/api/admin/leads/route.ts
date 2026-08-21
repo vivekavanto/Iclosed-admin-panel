@@ -25,6 +25,10 @@ const LEAD_FIELD_MAP: Record<string, string> = {
   status: 'status',
   leadType: 'lead_type',
   price: 'price',
+  // Deposit captured at intake (portal Step 2 → Property Details). Numeric,
+  // unlike leads.price which is a text column.
+  depositAmount: 'deposit_amount',
+  sellingDepositAmount: 'selling_deposit_amount',
   service: 'service',
   subService: 'sub_service',
   apsSigned: 'aps_signed',
@@ -37,10 +41,15 @@ const LEAD_FIELD_MAP: Record<string, string> = {
   sellingPrice: 'selling_price',
 };
 
-// leads.selling_price is a NUMERIC column (leads.price is plain text), so a
-// value typed as "$720,000" has to be stripped to digits before it goes to
-// Postgres or the update fails with an invalid-input-syntax error.
-const NUMERIC_COLUMNS = new Set(['selling_price']);
+// leads.selling_price and the two deposit columns are NUMERIC (leads.price is
+// plain text), so a value typed as "$720,000" has to be stripped to digits
+// before it goes to Postgres or the update fails with an invalid-input-syntax
+// error.
+const NUMERIC_COLUMNS = new Set([
+  'selling_price',
+  'deposit_amount',
+  'selling_deposit_amount',
+]);
 
 // camelCase payload key → DB column for the CLIENTS table (the person's
 // personal/corporate fields). These now live on clients (source of truth),

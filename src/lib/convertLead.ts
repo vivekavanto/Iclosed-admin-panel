@@ -253,6 +253,18 @@ export async function convertSingleLead(
     const rawPrice = lead.price ? String(lead.price).replace(/[^0-9.]/g, "") : null;
     const cleanPrice = rawPrice ? parseFloat(rawPrice) : null;
 
+    // ── Deposit ──────────────────────────────────────────────────────────────
+    // The figure the client gave at intake becomes the file's opening deposit,
+    // the same way their price becomes the file's price. NULL stays NULL: "no
+    // deposit given" must not read as "a deposit of zero" in the estimator.
+    const rawDeposit =
+      lead.deposit_amount != null
+        ? String(lead.deposit_amount).replace(/[^0-9.]/g, "")
+        : null;
+    const parsedDeposit = rawDeposit ? parseFloat(rawDeposit) : null;
+    const cleanDeposit =
+      parsedDeposit != null && Number.isFinite(parsedDeposit) ? parsedDeposit : null;
+
     // ── Create the deal ──────────────────────────────────────────────────────
     const { data: deal, error: dealError } = await supabaseAdmin
       .from("deals")
@@ -271,6 +283,9 @@ export async function convertSingleLead(
         property_address: lead.address_street ?? "Address TBD",
         closing_date: opts.closing_date ?? null,
         price: cleanPrice ?? 0,
+        // Only spread when there IS a deposit, so a conversion still works on a
+        // database where the deposit migration hasn't been applied yet.
+        ...(cleanDeposit != null ? { deposit_amount: cleanDeposit } : {}),
         // Carry referral attribution (the partner whose code was applied at
         // intake) onto the deal so admins can see who referred each file. Only
         // spread when the lead actually carries a referral so a non-referred

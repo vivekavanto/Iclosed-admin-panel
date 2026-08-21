@@ -23,6 +23,10 @@ type DealRow = {
   opening_date?: string | null;
   requisition_date?: string | null;
   price?: number | null;
+  // Deposit already paid on the purchase. NULL means "not provided", which the
+  // estimator treats differently from 0 ("no deposit"), so it is never
+  // defaulted to a number the way price is.
+  deposit_amount?: number | null;
   outstanding_undertakings?: number | null;
   outstanding_requisitions?: number | null;
 };
@@ -116,6 +120,7 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
             opening_date: toDateInputValue(deal.opening_date),
             requisition_date: toDateInputValue(deal.requisition_date),
             price: deal.price ?? 0,
+            deposit_amount: deal.deposit_amount ?? null,
             outstanding_undertakings: deal.outstanding_undertakings ?? 0,
             outstanding_requisitions: deal.outstanding_requisitions ?? 0,
           });
@@ -166,6 +171,13 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
         opening_date: form.opening_date ?? "",
         requisition_date: form.requisition_date ?? "",
         price: Number(form.price) || 0,
+        // Blank stays NULL — "no deposit given" is not "a deposit of zero".
+        deposit_amount:
+          form.deposit_amount === null ||
+          form.deposit_amount === undefined ||
+          String(form.deposit_amount) === ""
+            ? null
+            : Number(form.deposit_amount),
         outstanding_undertakings: Number(form.outstanding_undertakings) || 0,
         outstanding_requisitions: Number(form.outstanding_requisitions) || 0,
         // GAP-001: optimistic concurrency guard.
@@ -419,6 +431,22 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
                   onChange={(e) =>
                     updateField("price", Number(e.target.value) as any)
                   }
+                  className={inputClass}
+                />
+              </Field>
+              <Field label="Deposit amount">
+                <input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={form.deposit_amount ?? ""}
+                  onChange={(e) =>
+                    updateField(
+                      "deposit_amount",
+                      e.target.value === "" ? null : Number(e.target.value),
+                    )
+                  }
+                  placeholder="Deposit already paid"
                   className={inputClass}
                 />
               </Field>

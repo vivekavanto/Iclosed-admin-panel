@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import {
+  BALANCE_LABELS,
   DISCLAIMERS,
   LINE_TOOLTIPS,
   type Statement,
@@ -127,7 +128,9 @@ const StatementCard: React.FC<StatementCardProps> = ({
             <div className="mt-1.5 border-t border-dashed border-gray-200 pt-2">
               {renderLine({
                 key: "hst",
-                label: "HST",
+                // The engine's own wording, rate and all — the same string the
+                // PDF prints, so the two never say HST differently.
+                label: statement.hst.label,
                 amount: statement.hst.amount,
               })}
             </div>
@@ -149,7 +152,7 @@ const StatementCard: React.FC<StatementCardProps> = ({
 
       <div className="mt-2 flex items-baseline justify-between gap-3.5 border-t border-gray-900 pt-2.5">
         <span className="text-[13.5px] font-semibold text-gray-900">
-          Total closing costs
+          {BALANCE_LABELS.total}
         </span>
         <span className="text-[14.5px] font-semibold tabular-nums text-gray-900">
           {formatCurrency(statement.total)}
@@ -168,35 +171,41 @@ const StatementCard: React.FC<StatementCardProps> = ({
           Funds you&apos;ll need on closing
         </div>
         <BalanceRow
-          label="Purchase price"
+          label={BALANCE_LABELS.purchase_price}
           value={formatCurrency(statement.balance.purchasePrice)}
         />
         <BalanceRow
           muted
-          label="less deposit already paid"
+          label={BALANCE_LABELS.deposit}
           value={signedCurrency(-statement.balance.depositPaid)}
         />
         <BalanceRow
           muted
-          label="less mortgage advance from your lender"
+          label={BALANCE_LABELS.mortgage}
           value={signedCurrency(-statement.balance.mortgageAmount)}
+        />
+        {/* Costs before adjustments, in the same order as the statement above
+            and as the PDF. */}
+        <BalanceRow
+          label={BALANCE_LABELS.closing_costs}
+          value={signedCurrency(statement.balance.closingCosts)}
         />
         {statement.balance.propertyTaxAdjustment !== 0 && (
           <BalanceRow
-            label="plus adjustments (above)"
+            label={
+              statement.balance.propertyTaxAdjustment > 0
+                ? BALANCE_LABELS.adjustment_charge
+                : BALANCE_LABELS.adjustment_credit
+            }
             value={signedCurrency(statement.balance.propertyTaxAdjustment)}
           />
         )}
-        <BalanceRow
-          label="plus closing costs (above)"
-          value={signedCurrency(statement.balance.closingCosts)}
-        />
         <div
           className="mt-2.5 flex items-baseline justify-between border-t pt-3"
           style={{ borderColor: `${accent}33` }}
         >
           <span className="text-[14px] font-bold text-gray-900">
-            Estimated balance due on closing
+            {BALANCE_LABELS.balance_due}
           </span>
           <span
             className="text-[22px] font-bold tabular-nums"

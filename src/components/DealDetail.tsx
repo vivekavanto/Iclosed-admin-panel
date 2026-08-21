@@ -38,13 +38,10 @@ import {
   NON_CITIZEN_FLAG_TOOLTIP,
 } from "@/lib/isNonCitizenFlagged";
 import { formatLocalDate, formatLocalDateTime } from "@/lib/formatDate";
-import {
-  downloadTaskPdf,
-  downloadDealZip,
-  type PdfDealMeta,
-  type PdfTaskInput,
-  type PdfDealSection,
-} from "@/lib/dealPdf";
+// The per-task download button still renders in the browser. The whole-file
+// package ("Download All") moved to /api/admin/deals/[id]/package so it shares
+// one builder with "Email to Clerk" — see handleDownloadDealZip.
+import { downloadTaskPdf, type PdfDealMeta, type PdfTaskInput } from "@/lib/dealPdf";
 import { upload } from "@vercel/blob/client";
 import {
   BLOB_ACCESS,
@@ -3709,19 +3706,17 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
    * Send every uploaded document on the file to the conveyancing clerk.
    *
    * All the work is server-side (/api/admin/deals/[id]/email-to-clerk) — the
-   * inbox is picked from the file type there, and the documents are attached as
-   * separate files, for the same reason "Download All" zips them separately:
-   * merging mangles the source documents' own formatting. Confirmed first
-   * because it pushes client PII to an external mailbox and can't be recalled.
+   * inbox is picked from the file type there, and the package is assembled the
+   * same way "Download All" assembles the ZIP: identification, the agreement of
+   * purchase and sale, personal information and the property facts (lock box
+   * code, rental equipment) merged into one PDF each, everything else attached
+   * in its original format.
+   *
+   * Sends on the click — no confirm dialog, same as the final report. The send
+   * is still audited server-side (it pushes client PII to an external mailbox),
+   * and the toast reports what actually went out.
    */
   const handleEmailToClerk = async () => {
-    const confirmed = window.confirm(
-      "Email all client documents on this file to the clerk?\n\n" +
-      "They will be sent as separate attachments to the purchase and/or sale " +
-      "clerk inbox, based on the file type.",
-    );
-    if (!confirmed) return;
-
     setEmailingClerk(true);
     try {
       const res = await fetch(`/api/admin/deals/${deal.id}/email-to-clerk`, { method: "POST" });
@@ -3731,8 +3726,20 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
         return;
       }
       const linkedNote = data.linked > 0 ? ` (${data.linked} sent as links — too large to attach)` : "";
+      // The combined PDFs the clerks asked for: IDs, the agreement(s), personal
+      // information, and the property facts (lock box code, rental equipment).
+      const merged = [
+        data.identification > 0 ? "IDs" : "",
+        data.aps > 0 ? "the APS" : "",
+        data.personalInfo > 0 ? "personal information" : "",
+        data.propertyInfo > 0 ? "property information" : "",
+      ].filter(Boolean);
+      const mergedNote =
+        merged.length > 0
+          ? ` — ${merged.join(", ")} combined into ${merged.length} PDF${merged.length === 1 ? "" : "s"}`
+          : "";
       showToast(
-        `Sent ${data.attached} document${data.attached === 1 ? "" : "s"} to ${data.recipients.join(", ")}${linkedNote}`,
+        `Sent ${data.attached} attachment${data.attached === 1 ? "" : "s"} to ${data.recipients.join(", ")}${mergedNote}${linkedNote}`,
       );
     } catch (err: any) {
       showToast(err?.message ?? "Failed to email the documents", "error");
@@ -3742,103 +3749,65 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
   };
 
   /**
-   * "Download All" — every task's documents as a ZIP of separate files.
+   * "Download All" — the deal package as a ZIP of PDFs, one per task, flat.
    *
-   * The sections are assembled exactly as the old combined-PDF export did (same
-   * milestone grouping, same "only tasks with data" rule); only the packaging
-   * changed. Merging everything into one PDF flattened the source documents and
-   * lost their own formatting, so each uploaded file now comes down in its
-   * original bytes, and tasks whose only content is form answers get a small
-   * PDF of their own so nothing that used to be in the package is dropped.
+   * The tasks are assembled exactly as the old combined-PDF export did (same
+   * milestone ordering, same "only tasks with data" rule); only the packaging
+   * changed. The clerks who read these asked for PDFs rather than folders —
+   * clicking into a folder per task, then a file per document, is what costs
+   * them time — so every task becomes ONE PDF with its form answers rendered and
+   * all of its uploads merged in behind them.
+   *
+   * Identification and personal information merge one step further, across every
+   * party on the file: all the IDs in one PDF, all the personal information in
+   * another. Same two documents the "Email to Clerk" send attaches.
+   */
+  /**
+   * "Download All" — the deal package as a ZIP of PDFs, one per entry, flat.
+   *
+   * The package itself is built SERVER-SIDE by /api/admin/deals/[id]/package,
+   * which is the same builder "Email to Clerk" attaches. It used to be assembled
+   * here in the browser from React state, matched to tasks by id, template and
+   * title; a stored document the matcher couldn't place — a lead_corporate_docs
+   * row with no task_id whose title no longer matched its task — was silently
+   * missing from the ZIP while arriving perfectly well on the clerk's email. One
+   * builder, one enumeration, no divergence.
+   *
+   * Each entry is ONE PDF: a task's answers with every file uploaded against it
+   * merged in behind them (so a multi-file void cheque or property tax bill is a
+   * single document), plus identification and personal information merged across
+   * every party on the file.
    */
   const handleDownloadDealZip = async () => {
     setDownloadingDealZip(true);
     try {
-      // Freshest responses and ID documents so recently-saved edits and uploads
-      // are included without a page refresh.
-      const [fresh, freshIdDocs] = await Promise.all([
-        fetchFreshResponsesMap(),
-        fetchIdDocsByLead(),
-      ]);
-      if (fresh) setResponsesByTask(fresh);
-      // Filter the SAME rows the task table renders (resolved leadType) against
-      // the freshly-fetched responses and ID documents — not the raw rows against
-      // state, which reports "no tasks" whenever the page's own fetch hasn't
-      // landed.
-      const realTasks = dedupeTasksByTemplate(tasks).flatMap((t) => {
-        const row = toDisplayRow(t);
-        return row && taskHasData(row, fresh ?? undefined, freshIdDocs ?? undefined)
-          ? [row]
-          : [];
-      });
-      const milestoneOrder = (m: Milestone) => m.orderIndex ?? Number.MAX_SAFE_INTEGER;
-      const orderedMilestones = [...milestones].sort((a, b) => milestoneOrder(a) - milestoneOrder(b));
-      const sections: PdfDealSection[] = [];
-      const usedTaskIds = new Set<string>();
-      for (const m of orderedMilestones) {
-        const milestoneTasks = realTasks
-          .filter((t) => t.milestoneId === m.id)
-          .sort((a, b) => (a.orderIndex ?? Number.MAX_SAFE_INTEGER) - (b.orderIndex ?? Number.MAX_SAFE_INTEGER));
-        if (milestoneTasks.length === 0) continue;
-        milestoneTasks.forEach((t) => usedTaskIds.add(t.id));
-        const builtTasks = await Promise.all(
-          milestoneTasks.map((t) =>
-            buildPdfTaskInput(t, fresh ?? undefined, freshIdDocs ?? undefined),
-          ),
-        );
-        sections.push({
-          milestoneTitle: m.title,
-          leadType: m.leadType ?? null,
-          tasks: builtTasks,
-        });
-      }
-      // Tasks the milestone pass didn't claim. In the unified family view that's
-      // every co-client's personal task: their milestones live on THEIR deal row,
-      // so `t.milestoneId` never matches one of the primary's milestones loaded
-      // above. Lumping them under "Other Tasks" hid whose paperwork it was, so
-      // they're grouped per person and the section is titled with that person's
-      // name and role ("Pavithra Testing — Co-Purchaser"). Anything with no
-      // resolvable owner (a manually-added, unlinked task) keeps the old label.
-      const orphanTasks = realTasks.filter((t) => !usedTaskIds.has(t.id));
-      if (orphanTasks.length > 0) {
-        const byOwner = new Map<string, DisplayTask[]>();
-        for (const t of orphanTasks) {
-          const key = t.ownerDealId ?? "";
-          byOwner.set(key, [...(byOwner.get(key) ?? []), t]);
-        }
-        for (const [ownerDealId, ownerTasks] of byOwner) {
-          const person = ownerDealId ? familyPeople.find((p) => p.id === ownerDealId) : undefined;
-          const built = await Promise.all(
-            ownerTasks.map((t) =>
-              buildPdfTaskInput(t, fresh ?? undefined, freshIdDocs ?? undefined),
-            ),
-          );
-          sections.push({
-            milestoneTitle: person?.lead_name || "Other Tasks",
-            leadType: person?.role || null,
-            tasks: built,
-          });
-        }
-      }
-      if (sections.length === 0) {
-        showToast(
-          tasks.length === 0
-            ? "This deal's tasks are still loading — try again in a moment"
-            : "No tasks with responses or documents to download",
-          "error",
-        );
+      const res = await fetch(`/api/admin/deals/${deal.id}/package`, { method: "POST" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showToast(data?.error ?? "Could not build the documents ZIP", "error");
         return;
       }
-      const { files, failed } = await downloadDealZip(buildPdfDealMeta(), sections);
-      if (files === 0) {
-        showToast("None of this deal's documents could be downloaded", "error");
-        return;
-      }
-      // A blob that can't be fetched is skipped, not fatal — say so rather than
-      // letting the ZIP look complete when it isn't.
+
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") ?? "";
+      const named = /filename="([^"]+)"/.exec(disposition)?.[1];
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = named || `Deal ${deal.fileNumber ?? "Documents"} - Documents.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // Revoked on the next tick so the click has already started the save.
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+
+      // A blob that couldn't be fetched is skipped, not fatal — say so rather
+      // than letting the ZIP look complete when it isn't.
+      const failedRaw = decodeURIComponent(res.headers.get("X-Package-Failed") ?? "");
+      const failed = failedRaw ? failedRaw.split(", ").filter(Boolean) : [];
       if (failed.length > 0) {
         showToast(
-          `Downloaded ${files} file${files === 1 ? "" : "s"} — ${failed.length} could not be ` +
+          `Downloaded — ${failed.length} document${failed.length === 1 ? "" : "s"} could not be ` +
           `retrieved: ${failed.slice(0, 3).join(", ")}${failed.length > 3 ? "…" : ""}`,
           "error",
         );
@@ -4170,6 +4139,22 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                     </p>
                     <p className="font-bold text-sm text-slate-900 leading-none">
                       ${Number(rawDeal.price).toLocaleString()}
+                    </p>
+                  </div>
+                </div>
+              )}
+              {typeof rawDeal?.deposit_amount === "number" &&
+                rawDeal.deposit_amount > 0 && (
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400">
+                    <FileText size={14} />
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase font-bold text-slate-400 tracking-wider leading-none mb-1">
+                      Deposit
+                    </p>
+                    <p className="font-bold text-sm text-slate-900 leading-none">
+                      ${Number(rawDeal.deposit_amount).toLocaleString()}
                     </p>
                   </div>
                 </div>
@@ -4610,13 +4595,14 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
             <h2 className="text-lg font-bold text-slate-900">Tasks</h2>
             <div className="flex items-center gap-2">
               {/* "Download All" only makes sense once there's finished work to
-                  export — show it only when at least one task is completed. */}
+                  export — show it only when at least one task is completed.
+                  Ships a ZIP of PDFs, one per task; see handleDownloadDealZip. */}
               {tasks.some((t) => t.status === "Completed") && (
               <button
                 onClick={handleDownloadDealZip}
                 disabled={downloadingDealZip}
                 className="bg-brand-primary text-white hover:bg-brand-primaryHover px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-colors shadow-sm disabled:opacity-60"
-                title="Download every document as a separate file in a ZIP"
+                title="Download a ZIP of PDFs — one per task, with all IDs in one PDF and all personal information in another"
               >
                 {downloadingDealZip ? (
                   <>
@@ -4629,16 +4615,17 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                 )}
               </button>
               )}
-              {/* Sends every uploaded document to the firm's clerk inbox as
-                  SEPARATE attachments, in their original formats — same
-                  packaging rule as the ZIP above. Shown on the same condition
-                  as Download All. */}
+              {/* Sends the whole document package to the firm's clerk inbox,
+                  packaged exactly like the ZIP above: identification and
+                  personal information merged into one PDF each, every other
+                  document attached in its original format. Shown on the same
+                  condition as Download All. */}
               {tasks.some((t) => t.status === "Completed") && (
               <button
                 onClick={handleEmailToClerk}
                 disabled={emailingClerk}
                 className="bg-white text-brand-primary border border-brand-primary hover:bg-brand-light px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-colors shadow-sm disabled:opacity-60"
-                title="Email all client documents to the purchase / sale clerk"
+                title="Email all client documents to the purchase / sale clerk — IDs in one PDF, personal information in another"
               >
                 {emailingClerk ? (
                   <>

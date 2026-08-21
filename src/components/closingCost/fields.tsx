@@ -172,6 +172,12 @@ export const SmallMoney: React.FC<{
   badge?: string;
   /** Draws the field as unanswered; the panel footer reads back the reason. */
   invalid?: boolean;
+  /**
+   * Renders an "Is estimate" checkbox under the field. Only the four
+   * provisional lines pass it — ticked, the line carries the ESTIMATE chip on
+   * screen and in the PDF; unticked, it reads as a settled figure.
+   */
+  estimate?: { checked: boolean; onChange: (checked: boolean) => void };
   onChange: (value: string) => void;
 }> = ({
   label,
@@ -181,6 +187,7 @@ export const SmallMoney: React.FC<{
   allowNegative,
   badge,
   invalid,
+  estimate,
   onChange,
 }) => (
   <div className="flex flex-col gap-1">
@@ -219,6 +226,18 @@ export const SmallMoney: React.FC<{
         }}
       />
     </div>
+    {estimate && (
+      <label className="flex cursor-pointer select-none items-center gap-1.5 text-[10px] font-medium text-gray-500">
+        <input
+          type="checkbox"
+          checked={estimate.checked}
+          onChange={(e) => estimate.onChange(e.target.checked)}
+          className="h-3.5 w-3.5 cursor-pointer rounded border-gray-300"
+          style={{ accentColor: accent }}
+        />
+        Is estimate
+      </label>
+    )}
   </div>
 );
 

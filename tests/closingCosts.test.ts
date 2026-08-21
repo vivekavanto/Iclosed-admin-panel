@@ -93,7 +93,7 @@ test("torontoMLTT: identical to provincial at or below $2M", () => {
 test("torontoMLTT: still equal to provincial through $3M", () => {
   // Not a coincidence worth relying on, but worth pinning: the provincial
   // table's top open-ended band is 2.5%, which is exactly Toronto's $2M–$3M
-  // band. The two only diverge ABOVE $3M, where Toronto's 3.5%+ luxury tiers
+  // band. The two only diverge ABOVE $3M, where Toronto's 4.4%+ luxury tiers
   // start. Anyone "fixing" a test that expects Toronto > provincial at $3M
   // should change the test, not the brackets.
   assert.equal(torontoMLTT(2_500_000), provincialLTT(2_500_000));
@@ -105,16 +105,16 @@ test("torontoMLTT: still equal to provincial through $3M", () => {
 test("torontoMLTT: luxury tiers above $2M", () => {
   // 36,475 + 1,000,000 × 2.5%
   assert.equal(torontoMLTT(3_000_000), 61_475);
-  // + 1,000,000 × 3.5%
-  assert.equal(torontoMLTT(4_000_000), 96_475);
-  // + 1,000,000 × 4.5%
-  assert.equal(torontoMLTT(5_000_000), 141_475);
-  // + 5,000,000 × 5.5%
-  assert.equal(torontoMLTT(10_000_000), 416_475);
-  // + 10,000,000 × 6.5%
-  assert.equal(torontoMLTT(20_000_000), 1_066_475);
-  // + 5,000,000 × 7.5% (top open-ended band)
-  assert.equal(torontoMLTT(25_000_000), 1_441_475);
+  // + 1,000,000 × 4.40%
+  assert.equal(torontoMLTT(4_000_000), 105_475);
+  // + 1,000,000 × 5.45%
+  assert.equal(torontoMLTT(5_000_000), 159_975);
+  // + 5,000,000 × 6.50%
+  assert.equal(torontoMLTT(10_000_000), 484_975);
+  // + 10,000,000 × 7.55%
+  assert.equal(torontoMLTT(20_000_000), 1_239_975);
+  // + 5,000,000 × 8.60% (top open-ended band)
+  assert.equal(torontoMLTT(25_000_000), 1_669_975);
 });
 
 // ── FCT title premium ──────────────────────────────────────────────────

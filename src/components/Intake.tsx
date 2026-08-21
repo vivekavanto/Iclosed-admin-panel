@@ -38,6 +38,8 @@ interface IntakeState {
   subService: 'buying' | 'selling' | 'both' | null;
   clientType: 'residential' | 'corporate' | null;
   price: string;
+  /** Deposit already paid. Free text like price; cleaned on submit. */
+  deposit: string;
   address: {
     street: string;
     unit: string;
@@ -69,6 +71,7 @@ const Intake: React.FC = () => {
     subService: null,
     clientType: null,
     price: '',
+    deposit: '',
     address: { street: '', unit: '', city: '', postalCode: '', province: 'Ontario' },
     apsSigned: null,
     contact: { fullName: '', email: '', phone: '' },
@@ -86,6 +89,14 @@ const Intake: React.FC = () => {
       const firstName = nameParts[0] || '';
       const lastName = nameParts.slice(1).join(' ') || '';
 
+      // leads.deposit_amount is NUMERIC — strip "$" and commas, and keep a
+      // blank as "no deposit given" rather than writing a zero nobody typed.
+      const depositDigits = data.deposit.replace(/[^0-9.]/g, '');
+      const depositAmount =
+        depositDigits === '' || !Number.isFinite(Number(depositDigits))
+          ? null
+          : Number(depositDigits);
+
       // 1. Insert into leads
       const { data: lead, error: leadError } = await supabase
         .from('leads')
@@ -97,6 +108,9 @@ const Intake: React.FC = () => {
           service: data.service,
           sub_service: data.subService,
           purchase_price: data.price,
+          // Only spread when there IS one, so intake still works on a database
+          // where the deposit migration hasn't been applied yet.
+          ...(depositAmount != null ? { deposit_amount: depositAmount } : {}),
           is_corporate: data.clientType === 'corporate',
           corporate_name: data.corporate.name || null,
           corporate_email: data.corporate.email || null,
@@ -614,6 +628,25 @@ const Intake: React.FC = () => {
                   onChange={(e) => setData({ ...data, price: e.target.value })}
                 />
               </div>
+              {/* Deposit already paid. Not required to submit, but it lands on
+                  the lead, follows the lead onto the file at conversion, and
+                  prefills "Deposit already paid" in the closing-cost estimator —
+                  so asking here saves the clerk re-typing it later. */}
+              <label className="block font-bold text-sm text-slate-900 pt-2">
+                Deposit Amount
+              </label>
+              <div className="relative">
+                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-medium">
+                  $
+                </span>
+                <input
+                  type="text"
+                  placeholder="50,000"
+                  className="w-full pl-8 pr-4 py-4 border border-slate-300 rounded-lg text-lg outline-none focus:border-brand-primary bg-white text-black font-bold placeholder:text-slate-200"
+                  value={data.deposit}
+                  onChange={(e) => setData({ ...data, deposit: e.target.value })}
+                />
+              </div>
             </div>
           </StepWrapper>
         );
@@ -1122,6 +1155,7 @@ const Intake: React.FC = () => {
                   subService: null,
                   clientType: null,
                   price: "",
+                  deposit: "",
                   address: {
                     street: "",
                     unit: "",

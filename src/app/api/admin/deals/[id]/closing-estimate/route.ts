@@ -53,7 +53,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const { data: deal, error: dealErr } = await supabase
     .from("deals")
     .select(
-      "id, file_number, type, status, price, property_address, closing_date, lead_id, is_deleted",
+      "id, file_number, type, status, price, deposit_amount, property_address, closing_date, lead_id, is_deleted",
     )
     .eq("id", id)
     .maybeSingle();
@@ -103,18 +103,23 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   let leadCity: string | null = null;
   let purchasersHint: string | null = null;
   let clientEmail: string | null = null;
+  // The deposit the client gave at intake. The file's own figure wins — a clerk
+  // may have corrected it — and the lead is the fallback for a file converted
+  // before deals.deposit_amount existed, or whose lead was updated afterwards.
+  let leadDeposit: number | null = null;
   if (deal.lead_id && isUuid(deal.lead_id)) {
     try {
       const { data: lead } = await supabase
         .from("leads")
         .select(
-          "id, first_name, last_name, email, ownership_history, address_city, parent_lead_id",
+          "id, first_name, last_name, email, ownership_history, address_city, parent_lead_id, deposit_amount",
         )
         .eq("id", deal.lead_id)
         .maybeSingle();
       leadOwnershipHistory = lead?.ownership_history ?? null;
       leadCity = lead?.address_city ?? null;
       clientEmail = lead?.email ?? null;
+      leadDeposit = lead?.deposit_amount ?? null;
 
       if (lead) {
         // A statement is addressed to everyone buying, so the hint covers the
@@ -166,6 +171,10 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     default_firm_key: defaultFirmKey,
     prefill: {
       purchase_price: deal.price ?? 0,
+      // "Deposit already paid" — from the file, falling back to the lead's
+      // intake figure. NULL when neither has one, so the field opens BLANK
+      // rather than pre-filled with a 0 nobody typed.
+      deposit_paid: deal.deposit_amount ?? leadDeposit ?? null,
       is_toronto: torontoHint,
       // The intake question is "have you owned before?" — "No (first time)" is
       // the only answer that suggests first-time-buyer status.

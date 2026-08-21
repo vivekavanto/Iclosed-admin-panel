@@ -6,8 +6,10 @@ import ClosingCostFirmCard from "./ClosingCostFirmCard";
 import ClosingCostSharedRatesCard from "./ClosingCostSharedRatesCard";
 import ClosingCostStatementTypesCard from "./ClosingCostStatementTypesCard";
 import {
+  BALANCE_LABELS,
   DEFAULT_LTT_TIERS,
   DEFAULT_MLTT_TIERS,
+  LINE_LABELS,
   computeStatement,
   ratesFromConfigRow,
   type Tier,
@@ -603,10 +605,10 @@ const ClosingCostSettings: React.FC = () => {
             </p>
             <dl className="mt-4 space-y-2 text-[12px]">
               {[
-                ["Ontario land transfer tax", preview.detail.provincialLTT],
-                ["Title insurance premium", preview.detail.titlePremium],
-                ["Legal fees", preview.detail.legalFees],
-                ["HST", preview.hst.amount],
+                [LINE_LABELS.ltt_provincial, preview.detail.provincialLTT],
+                [LINE_LABELS.title_premium, preview.detail.titlePremium],
+                [LINE_LABELS.legal_fees, preview.detail.legalFees],
+                [LINE_LABELS.hst, preview.hst.amount],
               ].map(([label, value]) => (
                 <div key={String(label)} className="flex justify-between gap-3">
                   <dt className="text-gray-500">{label}</dt>
@@ -616,13 +618,13 @@ const ClosingCostSettings: React.FC = () => {
                 </div>
               ))}
               <div className="flex justify-between gap-3 border-t border-gray-100 pt-2 font-bold">
-                <dt style={{ color: BRAND }}>Total closing costs</dt>
+                <dt style={{ color: BRAND }}>{BALANCE_LABELS.total}</dt>
                 <dd className="tabular-nums" style={{ color: BRAND }}>
                   {formatCurrency(preview.total)}
                 </dd>
               </div>
               <div className="flex justify-between gap-3">
-                <dt className="text-gray-500">Balance due on closing</dt>
+                <dt className="text-gray-500">{BALANCE_LABELS.balance_due}</dt>
                 <dd className="tabular-nums text-gray-800">
                   {formatCurrency(preview.balance.balanceDue)}
                 </dd>

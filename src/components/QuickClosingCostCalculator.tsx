@@ -16,6 +16,7 @@ import { formatCurrency, parseAmountInput } from "@/lib/formatCurrency";
 import {
   ADJUST_INPUTS,
   ADJUST_PLACEHOLDERS,
+  ESTIMATE_FLAG_BY_FIELD,
   OVERRIDE_FIELDS,
 } from "@/components/closingCost/adjustFields";
 import {
@@ -88,6 +89,15 @@ interface FormState {
   purchasers: string;
   propertyAddress: string;
   closingDate: string;
+  /**
+   * Whether each provisional line still carries the ESTIMATE chip — the four
+   * "Is estimate" checkboxes in the Adjust fees panel. They drive the chip on
+   * screen, in the PDF and in the client's copy.
+   */
+  titlePremiumIsEstimate: boolean;
+  teraviewIsEstimate: boolean;
+  sheriffIsEstimate: boolean;
+  propertyTaxIsEstimate: boolean;
   /** key → typed text; blank means "use the firm standard". */
   overrides: Record<string, string>;
 }
@@ -109,6 +119,10 @@ const EMPTY_FORM: FormState = {
   purchasers: "",
   propertyAddress: "",
   closingDate: "",
+  titlePremiumIsEstimate: true,
+  teraviewIsEstimate: true,
+  sheriffIsEstimate: true,
+  propertyTaxIsEstimate: true,
   overrides: {},
 };
 
@@ -274,6 +288,22 @@ const QuickClosingCostCalculator: React.FC = () => {
     [statementTypes, form.statementType],
   );
 
+  /**
+   * The "Is estimate" checkbox for a field, or undefined when that field has
+   * none. Hidden on a final account: nothing there is provisional, so a chip
+   * cannot appear whatever the box says, and showing a dead control would
+   * suggest otherwise. The saved state is left alone so switching back to a
+   * draft restores the ticks.
+   */
+  const estimateBox = (fieldKey: string) => {
+    const flag = ESTIMATE_FLAG_BY_FIELD[fieldKey];
+    if (!flag || form.statementType === "final") return undefined;
+    return {
+      checked: form[flag],
+      onChange: (checked: boolean) => update(flag, checked),
+    };
+  };
+
   const inputs: ClosingCostInputs = useMemo(
     () => ({
       price: parseAmountInput(form.price) ?? 0,
@@ -288,6 +318,10 @@ const QuickClosingCostCalculator: React.FC = () => {
       // A final account states charges actually incurred, so nothing on it is
       // badged as an estimate. Mirrors buildEstimateRow on the server.
       isFinalAccount: form.statementType === "final",
+      titlePremiumIsEstimate: form.titlePremiumIsEstimate,
+      teraviewIsEstimate: form.teraviewIsEstimate,
+      sheriffIsEstimate: form.sheriffIsEstimate,
+      propertyTaxIsEstimate: form.propertyTaxIsEstimate,
     }),
     [form],
   );
@@ -686,6 +720,7 @@ const QuickClosingCostCalculator: React.FC = () => {
                   value={form[field.key]}
                   accent={accent}
                   placeholder={ADJUST_PLACEHOLDERS[field.key](statement)}
+                  estimate={estimateBox(field.key)}
                   onChange={(v) => update(field.key, v)}
                 />
               ))}
@@ -696,6 +731,7 @@ const QuickClosingCostCalculator: React.FC = () => {
                   value={form.overrides[field.key] ?? ""}
                   accent={accent}
                   placeholder={amountText(activeConfig[field.key])}
+                  estimate={estimateBox(field.key)}
                   onChange={(v) => setOverride(field.key, v)}
                 />
               ))}
@@ -707,6 +743,7 @@ const QuickClosingCostCalculator: React.FC = () => {
                 placeholder={ADJUST_PLACEHOLDERS.propertyTaxAdjustment(statement)}
                 badge={form.statementType === "final" ? "Required" : undefined}
                 invalid={finalNeedsPropertyTax}
+                estimate={estimateBox("propertyTaxAdjustment")}
                 onChange={updatePropertyTax}
               />
             </div>

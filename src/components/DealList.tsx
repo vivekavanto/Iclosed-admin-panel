@@ -112,15 +112,18 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   // Defaults to 'asc' so the upcoming closings (the default filtered view)
   // surface soonest-first.
   const [closingSort, setClosingSort] = useState<'asc' | 'desc' | null>('asc');
-  // Which file row has its pending-tasks panel expanded (one at a time). The
-  // list API only returns the Steps count, not the task titles, so we lazy-fetch
-  // the deal's tasks from /api/admin/tasks the first time a row is expanded and
-  // cache them in pendingTasks keyed by deal id.
+  // Which file row has its progress panel expanded (one at a time). The list
+  // API only returns the Steps count, not the titles, so we lazy-fetch the
+  // deal's tasks from /api/admin/tasks and its milestones from
+  // /api/admin/milestones the first time a row is expanded, and cache both in
+  // pendingTasks keyed by deal id.
   //
-  // Once a file has NO pending tasks the panel switches to the next incomplete
-  // milestones (Title Search, Mortgage Instructions, …) — "what's next on this
-  // file" is the question the panel is really answering, and an empty task list
-  // stops answering it. Those are fetched only in that case.
+  // Tasks and milestones are BOTH listed, always. Milestone status is derived
+  // from the tasks under it (recalcMilestones.ts), so the two answer different
+  // questions: the tasks say what is outstanding, the milestones say what stage
+  // the file is stuck at. A file can also carry open milestones with no open
+  // tasks — an admin-role or auto-complete stage — so showing milestones only
+  // as a fallback hid them on exactly the files where they were the answer.
   const [expandedDealId, setExpandedDealId] = useState<string | null>(null);
   const [pendingTasks, setPendingTasks] = useState<
     Record<
@@ -129,7 +132,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
         loading: boolean;
         error: boolean;
         tasks: { id: string; title: string; status: string }[];
-        nextMilestones: { id: string; title: string; status: string; leadType: string | null }[];
+        milestones: { id: string; title: string; status: string; leadType: string | null }[];
       }
     >
   >({});
@@ -243,7 +246,8 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   }, []);
 
   // Loads what the panel shows for one file: the open tasks exactly as the file
-  // page lists them, or — when none are open — the next incomplete milestones.
+  // page lists them, and the open milestones in stage order. Both every time —
+  // one request each, made once per file and then served from the cache.
   const loadFileProgress = useCallback(async (dealId: string) => {
     // The handful of fields the panel reads off each API row.
     type TaskRow = {
@@ -296,35 +300,36 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           };
         });
 
-      let nextMilestones: { id: string; title: string; status: string; leadType: string | null }[] = [];
-      if (pending.length === 0) {
-        // Milestones are already ordered by order_index (the canonical stage
-        // sequence) by the API, so the first three open ones ARE the next three.
-        // Family milestones mirror by stage, so the primary's rows speak for the
-        // whole file.
-        const msRes = await fetch(`/api/admin/milestones?deal_id=${dealId}`);
-        if (msRes.ok) {
-          const ms: MilestoneRow[] = await msRes.json();
-          nextMilestones = (ms || [])
-            .filter((m) => m?.status !== 'Completed')
-            .slice(0, 3)
-            .map((m) => ({
-              id: String(m.id),
-              title: m.title?.trim() || 'Untitled milestone',
-              status: m.status || 'Pending',
-              leadType: m.stage_templates?.lead_type ?? null,
-            }));
-        }
+      // Milestones come back already ordered by order_index (the canonical
+      // stage sequence), so the open ones read in the order the file works
+      // through them. Family milestones mirror by stage, so the primary's rows
+      // speak for the whole file.
+      //
+      // A milestone fetch that fails does NOT fail the panel: the tasks are the
+      // more important half, and an empty milestone list reads as "none open",
+      // which is why the failure is swallowed here rather than thrown.
+      let milestones: { id: string; title: string; status: string; leadType: string | null }[] = [];
+      const msRes = await fetch(`/api/admin/milestones?deal_id=${dealId}`);
+      if (msRes.ok) {
+        const ms: MilestoneRow[] = await msRes.json();
+        milestones = (ms || [])
+          .filter((m) => m?.status !== 'Completed')
+          .map((m) => ({
+            id: String(m.id),
+            title: m.title?.trim() || 'Untitled milestone',
+            status: m.status || 'Pending',
+            leadType: m.stage_templates?.lead_type ?? null,
+          }));
       }
 
       setPendingTasks((p) => ({
         ...p,
-        [dealId]: { loading: false, error: false, tasks: pending, nextMilestones },
+        [dealId]: { loading: false, error: false, tasks: pending, milestones },
       }));
     } catch {
       setPendingTasks((p) => ({
         ...p,
-        [dealId]: { loading: false, error: true, tasks: [], nextMilestones: [] },
+        [dealId]: { loading: false, error: true, tasks: [], milestones: [] },
       }));
     }
   }, []);
@@ -335,7 +340,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
     setPendingTasks((prev) => {
       if (prev[dealId]) return prev;
       loadFileProgress(dealId);
-      return { ...prev, [dealId]: { loading: true, error: false, tasks: [], nextMilestones: [] } };
+      return { ...prev, [dealId]: { loading: true, error: false, tasks: [], milestones: [] } };
     });
   }, [loadFileProgress]);
 
@@ -1208,7 +1213,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                         togglePendingTasks(deal.id);
                       }}
                       className="group/steps flex items-center gap-1.5 cursor-pointer min-w-0"
-                      title="Show pending tasks for this file"
+                      title="Show pending tasks and milestones for this file"
                     >
                       <div className="w-14 h-1.5 bg-slate-200 rounded-full overflow-hidden flex-shrink-0">
                         <div
@@ -1414,70 +1419,87 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       {(() => {
                         const entry = pendingTasks[deal.id];
                         if (!entry || entry.loading) {
-                          return <span className="text-xs text-slate-400">Loading pending tasks…</span>;
+                          return <span className="text-xs text-slate-400">Loading pending tasks and milestones…</span>;
                         }
                         if (entry.error) {
-                          return <span className="text-xs text-red-500">Failed to load pending tasks.</span>;
+                          return <span className="text-xs text-red-500">Failed to load pending tasks and milestones.</span>;
                         }
-                        // Every task done → the panel answers "what's next?"
-                        // with the next incomplete milestones instead.
-                        if (entry.tasks.length === 0) {
-                          if (entry.nextMilestones.length === 0) {
-                            return (
-                              <span className="text-xs text-green-600 font-medium">
-                                ✓ All tasks and milestones completed.
-                              </span>
-                            );
-                          }
+                        if (entry.tasks.length === 0 && entry.milestones.length === 0) {
                           return (
-                            <div className="flex flex-col gap-2">
-                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                                <span className="text-green-600">✓ All tasks completed</span>
-                                {' · '}next milestone{entry.nextMilestones.length > 1 ? 's' : ''} for {deal.fileNumber || 'this file'}
-                              </span>
-                              <div className="flex flex-wrap gap-1.5">
-                                {entry.nextMilestones.map((m, i) => (
-                                  <span
-                                    key={m.id}
-                                    className="inline-flex items-center gap-1.5 bg-white border border-slate-200 rounded-full px-2.5 py-1 text-[11px] text-slate-700"
-                                    title={m.status}
-                                  >
-                                    <span className="text-[9px] font-bold text-slate-400">{i + 1}</span>
-                                    {/* A Purchase & Sale file carries both sides'
-                                        stages, so name the side or the sequence
-                                        reads as one confused list. */}
-                                    {isCombined && m.leadType && (
-                                      <span
-                                        className={`text-[9px] font-black uppercase tracking-widest ${
-                                          m.leadType.toLowerCase() === 'sale' ? 'text-orange-600' : 'text-blue-600'
-                                        }`}
-                                      >
-                                        {m.leadType}
-                                      </span>
-                                    )}
-                                    {m.title}
-                                  </span>
-                                ))}
-                              </div>
-                            </div>
+                            <span className="text-xs text-green-600 font-medium">
+                              ✓ All tasks and milestones completed.
+                            </span>
                           );
                         }
+                        const fileLabel = deal.fileNumber || 'this file';
                         return (
-                          <div className="flex flex-col gap-2">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                              {entry.tasks.length} pending task{entry.tasks.length > 1 ? 's' : ''} for {deal.fileNumber || 'this file'}
-                            </span>
-                            <div className="flex flex-wrap gap-1.5">
-                              {entry.tasks.map((t) => (
-                                <span
-                                  key={t.id}
-                                  className="inline-flex items-center gap-1.5 bg-white border border-slate-200 rounded-full px-2.5 py-1 text-[11px] text-slate-700"
-                                  title={t.status}
-                                >
-                                  <span className="w-1.5 h-1.5 rounded-full bg-slate-300" />
-                                  {t.title}
-                                </span>
-                              ))}
+                          <div className="flex flex-col gap-2.5">
+                            {/* ── Pending tasks ── */}
+                            <div className="flex flex-col gap-2">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                                {entry.tasks.length === 0 ? (
+                                  <span className="text-green-600">✓ All tasks completed</span>
+                                ) : (
+                                  <>
+                                    {entry.tasks.length} pending task{entry.tasks.length > 1 ? 's' : ''} for {fileLabel}
+                                  </>
+                                )}
+                              </span>
+                              {entry.tasks.length > 0 && (
+                                <div className="flex flex-wrap gap-1.5">
+                                  {entry.tasks.map((t) => (
+                                    <span
+                                      key={t.id}
+                                      className="inline-flex items-center gap-1.5 bg-white border border-slate-200 rounded-full px-2.5 py-1 text-[11px] text-slate-700"
+                                      title={t.status}
+                                    >
+                                      <span className="w-1.5 h-1.5 rounded-full bg-slate-300" />
+                                      {t.title}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* ── Pending milestones ──
+                                Listed in stage order, so the first chip is the
+                                stage the file is actually sitting at. */}
+                            <div className="flex flex-col gap-2">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                                {entry.milestones.length === 0 ? (
+                                  <span className="text-green-600">✓ All milestones completed</span>
+                                ) : (
+                                  <>
+                                    {entry.milestones.length} pending milestone{entry.milestones.length > 1 ? 's' : ''} for {fileLabel}
+                                  </>
+                                )}
+                              </span>
+                              {entry.milestones.length > 0 && (
+                                <div className="flex flex-wrap gap-1.5">
+                                  {entry.milestones.map((m, i) => (
+                                    <span
+                                      key={m.id}
+                                      className="inline-flex items-center gap-1.5 bg-white border border-slate-200 rounded-full px-2.5 py-1 text-[11px] text-slate-700"
+                                      title={m.status}
+                                    >
+                                      <span className="text-[9px] font-bold text-slate-400">{i + 1}</span>
+                                      {/* A Purchase & Sale file carries both sides'
+                                          stages, so name the side or the sequence
+                                          reads as one confused list. */}
+                                      {isCombined && m.leadType && (
+                                        <span
+                                          className={`text-[9px] font-black uppercase tracking-widest ${
+                                            m.leadType.toLowerCase() === 'sale' ? 'text-orange-600' : 'text-blue-600'
+                                          }`}
+                                        >
+                                          {m.leadType}
+                                        </span>
+                                      )}
+                                      {m.title}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           </div>
                         );

@@ -5,6 +5,7 @@ import { getFamilyDealIds } from "./familyDeals";
 import { formatLeadTypeLabel, buildLeadAddressForEmail } from "./leadEmailAddress";
 import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "./emailIdentity";
 import { buildAgentCcList } from "./agentCc";
+import { loadDealTemplateFacts } from "./dealTemplateFacts";
 import {
     resolveLeadRecipientSide,
     resolveMilestoneSide,
@@ -310,7 +311,23 @@ export async function sendCombinedMilestoneEmail(opts: {
             else if (role === "Co-Purchaser") displayLeadType = "Purchase";
         }
 
+        // File-level facts ({{ transaction }}, {{ closing_date }},
+        // {{ party_summary }}, {{ task_count }}…). A template written for one of
+        // the automatic senders is pickable here too, and without these it would
+        // email raw "{{ … }}" text. Loaded per recipient because the family a
+        // co-person belongs to is resolved from their own lead row.
+        const facts = await loadDealTemplateFacts(lead);
+
         const placeholders: Record<string, string> = {
+            // File-level facts first — every explicit key below overrides them,
+            // so the recipient-scoped values (their address, their side's lead
+            // type) still win.
+            ...Object.fromEntries(
+                Object.entries(facts).flatMap(([k, v]) => [
+                    [`{{ ${k} }}`, v],
+                    [`{{${k}}}`, v],
+                ]),
+            ),
             // User placeholders
             "{{ user.first_name }}": firstName,
             "{{ user.last_name }}": lastName,
@@ -373,6 +390,12 @@ export async function sendCombinedMilestoneEmail(opts: {
         }
 
         // Catch remaining placeholders with flexible whitespace
+        for (const [k, v] of Object.entries(facts)) {
+            processedBody = processedBody.replace(
+                new RegExp(`\\{\\{\\s*${k}\\s*\\}\\}`, "gi"),
+                v,
+            );
+        }
         processedBody = processedBody.replace(/\{\{\s*user\.get_full_name\s*\}\}/gi, fullName);
         processedBody = processedBody.replace(/\{\{\s*user\.first_name\s*\}\}/gi, firstName);
         processedBody = processedBody.replace(/\{\{\s*user\.last_name\s*\}\}/gi, lastName);

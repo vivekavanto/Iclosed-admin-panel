@@ -1,3 +1,5 @@
+import { LINE_LABELS } from "@/lib/closingCosts";
+
 // Field descriptions shared by the closing-cost settings cards.
 //
 // Kept out of the components so the three cards, the shell's live sample and
@@ -37,20 +39,20 @@ export const FIRM_SECTIONS: FieldSection[] = [
     fields: [
       {
         key: "legal_fees",
-        label: "Legal fees",
+        label: LINE_LABELS.legal_fees,
         hint: "the whole purchase, mortgage or not",
         prefix: "$",
       },
-      { key: "legal_title_submission", label: "Legal — title submission", prefix: "$" },
-      { key: "admin_fee", label: "Admin fee", prefix: "$" },
+      { key: "legal_title_submission", label: LINE_LABELS.title_submission, prefix: "$" },
+      { key: "admin_fee", label: LINE_LABELS.admin_fee, prefix: "$" },
     ],
   },
   {
     title: "Search & Review Charges",
     note: "Per firm rather than shared because HST is charged on them — they are the firm's own search-and-review supply, not a pure government pass-through.",
     fields: [
-      { key: "teraview", label: "Teraview — searches & review", prefix: "$" },
-      { key: "sheriff", label: "Sheriff's Certificates", prefix: "$" },
+      { key: "teraview", label: LINE_LABELS.teraview, prefix: "$" },
+      { key: "sheriff", label: LINE_LABELS.sheriff, prefix: "$" },
     ],
   },
 ];
@@ -82,8 +84,8 @@ export const SHARED_SECTIONS: FieldSection[] = [
     title: "Government Registration",
     note: "The ServiceOntario e-registration tariff. Identical for every firm, and the mortgage registration only applies when there is a mortgage.",
     fields: [
-      { key: "reg_transfer", label: "Registration of Transfer", prefix: "$" },
-      { key: "reg_mortgage", label: "Registration of Mortgage", prefix: "$" },
+      { key: "reg_transfer", label: LINE_LABELS.reg_transfer, prefix: "$" },
+      { key: "reg_mortgage", label: LINE_LABELS.reg_mortgage, prefix: "$" },
     ],
   },
   {
@@ -92,7 +94,7 @@ export const SHARED_SECTIONS: FieldSection[] = [
     fields: [
       {
         key: "property_tax_default",
-        label: "Property tax & common expenses",
+        label: LINE_LABELS.property_tax_adjustment,
         hint: "what a new estimate starts with",
         prefix: "$",
       },
