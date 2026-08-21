@@ -5,10 +5,14 @@
 // button downloads: both are built by src/lib/dealPackage.ts, so the email and
 // the ZIP can no longer disagree about what is on a file.
 //
-//   • IDENTIFICATION and PERSONAL INFORMATION arrive MERGED — one PDF holding
-//     every party's ID, one holding every party's personal information. The
-//     clerks read those across all parties at once, and a two-person file used
-//     to mean six separate files to open.
+//   • IDENTIFICATION, the AGREEMENT OF PURCHASE AND SALE and PERSONAL
+//     INFORMATION arrive MERGED — one PDF holding every party's ID, one holding
+//     the file's agreement(s), one holding every party's personal information.
+//     The clerks read those across all parties at once, and a two-person file
+//     used to mean six separate files to open.
+//   • PROPERTY INFORMATION arrives as one PDF: the lock box code (a column on
+//     the deal, so no document ever carried it) and the rental equipment
+//     answers. Both were reported missing from the package.
 //   • EVERY OTHER TASK arrives as ONE PDF — its answers, then every file
 //     uploaded against it merged in behind them. A void cheque or property tax
 //     bill uploaded in three parts is one attachment, not three.
@@ -82,8 +86,12 @@ export type ClerkEmailResult = {
   linked: number;
   /** ID documents merged into the combined identification PDF. */
   identification: number;
+  /** Agreements merged into the combined APS PDF. */
+  aps: number;
   /** Parties whose answers are in the combined personal-information PDF. */
   personalInfo: number;
+  /** Facts (lock box code, rental answers) in the property-information PDF. */
+  propertyInfo: number;
   error?: string;
 };
 
@@ -218,7 +226,9 @@ function renderBody(f: ClerkEmailFacts): string {
  */
 function renderPackageSummaryHtml(pkg: {
   identification: number;
+  aps: number;
   personalInfo: number;
+  propertyInfo: number;
   taskPdfs: number;
   separate: number;
 }): string {
@@ -229,10 +239,22 @@ function renderPackageSummaryHtml(pkg: {
         `${pkg.identification === 1 ? "" : "s"} combined into one PDF`,
     );
   }
+  if (pkg.aps > 0) {
+    items.push(
+      `<strong>Agreement of Purchase and Sale</strong> — ${pkg.aps === 1 ? "the agreement" : `all ${pkg.aps} agreements and amendments`} ` +
+        `combined into one PDF`,
+    );
+  }
   if (pkg.personalInfo > 0) {
     items.push(
       `<strong>Personal Information</strong> — ${pkg.personalInfo === 1 ? "the client's" : `all ${pkg.personalInfo} clients'`} ` +
         `details in one PDF`,
+    );
+  }
+  if (pkg.propertyInfo > 0) {
+    items.push(
+      `<strong>Property Information</strong> — the lock box code and rental ` +
+        `equipment details for the property`,
     );
   }
   if (pkg.taskPdfs > 0) {
@@ -316,7 +338,9 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
     attached: 0,
     linked: 0,
     identification: 0,
+    aps: 0,
     personalInfo: 0,
+    propertyInfo: 0,
   };
 
   const { data: deal } = await supabaseAdmin
@@ -379,8 +403,10 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
   const packageAttachments: EmailAttachment[] = [];
   const consumedByEmail = new Set<string>();
   let packageBytes = 0;
-  // Entries that are neither of the two family-wide documents — the per-task
-  // PDFs, which is what the body's "Attached:" breakdown counts separately.
+  // Entries that are none of the family-wide documents — the per-task PDFs,
+  // which is what the body's "Attached:" breakdown counts separately. Counted by
+  // entry.kind, not by title: the two title comparisons this used to make went
+  // stale the moment the combined APS and property PDFs were added.
   let taskPdfCount = 0;
   for (const entry of pkg.entries) {
     if (packageBytes + entry.bytes.byteLength > ATTACHMENT_BUDGET_BYTES) {
@@ -395,9 +421,7 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
       filename: `${stem}${sanitizeEntryName(entry.title)}.pdf`,
       content: Buffer.from(entry.bytes),
     });
-    if (entry.title !== "Identification" && entry.title !== "Personal Information") {
-      taskPdfCount++;
-    }
+    if (entry.kind === "task" || entry.kind === "leftover") taskPdfCount++;
     for (const url of entry.consumedUrls) consumedByEmail.add(url);
   }
 
@@ -476,7 +500,9 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
     linked_count: String(docs.linked.length),
     document_count: String(attachments.length + docs.linked.length),
     identification_count: String(pkg.identificationDocs),
+    aps_count: String(pkg.apsDocs),
     personal_info_count: String(pkg.personalInfoPeople),
+    property_info_count: String(pkg.propertyInfoRows),
     separate_count: String(docs.attachments.length),
     deal_url: dealUrl,
   };
@@ -497,7 +523,9 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
       : renderBody(facts)) +
     renderPackageSummaryHtml({
       identification: pkg.identificationDocs,
+      aps: pkg.apsDocs,
       personalInfo: pkg.personalInfoPeople,
+      propertyInfo: pkg.propertyInfoRows,
       taskPdfs: taskPdfCount,
       separate: docs.attachments.length,
     }) +
@@ -539,7 +567,8 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
     `[ClerkDocuments] sent deal=${dealId} file=${fileNumber} to=${recipients.join(", ")} ` +
       `template=${template ? "db" : "built-in"} ` +
       `attached=${attachments.length} (merged ids=${pkg.identificationDocs}, ` +
-      `personal info for ${pkg.personalInfoPeople}, task pdfs=${taskPdfCount}, ` +
+      `aps=${pkg.apsDocs}, personal info for ${pkg.personalInfoPeople}, ` +
+      `property rows=${pkg.propertyInfoRows}, task pdfs=${taskPdfCount}, ` +
       `separate=${docs.attachments.length}) linked=${docs.linked.length}`,
   );
 
@@ -549,6 +578,8 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
     attached: attachments.length,
     linked: docs.linked.length,
     identification: pkg.identificationDocs,
+    aps: pkg.apsDocs,
     personalInfo: pkg.personalInfoPeople,
+    propertyInfo: pkg.propertyInfoRows,
   };
 }

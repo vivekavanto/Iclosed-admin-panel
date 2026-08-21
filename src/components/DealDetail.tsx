@@ -3707,9 +3707,10 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
    *
    * All the work is server-side (/api/admin/deals/[id]/email-to-clerk) — the
    * inbox is picked from the file type there, and the package is assembled the
-   * same way "Download All" assembles the ZIP: identification and personal
-   * information merged into one PDF each, everything else attached in its
-   * original format.
+   * same way "Download All" assembles the ZIP: identification, the agreement of
+   * purchase and sale, personal information and the property facts (lock box
+   * code, rental equipment) merged into one PDF each, everything else attached
+   * in its original format.
    *
    * Sends on the click — no confirm dialog, same as the final report. The send
    * is still audited server-side (it pushes client PII to an external mailbox),
@@ -3725,10 +3726,17 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
         return;
       }
       const linkedNote = data.linked > 0 ? ` (${data.linked} sent as links — too large to attach)` : "";
-      const mergedCount = (data.identification > 0 ? 1 : 0) + (data.personalInfo > 0 ? 1 : 0);
+      // The combined PDFs the clerks asked for: IDs, the agreement(s), personal
+      // information, and the property facts (lock box code, rental equipment).
+      const merged = [
+        data.identification > 0 ? "IDs" : "",
+        data.aps > 0 ? "the APS" : "",
+        data.personalInfo > 0 ? "personal information" : "",
+        data.propertyInfo > 0 ? "property information" : "",
+      ].filter(Boolean);
       const mergedNote =
-        mergedCount > 0
-          ? ` — IDs and personal information combined into ${mergedCount} PDF${mergedCount === 1 ? "" : "s"}`
+        merged.length > 0
+          ? ` — ${merged.join(", ")} combined into ${merged.length} PDF${merged.length === 1 ? "" : "s"}`
           : "";
       showToast(
         `Sent ${data.attached} attachment${data.attached === 1 ? "" : "s"} to ${data.recipients.join(", ")}${mergedNote}${linkedNote}`,
