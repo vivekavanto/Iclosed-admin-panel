@@ -279,6 +279,47 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
     : { data: [] };
   const responseRows = (responses ?? []) as unknown as ResponseRow[];
 
+  // ── task_responses.file_url is NOT reliable ────────────────────────────────
+  // A file response routinely carries a file_name with a NULL file_url: the
+  // blob is on the matching lead_corporate_docs row instead (the customer
+  // portal writes both stores, and a re-submit deletes and re-inserts the
+  // response rows while the document rows survive). BOTH admin document views
+  // repair this at read time — see the two "Resolve missing file URLs from
+  // lead_corporate_docs" blocks in /api/admin/task-responses — which is why the
+  // deal page shows a document the package cannot see.
+  //
+  // Repairing it here, once, fixes every section below at the same time rather
+  // than leaving each one to remember: filtering on `r.file_url` alone silently
+  // drops a document the firm knows it has.
+  const corporateUrlByName = new Map<string, string>();
+  for (const d of corporate ?? []) {
+    const name = String(d.file_name ?? "").trim().toLowerCase();
+    const url = (d.file_url as string | null) ?? "";
+    if (name && url && !corporateUrlByName.has(name)) corporateUrlByName.set(name, url);
+  }
+  let repairedUrls = 0;
+  const unresolvedFileRows: string[] = [];
+  for (const r of responseRows) {
+    if (r.field_type !== "file" || r.file_url) continue;
+    const url = corporateUrlByName.get(String(r.file_name ?? "").trim().toLowerCase());
+    if (url) {
+      r.file_url = url;
+      repairedUrls++;
+    } else if (r.file_name) {
+      unresolvedFileRows.push(r.file_name);
+    }
+  }
+  if (repairedUrls > 0) {
+    logger.warn(
+      `[dealPackage] resolved ${repairedUrls} task_responses file row(s) with a null file_url from lead_corporate_docs`,
+    );
+  }
+  if (unresolvedFileRows.length > 0) {
+    logger.error(
+      `[dealPackage] ${unresolvedFileRows.length} uploaded file(s) have no blob anywhere and are MISSING from this package: ${unresolvedFileRows.join(", ")}`,
+    );
+  }
+
   // Field ordering, so a task's answers print in the order the client was asked.
   const templateIds = Array.from(
     new Set(taskRows.map((t) => t.task_template_id).filter(Boolean)),
@@ -328,7 +369,9 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
   const entries: PackageEntry[] = [];
   const consumedUrls = new Set<string>();
   const skipped: SkippedDoc[] = [];
-  const failed: string[] = [];
+  // A file response whose blob could not be resolved at all is already lost —
+  // report it the same way a failed download is, so the caller can warn.
+  const failed: string[] = [...unresolvedFileRows];
   let identificationDocs = 0;
   let apsDocs = 0;
   let personalInfoPeople = 0;
@@ -515,6 +558,11 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
   //     (hot water tank rented/owned, its provider, other rental equipment) are
   //     the whole point of it — there is no upload behind it.
   //
+  // The UPLOADS behind those two tasks are read from both document stores, the
+  // way identification and the APS are. Reading task_responses alone (and only
+  // rows with a non-null file_url) is what shipped this entry without the
+  // client's lock box photos while the deal page kept showing them.
+  //
   // Property facts, not personal ones, so they merge across the family into one
   // PDF the way identification does rather than repeating per party.
   const lockboxTasks = taskRows.filter((t) => isLockboxTitle(t.title));
@@ -589,21 +637,60 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
     // A scan attached to either task (a rental contract, a photo of the box)
     // rides behind the answers, so nothing is lost by taking these tasks out of
     // the per-task loop.
-    const propertyFiles = [...lockboxTasks, ...rentalTasks].flatMap((t) =>
-      (responsesByTask.get(t.id) ?? []).filter((r) => r.field_type === "file" && r.file_url),
-    );
+    //
+    // BOTH stores, for the same reason loadIdentificationDocs consults both: a
+    // client's upload reaches us as a task_response AND as a lead_corporate_docs
+    // row, and the two go out of step — a re-submitted task deletes and
+    // re-inserts its responses while the document rows survive, and "Save draft"
+    // / "Replace" write only the document row. Reading task_responses alone was
+    // what emptied this entry of the client's lock box uploads while the deal
+    // page went on showing them.
+    const propertyFiles: Array<{ fileUrl: string; fileName: string; label: string }> = [];
+    const seenPropertyFile = new Set<string>();
+    const pushPropertyFile = (fileUrl: string, fileName: string, label: string) => {
+      // Shared tasks are copied onto every party's deal, so the same photo
+      // arrives two or three times over on a family file.
+      if (!fileUrl || seenPropertyFile.has(fileUrl)) return;
+      seenPropertyFile.add(fileUrl);
+      propertyFiles.push({ fileUrl, fileName: fileName || "Document", label: label || "Document" });
+    };
+
+    for (const t of [...lockboxTasks, ...rentalTasks]) {
+      for (const r of responsesByTask.get(t.id) ?? []) {
+        if (r.field_type !== "file" || !r.file_url) continue;
+        pushPropertyFile(
+          r.file_url,
+          r.file_name || r.field_label || "Document",
+          r.field_label || r.file_name || t.title || "Document",
+        );
+      }
+    }
+    // Documents filed against the FILE rather than a task, whose type names the
+    // lock box or the rental equipment. lead_corporate_docs carries no task_id,
+    // so its own label is the only attribution there is.
+    for (const d of corporate ?? []) {
+      const url = d.file_url as string | null;
+      if (!url) continue;
+      const label = `${d.custom_type ?? ""} ${d.document_type ?? ""} ${d.doc_type ?? ""}`;
+      if (!isLockboxTitle(label) && !isRentalTitle(label)) continue;
+      pushPropertyFile(
+        url,
+        (d.file_name as string) || "Document",
+        humanise((d.custom_type as string) || (d.document_type as string), "Document"),
+      );
+    }
+
     let index = 0;
-    for (const r of propertyFiles) {
+    for (const doc of propertyFiles) {
       index++;
-      const fileName = r.file_name || r.field_label || "Document";
-      const bytes = await fetchBytes(r.file_url as string, fileName);
+      const bytes = await fetchBytes(doc.fileUrl, doc.fileName);
       if (!bytes) continue;
       await propertyPdf.addDocument({
         bytes,
-        fileUrl: r.file_url as string,
-        fileName,
+        fileUrl: doc.fileUrl,
+        fileName: doc.fileName,
         heading: "Property Information",
-        sublabel: r.field_label || r.file_name || "Document",
+        sublabel: doc.label,
         index,
         total: propertyFiles.length,
         sectionTitle: "Property Information",
@@ -611,8 +698,24 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
     }
 
     propertyInfoRows = rows;
-    if (rows > 0 || propertyPdf.documents > 0) {
+    // `skipped` matters as much as the two counters: a document that could not
+    // be embedded has a note page in this PDF and travels as its own original,
+    // and dropping the entry here would strand that note AND lose the skip
+    // report the clerk email needs to attach the original.
+    if (rows > 0 || propertyPdf.documents > 0 || propertyPdf.skipped.length > 0) {
       await finish("Property Information", propertyPdf, "property");
+    }
+    // The symptom that started this — "the client's lock box uploads are not in
+    // the property PDF" — was invisible in the logs. Say it out loud.
+    logger.info(
+      `[dealPackage] property information: ${rows} fact(s), ${propertyPdf.documents}/${propertyFiles.length} document(s) merged`,
+    );
+    for (const doc of propertyFiles) {
+      if (!consumedUrls.has(doc.fileUrl)) {
+        logger.warn(
+          `[dealPackage] property information could not merge "${doc.fileName}" — it ships as its own attachment instead`,
+        );
+      }
     }
   } catch (err) {
     logger.error("[dealPackage] property information entry failed:", err);
