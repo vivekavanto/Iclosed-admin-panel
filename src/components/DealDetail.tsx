@@ -3706,11 +3706,11 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
    * Send every uploaded document on the file to the conveyancing clerk.
    *
    * All the work is server-side (/api/admin/deals/[id]/email-to-clerk) — the
-   * inbox is picked from the file type there, and the package is assembled the
-   * same way "Download All" assembles the ZIP: identification, the agreement of
-   * purchase and sale, personal information and the property facts (lock box
-   * code, rental equipment) merged into one PDF each, everything else attached
-   * in its original format.
+   * inbox is picked from the file type there, and the package is enumerated the
+   * same way "Download All" enumerates the ZIP but sent UNMERGED: every uploaded
+   * document is attached on its own in the format it was uploaded in, alongside
+   * the generated pages nothing else carries (personal information, the property
+   * facts, each task's typed answers).
    *
    * Sends on the click — no confirm dialog, same as the final report. The send
    * is still audited server-side (it pushes client PII to an external mailbox),
@@ -3726,8 +3726,11 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
         return;
       }
       const linkedNote = data.linked > 0 ? ` (${data.linked} sent as links — too large to attach)` : "";
-      // The combined PDFs the clerks asked for: IDs, the agreement(s), personal
-      // information, and the property facts (lock box code, rental equipment).
+      // Documents go out individually now, so the only combined PDFs left are the
+      // GENERATED ones — personal information across the parties, and the property
+      // facts (lock box code, rental equipment). identification/aps stay in the
+      // list because the send can be switched back to merging (mergeDocuments in
+      // buildDealPackage), and they read as 0 until it is.
       const merged = [
         data.identification > 0 ? "IDs" : "",
         data.aps > 0 ? "the APS" : "",

@@ -37,6 +37,19 @@
 //                            as one PDF instead of three attachments.
 //   6. One entry per orphan document — a stored document belonging to no task,
 //                            grouped by its type and owner so it still ships.
+//                            This sweeps ALL FIVE stores a blob can sit in:
+//                            lead_corporate_docs, lead_identification_docs,
+//                            task_responses, tasks.document_url and
+//                            deal_documents.
+//
+// Merging is OPTIONAL — see DealPackageOptions.mergeDocuments
+// ───────────────────────────────────────────────
+// The grouping above is what "Download All" ships. "Email to Clerk" asks for the
+// same enumeration with `mergeDocuments: false`: sections 1, 2 and 6 then draw
+// nothing and drop out, sections 3, 4 and 5 keep their generated ANSWERS and
+// nothing else, and every uploaded document stays unconsumed so the caller can
+// attach it on its own, in the bytes and under the name it was uploaded with.
+// The enumeration is shared either way — only the packaging differs.
 //
 // Everything is best-effort: a blob that can't be fetched or embedded costs that
 // one document (and is reported in `skipped`, so the clerk email can attach the
@@ -87,6 +100,22 @@ export interface PackageEntry {
   consumedUrls: string[];
 }
 
+/** How the package is assembled. */
+export interface DealPackageOptions {
+  /**
+   * Merge each section's source documents into that section's PDF — the ZIP's
+   * behaviour, and the default.
+   *
+   * Pass `false` to leave every uploaded document ALONE. The entries then hold
+   * only the generated answers (personal information, property facts, a task's
+   * form responses), no blob is reported in `consumedUrls`, and the caller
+   * ships each document as its own attachment in its original bytes. That is
+   * what "Email to Clerk" does: merging costs a document its filename and its
+   * byte-for-byte formatting, and the clerks asked for the originals back.
+   */
+  mergeDocuments?: boolean;
+}
+
 /** A document that could not go into a PDF, kept in its original bytes. */
 export interface PackageOriginal {
   fileName: string;
@@ -114,6 +143,8 @@ export interface DealPackageResult {
   personalInfoPeople: number;
   /** Facts (lock box code, rental answers) inside the property entry. */
   propertyInfoRows: number;
+  /** Whether source documents were merged into the entries — see the options. */
+  mergedDocuments: boolean;
 }
 
 interface TaskRow {
@@ -123,6 +154,9 @@ interface TaskRow {
   milestone_id: string | null;
   order_index: number | null;
   task_template_id: string | null;
+  /** A document hung off the TASK itself rather than off one of its form fields. */
+  document_url: string | null;
+  document_name: string | null;
 }
 
 interface ResponseRow {
@@ -164,8 +198,18 @@ export function sanitizeEntryName(name: string): string {
  * Returns null when the deal doesn't exist. An existing deal with nothing
  * uploaded returns a result with no entries — the caller decides whether that is
  * an error (the clerk email) or a toast (the ZIP).
+ *
+ * `options.mergeDocuments: false` builds the SAME enumeration without merging
+ * anything: the entries carry the generated answers only, and every uploaded
+ * document is left for the caller to attach untouched.
  */
-export async function buildDealPackage(dealId: string): Promise<DealPackageResult | null> {
+export async function buildDealPackage(
+  dealId: string,
+  options: DealPackageOptions = {},
+): Promise<DealPackageResult | null> {
+  // Default ON, so "Download All" keeps building the merged archive. The clerk
+  // email opts out — every document reaches the clerks under its own name.
+  const mergeDocuments = options.mergeDocuments !== false;
   const { data: deal } = await supabaseAdmin
     .from("deals")
     .select(
@@ -222,7 +266,12 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
       dealIds.length
         ? supabaseAdmin
             .from("tasks")
-            .select("id, deal_id, title, milestone_id, order_index, task_template_id")
+            .select(
+              // document_url / document_name: a document attached to the task
+              // itself, which the deal page renders and which NO sweep here used
+              // to look at. Free — it rides on a query already being made.
+              "id, deal_id, title, milestone_id, order_index, task_template_id, document_url, document_name",
+            )
             .in("deal_id", dealIds)
             .eq("is_deleted", false)
         : Promise.resolve({ data: [] }),
@@ -401,6 +450,17 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
     }
   };
 
+  /**
+   * The documents a section should merge in — empty when the caller asked for
+   * documents to stay separate.
+   *
+   * Every section funnels its source documents through this rather than testing
+   * `mergeDocuments` itself, so "don't merge" cannot be half-applied: nothing is
+   * downloaded, nothing is embedded, and nothing lands in `consumedUrls` — which
+   * is exactly what makes the blob reach the caller as its own attachment.
+   */
+  const toMerge = <T>(docs: T[]): T[] => (mergeDocuments ? docs : []);
+
   /** Finish a PackageDoc into an entry, dropping it when nothing was drawn. */
   const finish = async (
     title: string,
@@ -432,11 +492,14 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
   // pages are copied in verbatim (blank ones dropped) and an image gets its own
   // page whose band names the party, so attribution survives without a page of
   // its own.
+  //
+  // With merging off this section has nothing to draw and drops out entirely —
+  // each ID travels to the clerk as its own attachment instead.
   try {
     const docsByLead = await loadIdentificationDocs(leadIds, dealIds);
     const idPdf = await PackageDoc.create(meta);
     for (const person of people) {
-      const docs = docsByLead.get(person.leadId) ?? [];
+      const docs = toMerge(docsByLead.get(person.leadId) ?? []);
       let index = 0;
       for (const doc of docs) {
         index++;
@@ -488,7 +551,7 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
       }
 
       let index = 0;
-      for (const doc of aps.docs) {
+      for (const doc of toMerge(aps.docs)) {
         index++;
         const fileName = doc.fileName || "Agreement of Purchase and Sale";
         const bytes = await fetchBytes(doc.fileUrl, fileName);
@@ -521,8 +584,10 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
     if (withRows.length > 0) {
       const infoPdf = await PackageDoc.create(meta);
       for (const person of withRows) {
-        infoPdf.newPage();
-        infoPdf.band(person.name || "Client", "Personal Information");
+        // section(), NOT newPage(): a party's answers start wherever the last
+        // party's ended. Forcing a page each meant a two-person file was two
+        // pages that were each ~80% white.
+        infoPdf.section(person.name || "Client", "Personal Information");
         if (person.name) infoPdf.kvRow("Name", person.name);
         for (const row of rowsByLead.get(person.leadId) ?? []) {
           infoPdf.kvRow(
@@ -681,7 +746,7 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
     }
 
     let index = 0;
-    for (const doc of propertyFiles) {
+    for (const doc of toMerge(propertyFiles)) {
       index++;
       const bytes = await fetchBytes(doc.fileUrl, doc.fileName);
       if (!bytes) continue;
@@ -708,13 +773,16 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
     // The symptom that started this — "the client's lock box uploads are not in
     // the property PDF" — was invisible in the logs. Say it out loud.
     logger.info(
-      `[dealPackage] property information: ${rows} fact(s), ${propertyPdf.documents}/${propertyFiles.length} document(s) merged`,
+      `[dealPackage] property information: ${rows} fact(s), ${propertyPdf.documents}/${propertyFiles.length} document(s) merged` +
+        (mergeDocuments ? "" : " (merging off — every document is attached separately)"),
     );
-    for (const doc of propertyFiles) {
-      if (!consumedUrls.has(doc.fileUrl)) {
-        logger.warn(
-          `[dealPackage] property information could not merge "${doc.fileName}" — it ships as its own attachment instead`,
-        );
+    if (mergeDocuments) {
+      for (const doc of propertyFiles) {
+        if (!consumedUrls.has(doc.fileUrl)) {
+          logger.warn(
+            `[dealPackage] property information could not merge "${doc.fileName}" — it ships as its own attachment instead`,
+          );
+        }
       }
     }
   } catch (err) {
@@ -789,9 +857,10 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
       }
 
       // Every file uploaded against this task, merged in behind the answers —
-      // one PDF for the whole task however many files it holds.
+      // one PDF for the whole task however many files it holds. With merging off
+      // the entry is the answers alone and each upload is attached separately.
       let index = 0;
-      for (const r of fileRows) {
+      for (const r of toMerge(fileRows)) {
         index++;
         const fileName = r.file_name || r.field_label || "Document";
         const bytes = await fetchBytes(r.file_url as string, fileName);
@@ -869,6 +938,45 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
     });
   }
 
+  // A document hung off the TASK rather than one of its form fields. Same
+  // grouping as any other upload: to a clerk it is this task's document.
+  for (const t of taskRows) {
+    const url = t.document_url;
+    if (!url || consumedUrls.has(url)) continue;
+    leftovers.push({
+      fileUrl: url,
+      fileName: t.document_name || "Document",
+      owner: leadNameById.get(leadByDeal.get(t.deal_id) ?? "") ?? "",
+      label: humanise(t.title, "Document"),
+    });
+  }
+
+  // `deal_documents` — deal-keyed document rows. Nothing in this repo writes the
+  // table, so its shape is the one thing here we don't control: queried on its
+  // own, and a failure costs only these rows rather than the whole package.
+  if (dealIds.length) {
+    const { data: dealDocs, error: dealDocsError } = await supabaseAdmin
+      .from("deal_documents")
+      .select("deal_id, file_url, name, type")
+      .in("deal_id", dealIds);
+    if (dealDocsError) {
+      logger.warn(
+        `[dealPackage] deal_documents sweep failed — those rows are missing from this package:`,
+        dealDocsError,
+      );
+    }
+    for (const d of dealDocs ?? []) {
+      const url = d.file_url as string | null;
+      if (!url || consumedUrls.has(url)) continue;
+      leftovers.push({
+        fileUrl: url,
+        fileName: (d.name as string) || "Document",
+        owner: leadNameById.get(leadByDeal.get(d.deal_id as string) ?? "") ?? "",
+        label: humanise((d.type as string) || (d.name as string), "Document"),
+      });
+    }
+  }
+
   // Grouped by owner + label, so three pages of one tax bill are one PDF.
   const groups = new Map<string, { title: string; docs: Leftover[] }>();
   const seenLeftover = new Set<string>();
@@ -886,7 +994,9 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
     }
   }
 
-  for (const { title, docs } of groups.values()) {
+  // Nothing to group when documents aren't being merged: every one of these
+  // blobs is unconsumed, so the caller attaches it in its original form.
+  for (const { title, docs } of mergeDocuments ? [...groups.values()] : []) {
     try {
       const pdf = await PackageDoc.create(meta);
       let index = 0;
@@ -939,6 +1049,7 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
     apsDocs,
     personalInfoPeople,
     propertyInfoRows,
+    mergedDocuments: mergeDocuments,
   };
 }
 

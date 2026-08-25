@@ -65,6 +65,19 @@ const PAD_TOP = 12;
 const PAD_BOT = 12;
 const LABEL_W = 180;
 
+/**
+ * How far an image may be blown up to fill the column.
+ *
+ * Real IDs are photos or scans well over 1000px wide, so they are scaled DOWN to
+ * the column and this never applies. It exists for the small scan — without it a
+ * 300px licence sat at its natural size in the middle of a full page of white.
+ * Capped rather than uncapped so a thumbnail isn't stretched into a blur.
+ */
+const MAX_IMAGE_UPSCALE = 2.5;
+
+/** band()'s own height plus the gap it leaves behind it. */
+const BAND_BLOCK = 42 + 18;
+
 export type PackageDocKind = "pdf" | "jpg" | "png" | "other";
 
 /**
@@ -427,6 +440,20 @@ export class PackageDoc {
     }
   }
 
+  /**
+   * A band that is guaranteed to be followed by content on the same page.
+   *
+   * band() alone breaks only when the BAND doesn't fit, which can leave a
+   * section heading stranded at the foot of a page with its first row overleaf.
+   * Sections that flow one after another (every party's personal information in
+   * one PDF) use this instead.
+   */
+  section(title: string, label?: string | null): void {
+    const firstRow = PAD_TOP + LINE + PAD_BOT;
+    if (this.y - BAND_BLOCK - firstRow < BOTTOM) this.newPage();
+    this.band(title, label);
+  }
+
   /** Grey band with a red left bar: bold title + optional letter-spaced label. */
   band(title: string, label?: string | null): void {
     const h = 42;
@@ -591,32 +618,43 @@ export class PackageDoc {
 
   /** A full-page card holding one uploaded image. */
   imagePage(heading: string, sublabel: string, img: PDFImage): void {
-    this.newPage();
+    const pad = 18;
+    const gap = 18;
+    const maxW = CONTENT_W - pad * 2;
+    const maxH = TOP - BOTTOM - BAND_BLOCK - pad * 2;
+
+    // Fill the column, and no more: capped by the page height so a portrait scan
+    // still lands on one page, and by MAX_IMAGE_UPSCALE so a small one isn't
+    // stretched into a blur.
+    const scale = Math.min(maxW / img.width, maxH / img.height, MAX_IMAGE_UPSCALE);
+    const w = img.width * scale;
+    const h = img.height * scale;
+    const cardH = h + pad * 2;
+
+    // Break only when this image genuinely does not fit under what is already on
+    // the page — not on principle. Two landscape IDs then share a page instead
+    // of taking one each.
+    if (this.y - BAND_BLOCK - cardH < BOTTOM) this.newPage();
     this.band(heading || "Document", sublabel || undefined);
+
     const page = this.current();
-    const cardY = BOTTOM;
-    const cardH = this.y - BOTTOM;
+    const top = this.y;
     page.drawRectangle({
       x: M,
-      y: cardY,
+      y: top - cardH,
       width: CONTENT_W,
       height: cardH,
       color: rgb(1, 1, 1),
       borderColor: HAIR,
       borderWidth: 1,
     });
-
-    const pad = 24;
-    const scale = Math.min((CONTENT_W - pad * 2) / img.width, (cardH - pad * 2) / img.height, 1);
-    const w = img.width * scale;
-    const h = img.height * scale;
     page.drawImage(img, {
       x: M + (CONTENT_W - w) / 2,
-      y: cardY + (cardH - h) / 2,
+      y: top - pad - h,
       width: w,
       height: h,
     });
-    this.y = BOTTOM;
+    this.y = top - cardH - gap;
   }
 
   /** Stand-in page for a document that could not be embedded inline. */
@@ -657,8 +695,8 @@ export class PackageDoc {
   }
 
   /**
-   * Embed one uploaded document — an image on its own page, a PDF's own pages
-   * copied in verbatim.
+   * Embed one uploaded document — an image in the flow (see imagePage), a PDF's
+   * own pages copied in verbatim.
    *
    * Returns true when the document's content genuinely reached this PDF, which
    * is what lets the clerk email stop attaching the original separately.

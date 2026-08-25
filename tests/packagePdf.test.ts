@@ -195,7 +195,7 @@ test("addDocument reports a merged PDF as consumed so it isn't attached twice", 
   assert.equal(pkg.skipped.length, 0);
 });
 
-test("an image is embedded on its own page", async () => {
+test("an image is embedded as a page of its own when it is the only one", async () => {
   const pkg = await PackageDoc.create(META);
   const ok = await pkg.addDocument({
     bytes: new Uint8Array(PNG_1PX),
@@ -280,4 +280,70 @@ test("the cover page reports the file it belongs to", async () => {
 test("save returns null when nothing was drawn", async () => {
   const pkg = await PackageDoc.create(META);
   assert.equal(await pkg.save(), null);
+});
+
+// ─────────────────────────── wasted space ────────────────────────────
+//
+// Both of these were reported as "too much empty space" on the identification
+// and personal-information PDFs. An image used to take a page of its own with a
+// white card stretched from the band to the footer — a landscape licence sat in
+// the middle of roughly 340pt of nothing — and every party's personal
+// information started with a forced page break.
+
+test("several images share a page instead of taking one each", async () => {
+  const pkg = await PackageDoc.create(META);
+  for (const name of ["Aliya Test", "Ravi Anand", "Preetha Jayanthan"]) {
+    await pkg.addDocument({
+      bytes: new Uint8Array(PNG_1PX),
+      fileUrl: `https://blob.example/${name}.png`,
+      fileName: `${name}.png`,
+      heading: name,
+      sublabel: "Driver Licence",
+    });
+  }
+  assert.equal(pkg.documents, 3);
+  assert.equal(pkg.pageCount, 1, "three small IDs fit on one page");
+});
+
+test("an image leaves the cursor below it, so text can follow on the same page", async () => {
+  const pkg = await PackageDoc.create(META);
+  await pkg.addDocument({
+    bytes: new Uint8Array(PNG_1PX),
+    fileUrl: "https://blob.example/licence.png",
+    fileName: "licence.png",
+    heading: "Aliya Test",
+    sublabel: "Driver Licence",
+  });
+  pkg.kvRow("Document", "Driver Licence");
+  assert.equal(pkg.pageCount, 1, "the row belongs under the image, not overleaf");
+});
+
+test("consecutive sections flow down one page rather than one page each", async () => {
+  const pkg = await PackageDoc.create(META);
+  for (const name of ["Aliya Test", "Ravi Anand"]) {
+    pkg.section(name, "Personal Information");
+    pkg.kvRow("Name", name);
+    pkg.kvRow("Marital Status", "Married");
+    pkg.kvRow("Citizenship", "Canadian Citizen");
+  }
+  assert.equal(pkg.pageCount, 1, "two parties' details belong on one page");
+});
+
+test("section() breaks rather than stranding a heading at the foot of a page", async () => {
+  // 14 rows leaves room for the band itself but NOT for the row that follows it,
+  // which is exactly the case plain band() gets wrong.
+  const fill = (doc: PackageDoc) => {
+    doc.section("Aliya Test", "Personal Information");
+    for (let i = 0; i < 14; i++) doc.kvRow(`Field ${i + 1}`, "Value");
+  };
+
+  const stranded = await PackageDoc.create(META);
+  fill(stranded);
+  stranded.band("Ravi Anand", "Personal Information");
+  assert.equal(stranded.pageCount, 1, "band() alone leaves the heading where it lands");
+
+  const kept = await PackageDoc.create(META);
+  fill(kept);
+  kept.section("Ravi Anand", "Personal Information");
+  assert.equal(kept.pageCount, 2, "section() takes the heading to the next page with its rows");
 });
