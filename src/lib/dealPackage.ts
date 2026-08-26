@@ -19,13 +19,37 @@
 //   1. Identification      — every party's ID, merged. A pure merge: no divider
 //                            pages, and blank pages inside a two-sided scan are
 //                            dropped (see packagePdf.isBlankPage).
-//   2. Personal Information — every party's answers, merged.
-//   3. One entry per TASK   — its answers, then every file uploaded against it
+//   2. Agreement of Purchase and Sale — the file's agreement(s), merged. One PDF
+//                            per FILE: a P&S file carries a purchase-side and a
+//                            sale-side agreement and every party's deal holds
+//                            its own copy of the APS task, which had the clerks
+//                            opening the same agreement three or four times.
+//   3. Personal Information — every party's answers, merged.
+//   4. Property Information — facts about the PROPERTY rather than a person:
+//                            the lock box code and the rental equipment on it.
+//                            Both were reported missing: the lock box code
+//                            because it lives in a column on the deal that no
+//                            task or document carries, the rental answers
+//                            because they sit on the Sale-side shared task.
+//   5. One entry per TASK   — its answers, then every file uploaded against it
 //                            merged in behind them. This is what makes a
 //                            multi-file void cheque or property tax bill arrive
 //                            as one PDF instead of three attachments.
-//   4. One entry per orphan document — a stored document belonging to no task,
+//   6. One entry per orphan document — a stored document belonging to no task,
 //                            grouped by its type and owner so it still ships.
+//                            This sweeps ALL FIVE stores a blob can sit in:
+//                            lead_corporate_docs, lead_identification_docs,
+//                            task_responses, tasks.document_url and
+//                            deal_documents.
+//
+// Merging is OPTIONAL — see DealPackageOptions.mergeDocuments
+// ───────────────────────────────────────────────
+// The grouping above is what "Download All" ships. "Email to Clerk" asks for the
+// same enumeration with `mergeDocuments: false`: sections 1, 2 and 6 then draw
+// nothing and drop out, sections 3, 4 and 5 keep their generated ANSWERS and
+// nothing else, and every uploaded document stays unconsumed so the caller can
+// attach it on its own, in the bytes and under the name it was uploaded with.
+// The enumeration is shared either way — only the packaging differs.
 //
 // Everything is best-effort: a blob that can't be fetched or embedded costs that
 // one document (and is reported in `skipped`, so the clerk email can attach the
@@ -49,15 +73,47 @@ export interface PackagePerson {
   name: string;
 }
 
+/**
+ * Which part of the package an entry belongs to. Callers group by this rather
+ * than by matching on the title — the clerk email's "Attached:" breakdown used
+ * to compare `entry.title` against the two literal strings "Identification" and
+ * "Personal Information", which silently miscounts the moment a combined PDF is
+ * added or renamed.
+ */
+export type PackageEntryKind =
+  | "identification"
+  | "aps"
+  | "personal-info"
+  | "property"
+  | "task"
+  | "leftover";
+
 /** One PDF in the package. */
 export interface PackageEntry {
   /** File-name stem — "Identification", "Latest Property Tax Bill - Aliya Test". */
   title: string;
+  kind: PackageEntryKind;
   bytes: Uint8Array;
   /** Source documents merged in. */
   documents: number;
   /** Blob URLs whose content genuinely reached this PDF. */
   consumedUrls: string[];
+}
+
+/** How the package is assembled. */
+export interface DealPackageOptions {
+  /**
+   * Merge each section's source documents into that section's PDF — the ZIP's
+   * behaviour, and the default.
+   *
+   * Pass `false` to leave every uploaded document ALONE. The entries then hold
+   * only the generated answers (personal information, property facts, a task's
+   * form responses), no blob is reported in `consumedUrls`, and the caller
+   * ships each document as its own attachment in its original bytes. That is
+   * what "Email to Clerk" does: merging costs a document its filename and its
+   * byte-for-byte formatting, and the clerks asked for the originals back.
+   */
+  mergeDocuments?: boolean;
 }
 
 /** A document that could not go into a PDF, kept in its original bytes. */
@@ -81,8 +137,14 @@ export interface DealPackageResult {
   failed: string[];
   /** ID documents inside the identification entry. */
   identificationDocs: number;
+  /** Agreements merged into the combined APS entry. */
+  apsDocs: number;
   /** Parties inside the personal-information entry. */
   personalInfoPeople: number;
+  /** Facts (lock box code, rental answers) inside the property entry. */
+  propertyInfoRows: number;
+  /** Whether source documents were merged into the entries — see the options. */
+  mergedDocuments: boolean;
 }
 
 interface TaskRow {
@@ -92,6 +154,9 @@ interface TaskRow {
   milestone_id: string | null;
   order_index: number | null;
   task_template_id: string | null;
+  /** A document hung off the TASK itself rather than off one of its form fields. */
+  document_url: string | null;
+  document_name: string | null;
 }
 
 interface ResponseRow {
@@ -133,8 +198,18 @@ export function sanitizeEntryName(name: string): string {
  * Returns null when the deal doesn't exist. An existing deal with nothing
  * uploaded returns a result with no entries — the caller decides whether that is
  * an error (the clerk email) or a toast (the ZIP).
+ *
+ * `options.mergeDocuments: false` builds the SAME enumeration without merging
+ * anything: the entries carry the generated answers only, and every uploaded
+ * document is left for the caller to attach untouched.
  */
-export async function buildDealPackage(dealId: string): Promise<DealPackageResult | null> {
+export async function buildDealPackage(
+  dealId: string,
+  options: DealPackageOptions = {},
+): Promise<DealPackageResult | null> {
+  // Default ON, so "Download All" keeps building the merged archive. The clerk
+  // email opts out — every document reaches the clerks under its own name.
+  const mergeDocuments = options.mergeDocuments !== false;
   const { data: deal } = await supabaseAdmin
     .from("deals")
     .select(
@@ -182,12 +257,21 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
     price: deal.price as number | null,
   };
 
-  const [{ data: tasks }, { data: milestones }, { data: dealRows }, { data: corporate }] =
-    await Promise.all([
+  const [
+    { data: tasks },
+    { data: milestones },
+    { data: dealRows },
+    { data: corporate, error: corporateError },
+  ] = await Promise.all([
       dealIds.length
         ? supabaseAdmin
             .from("tasks")
-            .select("id, deal_id, title, milestone_id, order_index, task_template_id")
+            .select(
+              // document_url / document_name: a document attached to the task
+              // itself, which the deal page renders and which NO sweep here used
+              // to look at. Free — it rides on a query already being made.
+              "id, deal_id, title, milestone_id, order_index, task_template_id, document_url, document_name",
+            )
             .in("deal_id", dealIds)
             .eq("is_deleted", false)
         : Promise.resolve({ data: [] }),
@@ -198,16 +282,39 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
             .in("deal_id", dealIds)
         : Promise.resolve({ data: [] }),
       dealIds.length
-        ? supabaseAdmin.from("deals").select("id, lead_id").in("id", dealIds)
-        : Promise.resolve({ data: [] }),
+        ? supabaseAdmin
+            .from("deals")
+            // lockbox_code / garage_access_code are per-deal columns with no task
+            // or document behind them — section 4 is the only thing that ships
+            // them, so they have to be read for the whole family here.
+            .select("id, lead_id, file_number, property_address, lockbox_code, garage_access_code")
+            .in("id", dealIds)
+        : Promise.resolve({ data: [], error: null }),
       leadIds.length
         ? supabaseAdmin
             .from("lead_corporate_docs")
-            .select("lead_id, file_url, file_name, doc_type, custom_type, task_title, created_at")
+            // NO task_title — that column does not exist on this table (it is
+            // synthesised by /api/admin/deals/[id]/documents). Selecting it made
+            // PostgREST reject the whole query with 42703, which cost the package
+            // its ENTIRE lead_corporate_docs sweep: every document filed against
+            // the file rather than a task — intake APS uploads, a Notice of
+            // Fulfillment, a retainer — was silently absent from both the ZIP and
+            // the clerk email. Anything added here must exist on the table.
+            .select("lead_id, file_url, file_name, doc_type, custom_type, document_type, created_at")
             .in("lead_id", leadIds)
             .order("created_at", { ascending: true })
-        : Promise.resolve({ data: [] }),
+        : Promise.resolve({ data: [], error: null }),
     ]);
+
+  // A rejected sweep must never be silent again: an empty `corporate` is
+  // indistinguishable from "this file has no filed documents" at the call sites
+  // below, so say so here.
+  if (corporateError) {
+    logger.error(
+      `[dealPackage] lead_corporate_docs sweep failed — filed documents are MISSING from this package:`,
+      corporateError,
+    );
+  }
 
   const taskRows = (tasks ?? []) as unknown as TaskRow[];
   const { data: responses } = taskRows.length
@@ -220,6 +327,47 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
         )
     : { data: [] };
   const responseRows = (responses ?? []) as unknown as ResponseRow[];
+
+  // ── task_responses.file_url is NOT reliable ────────────────────────────────
+  // A file response routinely carries a file_name with a NULL file_url: the
+  // blob is on the matching lead_corporate_docs row instead (the customer
+  // portal writes both stores, and a re-submit deletes and re-inserts the
+  // response rows while the document rows survive). BOTH admin document views
+  // repair this at read time — see the two "Resolve missing file URLs from
+  // lead_corporate_docs" blocks in /api/admin/task-responses — which is why the
+  // deal page shows a document the package cannot see.
+  //
+  // Repairing it here, once, fixes every section below at the same time rather
+  // than leaving each one to remember: filtering on `r.file_url` alone silently
+  // drops a document the firm knows it has.
+  const corporateUrlByName = new Map<string, string>();
+  for (const d of corporate ?? []) {
+    const name = String(d.file_name ?? "").trim().toLowerCase();
+    const url = (d.file_url as string | null) ?? "";
+    if (name && url && !corporateUrlByName.has(name)) corporateUrlByName.set(name, url);
+  }
+  let repairedUrls = 0;
+  const unresolvedFileRows: string[] = [];
+  for (const r of responseRows) {
+    if (r.field_type !== "file" || r.file_url) continue;
+    const url = corporateUrlByName.get(String(r.file_name ?? "").trim().toLowerCase());
+    if (url) {
+      r.file_url = url;
+      repairedUrls++;
+    } else if (r.file_name) {
+      unresolvedFileRows.push(r.file_name);
+    }
+  }
+  if (repairedUrls > 0) {
+    logger.warn(
+      `[dealPackage] resolved ${repairedUrls} task_responses file row(s) with a null file_url from lead_corporate_docs`,
+    );
+  }
+  if (unresolvedFileRows.length > 0) {
+    logger.error(
+      `[dealPackage] ${unresolvedFileRows.length} uploaded file(s) have no blob anywhere and are MISSING from this package: ${unresolvedFileRows.join(", ")}`,
+    );
+  }
 
   // Field ordering, so a task's answers print in the order the client was asked.
   const templateIds = Array.from(
@@ -270,9 +418,13 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
   const entries: PackageEntry[] = [];
   const consumedUrls = new Set<string>();
   const skipped: SkippedDoc[] = [];
-  const failed: string[] = [];
+  // A file response whose blob could not be resolved at all is already lost —
+  // report it the same way a failed download is, so the caller can warn.
+  const failed: string[] = [...unresolvedFileRows];
   let identificationDocs = 0;
+  let apsDocs = 0;
   let personalInfoPeople = 0;
+  let propertyInfoRows = 0;
 
   /** Fetch a blob once; a failure is recorded and costs only that document. */
   const bytesCache = new Map<string, Uint8Array | null>();
@@ -298,8 +450,23 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
     }
   };
 
+  /**
+   * The documents a section should merge in — empty when the caller asked for
+   * documents to stay separate.
+   *
+   * Every section funnels its source documents through this rather than testing
+   * `mergeDocuments` itself, so "don't merge" cannot be half-applied: nothing is
+   * downloaded, nothing is embedded, and nothing lands in `consumedUrls` — which
+   * is exactly what makes the blob reach the caller as its own attachment.
+   */
+  const toMerge = <T>(docs: T[]): T[] => (mergeDocuments ? docs : []);
+
   /** Finish a PackageDoc into an entry, dropping it when nothing was drawn. */
-  const finish = async (title: string, pdf: PackageDoc): Promise<void> => {
+  const finish = async (
+    title: string,
+    pdf: PackageDoc,
+    kind: PackageEntryKind,
+  ): Promise<void> => {
     const bytes = await pdf.save();
     skipped.push(...pdf.skipped);
     // packagePdf is deliberately logger-free, so its complaints surface here.
@@ -313,6 +480,7 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
     for (const url of pdf.consumedUrls) consumedUrls.add(url);
     entries.push({
       title: sanitizeEntryName(title),
+      kind,
       bytes,
       documents: pdf.documents,
       consumedUrls: [...pdf.consumedUrls],
@@ -324,11 +492,14 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
   // pages are copied in verbatim (blank ones dropped) and an image gets its own
   // page whose band names the party, so attribution survives without a page of
   // its own.
+  //
+  // With merging off this section has nothing to draw and drops out entirely —
+  // each ID travels to the clerk as its own attachment instead.
   try {
     const docsByLead = await loadIdentificationDocs(leadIds, dealIds);
     const idPdf = await PackageDoc.create(meta);
     for (const person of people) {
-      const docs = docsByLead.get(person.leadId) ?? [];
+      const docs = toMerge(docsByLead.get(person.leadId) ?? []);
       let index = 0;
       for (const doc of docs) {
         index++;
@@ -348,20 +519,75 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
       }
     }
     identificationDocs = idPdf.documents;
-    await finish("Identification", idPdf);
+    await finish("Identification", idPdf, "identification");
   } catch (err) {
     logger.error("[dealPackage] identification entry failed:", err);
   }
 
-  // ── 2. Personal Information ────────────────────────────────────────────────
+  // ── 2. Agreement of Purchase and Sale ──────────────────────────────────────
+  // Merged exactly the way identification is, and for the same reason. The APS
+  // reaches us from two directions — bridged onto the APS task as a
+  // task_response by completeApsTask, or filed straight onto the lead as a
+  // lead_corporate_docs row at intake — and a P&S family multiplies it further:
+  // one APS task per side, per party's deal. That was three or four attachments
+  // of the same agreement; it is now one PDF for the file, deduped by blob URL.
+  try {
+    const aps = await loadApsMaterial(leadIds, dealIds);
+    if (aps.docs.length > 0 || aps.answers.length > 0) {
+      const apsPdf = await PackageDoc.create(meta);
+
+      // Any answers typed ON the APS task (most decks have none — it is an
+      // upload task) lead, so the agreements that follow stay contiguous.
+      if (aps.answers.length > 0) {
+        apsPdf.newPage();
+        apsPdf.band("Agreement of Purchase and Sale", "Details");
+        let heading = "";
+        for (const row of aps.answers) {
+          const owner = leadNameById.get(row.leadId) ?? "";
+          const showHeading = owner && owner !== heading ? owner : undefined;
+          if (showHeading) heading = owner;
+          apsPdf.kvRow(row.label, row.value, showHeading);
+        }
+      }
+
+      let index = 0;
+      for (const doc of toMerge(aps.docs)) {
+        index++;
+        const fileName = doc.fileName || "Agreement of Purchase and Sale";
+        const bytes = await fetchBytes(doc.fileUrl, fileName);
+        if (!bytes) continue;
+        await apsPdf.addDocument({
+          bytes,
+          fileUrl: doc.fileUrl,
+          fileName,
+          heading: leadNameById.get(doc.leadId) || "Agreement of Purchase and Sale",
+          // The side is what a clerk on a P&S file is looking for — "Purchase" /
+          // "Sale" — so it captions the page ahead of the upload's own name.
+          sublabel: doc.label || "Agreement",
+          index,
+          total: aps.docs.length,
+          sectionTitle: "Agreement of Purchase and Sale",
+        });
+      }
+
+      apsDocs = apsPdf.documents;
+      await finish("Agreement of Purchase and Sale", apsPdf, "aps");
+    }
+  } catch (err) {
+    logger.error("[dealPackage] agreement of purchase and sale entry failed:", err);
+  }
+
+  // ── 3. Personal Information ────────────────────────────────────────────────
   try {
     const rowsByLead = await loadPersonalInfo(leadIds, dealIds);
     const withRows = people.filter((p) => (rowsByLead.get(p.leadId) ?? []).length > 0);
     if (withRows.length > 0) {
       const infoPdf = await PackageDoc.create(meta);
       for (const person of withRows) {
-        infoPdf.newPage();
-        infoPdf.band(person.name || "Client", "Personal Information");
+        // section(), NOT newPage(): a party's answers start wherever the last
+        // party's ended. Forcing a page each meant a two-person file was two
+        // pages that were each ~80% white.
+        infoPdf.section(person.name || "Client", "Personal Information");
         if (person.name) infoPdf.kvRow("Name", person.name);
         for (const row of rowsByLead.get(person.leadId) ?? []) {
           infoPdf.kvRow(
@@ -372,22 +598,211 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
         }
       }
       personalInfoPeople = withRows.length;
-      await finish("Personal Information", infoPdf);
+      await finish("Personal Information", infoPdf, "personal-info");
     }
   } catch (err) {
     logger.error("[dealPackage] personal information entry failed:", err);
   }
 
-  // ── 3. One entry per task ──────────────────────────────────────────────────
-  // Deal-page order: milestone order, then task order within it, with each
-  // person's copy of a task kept beside the primary's.
   const responsesByTask = new Map<string, ResponseRow[]>();
   for (const r of responseRows) {
     responsesByTask.set(r.task_id, [...(responsesByTask.get(r.task_id) ?? []), r]);
   }
 
+  // ── 4. Property Information ────────────────────────────────────────────────
+  // What the clerks reported missing. Neither fact is a document, which is
+  // exactly why a document package lost them:
+  //
+  //   • The LOCK BOX CODE is a column on the deal (deals.lockbox_code, typed
+  //     into the card on the deal page, and the source of the
+  //     {{ lockbox_code }} email variable). Some files instead carry it as the
+  //     answer to an "Enter Lockbox Code" task. Both are read here, so the code
+  //     lands in one predictable place however it was entered — and the task is
+  //     dropped from the per-task loop below rather than shipping twice.
+  //   • RENTAL EQUIPMENT INFORMATION is a Sale-side shared task whose answers
+  //     (hot water tank rented/owned, its provider, other rental equipment) are
+  //     the whole point of it — there is no upload behind it.
+  //
+  // The UPLOADS behind those two tasks are read from both document stores, the
+  // way identification and the APS are. Reading task_responses alone (and only
+  // rows with a non-null file_url) is what shipped this entry without the
+  // client's lock box photos while the deal page kept showing them.
+  //
+  // Property facts, not personal ones, so they merge across the family into one
+  // PDF the way identification does rather than repeating per party.
+  const lockboxTasks = taskRows.filter((t) => isLockboxTitle(t.title));
+  const rentalTasks = taskRows.filter((t) => isRentalTitle(t.title));
+  try {
+    const propertyPdf = await PackageDoc.create(meta);
+    let rows = 0;
+    // Same "no duplicate answers" rule the family view needs: a shared task is
+    // copied onto every party's deal, so the same code arrives two or three
+    // times over.
+    const seenRow = new Set<string>();
+    // A section heading is drawn by the first row that actually lands under it —
+    // pass it on every call and it appears once, or not at all when the file has
+    // nothing to say there.
+    const printedHeadings = new Set<string>();
+    const addRow = (label: string, value: string, heading?: string) => {
+      const clean = String(value ?? "").trim();
+      if (!clean) return;
+      const key = `${label.toLowerCase()}::${clean.toLowerCase()}`;
+      if (seenRow.has(key)) return;
+      seenRow.add(key);
+      if (rows === 0) {
+        propertyPdf.newPage();
+        propertyPdf.band("Property Information", fileNumber || undefined);
+      }
+      rows++;
+      const head = heading && !printedHeadings.has(heading) ? heading : undefined;
+      if (head) printedHeadings.add(head);
+      propertyPdf.kvRow(label, clean, head);
+    };
+
+    // Deal columns first — the lock box code as staff actually enter it today.
+    // Ordered by party so a family reads primary-first like every other entry.
+    const dealsByRank = [...(dealRows ?? [])].sort(
+      (a, b) =>
+        (personRank.get((a.lead_id as string) ?? "") ?? MAX_INT) -
+        (personRank.get((b.lead_id as string) ?? "") ?? MAX_INT),
+    );
+    for (const d of dealsByRank) {
+      addRow("Lock Box Code", (d.lockbox_code as string) ?? "", "Property access");
+      addRow("Garage Access Code", (d.garage_access_code as string) ?? "", "Property access");
+    }
+
+    // Then the same code where a file carries it as a task answer instead.
+    for (const task of lockboxTasks) {
+      for (const r of (responsesByTask.get(task.id) ?? []).sort(
+        (a, b) => fieldOrder(a) - fieldOrder(b),
+      )) {
+        if (r.field_type === "file") continue;
+        addRow(
+          humanise(r.field_label || r.field_id, "Lock Box Code"),
+          String(r.value ?? ""),
+          "Property access",
+        );
+      }
+    }
+
+    // Rental equipment — its own heading, since it answers a different question.
+    for (const task of rentalTasks) {
+      for (const r of (responsesByTask.get(task.id) ?? []).sort(
+        (a, b) => fieldOrder(a) - fieldOrder(b),
+      )) {
+        if (r.field_type === "file") continue;
+        addRow(
+          String(r.field_label || r.field_id || "Rental equipment"),
+          String(r.value ?? ""),
+          "Rental equipment",
+        );
+      }
+    }
+
+    // A scan attached to either task (a rental contract, a photo of the box)
+    // rides behind the answers, so nothing is lost by taking these tasks out of
+    // the per-task loop.
+    //
+    // BOTH stores, for the same reason loadIdentificationDocs consults both: a
+    // client's upload reaches us as a task_response AND as a lead_corporate_docs
+    // row, and the two go out of step — a re-submitted task deletes and
+    // re-inserts its responses while the document rows survive, and "Save draft"
+    // / "Replace" write only the document row. Reading task_responses alone was
+    // what emptied this entry of the client's lock box uploads while the deal
+    // page went on showing them.
+    const propertyFiles: Array<{ fileUrl: string; fileName: string; label: string }> = [];
+    const seenPropertyFile = new Set<string>();
+    const pushPropertyFile = (fileUrl: string, fileName: string, label: string) => {
+      // Shared tasks are copied onto every party's deal, so the same photo
+      // arrives two or three times over on a family file.
+      if (!fileUrl || seenPropertyFile.has(fileUrl)) return;
+      seenPropertyFile.add(fileUrl);
+      propertyFiles.push({ fileUrl, fileName: fileName || "Document", label: label || "Document" });
+    };
+
+    for (const t of [...lockboxTasks, ...rentalTasks]) {
+      for (const r of responsesByTask.get(t.id) ?? []) {
+        if (r.field_type !== "file" || !r.file_url) continue;
+        pushPropertyFile(
+          r.file_url,
+          r.file_name || r.field_label || "Document",
+          r.field_label || r.file_name || t.title || "Document",
+        );
+      }
+    }
+    // Documents filed against the FILE rather than a task, whose type names the
+    // lock box or the rental equipment. lead_corporate_docs carries no task_id,
+    // so its own label is the only attribution there is.
+    for (const d of corporate ?? []) {
+      const url = d.file_url as string | null;
+      if (!url) continue;
+      const label = `${d.custom_type ?? ""} ${d.document_type ?? ""} ${d.doc_type ?? ""}`;
+      if (!isLockboxTitle(label) && !isRentalTitle(label)) continue;
+      pushPropertyFile(
+        url,
+        (d.file_name as string) || "Document",
+        humanise((d.custom_type as string) || (d.document_type as string), "Document"),
+      );
+    }
+
+    let index = 0;
+    for (const doc of toMerge(propertyFiles)) {
+      index++;
+      const bytes = await fetchBytes(doc.fileUrl, doc.fileName);
+      if (!bytes) continue;
+      await propertyPdf.addDocument({
+        bytes,
+        fileUrl: doc.fileUrl,
+        fileName: doc.fileName,
+        heading: "Property Information",
+        sublabel: doc.label,
+        index,
+        total: propertyFiles.length,
+        sectionTitle: "Property Information",
+      });
+    }
+
+    propertyInfoRows = rows;
+    // `skipped` matters as much as the two counters: a document that could not
+    // be embedded has a note page in this PDF and travels as its own original,
+    // and dropping the entry here would strand that note AND lose the skip
+    // report the clerk email needs to attach the original.
+    if (rows > 0 || propertyPdf.documents > 0 || propertyPdf.skipped.length > 0) {
+      await finish("Property Information", propertyPdf, "property");
+    }
+    // The symptom that started this — "the client's lock box uploads are not in
+    // the property PDF" — was invisible in the logs. Say it out loud.
+    logger.info(
+      `[dealPackage] property information: ${rows} fact(s), ${propertyPdf.documents}/${propertyFiles.length} document(s) merged` +
+        (mergeDocuments ? "" : " (merging off — every document is attached separately)"),
+    );
+    if (mergeDocuments) {
+      for (const doc of propertyFiles) {
+        if (!consumedUrls.has(doc.fileUrl)) {
+          logger.warn(
+            `[dealPackage] property information could not merge "${doc.fileName}" — it ships as its own attachment instead`,
+          );
+        }
+      }
+    }
+  } catch (err) {
+    logger.error("[dealPackage] property information entry failed:", err);
+  }
+
+  // ── 5. One entry per task ──────────────────────────────────────────────────
+  // Deal-page order: milestone order, then task order within it, with each
+  // person's copy of a task kept beside the primary's.
+  //
+  // The tasks whose content has already been merged family-wide above are left
+  // out here — identification, personal information, the APS, and the lock box
+  // and rental tasks that section 4 absorbed — so nothing ships twice.
   const packagedTasks = taskRows.filter(
-    (t) => !isIdentificationTitle(t.title) && !isPersonalInfoTitle(t.title),
+    (t) =>
+      !isIdentificationTitle(t.title) &&
+      !isPersonalInfoTitle(t.title) &&
+      !isApsTitle(t.title) &&
+      !isLockboxTitle(t.title) &&
+      !isRentalTitle(t.title),
   );
   // What a task is a copy OF — template id when there is one, its title
   // otherwise, so a manually-added twin still pairs up with its peer.
@@ -442,9 +857,10 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
       }
 
       // Every file uploaded against this task, merged in behind the answers —
-      // one PDF for the whole task however many files it holds.
+      // one PDF for the whole task however many files it holds. With merging off
+      // the entry is the answers alone and each upload is attached separately.
       let index = 0;
-      for (const r of fileRows) {
+      for (const r of toMerge(fileRows)) {
         index++;
         const fileName = r.file_name || r.field_label || "Document";
         const bytes = await fetchBytes(r.file_url as string, fileName);
@@ -463,14 +879,14 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
 
       const named =
         (copies.get(peerKey(task)) ?? 1) > 1 && ownerName ? `${title} - ${ownerName}` : title;
-      await finish(named, pdf);
+      await finish(named, pdf, "task");
     } catch (err) {
       logger.error(`[dealPackage] task entry "${title}" failed:`, err);
       failed.push(title);
     }
   }
 
-  // ── 4. Leftover documents ──────────────────────────────────────────────────
+  // ── 6. Leftover documents ──────────────────────────────────────────────────
   // Any stored blob that reached no entry above. This is the safety net the ZIP
   // never had: whatever the matching rules do or don't manage to place, a
   // document on this file ends up in the package.
@@ -493,15 +909,16 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
   for (const d of corporate ?? []) {
     const url = d.file_url as string | null;
     if (!url || consumedUrls.has(url)) continue;
-    // An ID that couldn't be embedded already has its say inside the
-    // identification entry; a second copy here would only duplicate it.
+    // An ID or an agreement that couldn't be embedded already has its say inside
+    // the combined entry above; a second copy here would only duplicate it.
     if (String(d.doc_type ?? "").toLowerCase() === "identification") continue;
+    if (isApsDocType(d.doc_type as string | null, d.custom_type as string | null)) continue;
     leftovers.push({
       fileUrl: url,
       fileName: (d.file_name as string) || "Document",
       owner: leadNameById.get(d.lead_id as string) ?? "",
       label: humanise(
-        (d.task_title as string) || (d.custom_type as string) || (d.doc_type as string),
+        (d.custom_type as string) || (d.document_type as string) || (d.doc_type as string),
         "Document",
       ),
     });
@@ -510,14 +927,54 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
   for (const r of responseRows) {
     if (r.field_type !== "file" || !r.file_url || consumedUrls.has(r.file_url)) continue;
     const task = taskById.get(r.task_id);
-    // Whatever couldn't be embedded into the identification entry stays there.
-    if (task && isIdentificationTitle(task.title)) continue;
+    // Whatever couldn't be embedded into one of the merged entries stays there —
+    // it travels as its own original file instead (see `skipped`/`originals`).
+    if (task && (isIdentificationTitle(task.title) || isApsTitle(task.title))) continue;
     leftovers.push({
       fileUrl: r.file_url,
       fileName: r.file_name || r.field_label || "Document",
       owner: task ? leadNameById.get(leadByDeal.get(task.deal_id) ?? "") ?? "" : "",
       label: humanise(task?.title || r.field_label, "Document"),
     });
+  }
+
+  // A document hung off the TASK rather than one of its form fields. Same
+  // grouping as any other upload: to a clerk it is this task's document.
+  for (const t of taskRows) {
+    const url = t.document_url;
+    if (!url || consumedUrls.has(url)) continue;
+    leftovers.push({
+      fileUrl: url,
+      fileName: t.document_name || "Document",
+      owner: leadNameById.get(leadByDeal.get(t.deal_id) ?? "") ?? "",
+      label: humanise(t.title, "Document"),
+    });
+  }
+
+  // `deal_documents` — deal-keyed document rows. Nothing in this repo writes the
+  // table, so its shape is the one thing here we don't control: queried on its
+  // own, and a failure costs only these rows rather than the whole package.
+  if (dealIds.length) {
+    const { data: dealDocs, error: dealDocsError } = await supabaseAdmin
+      .from("deal_documents")
+      .select("deal_id, file_url, name, type")
+      .in("deal_id", dealIds);
+    if (dealDocsError) {
+      logger.warn(
+        `[dealPackage] deal_documents sweep failed — those rows are missing from this package:`,
+        dealDocsError,
+      );
+    }
+    for (const d of dealDocs ?? []) {
+      const url = d.file_url as string | null;
+      if (!url || consumedUrls.has(url)) continue;
+      leftovers.push({
+        fileUrl: url,
+        fileName: (d.name as string) || "Document",
+        owner: leadNameById.get(leadByDeal.get(d.deal_id as string) ?? "") ?? "",
+        label: humanise((d.type as string) || (d.name as string), "Document"),
+      });
+    }
   }
 
   // Grouped by owner + label, so three pages of one tax bill are one PDF.
@@ -537,7 +994,9 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
     }
   }
 
-  for (const { title, docs } of groups.values()) {
+  // Nothing to group when documents aren't being merged: every one of these
+  // blobs is unconsumed, so the caller attaches it in its original form.
+  for (const { title, docs } of mergeDocuments ? [...groups.values()] : []) {
     try {
       const pdf = await PackageDoc.create(meta);
       let index = 0;
@@ -556,7 +1015,7 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
           sectionTitle: title,
         });
       }
-      await finish(title, pdf);
+      await finish(title, pdf, "leftover");
     } catch (err) {
       logger.error(`[dealPackage] leftover entry "${title}" failed:`, err);
       failed.push(title);
@@ -587,7 +1046,10 @@ export async function buildDealPackage(dealId: string): Promise<DealPackageResul
     skipped,
     failed,
     identificationDocs,
+    apsDocs,
     personalInfoPeople,
+    propertyInfoRows,
+    mergedDocuments: mergeDocuments,
   };
 }
 
@@ -640,6 +1102,49 @@ function isIdentificationTitle(title: string | null | undefined): boolean {
 
 function isPersonalInfoTitle(title: string | null | undefined): boolean {
   return String(title ?? "").toLowerCase().includes("personal info");
+}
+
+/**
+ * "Agreement of Purchase and Sale and Amendments" — the seeded title — plus the
+ * "APS" shorthand a manually-added task tends to carry. Deliberately loose for
+ * the same reason isIdentificationTitle is: task titles are per-deal SNAPSHOTS
+ * of a template's name, so a file created before a rename keeps the old wording.
+ */
+function isApsTitle(title: string | null | undefined): boolean {
+  const t = String(title ?? "").toLowerCase();
+  return t.includes("agreement of purchase and sale") || /\baps\b/.test(t);
+}
+
+/** "Enter Lockbox Code", "Lock Box Code". */
+function isLockboxTitle(title: string | null | undefined): boolean {
+  return /lock\s*box/i.test(String(title ?? ""));
+}
+
+/** "Rental Equipment Information". */
+function isRentalTitle(title: string | null | undefined): boolean {
+  return /rental/i.test(String(title ?? ""));
+}
+
+/**
+ * Is this lead_corporate_docs row an agreement?
+ *
+ * Four shapes are in the data, all of them live (see completeApsTask.ts):
+ * doc_type "aps_purchase" / "aps_sale" / "aps", and the legacy rows written as
+ * doc_type "document" with the side carried in custom_type ("APS Purchase
+ * Document").
+ */
+function isApsDocType(docType: string | null | undefined, customType: string | null | undefined): boolean {
+  const dt = String(docType ?? "").toLowerCase().trim();
+  if (dt === "aps" || dt === "aps_purchase" || dt === "aps_sale") return true;
+  return /\baps\b/i.test(String(customType ?? ""));
+}
+
+/** "Purchase" / "Sale" / "" — which side of a P&S file an agreement is for. */
+function apsSideLabel(docType: string | null | undefined, customType: string | null | undefined): string {
+  const hay = `${docType ?? ""} ${customType ?? ""}`.toLowerCase();
+  if (hay.includes("purchase")) return "Purchase";
+  if (hay.includes("sale")) return "Sale";
+  return "";
 }
 
 /**
@@ -733,6 +1238,147 @@ async function loadIdentificationDocs(
   }
 
   return byLead;
+}
+
+/** One agreement on the file. */
+interface ApsDoc {
+  /** Whose upload it was — "" when the row belongs to a deal with no lead. */
+  leadId: string;
+  fileUrl: string;
+  fileName: string;
+  /** "Purchase" / "Sale" / the field's own label — captioned onto the page. */
+  label: string;
+}
+
+/** An answer typed on the APS task itself, if a deck has any such field. */
+interface ApsAnswer {
+  leadId: string;
+  label: string;
+  value: string;
+}
+
+interface ApsMaterial {
+  docs: ApsDoc[];
+  answers: ApsAnswer[];
+}
+
+/**
+ * Every agreement on the file, deduped by blob URL and ordered purchase-side
+ * first.
+ *
+ * Both stores are read, because the APS legitimately lands in either. An
+ * agreement uploaded at intake is a lead_corporate_docs row (doc_type
+ * "aps_purchase" / "aps_sale" / "aps", or a legacy "document" row whose
+ * custom_type names the APS); completeApsTask.ts bridges those onto the APS task
+ * as task_responses, but only for files it has run over, and a client answering
+ * the task writes only task_responses. Reading one store alone loses agreements.
+ */
+async function loadApsMaterial(leadIds: string[], dealIds: string[]): Promise<ApsMaterial> {
+  const docs: ApsDoc[] = [];
+  const answers: ApsAnswer[] = [];
+  if (leadIds.length === 0 && dealIds.length === 0) return { docs, answers };
+
+  const [{ data: corporate }, { data: deals }, { data: tasks }] = await Promise.all([
+    leadIds.length
+      ? supabaseAdmin
+          .from("lead_corporate_docs")
+          .select("lead_id, file_url, file_name, doc_type, custom_type, created_at")
+          .in("lead_id", leadIds)
+          .order("created_at", { ascending: true })
+      : Promise.resolve({ data: [] }),
+    dealIds.length
+      ? supabaseAdmin.from("deals").select("id, lead_id").in("id", dealIds)
+      : Promise.resolve({ data: [] }),
+    dealIds.length
+      ? supabaseAdmin
+          .from("tasks")
+          .select("id, title, deal_id, task_template_id")
+          .in("deal_id", dealIds)
+          .eq("is_deleted", false)
+      : Promise.resolve({ data: [] }),
+  ]);
+
+  const apsTasks = (tasks ?? []).filter((t) => isApsTitle(t.title as string));
+
+  // Which side a task's agreement is for. NOT derivable from the task title or
+  // the response's field label — both read "Agreement of Purchase and Sale" on
+  // either side of a P&S file — so it comes from the template's lead_type, which
+  // is the same thing completeApsTask.ts routes bridged uploads by.
+  const apsTemplateIds = Array.from(
+    new Set(apsTasks.map((t) => t.task_template_id as string | null).filter(Boolean)),
+  ) as string[];
+  const { data: apsTemplates } = apsTemplateIds.length
+    ? await supabaseAdmin.from("task_templates").select("id, lead_type").in("id", apsTemplateIds)
+    : { data: [] };
+  const sideByTemplate = new Map<string, string>(
+    (apsTemplates ?? []).map((t) => [t.id as string, apsSideLabel(t.lead_type as string, null)]),
+  );
+  const sideByTask = new Map<string, string>(
+    apsTasks.map((t) => [
+      t.id as string,
+      sideByTemplate.get((t.task_template_id as string) ?? "") ?? "",
+    ]),
+  );
+  const leadByDeal = new Map<string, string>(
+    (deals ?? []).map((d) => [d.id as string, (d.lead_id as string) ?? ""]),
+  );
+  const dealByTask = new Map<string, string>(
+    apsTasks.map((t) => [t.id as string, (t.deal_id as string) ?? ""]),
+  );
+  const { data: responses } = apsTasks.length
+    ? await supabaseAdmin
+        .from("task_responses")
+        .select("task_id, field_label, field_type, value, file_url, file_name")
+        .in(
+          "task_id",
+          apsTasks.map((t) => t.id as string),
+        )
+    : { data: [] };
+
+  const seen = new Set<string>();
+  const pushDoc = (doc: ApsDoc) => {
+    if (!doc.fileUrl || seen.has(doc.fileUrl)) return;
+    seen.add(doc.fileUrl);
+    docs.push(doc);
+  };
+
+  for (const d of corporate ?? []) {
+    if (!isApsDocType(d.doc_type as string | null, d.custom_type as string | null)) continue;
+    pushDoc({
+      leadId: (d.lead_id as string) ?? "",
+      fileUrl: d.file_url as string,
+      fileName: (d.file_name as string) || "Agreement of Purchase and Sale",
+      label: apsSideLabel(d.doc_type as string | null, d.custom_type as string | null),
+    });
+  }
+
+  for (const r of responses ?? []) {
+    const leadId = leadByDeal.get(dealByTask.get(r.task_id as string) ?? "") ?? "";
+    if (r.field_type === "file") {
+      if (!r.file_url) continue;
+      pushDoc({
+        leadId,
+        fileUrl: r.file_url as string,
+        fileName: (r.file_name as string) || "Agreement of Purchase and Sale",
+        label: sideByTask.get(r.task_id as string) || "Agreement",
+      });
+      continue;
+    }
+    const value = String(r.value ?? "").trim();
+    if (!value) continue;
+    answers.push({
+      leadId,
+      label: String(r.field_label ?? "Detail"),
+      value,
+    });
+  }
+
+  // Purchase side first on a P&S file, which is the order the clerks read them
+  // in; everything unlabelled keeps its arrival order at the end.
+  const sideRank = (label: string) => (label === "Purchase" ? 0 : label === "Sale" ? 1 : 2);
+  docs.sort((a, b) => sideRank(a.label) - sideRank(b.label));
+
+  return { docs, answers };
 }
 
 /**

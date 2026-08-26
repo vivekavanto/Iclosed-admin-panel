@@ -11,11 +11,13 @@ import { sendClerkDocumentsEmail } from "@/lib/sendClerkDocumentsEmail";
  * Emails every client document on the file to the firm's conveyancing clerk
  * inbox — purchase@ / sale@ / both, chosen by the file's type.
  *
- * The clerks asked for the paperwork MERGED: identification and personal
- * information go out as two combined PDFs — every party's ID in one, every
- * party's details in the other — and every other task goes out as one PDF
- * holding its answers and every file uploaded against it. Anything that can't be
- * embedded still travels as its own original file.
+ * The clerks asked for the paperwork MERGED: identification, the agreement of
+ * purchase and sale, and personal information go out as three combined PDFs —
+ * every party's ID in one, the file's agreement(s) in another, every party's
+ * details in the third — alongside a property-information PDF carrying the lock
+ * box code and the rental equipment answers. Every other task goes out as one
+ * PDF holding its answers and every file uploaded against it. Anything that
+ * can't be embedded still travels as its own original file.
  *
  * "Download All" on the deal page ships the identical package as a ZIP; both are
  * built by src/lib/dealPackage.ts.
@@ -58,7 +60,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         attached: result.attached,
         linked: result.linked,
         identification: result.identification,
+        aps: result.aps,
         personalInfo: result.personalInfo,
+        propertyInfo: result.propertyInfo,
       },
       req,
     });
@@ -69,7 +73,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       attached: result.attached,
       linked: result.linked,
       identification: result.identification,
+      aps: result.aps,
       personalInfo: result.personalInfo,
+      propertyInfo: result.propertyInfo,
     });
   } catch (err) {
     logger.error(`POST /api/admin/deals/${id}/email-to-clerk error:`, err);

@@ -5,7 +5,7 @@
 // a file is finished, the whole document package should be in that email rather
 // than behind ten clicks in the portal.
 //
-// Documents live in THREE places in this schema, and all three matter:
+// Documents live in FIVE places in this schema, and all five matter:
 //
 //   • `lead_corporate_docs`      — intake / admin uploads (IDs, APS, corporate
 //                                  records, mortgage, home insurance…), keyed
@@ -16,6 +16,21 @@
 //                                  form field, keyed by task_id. These are the
 //                                  ones the alert is actually about, so missing
 //                                  them would defeat the point.
+//   • `tasks.document_url`       — a document hung directly off a task rather
+//                                  than off one of its form fields (the tasks
+//                                  PATCH route writes it, and the deal page
+//                                  renders it as the task's document). No sweep
+//                                  looked here at all.
+//   • `deal_documents`            — deal-keyed document rows. Nothing in this
+//                                  repo writes them, but the right-to-be-
+//                                  forgotten erase sweeps the table for blobs,
+//                                  so rows with a `file_url` do exist and would
+//                                  otherwise never reach a clerk.
+//
+// The last two are queried on their own rather than inside the Promise.all
+// below: a failure there falls into the shared catch, which abandons the WHOLE
+// sweep and sends an email with no documents at all. Isolated, an unexpected
+// schema costs only its own store.
 //
 // Everything is gathered FAMILY-wide (client + co-purchasers / co-sellers), the
 // same scope the alert itself uses — a co-seller's ID belongs in the package.
@@ -271,7 +286,10 @@ export async function collectFamilyDocuments(
     const { data: tasks } = familyDealIds.length
       ? await supabaseAdmin
           .from("tasks")
-          .select("id, title, deal_id, task_template_id")
+          // document_url / document_name ride along on the query we already
+          // make — a document attached to the task itself rather than to one of
+          // its form fields.
+          .select("id, title, deal_id, task_template_id, document_url, document_name")
           .in("deal_id", familyDealIds)
           .eq("is_deleted", false)
       : { data: [] };
@@ -391,6 +409,28 @@ export async function collectFamilyDocuments(
       });
     });
 
+    // A document hung off the TASK itself. Same naming as a task response,
+    // because to a clerk it is the same thing: this task's document.
+    (tasks ?? []).forEach((t, i) => {
+      const url = (t as { document_url?: string | null }).document_url;
+      if (!url) return;
+      const original =
+        (t as { document_name?: string | null }).document_name ||
+        fallbackName(url, i);
+      candidates.push({
+        fileUrl: url,
+        fileName: apsTemplateIds.has((t.task_template_id as string) ?? "")
+          ? original
+          : packageFileName({
+              fileNumber: naming.fileNumber,
+              taskName: (t.title as string) ?? "",
+              clientName: clientNameByDeal.get(t.deal_id as string),
+              originalName: original,
+            }),
+        priority: 0,
+      });
+    });
+
     (identification ?? []).forEach((d, i) => {
       if (!d.file_url) return;
       const original = d.file_name || fallbackName(d.file_url, i);
@@ -408,6 +448,37 @@ export async function collectFamilyDocuments(
   } catch (err) {
     logger.error("[familyDocuments] failed to gather document rows:", err);
     return empty;
+  }
+
+  // `deal_documents` on its own: nothing in this repo writes the table, so its
+  // shape is the one thing here we don't control. A failure logs and costs only
+  // these rows — never the documents gathered above.
+  if (familyDealIds.length) {
+    try {
+      const { data: dealDocs, error } = await supabaseAdmin
+        .from("deal_documents")
+        .select("deal_id, file_url, name, type")
+        .in("deal_id", familyDealIds);
+      if (error) throw new Error(error.message);
+      (dealDocs ?? []).forEach((d, i) => {
+        if (!d.file_url) return;
+        const original = (d.name as string) || (d.type as string) || fallbackName(d.file_url, i);
+        candidates.push({
+          fileUrl: d.file_url as string,
+          fileName: packageFileName({
+            fileNumber: naming.fileNumber,
+            taskName: (d.type as string) || "",
+            clientName: "",
+            originalName: original,
+          }),
+          // Last: any of the stores above knows more about a blob than this one
+          // does, and dedupe() keeps the better-named copy.
+          priority: 3,
+        });
+      });
+    } catch (err) {
+      logger.warn("[familyDocuments] deal_documents sweep failed — skipping that store:", err);
+    }
   }
 
   const exclude = naming.excludeUrls;

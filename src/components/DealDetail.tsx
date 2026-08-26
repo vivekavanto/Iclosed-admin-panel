@@ -3706,10 +3706,11 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
    * Send every uploaded document on the file to the conveyancing clerk.
    *
    * All the work is server-side (/api/admin/deals/[id]/email-to-clerk) — the
-   * inbox is picked from the file type there, and the package is assembled the
-   * same way "Download All" assembles the ZIP: identification and personal
-   * information merged into one PDF each, everything else attached in its
-   * original format.
+   * inbox is picked from the file type there, and the package is enumerated the
+   * same way "Download All" enumerates the ZIP but sent UNMERGED: every uploaded
+   * document is attached on its own in the format it was uploaded in, alongside
+   * the generated pages nothing else carries (personal information, the property
+   * facts, each task's typed answers).
    *
    * Sends on the click — no confirm dialog, same as the final report. The send
    * is still audited server-side (it pushes client PII to an external mailbox),
@@ -3725,10 +3726,20 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
         return;
       }
       const linkedNote = data.linked > 0 ? ` (${data.linked} sent as links — too large to attach)` : "";
-      const mergedCount = (data.identification > 0 ? 1 : 0) + (data.personalInfo > 0 ? 1 : 0);
+      // Documents go out individually now, so the only combined PDFs left are the
+      // GENERATED ones — personal information across the parties, and the property
+      // facts (lock box code, rental equipment). identification/aps stay in the
+      // list because the send can be switched back to merging (mergeDocuments in
+      // buildDealPackage), and they read as 0 until it is.
+      const merged = [
+        data.identification > 0 ? "IDs" : "",
+        data.aps > 0 ? "the APS" : "",
+        data.personalInfo > 0 ? "personal information" : "",
+        data.propertyInfo > 0 ? "property information" : "",
+      ].filter(Boolean);
       const mergedNote =
-        mergedCount > 0
-          ? ` — IDs and personal information combined into ${mergedCount} PDF${mergedCount === 1 ? "" : "s"}`
+        merged.length > 0
+          ? ` — ${merged.join(", ")} combined into ${merged.length} PDF${merged.length === 1 ? "" : "s"}`
           : "";
       showToast(
         `Sent ${data.attached} attachment${data.attached === 1 ? "" : "s"} to ${data.recipients.join(", ")}${mergedNote}${linkedNote}`,
