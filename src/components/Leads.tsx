@@ -81,6 +81,13 @@ interface LeadUser {
   sellingPrice?: string;
   depositAmount?: string;
   sellingDepositAmount?: string;
+  // Closing (completion) date given at intake — typed on the customer form's
+  // Price & Address step, or read off the APS the client uploaded. Optional:
+  // blank means they didn't know it yet, which is normal before signing.
+  // `sellingClosingDate` is the sale-side date on Purchase & Sale files.
+  // Both are ISO "YYYY-MM-DD".
+  closingDate?: string;
+  sellingClosingDate?: string;
   created_at?: string;
   service?: string;
   subService?: string;
@@ -486,6 +493,14 @@ const Leads: React.FC = () => {
     }
   }
 
+  // A DATE column arrives as "YYYY-MM-DD", but a timestamp would arrive with a
+  // time part that <input type="date"> silently rejects. Keep the date half.
+  const toDateOnly = (value: unknown): string | undefined => {
+    if (!value) return undefined;
+    const match = /^(\d{4}-\d{2}-\d{2})/.exec(String(value).trim());
+    return match ? match[1] : undefined;
+  };
+
   const mapLead = (l: any): LeadUser => ({
     id: l.id,
     firstName: l.first_name ?? "",
@@ -515,6 +530,10 @@ const Leads: React.FC = () => {
     depositAmount: l.deposit_amount != null ? String(l.deposit_amount) : undefined,
     sellingDepositAmount:
       l.selling_deposit_amount != null ? String(l.selling_deposit_amount) : undefined,
+    // DATE columns come back as "YYYY-MM-DD"; trimmed to be safe so the value
+    // drops straight into a <input type="date">.
+    closingDate: toDateOnly(l.closing_date),
+    sellingClosingDate: toDateOnly(l.selling_closing_date),
     created_at: l.created_at,
     service: l.service,
     subService: l.sub_service,
@@ -594,6 +613,10 @@ const Leads: React.FC = () => {
     setAgentResult(null);
     setIsEditing(false);
     setEditResult(null);
+    // Seed the Convert dialog with the closing date the client already gave at
+    // intake. Still fully editable — the admin can overwrite or clear it, and
+    // whatever is in the box at Convert time is what the deal gets.
+    setConvertClosingDate(lead.closingDate ?? "");
     setView("DETAIL");
     router.push(`/admin/leads?lead=${lead.id}`);
   };
@@ -1604,6 +1627,25 @@ const Leads: React.FC = () => {
                     placeholder="e.g. 50000"
                   />
                 </div>
+                {/* Closing date given at intake. Optional — blank is normal for
+                    a client who hasn't signed an agreement yet. Read-only here:
+                    the authoritative date is set at conversion (this value
+                    seeds that dialog) and edited on the deal thereafter. */}
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                    {isSaleOnly ? "Sale Closing Date" : "Closing Date"}
+                  </label>
+                  <input
+                    type="date"
+                    className={inputClasses}
+                    value={selectedLead.closingDate ?? ""}
+                    readOnly
+                    disabled={isEditing}
+                  />
+                  {!selectedLead.closingDate && (
+                    <p className="text-xs text-slate-400">Not given at intake.</p>
+                  )}
+                </div>
               </div>
             </div>
           )}
@@ -1728,6 +1770,23 @@ const Leads: React.FC = () => {
                         readOnly={!isEditing}
                         placeholder="e.g. 25000"
                       />
+                    </div>
+                    {/* Sale-side closing date. A Buy & Sell client gives two —
+                        this is the one for the property they're selling. */}
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                        Sale Closing Date
+                      </label>
+                      <input
+                        type="date"
+                        className={inputClasses}
+                        value={selectedLead.sellingClosingDate ?? ""}
+                        readOnly
+                        disabled={isEditing}
+                      />
+                      {!selectedLead.sellingClosingDate && (
+                        <p className="text-xs text-slate-400">Not given at intake.</p>
+                      )}
                     </div>
                   </div>
                 </div>

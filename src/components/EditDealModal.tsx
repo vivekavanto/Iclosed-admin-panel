@@ -20,6 +20,9 @@ type DealRow = {
   clerk_name?: string | null;
   property_address?: string | null;
   closing_date?: string | null;
+  // Sale-side closing date, only meaningful on a Purchase & Sale file — that
+  // family is one deal row carrying both sides, so it holds two closing dates.
+  selling_closing_date?: string | null;
   opening_date?: string | null;
   requisition_date?: string | null;
   price?: number | null;
@@ -117,6 +120,7 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
             clerk_name: deal.clerk_name ?? "",
             property_address: deal.property_address ?? "",
             closing_date: toDateInputValue(deal.closing_date),
+            selling_closing_date: toDateInputValue(deal.selling_closing_date),
             opening_date: toDateInputValue(deal.opening_date),
             requisition_date: toDateInputValue(deal.requisition_date),
             price: deal.price ?? 0,
@@ -146,9 +150,17 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
+  // A combined file carries both sides on one deal row, so it has two closing
+  // dates. Matched on the type string containing both halves, which covers
+  // "Purchase & Sale" and the "and"/"+"/"/" separators convertLead also splits on.
+  const dealType = (form.type ?? "").toLowerCase();
+  const isPurchaseAndSale =
+    dealType.includes("purchase") && dealType.includes("sale");
+
   const handleSaveDetails = async () => {
     for (const [label, value] of [
       ["Closing date", form.closing_date],
+      ["Sale closing date", form.selling_closing_date],
       ["Opening date", form.opening_date],
       ["Requisition date", form.requisition_date],
     ] as const) {
@@ -168,6 +180,7 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
         clerk_name: form.clerk_name ?? "",
         property_address: form.property_address ?? "",
         closing_date: form.closing_date ?? "",
+        selling_closing_date: form.selling_closing_date ?? "",
         opening_date: form.opening_date ?? "",
         requisition_date: form.requisition_date ?? "",
         price: Number(form.price) || 0,
@@ -400,6 +413,21 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
                   className={inputClass}
                 />
               </Field>
+              {/* A Purchase & Sale file closes twice — once on each property.
+                  Only that type has a second date, so the field stays hidden on
+                  single-side files rather than offering a box that means nothing. */}
+              {isPurchaseAndSale && (
+                <Field label="Sale closing date">
+                  <input
+                    type="date"
+                    min={DATE_MIN}
+                    max={DATE_MAX}
+                    value={form.selling_closing_date ?? ""}
+                    onChange={(e) => updateField("selling_closing_date", e.target.value)}
+                    className={inputClass}
+                  />
+                </Field>
+              )}
               <Field label="Opening date">
                 <input
                   type="date"

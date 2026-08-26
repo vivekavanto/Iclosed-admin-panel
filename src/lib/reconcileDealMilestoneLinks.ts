@@ -227,6 +227,7 @@ type TaskTemplate = {
   role_type: string | null;
   is_shared: boolean | null;
   is_default: boolean | null;
+  activation_required: boolean | null;
   stage_template_id: string | null;
   order_index: number | null;
 };
@@ -234,7 +235,7 @@ type TaskTemplate = {
 async function loadTaskTemplate(taskTemplateId: string): Promise<TaskTemplate | null> {
   const { data } = await supabaseAdmin
     .from("task_templates")
-    .select("id, name, lead_type, role_type, is_shared, is_default, stage_template_id, order_index")
+    .select("id, name, lead_type, role_type, is_shared, is_default, activation_required, stage_template_id, order_index")
     .eq("id", taskTemplateId)
     .maybeSingle();
   return (data as TaskTemplate) ?? null;
@@ -396,6 +397,10 @@ export async function backfillTaskForTemplate(
     role_type: tpl.role_type ?? "Client",
     task_template_id: tpl.id,
     is_shared: tpl.is_shared ?? false,
+    // A template that starts switched off seeds switched-off tasks here too —
+    // otherwise a backfill would push an unready task straight onto live
+    // dashboards, which is exactly what the flag exists to prevent.
+    activation_required: tpl.activation_required ?? false,
     milestone_id: tpl.stage_template_id ? (liveMsByDeal.get(deal_id) ?? null) : null,
     // Snapshot the template order so a newly-seeded task sorts correctly on
     // existing deals (parity with convertLead's task clone).

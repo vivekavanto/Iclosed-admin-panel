@@ -1,6 +1,7 @@
 import supabaseAdmin from "./supabaseAdmin";
 import { logger } from "./logger";
 import { maybeNotifyAllTasksComplete } from "./notifyAllTasksComplete";
+import { isTaskInactive } from "./depositTask";
 
 /**
  * Recalculates milestone statuses for a co-purchaser/co-seller family, treating
@@ -70,14 +71,14 @@ export async function recalcMilestonesForFamily(
   const [{ data: sharedTasks }, { data: personalTasks }] = await Promise.all([
     supabaseAdmin
       .from("tasks")
-      .select("milestone_id, status")
+      .select("milestone_id, status, activation_required, activated_at")
       .eq("deal_id", primaryDealId)
       .eq("is_shared", true)
       .eq("is_deleted", false)
       .not("milestone_id", "is", null),
     supabaseAdmin
       .from("tasks")
-      .select("milestone_id, status")
+      .select("milestone_id, status, activation_required, activated_at")
       .in("deal_id", familyDealIds)
       .or("is_shared.is.null,is_shared.eq.false")
       .eq("is_deleted", false)
@@ -94,8 +95,17 @@ export async function recalcMilestonesForFamily(
     arr.push(status);
     stageStatuses.set(stage, arr);
   };
-  (sharedTasks ?? []).forEach((t) => poolStatus(t.milestone_id, t.status));
-  (personalTasks ?? []).forEach((t) => poolStatus(t.milestone_id, t.status));
+  // Tasks still awaiting an admin's activation are skipped. They are invisible
+  // to the client (the closing-funds task is created switched off, days before
+  // anyone can act on it), so counting one would pin its milestone to Pending
+  // for the life of the file — and, through maybeNotifyAllTasksComplete, stop
+  // the firm ever being told the client had finished.
+  const active = <T extends { activation_required?: boolean | null; activated_at?: string | null }>(
+    rows: T[] | null,
+  ) => (rows ?? []).filter((t) => !isTaskInactive(t));
+
+  active(sharedTasks).forEach((t) => poolStatus(t.milestone_id, t.status));
+  active(personalTasks).forEach((t) => poolStatus(t.milestone_id, t.status));
 
   // For each stage that actually has tasks, derive ONE status and write it to
   // every per-deal instance. Stages with no tasks are left untouched so manual

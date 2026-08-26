@@ -281,11 +281,22 @@ export async function convertSingleLead(
         // time the linked client signs in to the portal.
         status: "Inactive",
         property_address: lead.address_street ?? "Address TBD",
-        closing_date: opts.closing_date ?? null,
+        // A date typed into the convert dialog wins. When it's left blank, fall
+        // back to the closing date the client gave at intake (entered on the
+        // Price & Address step of the customer form, or read off the APS they
+        // uploaded) rather than creating the deal with no closing date and
+        // making someone re-key a date we already hold.
+        closing_date: opts.closing_date ?? lead.closing_date ?? null,
         price: cleanPrice ?? 0,
         // Only spread when there IS a deposit, so a conversion still works on a
         // database where the deposit migration hasn't been applied yet.
         ...(cleanDeposit != null ? { deposit_amount: cleanDeposit } : {}),
+        // Buy & Sell carries a second closing date for the sale property. Same
+        // conditional-spread rule: safe before add_deal_selling_closing_date.sql
+        // has been applied.
+        ...(lead.selling_closing_date
+          ? { selling_closing_date: lead.selling_closing_date }
+          : {}),
         // Carry referral attribution (the partner whose code was applied at
         // intake) onto the deal so admins can see who referred each file. Only
         // spread when the lead actually carries a referral so a non-referred
@@ -533,6 +544,10 @@ export async function convertSingleLead(
           role_type: tt.role_type ?? "Client",
           task_template_id: tt.id,
           is_shared: tt.is_shared ?? false,
+          // Blueprint flag for tasks that start switched OFF — the closing-funds
+          // task can't be shown to a client until the firm has drawn up the
+          // Final Statement of Account. See the 2026-08-26 migration.
+          activation_required: tt.activation_required ?? false,
           milestone_id: tt.stage_template_id ? (stageToMilestone[tt.stage_template_id] ?? null) : null,
           // Snapshot the template's order so the deal view / customer portal can
           // sort tasks the same way milestones are sorted (see the tasks GET

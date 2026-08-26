@@ -411,6 +411,11 @@ const EDITABLE_DEAL_COLUMNS = new Set([
   "lockbox_code",
   "garage_access_code",
   "closing_date",
+  // Sale-side closing date on a Purchase & Sale file. A P&S family is ONE deal
+  // row carrying both sides (like selling_price / selling_property_address), so
+  // the two closing dates sit side by side rather than on separate rows. Seeded
+  // from leads.selling_closing_date at conversion, then owned by the file.
+  "selling_closing_date",
   "opening_date",
   "requisition_date",
   "price",
@@ -456,6 +461,7 @@ const MIRROR_DEAL_COLUMNS = new Set([
   "lawyer_name",
   "clerk_name",
   "closing_date",
+  "selling_closing_date",
   "opening_date",
   "requisition_date",
   "price",
@@ -472,6 +478,7 @@ const ADMIN_NOTE_MAX = 500;
 
 const DATE_COLUMNS = new Set([
   "closing_date",
+  "selling_closing_date",
   "opening_date",
   "requisition_date",
 ]);

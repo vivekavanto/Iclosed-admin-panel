@@ -2,6 +2,7 @@ import { Resend } from "resend";
 import supabaseAdmin from "./supabaseAdmin";
 import { getFamilyDealIds } from "./familyDeals";
 import { resolvePrimaryDealId } from "./primaryDeal";
+import { isTaskInactive } from "./depositTask";
 import {
   formatLeadTypeLabel,
   buildLeadAddressPartsForEmail,
@@ -33,6 +34,10 @@ import { withRetry } from "./retry";
  *     was never applied and nothing reads it — the portal serves the client
  *     every non-deleted task. Filtering on it would ignore tasks still on the
  *     client's screen and fire this alert early, so we deliberately don't.
+ *   • EXCEPT tasks awaiting activation (`activation_required` with no
+ *     `activated_at`), which genuinely are off the client's screen — see the
+ *     2026-08-26 migration. Those must not hold the alert: the closing-funds
+ *     task is switched on in response to this very alert.
  *
  * The email carries the family's whole document package as attachments (see
  * familyDocuments.ts) so the reviewer doesn't have to open the file to read it.
@@ -173,19 +178,26 @@ export async function maybeNotifyAllTasksComplete(
     const [{ data: sharedTasks }, { data: personalTasks }] = await Promise.all([
       supabaseAdmin
         .from("tasks")
-        .select("id, status")
+        .select("id, status, activation_required, activated_at")
         .eq("deal_id", primaryDealId)
         .eq("is_shared", true)
         .eq("is_deleted", false),
       supabaseAdmin
         .from("tasks")
-        .select("id, status")
+        .select("id, status, activation_required, activated_at")
         .in("deal_id", dealIds)
         .or("is_shared.is.null,is_shared.eq.false")
         .eq("is_deleted", false),
     ]);
 
-    const pooled = [...(sharedTasks ?? []), ...(personalTasks ?? [])];
+    // Tasks awaiting an admin's activation are dropped, not counted as
+    // outstanding. The closing-funds task is created switched off and is only
+    // switched on once the firm has drawn up the Final Statement of Account —
+    // which is prompted by THIS alert. Counting it would deadlock the file:
+    // the alert waits on the task and the task waits on the alert.
+    const pooled = [...(sharedTasks ?? []), ...(personalTasks ?? [])].filter(
+      (t) => !isTaskInactive(t),
+    );
 
     // A file with no client-visible tasks at all has not "completed" anything —
     // don't alert on a freshly converted deal whose templates haven't landed.

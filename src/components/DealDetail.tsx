@@ -43,6 +43,8 @@ import { formatLocalDate, formatLocalDateTime } from "@/lib/formatDate";
 // one builder with "Email to Clerk" — see handleDownloadDealZip.
 import { downloadTaskPdf, type PdfDealMeta, type PdfTaskInput } from "@/lib/dealPdf";
 import { upload } from "@vercel/blob/client";
+import DepositTaskPanel from "./DepositTaskPanel";
+import { isDepositTask, isTaskInactive } from "@/lib/depositTask";
 import {
   BLOB_ACCESS,
   docDownloadHref,
@@ -132,6 +134,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
     taskTemplateId: t.task_template_id ?? null,
     leadType: t.task_templates?.lead_type ?? null,
     orderIndex: t.order_index ?? null,
+    activationRequired: t.activation_required ?? false,
+    activatedAt: t.activated_at ?? null,
+    balanceDue: t.balance_due ?? null,
     ownerDealId: t.owner_deal_id ?? null,
     ownerLeadId: t.owner_lead_id ?? null,
     ownerName: t.owner_name ?? null,
@@ -233,6 +238,20 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
   };
+
+  // ── The closing-funds task ────────────────────────────────────────────────
+  // "Deposit Funds Into Our Trust Account" needs the Final Statement of Account
+  // and the balance due before a client can act on it. That work opens in its
+  // own modal (DepositTaskPanel), the same way Upload Identification and Home
+  // Insurance open theirs instead of the generic Edit Task form — clicking the
+  // row is how every other task behaves, so this one should not be the
+  // exception that expands in place.
+  const [depositModalOpen, setDepositModalOpen] = useState(false);
+  const taskIsInactive = (task: Task) =>
+    isTaskInactive({
+      activation_required: task.activationRequired,
+      activated_at: task.activatedAt,
+    });
 
   // Inline lock box code editor (its own card under Milestones, Purchase files only).
   // Held in local state so a save reflects immediately — refetchData() only
@@ -828,6 +847,13 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
   };
 
   const openEditTask = async (task: DisplayTask) => {
+    // The closing-funds task has its own modal: uploading the statement,
+    // confirming the balance and activating are the whole job, and none of it
+    // fits the generic Edit Task fields.
+    if (!task.isTemplate && isDepositTask(task.title)) {
+      setDepositModalOpen(true);
+      return;
+    }
     // On a co-person deal, the two per-person tasks (Personal Info / Upload ID)
     // open the single-party drawer for THAT person — same design as the customer
     // portal — instead of a multi-party accordion. Scoped to the row's owner so
@@ -4704,7 +4730,15 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {displayTasks.map((task, index) => (
+                  {displayTasks.map((task, index) => {
+                    // The closing-funds task shows "Inactive" until an admin
+                    // activates it in its own modal (see openEditTask). Every
+                    // other aspect of the row is unchanged.
+                    const depositInactive =
+                      !task.isTemplate &&
+                      isDepositTask(task.title) &&
+                      taskIsInactive(task);
+                    return (
                     <tr
                       key={task.id}
                       draggable={!task.isTemplate}
@@ -4726,6 +4760,17 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                         {task.isTemplate ? (
                           <span className={`text-xs font-semibold border rounded px-2 py-1 inline-block ${getStatusColor("Pending")}`}>
                             Pending
+                          </span>
+                        ) : depositInactive ? (
+                          // Not click-to-toggle: this task becomes live through
+                          // "Activate task & notify client" in the panel below,
+                          // which is also what emails the client. Flipping it
+                          // from here would put it on their dashboard silently.
+                          <span
+                            className={`text-xs font-semibold border rounded px-2 py-1 inline-block ${getStatusColor("Inactive")}`}
+                            title="Upload the statement and enter the balance below, then activate"
+                          >
+                            Inactive
                           </span>
                         ) : (
                           // Click-to-toggle status: one tap flips between
@@ -4890,7 +4935,8 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                         </div>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                   {displayTasks.length === 0 && (
                     <tr>
                       <td
@@ -7321,6 +7367,54 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
           />
         );
       })()}
+
+      {/* ── Deposit Funds Into Our Trust Account ──────────────────────────────
+          Its own modal rather than the generic Edit Task form: uploading the
+          Final Statement of Account, confirming the balance it states and
+          activating the task for the client is the entire job, and none of it
+          maps onto title/status/due-date fields. */}
+      {depositModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Deposit Funds Into Our Trust Account"
+          className="fixed inset-0 z-50 flex justify-end items-stretch lg:justify-center lg:items-center bg-black/30 lg:bg-black/40 lg:backdrop-blur-sm lg:p-4 xl:p-12 2xl:p-20"
+          onClick={() => setDepositModalOpen(false)}
+        >
+          <div
+            className="bg-white shadow-2xl flex flex-col w-full h-full max-w-[520px] slide-in-from-right lg:h-auto lg:max-h-[90vh] lg:max-w-3xl lg:rounded-2xl lg:zoom-in lg:duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between px-6 py-5 border-b border-gray-100">
+              <div className="min-w-0">
+                <h3 className="text-base font-bold text-gray-900">
+                  Deposit Funds Into Our Trust Account
+                </h3>
+                <p className="text-xs text-gray-400 mt-1">
+                  Upload the Final Statement of Account and confirm the balance, then
+                  activate the task to notify the client.
+                </p>
+              </div>
+              <button
+                onClick={() => setDepositModalOpen(false)}
+                className="text-gray-400 hover:text-gray-700 shrink-0 ml-4"
+                aria-label="Close"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="px-6 py-6 overflow-y-auto flex-1">
+              <DepositTaskPanel
+                dealId={deal.id}
+                showToast={showToast}
+                // The row's badge flips Inactive to Pending off the task list,
+                // so it has to be refetched — the panel owns only its own state.
+                onActivated={() => void refetchData()}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

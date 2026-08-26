@@ -36,6 +36,14 @@ export interface Task {
   taskTemplateId?: string | null;
   leadType?: string | null;
   orderIndex?: number | null;
+  // Activation — the closing-funds task is created switched OFF and is shown as
+  // "Inactive" until an admin uploads the Final Statement of Account, enters the
+  // balance and activates it. `status` stays Pending throughout; see
+  // src/lib/depositTask.ts and the 2026-08-26 migration.
+  activationRequired?: boolean;
+  activatedAt?: string | null;
+  /** Balance due on closing, shown to the client on the deposit task. */
+  balanceDue?: number | null;
   // Owner annotation — only populated in the unified family view (tasks GET
   // include_family=1) for per-person personal tasks (ID, Personal Information).
   // Lets the page label rows "<title> - <ownerName>" and target edits/prefill
