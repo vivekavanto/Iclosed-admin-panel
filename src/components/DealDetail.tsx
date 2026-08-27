@@ -5184,7 +5184,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
               above Partner Details. Editable inline; saves to the deal via PATCH
               and feeds the {{ lockbox_code }} email variable. */}
           {(deal.type ?? "").toLowerCase().includes("purchase") && (
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
               <div className="flex items-center justify-between gap-3">
                 <h3 className="font-bold text-slate-800 text-sm">Lock Box Code</h3>
                 <div className="flex items-center gap-1.5">
@@ -5249,57 +5249,63 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                 .join("") || "—";
 
             return (
-              <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-                <h3 className="font-bold text-slate-800 text-sm mb-4">Partner Details</h3>
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="w-10 h-10 bg-slate-900 text-white rounded-lg flex items-center justify-center font-black text-xs shadow-md shrink-0">
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+                <h3 className="font-bold text-slate-800 text-sm mb-3">Partner Details</h3>
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 bg-slate-900 text-white rounded-lg flex items-center justify-center font-black text-[11px] shrink-0">
                     {initials}
                   </div>
                   <div className="min-w-0">
                     <p className="text-sm font-bold text-slate-900 truncate">
                       {partnerCompany || partnerPerson}
                     </p>
-                    {partnerType && <p className="text-xs text-slate-500">{partnerType}</p>}
+                    {partnerType && <p className="text-[11px] text-slate-500">{partnerType}</p>}
                   </div>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                  <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
-                    <p className="text-[10px] text-slate-500 font-medium mb-0.5 uppercase tracking-wide">
-                      Agent
-                    </p>
-                    <p className="font-bold text-slate-800 text-xs">{partnerPerson || "—"}</p>
-                  </div>
-                  <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
-                    <p className="text-[10px] text-slate-500 font-medium mb-0.5 uppercase tracking-wide">
-                      Phone
-                    </p>
-                    {partnerPhone ? (
-                      <a
-                        href={`tel:${partnerPhone}`}
-                        className="font-bold text-slate-800 hover:text-brand-primary truncate block text-xs"
-                      >
-                        {partnerPhone}
-                      </a>
-                    ) : (
-                      <p className="font-bold text-slate-400 text-xs">—</p>
-                    )}
-                  </div>
-                  <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 sm:col-span-2">
-                    <p className="text-[10px] text-slate-500 font-medium mb-0.5 uppercase tracking-wide">
-                      Email
-                    </p>
-                    {partnerEmail ? (
-                      <a
-                        href={`mailto:${partnerEmail}`}
-                        className="font-bold text-brand-primary hover:underline truncate block text-xs"
-                      >
-                        {partnerEmail}
-                      </a>
-                    ) : (
-                      <p className="font-bold text-slate-400 text-xs">—</p>
-                    )}
-                  </div>
-                </div>
+                {/* Compact label/value rows. A field with no value is dropped
+                    entirely rather than rendered as an em-dash placeholder. */}
+                <dl className="mt-3 border-t border-slate-100 text-xs">
+                  {partnerPerson && (
+                    <div className="flex items-baseline gap-3 py-1.5 border-b border-slate-100">
+                      <dt className="w-14 shrink-0 text-[10px] text-slate-500 uppercase tracking-wide">
+                        Agent
+                      </dt>
+                      <dd className="min-w-0 font-semibold text-slate-800 truncate">
+                        {partnerPerson}
+                      </dd>
+                    </div>
+                  )}
+                  {partnerPhone && (
+                    <div className="flex items-baseline gap-3 py-1.5 border-b border-slate-100">
+                      <dt className="w-14 shrink-0 text-[10px] text-slate-500 uppercase tracking-wide">
+                        Phone
+                      </dt>
+                      <dd className="min-w-0">
+                        <a
+                          href={`tel:${partnerPhone}`}
+                          className="font-semibold text-slate-800 hover:text-brand-primary truncate block"
+                        >
+                          {partnerPhone}
+                        </a>
+                      </dd>
+                    </div>
+                  )}
+                  {partnerEmail && (
+                    <div className="flex items-baseline gap-3 py-1.5">
+                      <dt className="w-14 shrink-0 text-[10px] text-slate-500 uppercase tracking-wide">
+                        Email
+                      </dt>
+                      <dd className="min-w-0">
+                        <a
+                          href={`mailto:${partnerEmail}`}
+                          className="font-semibold text-brand-primary hover:underline truncate block"
+                        >
+                          {partnerEmail}
+                        </a>
+                      </dd>
+                    </div>
+                  )}
+                </dl>
               </div>
             );
           })()}
@@ -5307,27 +5313,29 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
           {/* Email CC — extra people copied on this file's "Shared with agent"
               emails. Always shown (not gated on hasPartner) because a one-off CC
               is exactly the case where no referral partner exists. */}
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
             <h3 className="font-bold text-slate-800 text-sm mb-1">Email CC</h3>
-            <p className="text-xs text-slate-500 mb-4 leading-relaxed">
-              Copied on this file&apos;s &ldquo;Shared with agent&rdquo; emails, in
-              addition to the referral partner&apos;s own contacts. Activation and
-              password-reset emails are never CC&apos;d.
+            <p
+              className="text-[11px] text-slate-500 mb-3"
+              title="Activation and password-reset emails are never CC'd."
+            >
+              Copied on this file&apos;s &ldquo;Shared with agent&rdquo; emails, alongside
+              the partner&apos;s own contacts.
             </p>
 
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               {/* Inherited from the referral partner (partners.agent_email +
                   partner_contacts). Read-only here: they belong to the partner
                   and apply to every file it referred, so removing one is a
                   Partners-page decision, not a per-file one. Listed so the panel
                   shows the whole CC line — otherwise these arrive on an email
-                  while the file claims "No extra CC addresses". */}
+                  while the file claims it has no CC addresses. */}
               {partnerCc.length > 0 && (
-                <div className="space-y-2 pb-1">
+                <div className="space-y-1.5">
                   {partnerCc.map((p) => (
                     <div
                       key={p.email}
-                      className="flex items-center gap-2 bg-slate-50/60 border border-dashed border-slate-200 rounded-lg px-3 py-2"
+                      className="flex items-center gap-2 bg-slate-50/60 border border-dashed border-slate-200 rounded-lg px-3 py-1.5"
                       title={`Copied via referral partner ${p.partner} — manage in Partners`}
                     >
                       <span className="text-xs font-bold text-slate-500 truncate flex-1">
@@ -5338,16 +5346,12 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                       </span>
                     </div>
                   ))}
-                  <p className="text-[11px] text-slate-400 leading-relaxed">
-                    From the referral partner — edit these under Partners.
-                  </p>
+                  <p className="text-[10px] text-slate-400">Edit under Partners.</p>
                 </div>
               )}
 
-              {ccEmails.length === 0 && (
-                <p className="text-xs text-slate-400 italic">
-                  No extra CC addresses for this file.
-                </p>
+              {ccEmails.length === 0 && partnerCc.length === 0 && (
+                <p className="text-xs text-slate-400 italic">No CC addresses for this file.</p>
               )}
 
               {ccEmails.map((email) => {
@@ -5361,7 +5365,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                 return (
                 <div
                   key={email}
-                  className="flex items-center gap-2 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2"
+                  className="flex items-center gap-2 bg-slate-50 border border-slate-100 rounded-lg px-3 py-1.5"
                 >
                   <span className="text-xs font-bold text-slate-800 truncate flex-1">
                     {email}

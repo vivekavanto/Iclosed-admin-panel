@@ -169,7 +169,7 @@ const PostClosureDocuments: React.FC<{ dealId: string }> = ({ dealId }) => {
   const hasDocuments = documents.length > 0;
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
       {toast && (
         <div
           role="status"
