@@ -10,9 +10,10 @@
 // three identical copies would read as a mistake — the same convention
 // sendFinalReportEmail and the combined milestone email follow.
 //
-// The Final Statement of Account is ATTACHED. It is also linked on the task
-// itself, but a client reading the email on their phone should not have to log
-// in to see what they are being asked to pay.
+// TWO attachments ride along: the Final Statement of Account (per-file, pulled
+// from Vercel Blob) and the firm's static Funds Transfer Instructions PDF. Both
+// are also reachable from the task itself, but a client reading the email on
+// their phone should not have to log in to see what they owe or how to pay it.
 //
 // Wording lives in the "Deposit Funds Task Added" row of `email_templates` so
 // staff can retune it without a deploy. Unlike the final-report sender, a
@@ -20,6 +21,8 @@
 // telling a purchaser that money is due before closing, so it falls back to the
 // built-in copy below rather than going quiet.
 
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { get } from "@vercel/blob";
 import supabaseAdmin from "./supabaseAdmin";
 import { logger } from "./logger";
@@ -98,6 +101,31 @@ async function downloadDoc(fileUrl: string): Promise<Buffer> {
 }
 
 /**
+ * The firm's Funds Transfer Instructions, attached to every one of these emails.
+ *
+ * A file on disk rather than a blob or a template row: it is the same document
+ * for every client, it carries the firm's letterhead, and it must not be
+ * editable from an admin form — the trust-account numbers inside it are the
+ * same ones `FUNDS_TRANSFER` (depositTask.ts) renders on the task, and there
+ * should be exactly one way to change either.
+ *
+ * Kept OUT of `public/` deliberately: served from there it would be a
+ * guessable, unauthenticated URL exposing the firm's banking details. It lives
+ * under `assets/` and is pulled into the deployed bundle by
+ * `outputFileTracingIncludes` in next.config.ts — if that entry is dropped, the
+ * read below fails on Vercel and the email quietly goes out with one attachment
+ * instead of two.
+ */
+const INSTRUCTIONS_FILE = "funds-transfer-instructions.pdf";
+
+/** What the client sees the attachment called. */
+const INSTRUCTIONS_ATTACHMENT_NAME = "Funds Transfer Instructions.pdf";
+
+async function loadTransferInstructions(): Promise<Buffer> {
+  return readFile(path.join(process.cwd(), "assets", INSTRUCTIONS_FILE));
+}
+
+/**
  * Where the email's CTA sends the client: their task list.
  *
  * NEXT_PUBLIC_CUSTOMER_PORTAL_URL is the variable the rest of this app already
@@ -127,20 +155,20 @@ function portalUrl(): string {
  */
 function fallbackBody(v: Record<string, string>): string {
   return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#0f172a;">
-  <p>Hi ${v.client_name},</p>
+  <p>Hi ${v.client_names},</p>
   <p>
-    New task &ldquo;Deposit Funds Into Our Trust Account&rdquo; added on iClosed &mdash;
-    please log into your iClosed portal to complete the task.
+    Please see attached your Final Statement of Account, along with instructions
+    on how to deposit funds into our trust account. Once you&rsquo;ve deposited,
+    <strong>please log into iClosed to upload your proof of deposit.</strong>
   </p>
   <p style="margin:0 0 4px;"><strong>Balance due on closing:</strong> ${v.balance_due}</p>
   <p style="margin:0 0 4px;"><strong>Property:</strong> ${v.property_address}</p>
-  <p>Your Final Statement of Account is attached.</p>
+  <p style="margin:0 0 4px;"><strong>Closing date:</strong> ${v.closing_date}</p>
   <p style="margin-top:24px;">
     <a href="${v.portal_url}" style="background:#e11d48;color:#ffffff;text-decoration:none;padding:10px 18px;border-radius:8px;display:inline-block;font-weight:600;">
-      Open my portal
+      Open iClosed
     </a>
   </p>
-  <p style="color:#64748b;font-size:13px;margin-top:24px;">File ${v.file_number}</p>
 </div>`;
 }
 
@@ -168,7 +196,7 @@ export async function sendDepositTaskEmail(opts: {
   fileNumber: string | null;
   closingDate: string | null;
   balanceDue: number | null;
-  /** The Final Statement of Account, attached to the email. */
+  /** The Final Statement of Account, attached alongside the instructions PDF. */
   statement: { file_name: string | null; file_url: string | null } | null;
 }): Promise<DepositTaskEmailResult> {
   const ordered = [...(opts.leads ?? [])]
@@ -231,9 +259,9 @@ export async function sendDepositTaskEmail(opts: {
     { escape: false },
   );
 
-  // The statement rides along, but a download failure must not stop the email:
-  // the task itself links the same document, so an email without it still tells
-  // the client what to do.
+  // Both attachments are best-effort: the task itself links the statement and
+  // renders the transfer instructions inline, so an email that loses one still
+  // tells the client what to do. A failure here must not stop the send.
   const attachments: Array<{ filename: string; content: Buffer }> = [];
   if (opts.statement?.file_url) {
     try {
@@ -244,6 +272,17 @@ export async function sendDepositTaskEmail(opts: {
     } catch (err) {
       logger.warn("[DepositTask] statement attach failed — sending without it:", err);
     }
+  }
+  try {
+    attachments.push({
+      filename: INSTRUCTIONS_ATTACHMENT_NAME,
+      content: await loadTransferInstructions(),
+    });
+  } catch (err) {
+    logger.warn(
+      "[DepositTask] transfer-instructions attach failed — check outputFileTracingIncludes:",
+      err,
+    );
   }
 
   try {

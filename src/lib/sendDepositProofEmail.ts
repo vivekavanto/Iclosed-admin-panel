@@ -7,10 +7,22 @@
 // the all-tasks-complete alert, and for the same reason: an alert about a
 // document that doesn't carry the document is the one nobody can act on.
 //
-// Recipients: the purchase clerk (CLERK_PURCHASE_EMAIL, shared with the "Email
-// to Clerk" send) plus bookkeeping, who need every deposit regardless of side.
-// Bookkeeping is ALWAYS on the email — money reaching the trust account is
-// their record to keep, not the clerk's.
+// Recipients, in order of precedence:
+//
+//   1. DEPOSIT_PROOF_EMAIL   — if set, it IS the list, verbatim. The firm wants
+//      a different distribution here per environment (everyone in production,
+//      one tester on dev), and this is the only knob that expresses that
+//      without side effects.
+//   2. otherwise the side's clerk (CLERK_PURCHASE_EMAIL / CLERK_SALE_EMAIL)
+//      plus bookkeeping — the original behaviour, kept so an environment that
+//      sets nothing new keeps working.
+//
+// The override exists because CLERK_PURCHASE_EMAIL is SHARED with the "Email to
+// Clerk" document send. Widening it to add this email's recipients would have
+// silently changed who receives that one too, which nobody asked for.
+//
+// Bookkeeping is on the default list because money reaching the trust account
+// is their record to keep, not the clerk's.
 //
 // Finding the proof is deliberately belt-and-braces. The obvious source is the
 // task's own `task_responses` row, but file responses frequently carry only a
@@ -81,6 +93,25 @@ function bookkeepingRecipients(): string[] {
   return splitAddresses(configured);
 }
 
+/**
+ * Who this email goes to.
+ *
+ * DEPOSIT_PROOF_EMAIL wins outright when set — it is not merged with the clerk
+ * or bookkeeping lists, because the point of it is to say "these addresses and
+ * no others" for an environment. "off" disables the email entirely (no
+ * recipients means the caller returns `no_recipients` without sending), which
+ * is how a preview deployment stops mailing real staff.
+ */
+function depositProofRecipients(dealType: string | null | undefined): string[] {
+  const override = (process.env.DEPOSIT_PROOF_EMAIL ?? "").trim();
+  if (override) {
+    return override.toLowerCase() === "off" ? [] : splitAddresses(override);
+  }
+  return Array.from(
+    new Set([...clerkRecipientsForType(dealType), ...bookkeepingRecipients()]),
+  );
+}
+
 function adminBaseUrl(): string {
   const explicit = process.env.ADMIN_PORTAL_URL || process.env.NEXT_PUBLIC_ADMIN_URL;
   if (explicit) return explicit.replace(/\/+$/, "");
@@ -111,14 +142,18 @@ function joinNames(names: string[]): string {
 
 function fallbackBody(v: Record<string, string>, attached: number): string {
   return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#0f172a;">
-  <p>Hi,</p>
-  <p><strong>${v.client_names}</strong> has uploaded proof of deposit for ${v.transaction}.</p>
-  <p style="margin:0 0 4px;"><strong>Balance due on closing:</strong> ${v.balance_due}</p>
+  <p>Hi Team,</p>
+  <p>
+    <strong>${v.client_names}</strong> deposited <strong>${v.balance_due}</strong> for
+    ${v.transaction}.
+    ${attached > 0 ? "The document is attached." : "The document could not be attached &mdash; open the file to view it."}
+  </p>
+  <p style="margin:0 0 4px;"><strong>Deposit amount:</strong> ${v.balance_due}</p>
   <p style="margin:0 0 4px;"><strong>Closing date:</strong> ${v.closing_date}</p>
-  <p>${attached > 0 ? "The document is attached." : "The document could not be attached — open the file to view it."}</p>
+  <p style="margin:0 0 4px;"><strong>File number:</strong> ${v.file_number}</p>
   <p style="margin-top:24px;">
     <a href="${v.deal_url}" style="background:#e11d48;color:#ffffff;text-decoration:none;padding:10px 18px;border-radius:8px;display:inline-block;font-weight:600;">
-      Open file ${v.file_number}
+      Open file on iClosed
     </a>
   </p>
 </div>`;
@@ -204,9 +239,7 @@ export async function sendDepositProofEmail(taskId: string): Promise<DepositProo
       .eq("id", primaryDealId)
       .maybeSingle();
 
-    const recipients = Array.from(
-      new Set([...clerkRecipientsForType(deal?.type), ...bookkeepingRecipients()]),
-    );
+    const recipients = depositProofRecipients(deal?.type);
     if (recipients.length === 0) return { sent: false, reason: "no_recipients" };
     if (!process.env.RESEND_API_KEY) return { sent: false, reason: "email_not_configured" };
 

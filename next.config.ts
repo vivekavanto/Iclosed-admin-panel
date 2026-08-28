@@ -53,6 +53,21 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: path.join(__dirname),
   },
+  // The deposit-task email attaches assets/funds-transfer-instructions.pdf, read
+  // off the filesystem at send time (see sendDepositTaskEmail.ts). Nothing
+  // imports it, so Next's tracer cannot see it and the file would be absent from
+  // the deployed function — the email would then silently go out with only the
+  // Final Statement of Account. Name it here so it is bundled.
+  // public/email-logo.png is ALSO read off the filesystem, by packagePdf.ts, for
+  // the running header of the emailed deal package. Being in public/ makes it a
+  // CDN asset (which is what the email templates need) but does NOT put it in a
+  // serverless function's filesystem, so it has to be named here too. Without
+  // it the package silently falls back to the plain text wordmark.
+  outputFileTracingIncludes: {
+    "/api/admin/deals/[id]/deposit-task": ["./assets/funds-transfer-instructions.pdf"],
+    "/api/admin/deals/[id]/package": ["./public/email-logo.png"],
+    "/api/admin/deals/[id]/email-to-clerk": ["./public/email-logo.png"],
+  },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

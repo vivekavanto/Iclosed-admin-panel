@@ -41,6 +41,9 @@ import {
   type PDFImage,
   type RGB,
 } from "pdf-lib";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { BRAND_LOGO_FILE, BRAND_LOGO_HEADER } from "./brandLogo";
 
 // A4 in points, matching the browser export's `new jsPDF({ unit: "pt", format: "a4" })`.
 export const A4 = { w: 595.28, h: 841.89 };
@@ -357,6 +360,12 @@ export interface SkippedDoc {
 export class PackageDoc {
   private doc!: PDFDocument;
   private fonts!: Fonts;
+  /**
+   * The brand lockup for the running header, embedded once and drawn on every
+   * page. null when the file could not be read — the header then falls back to
+   * the old text wordmark rather than losing its branding entirely.
+   */
+  private logo: PDFImage | null = null;
   private ownPages = new Set<PDFPage>();
   private page: PDFPage | null = null;
   private y = TOP;
@@ -383,6 +392,21 @@ export class PackageDoc {
       serif: await self.doc.embedFont(StandardFonts.TimesRomanBold),
       mono: await self.doc.embedFont(StandardFonts.CourierBold),
     };
+    // Embedded once here rather than per page: pdf-lib writes one image object
+    // and every page references it, so a 100-page package costs 30KB, not 3MB.
+    //
+    // The file lives in public/ because the email templates load it over HTTP
+    // from this app's own host. Nothing imports it, so Next's tracer cannot see
+    // it — next.config.ts names it in outputFileTracingIncludes for the two
+    // routes that build a package. If that entry is dropped the read throws on
+    // Vercel and every package silently reverts to the text wordmark.
+    try {
+      self.logo = await self.doc.embedPng(
+        await readFile(path.join(process.cwd(), BRAND_LOGO_FILE)),
+      );
+    } catch (err) {
+      self.warnings.push(`brand logo unavailable, using text wordmark: ${String(err)}`);
+    }
     return self;
   }
 
@@ -820,14 +844,23 @@ export class PackageDoc {
         color: FAINT,
         charSpace: 1.4,
       });
-      this.text(page, "iClosed", {
-        x: A4.w - M,
-        y: A4.h - 56,
-        size: 12,
-        font: this.fonts.bold,
-        color: INK,
-        align: "right",
-      });
+      if (this.logo) {
+        page.drawImage(this.logo, {
+          x: A4.w - M - BRAND_LOGO_HEADER.width,
+          y: A4.h - BRAND_LOGO_HEADER.top - BRAND_LOGO_HEADER.height,
+          width: BRAND_LOGO_HEADER.width,
+          height: BRAND_LOGO_HEADER.height,
+        });
+      } else {
+        this.text(page, "iClosed", {
+          x: A4.w - M,
+          y: A4.h - 56,
+          size: 12,
+          font: this.fonts.bold,
+          color: INK,
+          align: "right",
+        });
+      }
       page.drawLine({
         start: { x: M, y: A4.h - 68 },
         end: { x: A4.w - M, y: A4.h - 68 },

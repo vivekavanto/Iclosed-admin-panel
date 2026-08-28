@@ -27,6 +27,7 @@
 
 import { docDownloadHref, docFetchCredentials } from "@/lib/blobPrivacy";
 import { isHeic, heicToJpegBytes } from "@/lib/heic";
+import { BRAND_LOGO_URL, BRAND_LOGO_HEADER } from "@/lib/brandLogo";
 
 export interface PdfResponse {
   field_label?: string | null;
@@ -693,7 +694,7 @@ async function buildBrandedTaskPdfBytes(
   const inserts: PdfInsert[] = [];
   drawTaskInfoBlock(doc, task);
   await drawTaskFiles(doc, task, fileResponses, inserts);
-  stampChrome(doc, deal);
+  stampChrome(doc, deal, await loadBrandLogo());
   return mergeInserts(doc, inserts);
 }
 
@@ -1368,9 +1369,47 @@ function pkgImagePage(
   }
 }
 
+/**
+ * The brand lockup for the running header, as a data URL.
+ *
+ * Fetched from this app's own /email-logo.png — the very file the email
+ * templates load — rather than inlined as base64, so the emailed package and
+ * this download can never show different artwork, and the client bundle does
+ * not carry 40KB of it.
+ *
+ * Cached for the life of the page: a deal export stamps every page, and a ZIP
+ * export builds several documents in a row.
+ *
+ * Resolves to null on any failure (offline, 404). stampChrome then falls back
+ * to the text wordmark, exactly as the server-side builder does.
+ */
+let brandLogoPromise: Promise<string | null> | null = null;
+
+function loadBrandLogo(): Promise<string | null> {
+  brandLogoPromise ??= (async () => {
+    try {
+      const res = await fetch(BRAND_LOGO_URL);
+      if (!res.ok) return null;
+      const blob = await res.blob();
+      return await new Promise<string | null>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(typeof reader.result === "string" ? reader.result : null);
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(blob);
+      });
+    } catch {
+      return null;
+    }
+  })();
+  return brandLogoPromise;
+}
+
 // Running header + footer stamped on every jsPDF page (done before pdf-lib
 // inserts the raw attachment pages, which are left as-is).
-function stampChrome(doc: JsPdfDoc, deal: PdfDealMeta) {
+//
+// `logo` is passed in rather than fetched here because this is sync and runs
+// per page; null means the fetch failed and the text wordmark stands in.
+function stampChrome(doc: JsPdfDoc, deal: PdfDealMeta, logo: string | null) {
   const g = pkgGeom(doc);
   const total = doc.getNumberOfPages();
   const fileNum = deal.fileNumber || "—";
@@ -1384,9 +1423,25 @@ function stampChrome(doc: JsPdfDoc, deal: PdfDealMeta) {
     doc.setTextColor(...PKG.faint);
     doc.text(`DEAL FILE · ${fileNum}`, g.M, 56, { charSpace: 1.4 } as any);
 
-    doc.setFontSize(12);
-    doc.setTextColor(...PKG.ink);
-    doc.text("iClosed", g.pageW - g.M, 56, { align: "right" } as any);
+    if (logo) {
+      // The alias (5th-from-last arg) makes jsPDF store the image ONCE and
+      // reference it from every page; without it a 100-page export embeds 100
+      // copies of the same PNG.
+      doc.addImage(
+        logo,
+        "PNG",
+        g.pageW - g.M - BRAND_LOGO_HEADER.width,
+        BRAND_LOGO_HEADER.top,
+        BRAND_LOGO_HEADER.width,
+        BRAND_LOGO_HEADER.height,
+        "iclosed-brand-logo",
+        "FAST",
+      );
+    } else {
+      doc.setFontSize(12);
+      doc.setTextColor(...PKG.ink);
+      doc.text("iClosed", g.pageW - g.M, 56, { align: "right" } as any);
+    }
 
     doc.setDrawColor(...PKG.brand);
     doc.setLineWidth(1.2);
@@ -1540,7 +1595,7 @@ export async function downloadDealPdf(
 
   // Stamp the running header/footer on every jsPDF page before merging raw
   // attachment pages (which stay as their original selves).
-  stampChrome(doc, deal);
+  stampChrome(doc, deal, await loadBrandLogo());
 
   // Phase B: merge each uploaded PDF's pages right after its placeholder page.
   const fileName = `Deal ${sanitizeFile(deal.fileNumber)} - Package.pdf`;
