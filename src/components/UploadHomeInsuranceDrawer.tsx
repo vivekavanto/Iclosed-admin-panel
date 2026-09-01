@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { X, Upload, FileText, Trash2, AlertCircle, CheckCircle2 } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { useIsLargeScreen } from "@/hooks/useMediaQuery";
+import { upload } from "@vercel/blob/client";
+import { BLOB_ACCESS } from "@/lib/blobPrivacy";
 
 interface UploadHomeInsuranceDrawerProps {
   open: boolean;
@@ -18,7 +20,14 @@ interface UploadHomeInsuranceDrawerProps {
   onSaved?: () => void;
 }
 
-const ALLOWED_EXTENSIONS = [".pdf", ".doc", ".docx"];
+// Must match ALLOWED_UPLOAD_CONTENT_TYPES / uploadValidation.ts, which is what
+// the Blob upload token is minted against. .doc and .docx used to be offered
+// here but were never accepted: the server rejected them only after the whole
+// file had been uploaded. Offering just what will actually be stored fails at
+// the file picker instead.
+const ALLOWED_EXTENSIONS = [".pdf", ".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"];
+const ACCEPT_ATTR = ALLOWED_EXTENSIONS.join(",");
+// The token route caps the PUT at MAX_DOCUMENT_UPLOAD_BYTES; keep these equal.
 const MAX_SIZE = 10 * 1024 * 1024; // 10 MB
 
 function formatBytes(bytes: number) {
@@ -28,7 +37,7 @@ function formatBytes(bytes: number) {
 
 function validateFile(f: File): string | null {
   const ext = "." + (f.name.split(".").pop() ?? "").toLowerCase();
-  if (!ALLOWED_EXTENSIONS.includes(ext)) return "Only PDF, DOC, and DOCX files are allowed.";
+  if (!ALLOWED_EXTENSIONS.includes(ext)) return "Only PDF or image files (JPG, PNG, WEBP, HEIC) are allowed.";
   if (f.size > MAX_SIZE) return "File size must not exceed 10 MB.";
   return null;
 }
@@ -125,16 +134,44 @@ export default function UploadHomeInsuranceDrawer({
 
   async function handleUpload() {
     if (!file) return;
+    // The upload token is minted against a real lead, so the placeholder this
+    // used to send ("unknown") could only ever fail — and it failed only after
+    // the whole file had gone up.
+    if (!leadId) {
+      setError("This task has no client record to attach the policy to.");
+      return;
+    }
     setUploading(true);
     setError(null);
     try {
-      const fd = new FormData();
-      fd.append("file", file);
-      fd.append("lead_id", leadId ?? "unknown");
-      fd.append("doc_type", "home_insurance");
-      const res = await fetch("/api/admin/uploadblobstorage", { method: "POST", body: fd });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error ?? "Upload failed");
+      // Browser -> Vercel Blob directly. Pushing the bytes through the function
+      // hits Vercel's ~4.5 MB request-body cap, which answers with a raw 413 —
+      // not JSON — so the parse below threw and the drawer reported a "token"
+      // error instead of anything about the file. Same shape as
+      // PostClosureDocuments / DepositTaskPanel.
+      const pathname = `corporate-docs/${leadId}/${Date.now()}-${file.name}`;
+      const blob = await upload(pathname, file, {
+        access: BLOB_ACCESS,
+        handleUploadUrl: "/api/admin/uploadblobstorage/token",
+        contentType: file.type,
+        clientPayload: JSON.stringify({ lead_id: leadId }),
+      });
+
+      const res = await fetch("/api/admin/uploadblobstorage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          file_url: blob.url,
+          file_name: file.name,
+          lead_id: leadId,
+          doc_type: "home_insurance",
+        }),
+      });
+      // A platform-level failure answers with HTML, not JSON.
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.error ?? `Upload failed (${res.status})`);
+      }
 
       const fileUrl: string | undefined = data.url ?? data.file_url;
       if (!fileUrl) throw new Error("Upload did not return a URL.");
@@ -322,7 +359,7 @@ export default function UploadHomeInsuranceDrawer({
                 <input
                   ref={inputRef}
                   type="file"
-                  accept=".pdf,.doc,.docx"
+                  accept={ACCEPT_ATTR}
                   className="hidden"
                   onChange={(e) => {
                     const f = e.target.files?.[0];

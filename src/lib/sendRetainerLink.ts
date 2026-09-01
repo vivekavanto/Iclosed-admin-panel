@@ -7,6 +7,8 @@ import {
   renderTransactionPhrase,
 } from "./leadEmailAddress";
 import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "./emailIdentity";
+import { getLeadFirmKey } from "./leadFirm";
+import { brandEmailHtml } from "./emailBrand";
 
 /**
  * Sends the "review and sign your retainer" email — the DocuSign-style link a
@@ -261,15 +263,16 @@ export async function sendRetainerLinkEmail(opts: {
     };
   }
 
+  const firm = await getLeadFirmKey(leadId);
   const resend = new Resend(process.env.RESEND_API_KEY);
-  const fromEmail = emailFrom();
+  const fromEmail = emailFrom(firm);
 
   const { error: sendError } = await resend.emails.send({
     from: fromEmail,
-    replyTo: emailReplyTo(),
+    replyTo: emailReplyTo(firm),
     to: [normalizeRecipientEmail(email)],
     subject,
-    html,
+    html: brandEmailHtml(html, firm),
   });
 
   if (sendError) {

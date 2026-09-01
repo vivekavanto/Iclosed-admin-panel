@@ -4,6 +4,9 @@ import { logger } from "./logger";
 import { getFamilyDealIds } from "./familyDeals";
 import { formatLeadTypeLabel, buildLeadAddressForEmail } from "./leadEmailAddress";
 import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "./emailIdentity";
+import { getDealFirmKey } from "./leadFirm";
+import { brandEmailHtml } from "./emailBrand";
+import type { FirmKey } from "./firms";
 import { buildAgentCcList } from "./agentCc";
 import { loadDealTemplateFacts } from "./dealTemplateFacts";
 import {
@@ -213,12 +216,13 @@ export async function sendCombinedMilestoneEmail(opts: {
     milestone: { title?: string | null; status?: string | null };
     template: { name?: string | null; subject?: string | null; body: string; shared_with_agent?: boolean | null };
     resend: Resend;
-    fromEmail: string;
+    /** The firm the file is retained under — sets the sender and the lockup. */
+    firm: FirmKey;
     milestoneSide: Side | null;
     /** Conversion passes the just-generated file number; the deal row may not carry it yet. */
     fileNumberOverride?: string | null;
 }): Promise<MilestoneSendResult> {
-    const { recipients, milestone, template, resend, fromEmail, milestoneSide } = opts;
+    const { recipients, milestone, template, resend, firm, milestoneSide } = opts;
 
     if (recipients.length === 0) {
         return { success: true, recipients: [], cc: [] };
@@ -445,12 +449,12 @@ export async function sendCombinedMilestoneEmail(opts: {
         const cc = await resolveAgentCc(template, recipients, to);
 
         const { data: sendResult, error: sendError } = await resend.emails.send({
-            from: fromEmail,
-            replyTo: emailReplyTo(),
+            from: emailFrom(firm),
+            replyTo: emailReplyTo(firm),
             to,
             ...(cc.length ? { cc } : {}),
             subject: processedSubject,
-            html: htmlBody,
+            html: brandEmailHtml(htmlBody, firm),
         });
 
         if (sendError) {
@@ -508,7 +512,6 @@ export async function dispatchAutoCompleteMilestoneEmails(
     }
 
     const resend = new Resend(process.env.RESEND_API_KEY);
-    const fromEmail = emailFrom();
 
     // One send per stage, not per party: every family member's copy of the same
     // auto-completed stage collapses into a single group.
@@ -563,7 +566,9 @@ export async function dispatchAutoCompleteMilestoneEmails(
                 milestone: { title: group[0].stageName, status: "Completed" },
                 template,
                 resend,
-                fromEmail,
+                // Every entry in a stage group is one family's file, so any of
+                // them answers for the firm.
+                firm: await getDealFirmKey(group[0].dealId ?? null),
                 milestoneSide,
                 fileNumberOverride: group[0].fileNumber,
             });

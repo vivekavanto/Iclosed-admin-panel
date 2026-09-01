@@ -10,7 +10,8 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { docDownloadHref } from "@/lib/blobPrivacy";
+import { upload } from "@vercel/blob/client";
+import { BLOB_ACCESS, docDownloadHref } from "@/lib/blobPrivacy";
 
 // Post-closure documents for a deal — the final reporting package sent to the
 // client after closing.
@@ -20,10 +21,22 @@ import { docDownloadHref } from "@/lib/blobPrivacy";
 // up in the admin Documents modal and the client's portal Documents page
 // without any extra plumbing.
 //
+// The BYTES, however, go browser -> Vercel Blob directly (the token route +
+// JSON register call), never through the function. A reporting package is a
+// scanned PDF and routinely clears Vercel's ~4.5 MB request-body cap; posting
+// it as multipart returned a raw 413 that never reached this code, so the
+// toast showed the JSON parse failure ("Unexpected token ...") instead of
+// anything about the file being too big. Same shape as DepositTaskPanel.
+//
 // The email wording is NOT here — it comes from the "Final Reporting Package"
 // row in Templates → Emails, so staff can reword it without a deploy.
 
 const BRAND = "#C10007";
+
+// Matches MAX_DOCUMENT_UPLOAD_BYTES on the token route, which is the real
+// enforcement point - Blob rejects the PUT itself. Checked here too so an
+// oversized file is named as such before any bytes leave the browser.
+const MAX_REPORT_BYTES = 10 * 1024 * 1024;
 
 interface FinalReportDoc {
   id: string;
@@ -88,17 +101,37 @@ const PostClosureDocuments: React.FC<{ dealId: string }> = ({ dealId }) => {
       showToast("This file has no client record to attach the report to", "error");
       return;
     }
+    if (file.size > MAX_REPORT_BYTES) {
+      showToast("The final report must be 10 MB or smaller", "error");
+      return;
+    }
+
     setUploading(true);
     try {
-      const body = new FormData();
-      body.append("file", file);
-      body.append("lead_id", primaryLeadId);
-      body.append("doc_type", "final_report");
+      const pathname = `corporate-docs/${primaryLeadId}/${Date.now()}-${file.name}`;
+      const blob = await upload(pathname, file, {
+        access: BLOB_ACCESS,
+        handleUploadUrl: "/api/admin/uploadblobstorage/token",
+        contentType: file.type,
+        clientPayload: JSON.stringify({ lead_id: primaryLeadId }),
+      });
 
-      const res = await fetch("/api/admin/uploadblobstorage", { method: "POST", body });
-      const data = await res.json();
+      const res = await fetch("/api/admin/uploadblobstorage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          file_url: blob.url,
+          file_name: file.name,
+          lead_id: primaryLeadId,
+          doc_type: "final_report",
+        }),
+      });
+      // A platform-level failure (a 413, a gateway error) answers with HTML,
+      // not JSON. Parsing it blind is what turned a size problem into a
+      // "token" error in the toast.
+      const data = await res.json().catch(() => null);
       if (!res.ok || data?.success === false) {
-        throw new Error(data?.error || "Upload failed");
+        throw new Error(data?.error || `Upload failed (${res.status})`);
       }
       await load();
       showToast("Final report uploaded");

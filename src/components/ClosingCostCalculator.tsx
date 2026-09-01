@@ -57,6 +57,16 @@ const inputClass =
 
 type ConfigRow = Record<string, unknown>;
 
+/** The `{ success, error }` envelope every route on this page answers with. */
+interface ApiJson {
+  success?: boolean;
+  error?: string;
+  data?: { updated_at?: string | null } | null;
+  pdf_error?: string | null;
+  pdf_attached?: boolean;
+  sent_to?: string;
+}
+
 interface EstimateRow {
   id: string;
   purchase_price: number | string | null;
@@ -492,6 +502,20 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
 
   const statement = useMemo(() => computeStatement(inputs, rates), [inputs, rates]);
 
+  /**
+   * A response body that is not JSON is a route that crashed, not an answer.
+   * Parsing it blind is what put `Unexpected token '<', "<!DOCTYPE "...` in the
+   * toast in place of the reason — every caller below falls back to naming the
+   * status instead.
+   */
+  const readJson = async (res: Response): Promise<ApiJson | null> => {
+    try {
+      return await res.json();
+    } catch {
+      return null;
+    }
+  };
+
   /** The exact body both save and issue send. */
   const buildBody = useCallback(
     () => ({
@@ -538,9 +562,9 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
           expected_updated_at: draftUpdatedAtRef.current,
         }),
       });
-      const data = await res.json();
+      const data = await readJson(res);
       if (!res.ok || !data?.success) {
-        throw new Error(data?.error || "Save failed");
+        throw new Error(data?.error || `Save failed (${res.status})`);
       }
       draftUpdatedAtRef.current = data.data?.updated_at ?? null;
       // Deliberately does NOT clear `dirty`. A saved draft is not an issued
@@ -609,9 +633,9 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ to, estimate_id: issued.id }),
       });
-      const data = await res.json();
+      const data = await readJson(res);
       if (!res.ok || !data?.success) {
-        throw new Error(data?.error || "Could not send the email");
+        throw new Error(data?.error || `Could not send the email (${res.status})`);
       }
       showToast(
         data.pdf_attached
@@ -677,9 +701,9 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(buildBody()),
       });
-      const data = await res.json();
+      const data = await readJson(res);
       if (!res.ok || !data?.success) {
-        throw new Error(data?.error || "Could not issue the estimate");
+        throw new Error(data?.error || `Could not issue the estimate (${res.status})`);
       }
       showToast(
         data.pdf_error

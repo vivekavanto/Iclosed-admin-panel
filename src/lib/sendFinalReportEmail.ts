@@ -22,6 +22,8 @@ import supabaseAdmin from "./supabaseAdmin";
 import { logger } from "./logger";
 import { isPrivateBlobUrl, blobTokenForUrl } from "./blobPrivacy";
 import { emailFrom, emailReplyTo } from "./emailIdentity";
+import { getLeadFirmKey } from "./leadFirm";
+import { brandEmailHtml } from "./emailBrand";
 import {
   decodeTemplateBraces,
   renderTemplateSafe,
@@ -139,7 +141,9 @@ export async function sendFinalReportEmail(opts: {
 
   const { Resend } = await import("resend");
   const resend = new Resend(process.env.RESEND_API_KEY);
-  const fromEmail = emailFrom();
+  // One firm per file; `opts.leads` is that one file's family.
+  const firm = await getLeadFirmKey(opts.leads?.[0]?.id ?? null);
+  const fromEmail = emailFrom(firm);
 
   // Every final-report document on the file, across the whole family — a
   // co-purchaser's package may have been uploaded against the primary's lead.
@@ -269,10 +273,10 @@ export async function sendFinalReportEmail(opts: {
 
       await resend.emails.send({
         from: fromEmail,
-        replyTo: emailReplyTo(),
+        replyTo: emailReplyTo(firm),
         to,
         subject,
-        html,
+        html: brandEmailHtml(html, firm),
         attachments,
       });
 

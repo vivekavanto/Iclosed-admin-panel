@@ -15,6 +15,8 @@ import { maskEmail } from "./maskEmail";
 import { logger } from "./logger";
 import { withRetry } from "./retry";
 import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "./emailIdentity";
+import { getLeadFirmKey } from "./leadFirm";
+import { brandEmailHtml } from "./emailBrand";
 import { buildAgentCcList } from "./agentCc";
 import { loadDealTemplateFacts, type DealFactValues } from "./dealTemplateFacts";
 
@@ -368,8 +370,10 @@ export async function sendWelcomeEmail(
     claimedSend = true;
   }
 
+  // Which firm this file is retained under decides the sender and the lockup.
+  const firm = await getLeadFirmKey(leadId);
   const resend = new Resend(process.env.RESEND_API_KEY);
-  const fromEmail = emailFrom();
+  const fromEmail = emailFrom(firm);
 
   // "Shared with agent?" templates copy everyone attached to the file — the
   // partner's primary agent, their additional partner_contacts, and the deal's
@@ -393,11 +397,11 @@ export async function sendWelcomeEmail(
       async () => {
         const { data, error } = await resend.emails.send({
           from: fromEmail,
-          replyTo: emailReplyTo(),
+          replyTo: emailReplyTo(firm),
           to: [normalizeRecipientEmail(lead.email)],
           ...(ccList.length > 0 ? { cc: ccList } : {}),
           subject,
-          html: htmlBody,
+          html: brandEmailHtml(htmlBody, firm),
         });
         if (error) throw new Error(error.message);
         return data;

@@ -5,6 +5,8 @@ import { maskEmail } from "./maskEmail";
 import { decodeTemplateBraces } from "./renderEmailTemplate";
 import { logger } from "./logger";
 import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "./emailIdentity";
+import { getLeadFirmKey } from "./leadFirm";
+import { brandEmailHtml } from "./emailBrand";
 
 export type AgentSignupEmailResult = {
   success: boolean;
@@ -311,15 +313,17 @@ export async function sendAgentSignupEmail(
     };
   }
 
+  // The agent hears from the firm that is acting on their client's file.
+  const firm = await getLeadFirmKey(leadId);
   const resend = new Resend(process.env.RESEND_API_KEY);
-  const fromEmail = emailFrom();
+  const fromEmail = emailFrom(firm);
 
   const { data: sendResult, error: sendError } = await resend.emails.send({
     from: fromEmail,
-    replyTo: emailReplyTo(),
+    replyTo: emailReplyTo(firm),
     to: [normalizeRecipientEmail(agentEmail)],
     subject,
-    html: htmlBody,
+    html: brandEmailHtml(htmlBody, firm),
   });
 
   if (sendError) {

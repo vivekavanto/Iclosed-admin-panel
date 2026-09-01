@@ -6,6 +6,12 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { formatPostalCode } from "@/lib/addressFields";
 import {
+  FIRMS,
+  FIRM_KEYS,
+  resolveFirmKey,
+  type FirmKey,
+} from "@/lib/firms";
+import {
   History,
   Mail,
   Key,
@@ -115,6 +121,10 @@ interface LeadUser {
   // Whether the agent has had the one-off "your client signed up" email. Drives
   // the manual Notify Agent catch-up for agents linked after activation.
   agentSignupEmailSent?: boolean;
+  // Which firm the FILE is retained under — "navawilson" | "iclosed".
+  // Undefined on a row read before the firm_key migration; resolveFirmKey()
+  // treats that as Nava Wilson, which is what every file already was.
+  firmKey?: string;
 }
 
 const Leads: React.FC = () => {
@@ -338,6 +348,64 @@ const Leads: React.FC = () => {
     }
   }
 
+
+  // ── Firm on the file (Nava Wilson vs iClosed LLP) ──────────────────────────
+  // Saved on its own, NOT through the Edit form. Two reasons: it is a property
+  // of the whole FILE rather than of this person (the server cascades it to
+  // every co-lead), and it is the one field an admin flips on its own, on a
+  // file they are otherwise only reading. Burying it behind Edit → Save would
+  // make the common case the awkward one.
+  const [savingFirm, setSavingFirm] = useState(false);
+  const [firmResult, setFirmResult] = useState<{
+    success: boolean;
+    message: string;
+  } | null>(null);
+
+  async function saveFirm(nextFirm: FirmKey) {
+    if (!selectedLead || savingFirm) return;
+    if (resolveFirmKey(selectedLead.firmKey) === nextFirm) return;
+
+    setSavingFirm(true);
+    setFirmResult(null);
+    try {
+      const res = await fetch(`/api/admin/leads`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: selectedLead.id, firmKey: nextFirm }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data?.error ?? `HTTP ${res.status}`);
+      }
+
+      // The server writes the firm to every lead in the family. Mirror that
+      // locally or the co-leads in the list keep showing the old firm until a
+      // reload — which reads as "the change did not take".
+      const rootId = selectedLead.parentLeadId ?? selectedLead.id;
+      const inFamily = (l: LeadUser) =>
+        l.id === rootId || l.parentLeadId === rootId;
+      setLeads((prev) =>
+        prev.map((l) => (inFamily(l) ? { ...l, firmKey: nextFirm } : l)),
+      );
+      setSelectedLead((prev) => (prev ? { ...prev, firmKey: nextFirm } : prev));
+
+      const warning = (data.warnings ?? [])[0] as string | undefined;
+      setFirmResult({
+        success: !warning,
+        message:
+          warning ??
+          `This file is now a ${FIRMS[nextFirm].label} file. Emails and the retainer will use its address and logo.`,
+      });
+    } catch (err: any) {
+      setFirmResult({
+        success: false,
+        message: err.message ?? "Failed to change the firm.",
+      });
+    } finally {
+      setSavingFirm(false);
+    }
+  }
+
   // ── Referral agent (partner) linking ───────────────────────────────────────
   // Intake is the only place that could originally attach an agent, so a file
   // created before the agent was known had no way back. These drive the Partner
@@ -544,6 +612,7 @@ const Leads: React.FC = () => {
     referralAgentCompany: l.referral_agent_company ?? null,
     referralAgentEmail: l.referral_agent_email ?? null,
     agentSignupEmailSent: l.agent_signup_email_sent ?? false,
+    firmKey: l.firm_key ?? undefined,
     sellingAddressStreet: l.selling_address_street,
     sellingAddressUnit: l.selling_address_unit,
     sellingAddressCity: l.selling_address_city,
@@ -1370,6 +1439,80 @@ const Leads: React.FC = () => {
             </button> */}
           </div>
         </div>
+
+
+        {/* ── Firm ── which entity this FILE is retained under. Drives the
+            address every automated email is sent from, the lockup at the foot
+            of those emails, and the retainer's logo and wording. Applies to the
+            whole family, not just this person. */}
+        {(() => {
+          const current = resolveFirmKey(selectedLead.firmKey);
+          const isCoLead = !!selectedLead.parentLeadId;
+          return (
+            <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-lg bg-slate-100 text-slate-500">
+                    <ShieldCheck size={18} />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-slate-800 tracking-tight">Firm</h3>
+                    <p className="text-xs font-medium text-slate-500 mt-0.5">
+                      Sets the sending address, the email logo and the retainer wording
+                      {isCoLead ? " for the whole file." : " for this file and every co-client on it."}
+                    </p>
+                  </div>
+                </div>
+                <div
+                  role="radiogroup"
+                  aria-label="Firm"
+                  className="inline-flex rounded-xl border border-slate-300 bg-slate-50 p-1 self-start"
+                >
+                  {FIRM_KEYS.map((key) => {
+                    const active = current === key;
+                    return (
+                      <button
+                        key={key}
+                        role="radio"
+                        aria-checked={active}
+                        onClick={() => saveFirm(key)}
+                        disabled={savingFirm}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-widest transition-all disabled:opacity-60 disabled:cursor-not-allowed ${
+                          active
+                            ? "bg-white text-brand-primary shadow-sm border border-slate-200"
+                            : "text-slate-500 hover:text-slate-700"
+                        }`}
+                      >
+                        {savingFirm && !active && <Loader2 size={12} className="animate-spin" />}
+                        {FIRMS[key].label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <p className="text-xs font-medium text-slate-500">
+                Mail is sent from{" "}
+                <span className="font-bold text-slate-700">{FIRMS[current].fromEmail}</span>.
+              </p>
+              {firmResult && (
+                <div
+                  className={`flex items-start gap-2 px-4 py-3 rounded-xl border text-sm font-semibold ${
+                    firmResult.success
+                      ? "bg-green-50 border-green-200 text-green-800"
+                      : "bg-amber-50 border-amber-200 text-amber-800"
+                  }`}
+                >
+                  {firmResult.success ? (
+                    <CheckCircle2 size={16} className="flex-shrink-0 mt-0.5" />
+                  ) : (
+                    <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" />
+                  )}
+                  <span>{firmResult.message}</span>
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Convert Result Banner */}
         {convertResult && (

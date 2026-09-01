@@ -320,8 +320,11 @@ const ClosingCostSettings: React.FC = () => {
         `/api/admin/closing-cost-config/firms/${firmKey}/logo`,
         { method: "POST", body },
       );
-      const data = await res.json();
-      if (!res.ok || !data?.success) throw new Error(data?.error || "Upload failed");
+      // A file over Vercel's ~4.5 MB body cap never reaches the route: the
+      // platform answers 413 with HTML, and parsing that blind surfaces a JSON
+      // "token" error instead of a size message.
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) throw new Error(data?.error || "Upload failed (" + res.status + ")");
       await load();
       showToast("Logo updated");
     } catch (err) {

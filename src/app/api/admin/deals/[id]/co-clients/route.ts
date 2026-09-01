@@ -105,7 +105,7 @@ export async function POST(
   const { data: rootLead, error: rootLeadError } = await supabaseAdmin
     .from("leads")
     .select(
-      "id, lead_type, price, selling_price, address_street, address_unit, address_city, address_province, address_postal_code, selling_address_street, selling_address_unit, selling_address_city, selling_address_province, selling_address_postal_code",
+      "id, lead_type, price, selling_price, firm_key, address_street, address_unit, address_city, address_province, address_postal_code, selling_address_street, selling_address_unit, selling_address_city, selling_address_province, selling_address_postal_code",
     )
     .eq("id", rootLeadId)
     .single();
@@ -176,6 +176,12 @@ export async function POST(
     lead_type: isPurchaser ? "Purchase" : "Sale",
     status: "New",
     price: rootLead.price ?? null,
+    // The firm is a property of the FILE. Without this the child would take
+    // the column default (Nava Wilson) and an iClosed LLP file would carry a
+    // co-client row claiming the other firm. leadFirm.ts reads the ROOT so
+    // nothing would look wrong in an email — which is exactly what makes the
+    // drift worth preventing here rather than discovering in SQL later.
+    firm_key: rootLead.firm_key ?? undefined,
   };
 
   if (isPurchaser) {

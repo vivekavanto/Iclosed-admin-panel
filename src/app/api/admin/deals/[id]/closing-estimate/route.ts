@@ -196,7 +196,24 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
  * The statement is recomputed server-side from the raw inputs and the effective
  * rates; client-sent totals are ignored entirely.
  */
-export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }) {
+  try {
+    return await saveDraftEstimate(req, ctx);
+  } catch (err) {
+    // See the note on POST in ./issue/route.ts — an escaping throw reaches the
+    // browser as an HTML error page and is reported as `Unexpected token '<'`.
+    logger.error("[ClosingEstimate PUT] unhandled failure:", err);
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : "Save failed" },
+      { status: 500 },
+    );
+  }
+}
+
+async function saveDraftEstimate(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
   const { id } = await params;
   if (!isUuid(id)) {
     return NextResponse.json({ success: false, error: "Invalid deal id" }, { status: 400 });

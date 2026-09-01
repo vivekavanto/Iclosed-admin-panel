@@ -14,6 +14,8 @@ import {
   type TemplateValue,
 } from "./renderEmailTemplate";
 import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "./emailIdentity";
+import { getLeadFirmKey } from "./leadFirm";
+import { brandEmailHtml } from "./emailBrand";
 
 /**
  * For each action type, list the template names we'll accept (in priority
@@ -424,15 +426,19 @@ export async function sendAuthEmailViaResend(opts: {
     return { success: false, error: "Email service not configured (missing RESEND_API_KEY)" };
   }
 
+  // `leadId` is optional here, and without it there is no file to read a firm
+  // from — getLeadFirmKey then returns the default, which is the branding this
+  // email had before firms existed. Callers that know the lead should pass it.
+  const firm = await getLeadFirmKey(lead?.id ?? leadId ?? null);
   const resend = new Resend(process.env.RESEND_API_KEY);
-  const fromEmail = emailFrom();
+  const fromEmail = emailFrom(firm);
 
   const { error: sendError } = await resend.emails.send({
     from: fromEmail,
-    replyTo: emailReplyTo(),
+    replyTo: emailReplyTo(firm),
     to: [email],
     subject,
-    html: bodyHtml,
+    html: brandEmailHtml(bodyHtml, firm),
   });
 
   if (sendError) {

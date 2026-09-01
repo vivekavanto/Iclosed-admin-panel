@@ -58,6 +58,30 @@ A single real-estate "file" can involve several people:
   directly. Personal fields (marital status, citizenship, etc.) live on
   **`clients`**, overlaid onto leads at read time.
 
+## Firms (Nava Wilson vs iClosed LLP)
+
+Clients are served under two entities, recorded per file on `leads.firm_key`
+(`navawilson` | `iclosed`, defaulting to `navawilson` — what every file was
+before the split). An admin flips it on the lead detail page; the PUT handler
+cascades it to every co-lead, and `src/lib/leadFirm.ts` resolves it from the
+**root** lead so a family can never be branded two ways.
+
+The label drives three client-visible things:
+
+| What | Where |
+| --- | --- |
+| Sender / reply-to | `emailFrom(firm)` / `emailReplyTo(firm)` in `emailIdentity.ts` |
+| Email lockup | `brandEmailHtml(html, firm)` — rewrites the logo filename in the rendered body (`emailBrand.ts`) |
+| Retainer logo + wording | **portal** repo: `firms.ts`, `retainerFaq.ts`, `generateRetainerPdf.ts` |
+
+`src/lib/firms.ts` is the registry and is **mirrored** in the portal
+(`iclosed_dev_web/src/lib/firms.ts`); the keys match
+`closing_cost_config.firm_key`, which has been per-firm since 2026-08-03.
+
+Internal/staff mail (`notifyAllTasksComplete`, `sendClerkDocumentsEmail`) and
+file-less mail (`sendPartnerCodeEmail`, the public calculator) stay on the
+firm-agnostic sender on purpose.
+
 ## Key flows
 
 | Flow | Path |
@@ -79,6 +103,10 @@ Rotation cadence is in `docs/key-rotation.md`.
 - `RESEND_API_KEY`, `RESEND_FROM_EMAIL`
 - `GEMINI_API_KEY`
 - `SERVICE_WEBHOOK_SECRET` (+ `SERVICE_WEBHOOK_ENFORCE`) — shared with the portal
+- `RESEND_FROM_EMAIL_NAVAWILSON` / `RESEND_FROM_EMAIL_ICLOSED` (+ the matching
+  `RESEND_REPLY_TO_EMAIL_*`) — per-firm sender overrides; see "Firms" below.
+  The legacy firm-agnostic `RESEND_FROM_EMAIL` no longer applies to
+  file-scoped mail
 - `NEXT_PUBLIC_PRIVATE_BLOB` — flag that switches document storage to private
   (requires a private-capable Blob store; see the remediation tracker)
 

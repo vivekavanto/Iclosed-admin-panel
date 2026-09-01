@@ -9,6 +9,8 @@
 
 import { escapeHtml } from "./renderEmailTemplate";
 import { emailFrom, emailReplyTo } from "./emailIdentity";
+import { brandEmailHtml } from "./emailBrand";
+import { resolveFirmKey } from "./firms";
 import type { Statement } from "./closingCosts";
 import type { StatementTypeConfig } from "./closingCostSettings";
 
@@ -25,6 +27,12 @@ export interface ClosingEstimateEmailParams {
   closingDate?: string | null;
   /** The statement PDF. Omitted only if generation failed. */
   pdf?: { fileName: string; bytes: Uint8Array } | null;
+  /**
+   * Firm to send as. Defaults to the firm the STATEMENT was prepared under
+   * (`config.firm_key`), which is what the attached PDF's letterhead shows.
+   * Callers pass the file's own firm when the estimate predates firm_key.
+   */
+  firmKey?: string | null;
 }
 
 /** "$21,363.69" — matches formatCurrency's output without importing React-land. */
@@ -108,19 +116,20 @@ export async function sendClosingEstimateEmail(
     </div>
   `;
 
+  const firm = resolveFirmKey(params.firmKey ?? config.firm_key);
   const { Resend } = await import("resend");
   const resend = new Resend(process.env.RESEND_API_KEY);
-  const fromEmail = emailFrom();
+  const fromEmail = emailFrom(firm);
 
   try {
     await resend.emails.send({
       from: fromEmail,
-      replyTo: emailReplyTo(),
+      replyTo: emailReplyTo(firm),
       to: [to],
       subject: params.fileNo
         ? `${statementType.label} — closing costs (File ${params.fileNo})`
         : `${statementType.label} — your closing costs`,
-      html,
+      html: brandEmailHtml(html, firm),
       attachments: pdf
         ? [{ filename: pdf.fileName, content: Buffer.from(pdf.bytes) }]
         : undefined,

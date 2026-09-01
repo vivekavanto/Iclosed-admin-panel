@@ -17,6 +17,18 @@
 // The numbers below are MEASURED from the PNG, not guessed, and the drawing
 // code depends on them. Re-measure if the artwork is ever re-cropped.
 
+// ── TWO FIRMS, TWO LOCKUPS ──────────────────────────────────────────────
+// The constants below describe the NAVA WILSON lockup — the iClosed wordmark
+// over "POWERED BY NAVA WILSON". A file on the iClosed LLP side uses the bare
+// wordmark in public/logo.png instead; see FIRMS in src/lib/firms.ts, and
+// emailBrand.ts for how a rendered email is repointed at it.
+//
+// The PDF consumers below are NOT firm-aware yet: the deal package is an
+// internal document for the clerks, so it stays on the one lockup. The
+// client-facing PDFs that DO follow the firm are the retainer (portal,
+// generateRetainerPdf.ts) and the closing-cost statement, which has carried
+// its own per-firm letterhead in closing_cost_config.logo_url since 2026-08-05.
+//
 /** Served by this app; also the URL burned into the email template rows. */
 export const BRAND_LOGO_URL = "/email-logo.png";
 

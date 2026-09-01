@@ -7,24 +7,61 @@
  * production mail went out as support@iclosed.ca but every client reply landed
  * in the testing inbox, where nobody reads it.
  *
- * Reply-to now defaults to support@iclosed.ca, and both are env-overridable so
- * a non-production deploy can point its mail somewhere else without touching
- * code:
- *   RESEND_FROM_EMAIL      e.g. "iClosed <support@iclosed.ca>"  (display name + address)
- *   RESEND_REPLY_TO_EMAIL  e.g. "support@iclosed.ca"            (bare address)
+ * ── NOW FIRM-DEPENDENT ──────────────────────────────────────────────────
+ * iClosed serves clients under two entities, and a file's `leads.firm_key`
+ * decides which one its mail comes from (see firms.ts / leadFirm.ts):
+ *
+ *   Nava Wilson  →  iclosed@navawilson.law
+ *   iClosed LLP  →  support@iclosed.ca
+ *
+ * Pass the firm and you get its addresses. Call with NO argument and you get
+ * the LEGACY, firm-agnostic behaviour — byte-for-byte what this returned
+ * before — so any send site not yet converted keeps sending what it always did.
+ *
+ * ⚠ OPS PREREQUISITE: navawilson.law must be a VERIFIED sending domain in
+ * Resend before Nava Wilson files start sending from it, or every one of those
+ * sends fails. Until it is, point that firm at an already-verified address with
+ * RESEND_FROM_EMAIL_NAVAWILSON — no code change, no redeploy of this logic.
+ *
+ * Env overrides, all optional:
+ *   RESEND_FROM_EMAIL                 legacy, firm-agnostic  ("iClosed <a@b.ca>")
+ *   RESEND_REPLY_TO_EMAIL             legacy, firm-agnostic  ("a@b.ca")
+ *   RESEND_FROM_EMAIL_NAVAWILSON      per-firm from
+ *   RESEND_FROM_EMAIL_ICLOSED
+ *   RESEND_REPLY_TO_EMAIL_NAVAWILSON  per-firm reply-to
+ *   RESEND_REPLY_TO_EMAIL_ICLOSED
+ *
+ * The per-firm vars deliberately do NOT fall back to the legacy ones. The
+ * legacy value is a SINGLE address; letting it stand in for a firm would
+ * collapse both firms back onto one sender on any deploy that still has it set
+ * — which is every current deploy — silently undoing the whole feature.
  */
+
+import { getFirm, type FirmKey } from "./firms";
 
 export const DEFAULT_FROM_EMAIL = "iClosed <support@iclosed.ca>";
 export const DEFAULT_REPLY_TO_EMAIL = "support@iclosed.ca";
 
-/** From address for Resend sends. */
-export function emailFrom(): string {
-  return process.env.RESEND_FROM_EMAIL?.trim() || DEFAULT_FROM_EMAIL;
+/**
+ * From address for Resend sends.
+ *
+ * @param firm The file's firm. Omit for the legacy firm-agnostic address.
+ */
+export function emailFrom(firm?: FirmKey | null): string {
+  if (firm == null) return process.env.RESEND_FROM_EMAIL?.trim() || DEFAULT_FROM_EMAIL;
+  const profile = getFirm(firm);
+  return process.env[profile.fromEnvVar]?.trim() || profile.fromEmail;
 }
 
-/** Reply-to address for Resend sends — where client replies actually go. */
-export function emailReplyTo(): string {
-  return process.env.RESEND_REPLY_TO_EMAIL?.trim() || DEFAULT_REPLY_TO_EMAIL;
+/**
+ * Reply-to address for Resend sends — where client replies actually go.
+ *
+ * @param firm The file's firm. Omit for the legacy firm-agnostic address.
+ */
+export function emailReplyTo(firm?: FirmKey | null): string {
+  if (firm == null) return process.env.RESEND_REPLY_TO_EMAIL?.trim() || DEFAULT_REPLY_TO_EMAIL;
+  const profile = getFirm(firm);
+  return process.env[profile.replyToEnvVar]?.trim() || profile.replyToEmail;
 }
 
 /**

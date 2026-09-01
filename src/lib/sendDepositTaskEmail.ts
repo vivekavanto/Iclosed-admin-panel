@@ -28,6 +28,8 @@ import supabaseAdmin from "./supabaseAdmin";
 import { logger } from "./logger";
 import { isPrivateBlobUrl, blobTokenForUrl } from "./blobPrivacy";
 import { emailFrom, emailReplyTo } from "./emailIdentity";
+import { getLeadFirmKey } from "./leadFirm";
+import { brandEmailHtml } from "./emailBrand";
 import { formatCurrency } from "./formatCurrency";
 import { buildLeadAddressForEmail } from "./leadEmailAddress";
 import {
@@ -286,14 +288,17 @@ export async function sendDepositTaskEmail(opts: {
   }
 
   try {
+    // `ordered` is primary-first, and the firm is a property of the file, so
+    // any lead in it resolves to the same answer.
+    const firm = await getLeadFirmKey(ordered[0]?.id ?? null);
     const { Resend } = await import("resend");
     const resend = new Resend(process.env.RESEND_API_KEY);
     await resend.emails.send({
-      from: emailFrom(),
-      replyTo: emailReplyTo(),
+      from: emailFrom(firm),
+      replyTo: emailReplyTo(firm),
       to,
       subject,
-      html,
+      html: brandEmailHtml(html, firm),
       ...(attachments.length > 0 ? { attachments } : {}),
     });
     return { sent: to };

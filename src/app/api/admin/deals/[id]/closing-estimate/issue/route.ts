@@ -30,7 +30,32 @@ import { formatLocalDate } from "@/lib/formatDate";
 
 const supabase = supabaseAdmin;
 
-export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
+/**
+ * Anything this handler throws — a PDF dependency, a Blob token, a helper that
+ * hits an unexpected shape — used to escape as Next's HTML error page. The
+ * browser then parsed it as JSON and the clerk saw `Unexpected token '<'`,
+ * which says nothing about what actually broke and hid whether the estimate had
+ * been issued at all. Every failure now leaves as `{ success, error }`.
+ *
+ * The real message is included: this route is admin-only (middleware gates
+ * /api/admin/*), and the insert error below has always been returned verbatim.
+ */
+export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
+  try {
+    return await issueEstimate(req, ctx);
+  } catch (err) {
+    logger.error("[ClosingEstimate issue] unhandled failure:", err);
+    return NextResponse.json(
+      {
+        success: false,
+        error: err instanceof Error ? err.message : "Could not issue the estimate",
+      },
+      { status: 500 },
+    );
+  }
+}
+
+async function issueEstimate(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   if (!isUuid(id)) {
     return NextResponse.json({ success: false, error: "Invalid deal id" }, { status: 400 });

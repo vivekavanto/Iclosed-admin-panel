@@ -8,6 +8,9 @@ import { guardServiceRequest } from "@/lib/verifyServiceSignature";
 import { get } from "@vercel/blob";
 import { isPrivateBlobUrl, blobTokenForUrl } from "@/lib/blobPrivacy";
 import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "@/lib/emailIdentity";
+import { getLeadFirmKey } from "@/lib/leadFirm";
+import { brandEmailHtml } from "@/lib/emailBrand";
+import type { FirmKey } from "@/lib/firms";
 import { buildAgentCcList } from "@/lib/agentCc";
 
 /**
@@ -88,7 +91,7 @@ async function sendRetainerEmail(
   },
   template: { name: string | null; subject: string | null; body: string; shared_with_agent?: boolean | null },
   resend: Resend,
-  fromEmail: string,
+  firm: FirmKey,
 ): Promise<RetainerSendResult> {
   if (!lead.email) {
     return { success: false, error: "Recipient has no email address" };
@@ -340,12 +343,12 @@ async function sendRetainerEmail(
   }
 
   const { data: sendResult, error: sendError } = await resend.emails.send({
-    from: fromEmail,
-    replyTo: emailReplyTo(),
+    from: emailFrom(firm),
+    replyTo: emailReplyTo(firm),
     to: [normalizeRecipientEmail(lead.email)],
     ...(cc ? { cc } : {}),
     subject: processedSubject,
-    html: processedBody,
+    html: brandEmailHtml(processedBody, firm),
     attachments,
   });
 
@@ -563,7 +566,6 @@ export async function POST(req: NextRequest) {
     // Lazy Resend client — only initialized when the retainer path actually
     // needs it. Skips the env-var requirement for non-retainer sends.
     let resendClient: Resend | null = null;
-    const fromEmail = emailFrom();
     if (retainerMode) {
       if (!process.env.RESEND_API_KEY) {
         return NextResponse.json(
@@ -680,7 +682,10 @@ export async function POST(req: NextRequest) {
           fullLead,
           templateRow,
           resendClient,
-          fromEmail,
+          // Resolved per recipient rather than once for the request: they are
+          // all on one file, so this is the same answer every time, and it
+          // stays right if that ever stops being true.
+          await getLeadFirmKey(fullLead.id),
         );
 
         results.push({

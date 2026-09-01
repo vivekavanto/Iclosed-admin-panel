@@ -38,6 +38,8 @@ import { logger } from "./logger";
 import { getFamilyDealIds } from "./familyDeals";
 import { resolvePrimaryDealId } from "./primaryDeal";
 import { emailFrom, emailReplyTo } from "./emailIdentity";
+import { getLeadFirmKey } from "./leadFirm";
+import { brandEmailHtml } from "./emailBrand";
 import { formatCurrency } from "./formatCurrency";
 import { clerkRecipientsForType } from "./sendClerkDocumentsEmail";
 import { readBlobDocument } from "./blobDocument";
@@ -328,15 +330,18 @@ export async function sendDepositProofEmail(taskId: string): Promise<DepositProo
       { escape: false },
     );
 
+    // Branded off the file's own firm, not the recipient's — this goes to the
+    // deposit desk about a specific transaction.
+    const firm = await getLeadFirmKey(deal?.lead_id ?? null);
     const { Resend } = await import("resend");
     const resend = new Resend(process.env.RESEND_API_KEY);
     await withRetry(() =>
       resend.emails.send({
-        from: emailFrom(),
-        replyTo: emailReplyTo(),
+        from: emailFrom(firm),
+        replyTo: emailReplyTo(firm),
         to: recipients,
         subject,
-        html,
+        html: brandEmailHtml(html, firm),
         ...(attachments.length > 0 ? { attachments } : {}),
       }),
     );

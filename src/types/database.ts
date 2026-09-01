@@ -705,6 +705,10 @@ export interface Database {
           account_activation_deferred: boolean;
           partner_id: string | null;
           agent_signup_email_sent: boolean;
+          // Which firm this FILE belongs to — "navawilson" | "iclosed". Drives
+          // the email from-address, the email lockup and the retainer wording.
+          // The ROOT lead is authoritative; see src/lib/leadFirm.ts.
+          firm_key: string;
         };
         Insert: {
           id?: string;
@@ -755,6 +759,7 @@ export interface Database {
           account_activation_deferred?: boolean;
           partner_id?: string | null;
           agent_signup_email_sent?: boolean;
+          firm_key?: string;
         };
         Update: {
           id?: string;
@@ -805,6 +810,7 @@ export interface Database {
           account_activation_deferred?: boolean;
           partner_id?: string | null;
           agent_signup_email_sent?: boolean;
+          firm_key?: string;
         };
         Relationships: [
           {

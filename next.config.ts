@@ -34,9 +34,13 @@ const securityHeaders = [
       "frame-ancestors 'none'",
       "object-src 'none'",
       "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
-      "style-src 'self' 'unsafe-inline'",
+      // globals.css @imports the Inter face from Google Fonts, so the
+      // stylesheet origin and the font-file origin both have to be named here.
+      // Without them the app falls back to a system font the day this header is
+      // switched to enforcing - already visible as a report-only violation.
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
       "img-src 'self' data: blob: https://*.blob.vercel-storage.com",
-      "font-src 'self' data:",
+      "font-src 'self' data: https://fonts.gstatic.com",
       "connect-src 'self' blob: data: https://*.supabase.co wss://*.supabase.co https://*.blob.vercel-storage.com https://generativelanguage.googleapis.com https://api.resend.com",
       // HEIC identification photos are decoded to JPEG in the browser (heic-to
       // → libheif/WASM) when building a deal or task PDF. libheif runs in a

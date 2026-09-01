@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { isUuid } from "@/lib/isUuid";
 import { logger } from "@/lib/logger";
+import { getDealFirmKey } from "@/lib/leadFirm";
 import { recordAudit } from "@/lib/recordAudit";
 import { getActingAdmin } from "@/lib/getActingAdmin";
 import { rateLimitOk } from "@/lib/rateLimit";
@@ -206,6 +207,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     fileNo,
     closingDate: closingDate ? formatLocalDate(closingDate) || closingDate : null,
     pdf,
+    // Send as the firm whose letterhead is on the attached statement. An
+    // estimate saved before firms were recorded has no firm of its own, so
+    // fall back to the file's — never to whichever firm happens to be the
+    // active default, which could be the other one entirely.
+    firmKey: firmKey ?? (await getDealFirmKey(deal.id)),
   });
 
   if (!sent.success) {

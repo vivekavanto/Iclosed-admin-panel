@@ -3,7 +3,7 @@ import supabaseAdmin from "@/lib/supabaseAdmin"
 import { Resend } from "resend"
 import { getFamilyDealIds } from "@/lib/familyDeals"
 import { guardServiceRequest } from "@/lib/verifyServiceSignature"
-import { emailFrom } from "@/lib/emailIdentity"
+import { getDealFirmKey } from "@/lib/leadFirm"
 import { maybeNotifyAllTasksComplete } from "@/lib/notifyAllTasksComplete"
 import { resolveMilestoneSide } from "@/lib/milestoneSide"
 import {
@@ -89,7 +89,7 @@ async function handlePortalRequest(body: Record<string, any>) {
     }
 
     const resend = new Resend(process.env.RESEND_API_KEY)
-    const fromEmail = emailFrom();
+    const firm = await getDealFirmKey(deal_id ?? null)
 
     // Find all deals in the family (purchaser + co-purchasers)
     let allDealIds: string[] = deal_id ? [deal_id] : []
@@ -124,7 +124,7 @@ async function handlePortalRequest(body: Record<string, any>) {
         milestone: { title: milestone_title },
         template,
         resend,
-        fromEmail,
+        firm,
         milestoneSide,
     })
 
@@ -271,7 +271,7 @@ export async function POST(req: Request) {
         }
 
         const resend = new Resend(process.env.RESEND_API_KEY)
-        const fromEmail = emailFrom();
+        const firm = await getDealFirmKey(dealId ?? null)
 
         // On a Purchase & Sale file every family deal carries BOTH sides'
         // milestones, so a purchase-side stage ("Title Search", "Financing Firm ->
@@ -341,7 +341,7 @@ export async function POST(req: Request) {
             milestone,
             template,
             resend,
-            fromEmail,
+            firm,
             milestoneSide,
         })
 

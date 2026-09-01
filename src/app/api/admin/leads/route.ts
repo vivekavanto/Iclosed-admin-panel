@@ -4,6 +4,7 @@ import { isUuid } from '@/lib/isUuid';
 import { recordAudit } from '@/lib/recordAudit';
 import { getActingAdmin } from '@/lib/getActingAdmin';
 import { normalizeRecipientEmail } from '@/lib/emailIdentity';
+import { isFirmKey, FIRM_KEYS } from '@/lib/firms';
 
 // Admin data must always be live — never serve a cached leads list, otherwise
 // an edited phone/name/etc. can keep showing the old value after a refresh.
@@ -198,6 +199,22 @@ export async function PUT(req: NextRequest) {
       updateData.email = email;
     }
 
+    // Which firm this FILE belongs to. Deliberately NOT routed through
+    // LEAD_FIELD_MAP: an unrecognised value has to be REJECTED here rather than
+    // stored, because nothing downstream would ever complain about it —
+    // resolveFirmKey() falls back to Nava Wilson for anything it does not
+    // recognise, so a typo would silently leave the file on the wrong sender
+    // and the wrong letterhead, with no error anywhere to explain why.
+    if (rest.firmKey !== undefined) {
+      if (!isFirmKey(rest.firmKey)) {
+        return NextResponse.json(
+          { success: false, error: `firmKey must be one of: ${FIRM_KEYS.join(', ')}` },
+          { status: 400 },
+        );
+      }
+      updateData.firm_key = rest.firmKey;
+    }
+
     const clientData: Record<string, any> = {};
     for (const [key, column] of Object.entries(CLIENT_FIELD_MAP)) {
       if (rest[key] !== undefined) clientData[column] = norm(rest[key]);
@@ -284,6 +301,30 @@ export async function PUT(req: NextRequest) {
         console.error('PUT /api/admin/leads person cascade error:', cascadeErr);
         warnings.push(
           "Saved on this file, but syncing to the person's other files failed.",
+        );
+      }
+    }
+
+
+    // The firm is a property of the FILE, not of a person, so a change has to
+    // land on every lead in the family — the root and all its co-purchasers /
+    // co-sellers. A family split across two firms would send the primary and
+    // the co-client mail from different addresses, on different letterheads,
+    // for the same transaction.
+    //
+    // src/lib/leadFirm.ts reads the ROOT lead, so branding stays coherent even
+    // if this cascade fails; the write is still worth doing so a direct SQL read
+    // of any single row tells the truth. Hence a warning, not a 500.
+    if (updateData.firm_key !== undefined && lead) {
+      const rootId = lead.parent_lead_id ?? lead.id;
+      const { error: firmErr } = await supabaseAdmin
+        .from('leads')
+        .update({ firm_key: updateData.firm_key })
+        .or(`id.eq.${rootId},parent_lead_id.eq.${rootId}`);
+      if (firmErr) {
+        console.error('PUT /api/admin/leads firm cascade error:', firmErr);
+        warnings.push(
+          'Saved on this person, but the firm could not be applied to the rest of the file.',
         );
       }
     }
