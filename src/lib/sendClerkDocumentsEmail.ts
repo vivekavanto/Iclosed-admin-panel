@@ -32,6 +32,15 @@
 //                     transferred once and the two clerks can see each other on
 //                     the thread.
 //
+// CLERK_DOCUMENTS_EMAIL overrides all of that when it is set: it IS the
+// recipient list, verbatim, for every file regardless of type. It exists
+// because the firm routes this email to one shared inbox in production while
+// dev mails a single tester, and because CLERK_PURCHASE_EMAIL /
+// CLERK_SALE_EMAIL are SHARED with the deposit-proof email (see
+// sendDepositProofEmail.ts) - widening those to retarget this email would
+// silently change who is told a client's closing funds arrived, which nobody
+// asked for. Same override shape, and same reason, as DEPOSIT_PROOF_EMAIL.
+//
 // Documents are NOT side-scoped on a P&S file. Both clerks get everything: a
 // purchase clerk routinely needs the sale-side ID and vice versa, and guessing
 // wrong would silently withhold a document someone is waiting on. Splitting by
@@ -132,6 +141,25 @@ export function clerkRecipientsForType(rawType: string | null | undefined): stri
   if (hasSale) return sale;
   if (hasPurchase) return purchase;
   return [];
+}
+
+/**
+ * The CLERK_DOCUMENTS_EMAIL override, or null when it is unset.
+ *
+ * Comma-separated, and deliberately NOT merged with the per-type lists: the
+ * point of it is to say "these addresses and no others" for an environment.
+ * Returning null (rather than []) for a blank value is what lets the caller
+ * tell "not configured" from "configured as this list", so an unset variable
+ * falls through to clerkRecipientsForType() untouched.
+ *
+ * Read ONLY by this email. clerkRecipientsForType() stays as it was, so the
+ * deposit-proof email that shares it is unaffected.
+ */
+export function clerkDocumentsOverride(): string[] | null {
+  const raw = (process.env.CLERK_DOCUMENTS_EMAIL ?? "").trim();
+  if (!raw) return null;
+  const list = splitAddresses(raw);
+  return list.length > 0 ? list : null;
 }
 
 function escapeHtml(s: string): string {
@@ -359,7 +387,10 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
     : { data: null };
 
   const rawType = primaryLead?.lead_type ?? deal.type;
-  const recipients = clerkRecipientsForType(rawType);
+  // An override also bypasses the "which side is this file" gate below, which
+  // is the point: a type we cannot route (Refinance, blank) has an inbox once
+  // one is named outright.
+  const recipients = clerkDocumentsOverride() ?? clerkRecipientsForType(rawType);
   if (recipients.length === 0) {
     return {
       ...empty,
