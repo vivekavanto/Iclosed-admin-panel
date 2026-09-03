@@ -5,7 +5,7 @@ import { BLOB_ACCESS, blobToken, blobTokenForUrl } from "@/lib/blobPrivacy";
 import {
   validateUpload,
   validateUploadMeta,
-  MAX_DOCUMENT_UPLOAD_BYTES,
+  maxUploadBytesForDocType,
 } from "@/lib/uploadValidation";
 import { readBlobMeta, BlobDocumentError } from "@/lib/blobDocument";
 
@@ -114,9 +114,11 @@ async function registerUploadedBlob(req: Request) {
       ? body.file_name.trim()
       : fallbackName;
 
+  // Same ceiling the token route minted the upload under — a final reporting
+  // package gets MAX_FINAL_REPORT_BYTES, everything else the document cap.
   const check = validateUploadMeta(
     { name: file_name, size: meta.size, type: meta.contentType },
-    MAX_DOCUMENT_UPLOAD_BYTES,
+    maxUploadBytesForDocType(doc_type),
   );
   if (!check.ok) {
     // The blob exists but isn't something we'll accept — drop it rather than

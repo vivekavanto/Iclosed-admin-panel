@@ -30,6 +30,10 @@ the admin repo but flags the portal where it matters.
   by external systems / the portal (reset-password, send-*). Those are protected
   instead by HMAC signatures — see `src/lib/verifyServiceSignature.ts` (verify
   side) and the portal's `signServiceRequest.ts` (sign side).
+- Routes OUTSIDE `/api/admin` are public by construction (the matcher never runs
+  on them) and carry their own token: `/api/auth/activate` (invite/recovery
+  only) and `/api/final-report/download` (an `invitation_tokens` row of type
+  `final_report`, scoped to specific document ids).
 - `supabaseAdmin` (`src/lib/supabaseAdmin.ts`) is the **service-role** client — it
   bypasses RLS and must NEVER be imported into client code (guarded to throw in
   the browser).
@@ -90,6 +94,7 @@ firm-agnostic sender on purpose.
 | Document upload (admin) | `UploadIdentificationDrawer` → `POST /api/admin/uploadblobstorage` → Vercel Blob → `lead_corporate_docs` |
 | APS finalisation | client upload via token → `POST /api/admin/deals/[id]/uploadblobstorage` → `completeApsTask.ts` → `recalcMilestones.ts` |
 | Welcome / auth / agent email | `sendWelcomeEmail.ts` / `sendAuthEmail.ts` / `sendAgentSignupEmail.ts` → Resend (templates rendered via `renderEmailTemplate.ts`) |
+| Final report delivery | `PostClosureDocuments` → upload (30 MB cap, `doc_type=final_report`) → `POST .../final-report/email` → `sendFinalReportEmail.ts` mints a per-group token (`finalReportLink.ts`) → client opens `GET /api/final-report/download` (public, token-scoped). Never an attachment |
 | Impersonate | `POST /api/admin/impersonate` → Supabase `auth.admin.generateLink` (audited) |
 | ID classification | `POST /api/admin/identify-document` → Google Gemini |
 

@@ -12,16 +12,24 @@
 //
 // Recipients are grouped by the package they are entitled to, NOT lumped
 // together unconditionally. On a Purchase & Sale file each co-person is party
-// to their own side only, so the documents attached — and the address shown —
+// to their own side only, so the documents linked — and the address shown —
 // are scoped by `recipientSide`, honouring the authoritative `co_person_role`
 // the same way the retainer sender does. Two people owed different documents
 // therefore still get two emails; two people owed the same one get one.
+//
+// ── A LINK, NOT AN ATTACHMENT ───────────────────────────────────────────
+// The package used to ride along as an attachment, which capped the whole
+// feature at the 10 MB document limit — and a real reporting package is 15-25
+// MB (base64 encoding then adds ~37% on the wire, against Gmail's 25 MB and
+// Outlook's 20 MB ceilings). Staff could not upload one, and any that squeaked
+// through risked a bounce. Each group now gets its OWN tokenised download link
+// (finalReportLink.ts), scoped to exactly the documents that group is entitled
+// to, and the email itself stays a few kilobytes.
 
-import { get } from "@vercel/blob";
 import supabaseAdmin from "./supabaseAdmin";
 import { logger } from "./logger";
-import { isPrivateBlobUrl, blobTokenForUrl } from "./blobPrivacy";
 import { emailFrom, emailReplyTo } from "./emailIdentity";
+import { createFinalReportDownloadLink } from "./finalReportLink";
 import { getLeadFirmKey } from "./leadFirm";
 import { brandEmailHtml } from "./emailBrand";
 import {
@@ -83,19 +91,36 @@ function joinNames(names: string[]): string {
   return `${clean.slice(0, -1).join(", ")} and ${clean[clean.length - 1]}`;
 }
 
-/** Pull a stored document's bytes, whichever blob store it lives in. */
-async function downloadDoc(fileUrl: string): Promise<Buffer> {
-  if (isPrivateBlobUrl(fileUrl)) {
-    const result = await get(fileUrl, {
-      access: "private",
-      token: blobTokenForUrl(fileUrl),
-    });
-    if (!result?.stream) throw new Error("private blob not found");
-    return Buffer.from(await new Response(result.stream).arrayBuffer());
-  }
-  const res = await fetch(fileUrl);
-  if (!res.ok) throw new Error(`status ${res.status}`);
-  return Buffer.from(await res.arrayBuffer());
+/**
+ * The download call-to-action, generated in CODE and appended when the template
+ * does not place the link itself.
+ *
+ * Why append rather than rely on the template: the `email_templates` rows live
+ * in the database SHARED with the customer portal, so a new `{{ download_link }}`
+ * placeholder starts rendering the moment someone edits the row — including on
+ * deploys that don't know the token yet, where it reaches clients as literal
+ * "{{ download_link }}" text. Worse, this send no longer carries an attachment:
+ * a template that mentions neither would deliver an email with no package in it
+ * at all. Appending guarantees the link is always there; a template that DOES
+ * place it (see the 2026-09-03 migration) suppresses this block.
+ */
+function renderDownloadCtaHtml(url: string, count: number): string {
+  return (
+    `<div style="margin:24px 0;">` +
+    `<p style="margin:0 0 12px;">` +
+    (count === 1
+      ? `Your final reporting package is ready to download:`
+      : `Your final reporting package (${count} documents) is ready to download:`) +
+    `</p>` +
+    `<p style="margin:0 0 12px;">` +
+    `<a href="${url}" style="background:#C10007;color:#ffffff;text-decoration:none;` +
+    `padding:12px 24px;border-radius:8px;display:inline-block;font-weight:600;">` +
+    `Download my final report</a></p>` +
+    `<p style="margin:0;color:#64748b;font-size:13px;">` +
+    `If the button does not work, copy this link into your browser:<br />` +
+    `<a href="${url}" style="color:#C10007;word-break:break-all;">${url}</a>` +
+    `</p></div>`
+  );
 }
 
 /**
@@ -107,6 +132,8 @@ async function downloadDoc(fileUrl: string): Promise<Buffer> {
 export async function sendFinalReportEmail(opts: {
   /** Every lead in the family, already resolved by the caller. */
   leads: RecipientLead[];
+  /** The deal the package belongs to — recorded on each download token. */
+  dealId: string;
   /** Restrict to these lead ids. Empty/undefined means all of them. */
   recipientLeadIds?: string[];
 }): Promise<FinalReportSendResult> {
@@ -224,13 +251,14 @@ export async function sendFinalReportEmail(opts: {
     );
 
     try {
-      const attachments: Array<{ filename: string; content: Buffer }> = [];
-      for (const doc of group.documents) {
-        attachments.push({
-          filename: doc.file_name || "final-report.pdf",
-          content: await downloadDoc(doc.file_url as string),
-        });
-      }
+      // ONE link per group, scoped to that group's documents. A purchase-side
+      // token cannot open the sale side's package, and vice versa.
+      const { url: downloadUrl } = await createFinalReportDownloadLink({
+        email: to[0],
+        dealId: opts.dealId,
+        leadIds: ordered.map((l) => l.id),
+        docIds: group.documents.map((d) => d.id),
+      });
 
       const leadAddress = await buildLeadAddressForEmail(anchor);
       // "Aliya" / "Aliya and Rehana" / "Aliya, Rehana and John". Surnames dedupe
@@ -257,14 +285,36 @@ export async function sendFinalReportEmail(opts: {
         client_name: fullName,
       };
 
+      // The download link, under every alias an admin might reasonably type —
+      // the same tolerance the retainer sender gives its signing link.
+      const linkAliases = [
+        "download_url",
+        "download_link",
+        "report_url",
+        "report_link",
+        "package_url",
+        "package_link",
+        "action_url",
+        "action_link",
+        "button_url",
+      ];
+      for (const alias of linkAliases) values[alias] = downloadUrl;
+
       const resolve = (name: string): TemplateValue | null => {
         const key = name.toLowerCase().replace(/^\.+/, "");
         if (!Object.prototype.hasOwnProperty.call(values, key)) return null;
-        // Everything here is client-supplied, so it is all HTML-escaped.
-        return { value: values[key] };
+        // The link is system-generated, so it may pass through unescaped inside
+        // an href. Everything else is client-supplied and is HTML-escaped.
+        return { value: values[key], raw: linkAliases.includes(key) };
       };
 
-      const html = renderTemplateSafe(decodeTemplateBraces(template.body), resolve);
+      const rendered = renderTemplateSafe(decodeTemplateBraces(template.body), resolve);
+      // Appended only when the template did not place the link itself, so an
+      // un-updated template still delivers a working package and an updated one
+      // does not show the button twice.
+      const html = rendered.includes(downloadUrl)
+        ? rendered
+        : rendered + renderDownloadCtaHtml(downloadUrl, group.documents.length);
       const subject = renderTemplateSafe(
         decodeTemplateBraces(template.subject || "Final Reporting Package"),
         resolve,
@@ -277,14 +327,13 @@ export async function sendFinalReportEmail(opts: {
         to,
         subject,
         html: brandEmailHtml(html, firm),
-        attachments,
       });
 
       for (const doc of group.documents) sentDocIds.add(doc.id);
       // One entry per ADDRESS, not per email sent: the audit log, the toast and
       // the "emailed to" stamp all read as "who received the package".
       for (const email of to) {
-        result.sent.push({ email, documents: attachments.length });
+        result.sent.push({ email, documents: group.documents.length });
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Could not send the email";

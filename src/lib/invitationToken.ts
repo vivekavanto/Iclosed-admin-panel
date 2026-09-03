@@ -11,7 +11,15 @@ const TOKEN_BYTES = 48;
 // clicks; 10 tolerates that while still bounding abuse.
 const MAX_CONSUMPTIONS = 10;
 
-export type InvitationType = "invite" | "recovery" | "retainer_sign";
+// 'invite' / 'recovery' are AUTH tokens — /api/auth/activate spends them for a
+// Supabase session. 'retainer_sign' and 'final_report' are scoped tokens
+// validated by their own handlers (the portal's retainer page,
+// /api/final-report/download) and must never reach the auth exchange.
+export type InvitationType =
+  | "invite"
+  | "recovery"
+  | "retainer_sign"
+  | "final_report";
 
 export type ConsumedInvitation = {
   type: InvitationType;

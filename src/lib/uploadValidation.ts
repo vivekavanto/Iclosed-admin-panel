@@ -6,7 +6,7 @@
 // actually needs, under a sane size cap. Checked server-side so a crafted client
 // can't bypass it.
 
-export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25 MB
+export const MAX_UPLOAD_BYTES = 30 * 1024 * 1024; // 30 MB
 
 // The application-level ceiling for a client-uploaded document (identification,
 // corporate docs). Enforced in three places so it can't be bypassed:
@@ -16,6 +16,42 @@ export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25 MB
 //   3. the register step, via head() on the stored blob.
 // Kept BELOW MAX_UPLOAD_BYTES, which still governs the legacy multipart path.
 export const MAX_DOCUMENT_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
+
+/**
+ * The ceiling for a post-closure FINAL REPORTING PACKAGE (doc_type
+ * "final_report").
+ *
+ * Higher than every other document on purpose: a reporting package is a scanned
+ * bundle — transfer, statement of adjustments, title policy, correspondence —
+ * and 15-25 MB is the NORMAL size, not the outlier. At the 10 MB document cap
+ * staff simply could not file one (the Blob PUT was rejected before any of our
+ * code ran, which is what surfaced as an opaque "token" error in the toast).
+ *
+ * Raising the cap is only safe because the package is no longer emailed as an
+ * ATTACHMENT — sendFinalReportEmail.ts sends a download link instead, so a
+ * 30 MB report can't produce an email that Gmail/Outlook will bounce.
+ */
+export const MAX_FINAL_REPORT_BYTES = 30 * 1024 * 1024; // 30 MB
+
+/** doc_types that upload under MAX_FINAL_REPORT_BYTES instead of the document cap. */
+const LARGE_DOC_TYPES = new Set(["final_report"]);
+
+/**
+ * The size ceiling for one doc_type. Every enforcement point (the drawer, the
+ * client-upload token route, the register step) reads it from here, so the
+ * three can't drift out of step and leave staff with a file the browser accepts
+ * and Blob rejects.
+ */
+export function maxUploadBytesForDocType(docType?: string | null): number {
+  return LARGE_DOC_TYPES.has((docType ?? "").trim().toLowerCase())
+    ? MAX_FINAL_REPORT_BYTES
+    : MAX_DOCUMENT_UPLOAD_BYTES;
+}
+
+/** "30 MB" — the same wording the validator puts in its error message. */
+export function formatMaxUploadSize(bytes: number): string {
+  return `${Math.floor(bytes / 1024 / 1024)} MB`;
+}
 
 const ALLOWED_MIME = new Set([
   "image/jpeg",

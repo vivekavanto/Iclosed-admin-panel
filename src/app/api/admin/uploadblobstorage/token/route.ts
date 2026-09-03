@@ -4,7 +4,7 @@ import supabaseAdmin from "@/lib/supabaseAdmin";
 import { blobToken } from "@/lib/blobPrivacy";
 import {
   ALLOWED_UPLOAD_CONTENT_TYPES,
-  MAX_DOCUMENT_UPLOAD_BYTES,
+  maxUploadBytesForDocType,
 } from "@/lib/uploadValidation";
 
 /**
@@ -38,9 +38,13 @@ export async function POST(request: Request) {
       token: blobToken(),
       onBeforeGenerateToken: async (_pathname, clientPayload) => {
         let leadId: string | null = null;
+        // The doc_type decides the size ceiling: a final reporting package is
+        // routinely 15-25 MB, every other document stays on the 10 MB cap.
+        let docType: string | null = null;
         try {
           const parsed = clientPayload ? JSON.parse(clientPayload) : null;
           leadId = typeof parsed?.lead_id === "string" ? parsed.lead_id : null;
+          docType = typeof parsed?.doc_type === "string" ? parsed.doc_type : null;
         } catch {
           throw new Error("Invalid upload payload.");
         }
@@ -61,8 +65,8 @@ export async function POST(request: Request) {
           // these — this is the real server-side enforcement point now that the
           // bytes don't pass through the app.
           allowedContentTypes: ALLOWED_UPLOAD_CONTENT_TYPES,
-          maximumSizeInBytes: MAX_DOCUMENT_UPLOAD_BYTES,
-          tokenPayload: JSON.stringify({ leadId }),
+          maximumSizeInBytes: maxUploadBytesForDocType(docType),
+          tokenPayload: JSON.stringify({ leadId, docType }),
           addRandomSuffix: false,
           // SEC-024: the browser uses this token immediately, so cap its life at
           // 2 minutes to shrink the replay window if it leaks.

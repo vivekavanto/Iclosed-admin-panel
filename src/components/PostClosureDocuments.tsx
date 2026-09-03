@@ -33,10 +33,15 @@ import { BLOB_ACCESS, docDownloadHref } from "@/lib/blobPrivacy";
 
 const BRAND = "#C10007";
 
-// Matches MAX_DOCUMENT_UPLOAD_BYTES on the token route, which is the real
+// Matches MAX_FINAL_REPORT_BYTES on the token route, which is the real
 // enforcement point - Blob rejects the PUT itself. Checked here too so an
 // oversized file is named as such before any bytes leave the browser.
-const MAX_REPORT_BYTES = 10 * 1024 * 1024;
+//
+// 30 MB, not the 10 MB every other document gets: a reporting package is a
+// scanned bundle and 15-25 MB is normal. The email no longer carries it as an
+// attachment (a download link goes out instead), so the size no longer decides
+// whether the client's mail server accepts the message.
+const MAX_REPORT_BYTES = 30 * 1024 * 1024;
 
 interface FinalReportDoc {
   id: string;
@@ -102,7 +107,7 @@ const PostClosureDocuments: React.FC<{ dealId: string }> = ({ dealId }) => {
       return;
     }
     if (file.size > MAX_REPORT_BYTES) {
-      showToast("The final report must be 10 MB or smaller", "error");
+      showToast("The final report must be 30 MB or smaller", "error");
       return;
     }
 
@@ -113,7 +118,12 @@ const PostClosureDocuments: React.FC<{ dealId: string }> = ({ dealId }) => {
         access: BLOB_ACCESS,
         handleUploadUrl: "/api/admin/uploadblobstorage/token",
         contentType: file.type,
-        clientPayload: JSON.stringify({ lead_id: primaryLeadId }),
+        // doc_type travels with the token request too: it is what lifts this
+        // upload's ceiling to 30 MB on the token route.
+        clientPayload: JSON.stringify({
+          lead_id: primaryLeadId,
+          doc_type: "final_report",
+        }),
       });
 
       const res = await fetch("/api/admin/uploadblobstorage", {
@@ -219,6 +229,7 @@ const PostClosureDocuments: React.FC<{ dealId: string }> = ({ dealId }) => {
           <h2 className="text-lg font-bold text-slate-900">Post Closure Documents</h2>
           <p className="mt-1 text-xs text-slate-500">
             The final reporting package, sent to the client(s) once the file has closed.
+            PDF or image, up to 30 MB.
           </p>
         </div>
 
@@ -252,8 +263,8 @@ const PostClosureDocuments: React.FC<{ dealId: string }> = ({ dealId }) => {
           <button
             type="button"
             onClick={handleEmail}
-            // Nothing to attach means nothing to send — the client would get an
-            // email promising an enclosure that isn't there.
+            // Nothing uploaded means nothing to send — the client would get an
+            // email whose download link opens an empty package.
             disabled={emailing || !hasDocuments}
             title={hasDocuments ? undefined : "Upload a final report first"}
             className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
@@ -333,8 +344,11 @@ const PostClosureDocuments: React.FC<{ dealId: string }> = ({ dealId }) => {
             .filter((r) => r.email?.trim())
             .map((r) => r.name || r.email)
             .join(", ") || "nobody — no email addresses on file"}
-          . Each client gets their own copy, addressed to them. Wording comes from the
-          &ldquo;Final Reporting Package&rdquo; email template.
+          . Each client gets their own copy, addressed to them, carrying a secure
+          download link rather than an attachment &mdash; so the package size can never
+          bounce the email. The link works for 180 days; the documents stay in the
+          client&rsquo;s portal permanently. Wording comes from the &ldquo;Final Reporting
+          Package&rdquo; email template.
         </p>
       )}
     </div>

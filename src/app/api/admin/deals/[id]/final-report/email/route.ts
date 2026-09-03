@@ -79,6 +79,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   const result = await sendFinalReportEmail({
     leads: leads ?? [],
+    dealId: id,
     recipientLeadIds: leadIds,
   });
 

@@ -46,6 +46,17 @@ export async function GET(req: NextRequest) {
 
   const { type, email, redirectTo, userData } = consumed.data;
 
+  // Only AUTH tokens may be exchanged for a session here. The other token types
+  // in this table are scoped grants validated by their own handlers — the
+  // portal's retainer page, /api/final-report/download — and are forwarded far
+  // more freely than an auth link (a client mails their reporting package link
+  // to their accountant). Spending one here would turn "open my document" into
+  // a password-reset session on that client's portal account.
+  if (type !== "invite" && type !== "recovery") {
+    console.warn(`[Activate] refused non-auth token type=${type}`);
+    return expiredRedirect("wrong_type");
+  }
+
   // At click-time the user already exists in auth.users (created at send-time
   // by sendAuthEmailViaResend's first generateLink call). We always use
   // `recovery` — for both invite and reset — because:
