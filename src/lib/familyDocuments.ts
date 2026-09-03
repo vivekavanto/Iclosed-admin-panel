@@ -51,10 +51,15 @@ import { logger } from "./logger";
  *
  * Well under Resend's ~40MB ceiling on purpose: attachments are base64-encoded
  * in transit, which inflates them by ~33%, and the HTML body plus headers ride
- * along too. 20MB of source bytes lands around 27MB on the wire, leaving room
- * to spare.
+ * along too. 25MB of source bytes lands around 33MB on the wire.
+ *
+ * Raised from 20MB on 2026-09-03: a Sale file with several photo IDs was
+ * spending the budget on higher-priority documents and linking the
+ * identification scans, which are the ones a clerk most needs in hand. The
+ * ceiling is the real constraint here, not the packing order — see the note on
+ * dedupe() about why documents cannot be sorted by size.
  */
-export const ATTACHMENT_BUDGET_BYTES = 20 * 1024 * 1024;
+export const ATTACHMENT_BUDGET_BYTES = 25 * 1024 * 1024;
 
 /** Refuse to even try a single file bigger than this — it would eat the budget. */
 const MAX_SINGLE_FILE_BYTES = 10 * 1024 * 1024;
@@ -231,6 +236,14 @@ function dedupe(docs: CandidateDoc[]): CandidateDoc[] {
   }
 
   const seenNames = new Map<string, number>();
+  // Priority is the ONLY sort key available here, and deliberately so: no store
+  // records a file's size (there is no file_size column on any of them), so a
+  // byte count exists only after downloadDoc() has already fetched the bytes.
+  // Sorting smallest-first would therefore mean downloading every document on
+  // the file before deciding what to attach — and it would optimise for the
+  // NUMBER of attachments rather than their importance, which is the wrong
+  // trade for a clerk who needs the identification more than three small task
+  // uploads. Raise ATTACHMENT_BUDGET_BYTES instead when files start spilling.
   return Array.from(byUrl.values())
     .sort((a, b) => a.priority - b.priority)
     .map((doc) => {
