@@ -321,13 +321,26 @@ export async function sendFinalReportEmail(opts: {
         { escape: false },
       );
 
-      await resend.emails.send({
+      // The SDK RETURNS { data, error } — it does not throw on an API-level
+      // rejection. Awaiting it and ignoring the result is what made a refused
+      // send report as a successful one: the documents were stamped "emailed",
+      // the toast said sent, and nothing left Resend. The commonest rejection
+      // here is a 403 for an unverified sender domain — see emailIdentity.ts,
+      // where a firm with no RESEND_FROM_EMAIL_* override falls back to its
+      // hardcoded address, which has to be a verified domain in Resend.
+      const { error: sendError } = await resend.emails.send({
         from: fromEmail,
         replyTo: emailReplyTo(firm),
         to,
         subject,
         html: brandEmailHtml(html, firm),
       });
+      if (sendError) {
+        // Thrown so the catch below records it per recipient, exactly like a
+        // network failure. The message is Resend's own and names the cause
+        // ("the X domain is not verified"), so it is worth showing the admin.
+        throw new Error(sendError.message || "Resend rejected the send");
+      }
 
       for (const doc of group.documents) sentDocIds.add(doc.id);
       // One entry per ADDRESS, not per email sent: the audit log, the toast and
