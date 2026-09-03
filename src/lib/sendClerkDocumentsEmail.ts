@@ -32,6 +32,21 @@
 //                     transferred once and the two clerks can see each other on
 //                     the thread.
 //
+// CLERK_ALWAYS_EMAIL rides along on top of whichever of those resolved — the
+// firm wants one supervising address on every file regardless of side. It is
+// added only when a side ALREADY resolved, so it deliberately does NOT rescue a
+// file whose type we cannot route (Refinance, blank): those still return [] and
+// the caller still refuses to send rather than quietly mailing a partial list.
+//
+// CLERK_DOCUMENTS_EMAIL overrides all of that when it is set: it IS the
+// recipient list, verbatim, for every file regardless of type. It exists
+// because the firm routes this email to one shared inbox in production while
+// dev mails a single tester, and because CLERK_PURCHASE_EMAIL /
+// CLERK_SALE_EMAIL are SHARED with the deposit-proof email (see
+// sendDepositProofEmail.ts) - widening those to retarget this email would
+// silently change who is told a client's closing funds arrived, which nobody
+// asked for. Same override shape, and same reason, as DEPOSIT_PROOF_EMAIL.
+//
 // Documents are NOT side-scoped on a P&S file. Both clerks get everything: a
 // purchase clerk routinely needs the sale-side ID and vice versa, and guessing
 // wrong would silently withhold a document someone is waiting on. Splitting by
@@ -64,8 +79,18 @@ import { logger } from "./logger";
 import { withRetry } from "./retry";
 
 /** Firm defaults; override per-environment without a deploy. */
-const DEFAULT_PURCHASE_CLERK = "purchase@navawilson.law";
-const DEFAULT_SALE_CLERK = "sale@navawilson.law";
+const DEFAULT_PURCHASE_CLERK = "iclosed.purchase@navawilson.law";
+const DEFAULT_SALE_CLERK = "iclosed.sale@navawilson.law";
+
+/**
+ * On every routable file, whichever side it is. Override with CLERK_ALWAYS_EMAIL
+ * (comma-separated); set it to "off" to drop it.
+ *
+ * Kept separate from the two side lists rather than baked into both, so an
+ * environment that overrides CLERK_PURCHASE_EMAIL / CLERK_SALE_EMAIL does not
+ * silently lose it.
+ */
+const DEFAULT_ALWAYS_CLERK = "aliya@navawilson.law";
 
 /**
  * email_templates row that owns this email's wording. Matched with ILIKE
@@ -124,14 +149,41 @@ export function clerkRecipientsForType(rawType: string | null | undefined): stri
   const purchase = splitAddresses(process.env.CLERK_PURCHASE_EMAIL || DEFAULT_PURCHASE_CLERK);
   const sale = splitAddresses(process.env.CLERK_SALE_EMAIL || DEFAULT_SALE_CLERK);
 
+  const configuredAlways = (process.env.CLERK_ALWAYS_EMAIL ?? DEFAULT_ALWAYS_CLERK).trim();
+  const always =
+    !configuredAlways || configuredAlways.toLowerCase() === "off"
+      ? []
+      : splitAddresses(configuredAlways);
+
   const lt = (rawType ?? "").toLowerCase().trim();
   const hasPurchase = lt.includes("purchase");
   const hasSale = lt.includes("sale");
 
-  if (hasPurchase && hasSale) return Array.from(new Set([...purchase, ...sale]));
-  if (hasSale) return sale;
-  if (hasPurchase) return purchase;
+  // The Set dedupes an address that appears on both sides AND in `always`, so a
+  // Purchase & Sale file still mails each person once.
+  if (hasPurchase && hasSale) return Array.from(new Set([...purchase, ...sale, ...always]));
+  if (hasSale) return Array.from(new Set([...sale, ...always]));
+  if (hasPurchase) return Array.from(new Set([...purchase, ...always]));
   return [];
+}
+
+/**
+ * The CLERK_DOCUMENTS_EMAIL override, or null when it is unset.
+ *
+ * Comma-separated, and deliberately NOT merged with the per-type lists: the
+ * point of it is to say "these addresses and no others" for an environment.
+ * Returning null (rather than []) for a blank value is what lets the caller
+ * tell "not configured" from "configured as this list", so an unset variable
+ * falls through to clerkRecipientsForType() untouched.
+ *
+ * Read ONLY by this email. clerkRecipientsForType() stays as it was, so the
+ * deposit-proof email that shares it is unaffected.
+ */
+export function clerkDocumentsOverride(): string[] | null {
+  const raw = (process.env.CLERK_DOCUMENTS_EMAIL ?? "").trim();
+  if (!raw) return null;
+  const list = splitAddresses(raw);
+  return list.length > 0 ? list : null;
 }
 
 function escapeHtml(s: string): string {
@@ -359,7 +411,10 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
     : { data: null };
 
   const rawType = primaryLead?.lead_type ?? deal.type;
-  const recipients = clerkRecipientsForType(rawType);
+  // An override also bypasses the "which side is this file" gate below, which
+  // is the point: a type we cannot route (Refinance, blank) has an inbox once
+  // one is named outright.
+  const recipients = clerkDocumentsOverride() ?? clerkRecipientsForType(rawType);
   if (recipients.length === 0) {
     return {
       ...empty,
