@@ -316,6 +316,23 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
           }
         }
 
+        // Seed the personal (not employer) phone from the lead's intake number
+        // when there is no saved response yet — mirrors the portal's prefill.
+        const leadPhone = String(dealData?.lead_phone ?? "").trim();
+        if (leadPhone) {
+          const phoneField = loadedFields.find((f) => {
+            const l = (f.label ?? "").toLowerCase();
+            return (
+              (f.field_type === "phone" || l.includes("phone")) &&
+              !l.includes("employer") &&
+              !l.includes("business")
+            );
+          });
+          if (phoneField && !(preValues[phoneField.id] ?? "").trim()) {
+            preValues[phoneField.id] = formatPhone(leadPhone);
+          }
+        }
+
         setTaskId(piTask.id);
         setFields(loadedFields);
         setExisting(existingByField);
