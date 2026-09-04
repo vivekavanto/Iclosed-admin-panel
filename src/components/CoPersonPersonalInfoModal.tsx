@@ -2,6 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { X, Loader2, AlertCircle, CheckCircle2, UserCog } from "lucide-react";
+import Button from "@/components/ui/Button";
 import AddressAutocomplete from "./shared/AddressAutocomplete";
 import {
   formatPostalCode,
@@ -194,7 +195,9 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
   const [values, setValues] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const [savingDraft, setSavingDraft] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [draftSaved, setDraftSaved] = useState(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
   // Full Name. NOT a task_form_fields row — it lives on the person's
   // lead/client record, so it loads from the deal payload and saves through
@@ -222,6 +225,7 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
     setLoadError(null);
     setGlobalError(null);
     setSaved(false);
+    setDraftSaved(false);
     setErrors({});
     setFields([]);
     setValues({});
@@ -424,11 +428,12 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
     return Object.keys(next).length === 0;
   }
 
-  async function handleSave() {
+  // draft: save whatever is typed (no validation) without completing the task.
+  async function handleSave(draft = false) {
     if (!taskId) return;
-    if (!validate()) return;
+    if (!draft && !validate()) return;
 
-    setSaving(true);
+    (draft ? setSavingDraft : setSaving)(true);
     setGlobalError(null);
     try {
       // Full Name first: it is not a task response, so it goes through the leads
@@ -500,25 +505,26 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
         }
       }
 
-      // Filling and saving the personal-information form completes it (mirrors
-      // the customer portal's auto-complete on submit and the admin Edit Task
-      // modal behaviour).
-      const taskRes = await fetch("/api/admin/tasks", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: taskId,
-          status: "Completed",
-          completed: true,
-          completed_at: new Date().toISOString(),
-        }),
-      });
-      const taskJson = await taskRes.json();
-      if (!taskRes.ok || !taskJson.success) {
-        throw new Error(taskJson.error || "Failed to complete task");
+      if (!draft) {
+        // Submitting the personal-information form completes it (mirrors the
+        // customer portal's auto-complete on submit).
+        const taskRes = await fetch("/api/admin/tasks", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: taskId,
+            status: "Completed",
+            completed: true,
+            completed_at: new Date().toISOString(),
+          }),
+        });
+        const taskJson = await taskRes.json();
+        if (!taskRes.ok || !taskJson.success) {
+          throw new Error(taskJson.error || "Failed to complete task");
+        }
       }
 
-      setSaved(true);
+      (draft ? setDraftSaved : setSaved)(true);
       onSaved();
       // Embedded in the accordion: stay open — the parent refreshes status and
       // advances to the next incomplete person. Standalone modal: auto-close.
@@ -526,7 +532,7 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
     } catch (err) {
       setGlobalError(err instanceof Error ? err.message : "Could not save. Please try again.");
     } finally {
-      setSaving(false);
+      (draft ? setSavingDraft : setSaving)(false);
     }
   }
 
@@ -594,13 +600,17 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
             </div>
           )}
 
-          {!loading && !loadError && saved && (
+          {!loading && !loadError && (saved || draftSaved) && (
             <div className="flex items-center gap-3 rounded-xl bg-green-50 border border-green-200 px-4 py-4">
               <CheckCircle2 size={20} className="text-green-600 flex-shrink-0" strokeWidth={2} />
               <div>
-                <p className="text-sm font-bold text-green-700">Saved successfully!</p>
+                <p className="text-sm font-bold text-green-700">
+                  {draftSaved ? "Draft saved!" : "Saved successfully!"}
+                </p>
                 <p className="text-xs text-green-600 mt-0.5">
-                  The personal information has been recorded.
+                  {draftSaved
+                    ? "You can come back later to finish."
+                    : "The personal information has been recorded."}
                 </p>
               </div>
             </div>
@@ -609,7 +619,7 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
           {/* Full Name — rendered above the template fields, mirroring where the
               customer portal shows it. It is not a task_form_fields row, so it
               is not part of `fields` and saves separately (see handleSave). */}
-          {!loading && !loadError && !saved && (
+          {!loading && !loadError && !saved && !draftSaved && (
             <div>
               <label className="text-sm font-semibold text-gray-800 mb-2 block">
                 Full Name
@@ -639,13 +649,13 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
             </div>
           )}
 
-          {!loading && !loadError && !saved && fields.length === 0 && (
+          {!loading && !loadError && !saved && !draftSaved && fields.length === 0 && (
             <div className="flex flex-col items-center justify-center py-12 gap-2 text-center">
               <p className="text-sm text-gray-500 font-medium">No other form fields to fill.</p>
             </div>
           )}
 
-          {!loading && !loadError && !saved &&
+          {!loading && !loadError && !saved && !draftSaved &&
             fields.map((field) => {
               const hasError = !!errors[field.id];
               const labelEl = (
@@ -788,27 +798,28 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
         </div>
 
         {/* Footer */}
-        {!loading && !loadError && !saved && fields.length > 0 && (
-          <div className="flex justify-end gap-2 px-6 py-4 border-t border-gray-100">
-            {!embedded && (
-              <button
-                type="button"
-                onClick={() => !saving && onClose()}
-                disabled={saving}
-                className="px-4 py-2.5 rounded-lg text-sm font-semibold border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-50 cursor-pointer"
-              >
-                Cancel
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={handleSave}
+        {!loading && !loadError && !saved && !draftSaved && fields.length > 0 && (
+          <div className="px-6 py-4 border-t border-gray-100 flex flex-col-reverse sm:flex-row gap-3">
+            <Button
+              variant="secondary"
+              fullWidth
+              onClick={() => handleSave(true)}
               disabled={saving}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold bg-[#C10007] text-white hover:bg-[#a30006] disabled:opacity-50 cursor-pointer"
+              loading={savingDraft}
+              className="sm:flex-1"
             >
-              {saving && <Loader2 size={15} className="animate-spin" />}
-              Save information
-            </button>
+              Save as Draft
+            </Button>
+            <Button
+              variant="primary"
+              fullWidth
+              onClick={() => handleSave(false)}
+              disabled={savingDraft}
+              loading={saving}
+              className="sm:flex-1"
+            >
+              Submit
+            </Button>
           </div>
         )}
       </div>
