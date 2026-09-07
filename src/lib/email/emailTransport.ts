@@ -89,10 +89,31 @@ function envSet(raw: string | undefined): Set<string> {
  */
 function smtpEnabledFor(firm: FirmKey | null, label: SendLabel): boolean {
   if (!firm) return false;
+
   const firms = envSet(process.env.EMAIL_SMTP_FIRMS);
-  if (!firms.has(firm)) return false;
+  if (!firms.has(firm) && !isWildcard(firms)) return false;
+
   const sends = envSet(process.env.EMAIL_SMTP_SENDS);
-  return sends.has(label.toLowerCase());
+  return isWildcard(sends) || sends.has(label.toLowerCase());
+}
+
+/**
+ * `all` or `*` — every send (or every firm) rather than a hand-kept list.
+ *
+ * The per-item allowlist exists so a rollout can enable ONE send at a time and
+ * watch it. Once a firm is known-good, maintaining that list is just friction:
+ * a send added later would silently keep using Resend until someone remembered
+ * to add its label, which is its own quiet failure. `all` says "this firm's mail
+ * goes over SMTP, whatever we add next".
+ *
+ * Note this only ever widens what an ALREADY-ALLOWLISTED firm sends. It cannot
+ * pull in the firm-agnostic senders (the clerk package, the all-tasks alert,
+ * partner codes): those pass `firm: null` in code and return false above, so no
+ * environment variable can route them over SMTP. That is deliberate — the first
+ * two carry up to 25 MB of attachments.
+ */
+function isWildcard(values: Set<string>): boolean {
+  return values.has("all") || values.has("*");
 }
 
 /**

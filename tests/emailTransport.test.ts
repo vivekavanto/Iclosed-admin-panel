@@ -66,9 +66,12 @@ function smtpEnabledFor(
         .map((s) => s.trim().toLowerCase())
         .filter(Boolean),
     );
+  const wild = (v: Set<string>) => v.has("all") || v.has("*");
   if (!firm) return false;
-  if (!set(cfg.firms).has(firm)) return false;
-  return set(cfg.sends).has(label.toLowerCase());
+  const firms = set(cfg.firms);
+  if (!firms.has(firm) && !wild(firms)) return false;
+  const sends = set(cfg.sends);
+  return wild(sends) || sends.has(label.toLowerCase());
 }
 
 // N — the property that matters most: never the wrong provider.
@@ -105,6 +108,36 @@ test("SMTP requires BOTH the firm and the send to be allowlisted", () => {
   assert.equal(smtpEnabledFor("navawilson", "deposit-task", cfg), true);
   assert.equal(smtpEnabledFor("navawilson", "closing-estimate", cfg), true);
   assert.equal(smtpEnabledFor("navawilson", "welcome", cfg), false);
+});
+
+// The "I want every email on SMTP" case — a hand-kept label list is friction
+// once a firm is known-good, and a send added later would silently stay on
+// Resend until someone remembered to list it.
+test("EMAIL_SMTP_SENDS=all covers every send for an allowlisted firm", () => {
+  const cfg = { firms: "navawilson", sends: "all" };
+  for (const label of ["welcome", "final-report", "auth", "milestone", "anything-new"]) {
+    assert.equal(smtpEnabledFor("navawilson", label, cfg), true, label);
+  }
+  assert.equal(smtpEnabledFor("navawilson", "welcome", { firms: "navawilson", sends: "*" }), true);
+});
+
+// The wildcard must WIDEN an allowlisted firm, never add a new one.
+test("EMAIL_SMTP_SENDS=all does not pull in a firm that is not allowlisted", () => {
+  const cfg = { firms: "navawilson", sends: "all" };
+  assert.equal(smtpEnabledFor("iclosed", "welcome", cfg), false);
+  assert.equal(smtpEnabledFor("iclosed", "final-report", cfg), false);
+});
+
+// Firm-agnostic sends pass firm: null in code, so no env value can reach them.
+test("no wildcard can route a firm-agnostic send over SMTP", () => {
+  for (const cfg of [
+    { firms: "all", sends: "all" },
+    { firms: "*", sends: "*" },
+  ]) {
+    assert.equal(smtpEnabledFor(null, "clerk-documents", cfg), false);
+    assert.equal(smtpEnabledFor(null, "all-tasks-complete", cfg), false);
+    assert.equal(smtpEnabledFor(null, "partner-code", cfg), false);
+  }
 });
 
 test("allowlist parsing tolerates spacing and casing", () => {
