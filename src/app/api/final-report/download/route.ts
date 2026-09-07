@@ -12,14 +12,23 @@ import { verifyFinalReportToken } from "@/lib/finalReportLink";
 import { FINAL_REPORT_DOC_TYPE } from "@/lib/sendFinalReportEmail";
 
 /**
- * GET /api/final-report/download?token=...[&doc=<uuid>]
+ * GET /api/final-report/download?token=...[&doc=<uuid>][&dl=1]
  *
  * The client-facing end of the final reporting package "magic link" — the link
  * the closing email carries INSTEAD of a 15-25 MB attachment no mail server
  * would accept (see finalReportLink.ts for why).
  *
- *   ?token=...            a small page listing the documents this token covers
- *   ?token=...&doc=<id>   the file itself
+ *   ?token=...            the document itself when the link covers exactly one
+ *                         (the usual case); otherwise a page listing them
+ *   ?token=...&doc=<id>   that one file
+ *   &dl=1                 save it instead of rendering it in the browser
+ *
+ * IT OPENS, IT DOES NOT SAVE. The email button used to land on a listing page
+ * that, for a single-document package, held nothing but a second Download
+ * button — an interstitial rather than a step. A link covering one document now
+ * serves that document straight away, and serves it INLINE, so the report opens
+ * in the browser PDF viewer where the client can read it before deciding to keep
+ * it. "&dl=1" is the explicit save variant the listing page uses.
  *
  * PUBLIC BY CONSTRUCTION: it sits outside /api/admin, so src/middleware.ts
  * never runs on it — the recipient has no account and no session, which is the
@@ -36,6 +45,25 @@ function portalUrl(): string {
     process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ?? "https://dev.iclosed.ca"
   ).replace(/\/+$/, "");
 }
+
+/**
+ * Content types we are willing to render INLINE.
+ *
+ * An allowlist rather than a blocklist because the private-blob branch below
+ * streams the file from OUR OWN origin: anything scriptable served inline there
+ * (HTML, SVG) would run as us. uploadValidation.ts already refuses those on the
+ * way in — this is the second lock, for rows that predate it. Anything not on
+ * the list is still delivered, just as a download.
+ */
+const INLINE_SAFE_TYPES = new Set([
+  "application/pdf",
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "text/plain",
+]);
 
 /** The one page shell both the listing and every error state render into. */
 function page(opts: {
@@ -72,6 +100,11 @@ function page(opts: {
     display: inline-block; margin-top: 8px; background: #C10007; color: #ffffff;
     text-decoration: none; padding: 9px 18px; border-radius: 8px; font-weight: 600;
   }
+  a.save {
+    display: inline-block; margin-left: 14px; color: #C10007; font-size: 13px;
+    font-weight: 600; text-decoration: none;
+  }
+  a.save:hover { text-decoration: underline; }
   .foot { margin-top: 28px; font-size: 13px; color: #64748b; }
   img.logo { display: block; margin-bottom: 24px; }
 </style>
@@ -102,6 +135,9 @@ export async function GET(req: Request) {
   const origin = url.origin;
   const token = url.searchParams.get("token") ?? "";
   const docId = url.searchParams.get("doc");
+  // The listing page's save links carry this; the email button does not — so the
+  // email opens the report, and the page can still download it.
+  const forceDownload = url.searchParams.get("dl") === "1";
 
   // Default branding for the states where no lead is resolved yet (bad token).
   const defaultFirm = getFirm(null);
@@ -173,16 +209,21 @@ export async function GET(req: Request) {
   const firm = getFirm(await getLeadFirmKey(scope.leadIds[0] ?? null));
 
   // ── One document: serve the bytes ──
-  if (docId) {
+  // A link that covers exactly ONE document IS that document: a page whose
+  // entire content is a single button is an interstitial, not a step. The
+  // listing below is for the genuinely multi-document package, where the client
+  // does have something to choose between.
+  const targetId = docId ?? (available.length === 1 ? available[0].id : null);
+  if (targetId) {
     // The token's own list is the authorisation — never the query string alone.
-    if (!isUuid(docId) || !scope.docIds.includes(docId)) {
+    if (!isUuid(targetId) || !scope.docIds.includes(targetId)) {
       return errorPage(
         "This link is no longer valid",
         "That document is not part of this package.",
         403,
       );
     }
-    const doc = available.find((d) => d.id === docId);
+    const doc = available.find((d) => d.id === targetId);
     if (!doc) {
       return errorPage(
         "This package is no longer available",
@@ -195,12 +236,14 @@ export async function GET(req: Request) {
     const filename = (doc.file_name || "final-report.pdf").replace(/["\\\r\n]/g, "");
 
     // A public blob is already a CDN-served file — hand the browser straight to
-    // it (with Vercel Blob's ?download=1 so it saves rather than renders), so a
-    // 30 MB package never streams through this function. Only a private blob,
-    // which the browser cannot read on its own, is proxied.
+    // it, so a 30 MB package never streams through this function. Blob serves it
+    // inline by default, which is exactly what we want here; its ?download=1 is
+    // added ONLY for the explicit save link. Only a private blob, which the
+    // browser cannot read on its own, is proxied.
     if (!isPrivateBlobUrl(fileUrl)) {
       const direct = new URL(fileUrl);
-      direct.searchParams.set("download", "1");
+      if (forceDownload) direct.searchParams.set("download", "1");
+      else direct.searchParams.delete("download");
       return NextResponse.redirect(direct.toString(), 302);
     }
 
@@ -217,14 +260,24 @@ export async function GET(req: Request) {
         );
       }
       const headers = new Headers();
-      headers.set(
-        "Content-Type",
-        result.blob?.contentType || "application/octet-stream",
-      );
+      const contentType = result.blob?.contentType || "application/octet-stream";
+      headers.set("Content-Type", contentType);
       if (result.blob?.size != null) {
         headers.set("Content-Length", String(result.blob.size));
       }
-      headers.set("Content-Disposition", `attachment; filename="${filename}"`);
+      // Inline so the report renders in the browser, the same as the public
+      // branch above — unless the save link was used, or the type is not one we
+      // will render from our own origin (see INLINE_SAFE_TYPES).
+      const inlineSafe = INLINE_SAFE_TYPES.has(
+        contentType.split(";")[0].trim().toLowerCase(),
+      );
+      const disposition = !forceDownload && inlineSafe ? "inline" : "attachment";
+      headers.set(
+        "Content-Disposition",
+        `${disposition}; filename="${filename}"`,
+      );
+      // Never let a browser render an unexpected type as something else.
+      headers.set("X-Content-Type-Options", "nosniff");
       headers.set("Cache-Control", "private, no-store");
       return new Response(result.stream as ReadableStream, { status: 200, headers });
     } catch (err) {
@@ -237,7 +290,10 @@ export async function GET(req: Request) {
     }
   }
 
-  // ── No document named: list what this link covers ──
+  // ── Several documents: list what this link covers ──
+  // Only reached by a multi-document package now. Each row opens the file in
+  // the browser (target=_blank so the client keeps this list to come back to),
+  // with the save link beside it for anyone who wants the file on disk.
   const items = available
     .map((d) => {
       const href = `${origin}/api/final-report/download?token=${encodeURIComponent(
@@ -245,7 +301,8 @@ export async function GET(req: Request) {
       )}&doc=${encodeURIComponent(d.id)}`;
       return (
         `<li><div class="name">${escapeHtml(d.file_name || "Final report")}</div>` +
-        `<a class="btn" href="${escapeHtml(href)}">Download</a></li>`
+        `<a class="btn" href="${escapeHtml(href)}" target="_blank" rel="noopener">Open</a>` +
+        `<a class="save" href="${escapeHtml(href)}&amp;dl=1">Download</a></li>`
       );
     })
     .join("");
@@ -255,11 +312,8 @@ export async function GET(req: Request) {
     logoSrc: `${origin}${firm.logoPath}`,
     heading: "Your final reporting package",
     body:
-      `<p>Your closing is complete. ${
-        available.length === 1
-          ? "The document below is your final reporting package."
-          : `The ${available.length} documents below make up your final reporting package.`
-      } Please save ${available.length === 1 ? "it" : "them"} for your records.</p>` +
+      `<p>Your closing is complete. The ${available.length} documents below make up ` +
+      `your final reporting package. Please save them for your records.</p>` +
       `<ul>${items}</ul>` +
       `<p class="foot">These documents are also in the Documents section of your ` +
       `<a href="${escapeHtml(portalUrl())}/login">client portal</a>, where they stay available permanently.</p>`,
