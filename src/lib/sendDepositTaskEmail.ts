@@ -27,7 +27,7 @@ import { get } from "@vercel/blob";
 import supabaseAdmin from "./supabaseAdmin";
 import { logger } from "./logger";
 import { isPrivateBlobUrl, blobTokenForUrl } from "./blobPrivacy";
-import { emailFrom, emailReplyTo } from "./emailIdentity";
+import { sendEmail } from "./email/emailTransport";
 import { getLeadFirmKey } from "./leadFirm";
 import { brandEmailHtml } from "./emailBrand";
 import { formatCurrency } from "./formatCurrency";
@@ -287,24 +287,27 @@ export async function sendDepositTaskEmail(opts: {
     );
   }
 
-  try {
-    // `ordered` is primary-first, and the firm is a property of the file, so
-    // any lead in it resolves to the same answer.
-    const firm = await getLeadFirmKey(ordered[0]?.id ?? null);
-    const { Resend } = await import("resend");
-    const resend = new Resend(process.env.RESEND_API_KEY);
-    await resend.emails.send({
-      from: emailFrom(firm),
-      replyTo: emailReplyTo(firm),
+  // `ordered` is primary-first, and the firm is a property of the file, so
+  // any lead in it resolves to the same answer.
+  const firm = await getLeadFirmKey(ordered[0]?.id ?? null);
+
+  // This used to await resend.emails.send() and discard its { data, error },
+  // then `return { sent: to }` unconditionally — so a refused send was reported
+  // as delivered, with the statement and transfer instructions never arriving.
+  const result = await sendEmail(
+    {
       to,
       subject,
       html: brandEmailHtml(html, firm),
       ...(attachments.length > 0 ? { attachments } : {}),
-    });
-    return { sent: to };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Could not send the email";
-    logger.error(`[DepositTask] send failed for ${to.join(", ")}:`, message);
-    return { sent: [], error: message };
+    },
+    { firm, label: "deposit-task" },
+  );
+
+  if (!result.ok) {
+    logger.error(`[DepositTask] send failed for ${to.length} recipient(s): ${result.error}`);
+    return { sent: [], error: result.error };
   }
+
+  return { sent: to };
 }

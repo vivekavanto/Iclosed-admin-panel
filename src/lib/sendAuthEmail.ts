@@ -1,6 +1,6 @@
 
 
-import { Resend } from "resend";
+import { sendEmail } from "./email/emailTransport";
 import supabaseAdmin from "./supabaseAdmin";
 import { createInvitationToken } from "./invitationToken";
 import {
@@ -13,7 +13,7 @@ import {
   escapeHtml,
   type TemplateValue,
 } from "./renderEmailTemplate";
-import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "./emailIdentity";
+import { normalizeRecipientEmail } from "./emailIdentity";
 import { getLeadFirmKey } from "./leadFirm";
 import { brandEmailHtml } from "./emailBrand";
 
@@ -430,19 +430,18 @@ export async function sendAuthEmailViaResend(opts: {
   // from — getLeadFirmKey then returns the default, which is the branding this
   // email had before firms existed. Callers that know the lead should pass it.
   const firm = await getLeadFirmKey(lead?.id ?? leadId ?? null);
-  const resend = new Resend(process.env.RESEND_API_KEY);
-  const fromEmail = emailFrom(firm);
 
-  const { error: sendError } = await resend.emails.send({
-    from: fromEmail,
-    replyTo: emailReplyTo(firm),
-    to: [email],
-    subject,
-    html: brandEmailHtml(bodyHtml, firm),
-  });
+  const sendResult = await sendEmail(
+    {
+      to: [email],
+      subject,
+      html: brandEmailHtml(bodyHtml, firm),
+    },
+    { firm, label: "auth" },
+  );
 
-  if (sendError) {
-    return { success: false, error: `Resend send failed: ${sendError.message}` };
+  if (!sendResult.ok) {
+    return { success: false, error: `Email send failed: ${sendResult.error}` };
   }
 
   return { success: true, userId: user?.id, actionLink };

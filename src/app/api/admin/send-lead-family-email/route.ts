@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { Resend } from "resend";
+import { sendEmail } from "@/lib/email/emailTransport";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { sendWelcomeEmail } from "@/lib/sendWelcomeEmail";
 import { sendAuthEmailViaResend } from "@/lib/sendAuthEmail";
@@ -7,7 +7,7 @@ import { formatLeadTypeLabel, buildLeadAddressPartsForEmail } from "@/lib/leadEm
 import { guardServiceRequest } from "@/lib/verifyServiceSignature";
 import { get } from "@vercel/blob";
 import { isPrivateBlobUrl, blobTokenForUrl } from "@/lib/blobPrivacy";
-import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "@/lib/emailIdentity";
+import { normalizeRecipientEmail } from "@/lib/emailIdentity";
 import { getLeadFirmKey } from "@/lib/leadFirm";
 import { brandEmailHtml } from "@/lib/emailBrand";
 import type { FirmKey } from "@/lib/firms";
@@ -90,7 +90,6 @@ async function sendRetainerEmail(
     co_person_role: string | null;
   },
   template: { name: string | null; subject: string | null; body: string; shared_with_agent?: boolean | null },
-  resend: Resend,
   firm: FirmKey,
 ): Promise<RetainerSendResult> {
   if (!lead.email) {
@@ -342,25 +341,26 @@ async function sendRetainerEmail(
     if (list.length > 0) cc = list;
   }
 
-  const { data: sendResult, error: sendError } = await resend.emails.send({
-    from: emailFrom(firm),
-    replyTo: emailReplyTo(firm),
-    to: [normalizeRecipientEmail(lead.email)],
-    ...(cc ? { cc } : {}),
-    subject: processedSubject,
-    html: brandEmailHtml(processedBody, firm),
-    attachments,
-  });
+  const sendResult = await sendEmail(
+    {
+      to: [normalizeRecipientEmail(lead.email)],
+      ...(cc ? { cc } : {}),
+      subject: processedSubject,
+      html: brandEmailHtml(processedBody, firm),
+      ...(attachments.length > 0 ? { attachments } : {}),
+    },
+    { firm, label: "retainer-resend" },
+  );
 
-  if (sendError) {
-    return { success: false, error: sendError.message };
+  if (!sendResult.ok) {
+    return { success: false, error: sendResult.error };
   }
 
   console.log(
-    `[Retainer Email] Sent to ${lead.email} with ${attachments.length} PDF attachment(s), id=${sendResult?.id}`,
+    `[Retainer Email] Sent to ${lead.email} with ${attachments.length} PDF attachment(s), id=${sendResult.id}`,
   );
 
-  return { success: true, emailId: sendResult?.id, pdfCount: attachments.length };
+  return { success: true, emailId: sendResult.id, pdfCount: attachments.length };
 }
 
 // Classify an email_templates row. We look at both the body and the name so a
@@ -563,19 +563,6 @@ export async function POST(req: NextRequest) {
       `[Family Email] template_id=${template_id ?? "(none)"} name="${templateName ?? "(none)"}" authType=${authType ?? "welcome"} retainer=${retainerMode} recipients=${recipients.length}`,
     );
 
-    // Lazy Resend client — only initialized when the retainer path actually
-    // needs it. Skips the env-var requirement for non-retainer sends.
-    let resendClient: Resend | null = null;
-    if (retainerMode) {
-      if (!process.env.RESEND_API_KEY) {
-        return NextResponse.json(
-          { success: false, error: "Email service not configured (missing RESEND_API_KEY)" },
-          { status: 500 },
-        );
-      }
-      resendClient = new Resend(process.env.RESEND_API_KEY);
-    }
-
     // Customer-portal redirect URL — same pattern used by the auto-invite in
     // convertLead.ts so admins and auto-flows land on the same set-password
     // page.
@@ -651,7 +638,7 @@ export async function POST(req: NextRequest) {
         continue;
       }
 
-      if (retainerMode && templateRow && resendClient) {
+      if (retainerMode && templateRow) {
         // ── Retainer template: mirror the iclosed_web auto-flow ─────────────
         // Fetches signed retainer PDFs from lead_corporate_docs and attaches
         // them. If the client hasn't signed yet, this recipient fails with a
@@ -681,7 +668,6 @@ export async function POST(req: NextRequest) {
         const res = await sendRetainerEmail(
           fullLead,
           templateRow,
-          resendClient,
           // Resolved per recipient rather than once for the request: they are
           // all on one file, so this is the same answer every time, and it
           // stays right if that ever stops being true.

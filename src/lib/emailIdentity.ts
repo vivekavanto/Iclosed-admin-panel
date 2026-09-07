@@ -37,7 +37,7 @@
  * — which is every current deploy — silently undoing the whole feature.
  */
 
-import { getFirm, type FirmKey } from "./firms";
+import { getFirm, type FirmKey } from "./firms.ts";
 
 export const DEFAULT_FROM_EMAIL = "iClosed <support@iclosed.ca>";
 export const DEFAULT_REPLY_TO_EMAIL = "support@iclosed.ca";

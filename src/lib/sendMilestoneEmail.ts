@@ -1,9 +1,9 @@
-import { Resend } from "resend";
+import { sendEmail } from "./email/emailTransport";
 import supabaseAdmin from "./supabaseAdmin";
 import { logger } from "./logger";
 import { getFamilyDealIds } from "./familyDeals";
 import { formatLeadTypeLabel, buildLeadAddressForEmail } from "./leadEmailAddress";
-import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "./emailIdentity";
+import { normalizeRecipientEmail } from "./emailIdentity";
 import { getDealFirmKey } from "./leadFirm";
 import { brandEmailHtml } from "./emailBrand";
 import type { FirmKey } from "./firms";
@@ -215,14 +215,17 @@ export async function sendCombinedMilestoneEmail(opts: {
     recipients: MilestoneRecipient[];
     milestone: { title?: string | null; status?: string | null };
     template: { name?: string | null; subject?: string | null; body: string; shared_with_agent?: boolean | null };
-    resend: Resend;
     /** The firm the file is retained under — sets the sender and the lockup. */
     firm: FirmKey;
     milestoneSide: Side | null;
     /** Conversion passes the just-generated file number; the deal row may not carry it yet. */
     fileNumberOverride?: string | null;
 }): Promise<MilestoneSendResult> {
-    const { recipients, milestone, template, resend, firm, milestoneSide } = opts;
+    // The Resend client used to be injected by the caller. It no longer is:
+    // which transport carries this email is a property of the FILE'S FIRM, not
+    // of whoever happens to be calling, and letting a caller supply the client
+    // would let it pick a provider the firm did not choose.
+    const { recipients, milestone, template, firm, milestoneSide } = opts;
 
     if (recipients.length === 0) {
         return { success: true, recipients: [], cc: [] };
@@ -448,23 +451,24 @@ export async function sendCombinedMilestoneEmail(opts: {
         const to = recipients.map((r) => normalizeRecipientEmail(r.email)).filter(Boolean);
         const cc = await resolveAgentCc(template, recipients, to);
 
-        const { data: sendResult, error: sendError } = await resend.emails.send({
-            from: emailFrom(firm),
-            replyTo: emailReplyTo(firm),
-            to,
-            ...(cc.length ? { cc } : {}),
-            subject: processedSubject,
-            html: brandEmailHtml(htmlBody, firm),
-        });
+        const sendResult = await sendEmail(
+            {
+                to,
+                ...(cc.length ? { cc } : {}),
+                subject: processedSubject,
+                html: brandEmailHtml(htmlBody, firm),
+            },
+            { firm, label: "milestone" },
+        );
 
-        if (sendError) {
-            return { success: false, recipients: to, cc, error: sendError.message };
+        if (!sendResult.ok) {
+            return { success: false, recipients: to, cc, error: sendResult.error };
         }
 
         logger.info(
             `[Milestone Email] Sent to ${to.join(", ")}` +
             `${cc.length ? ` (cc ${cc.length}: ${cc.join(", ")})` : template.shared_with_agent ? " (shared_with_agent on, but no cc addresses on file — no cc)" : ""}` +
-            `, milestone: "${milestone?.title ?? ""}", id: ${sendResult?.id}`,
+            `, milestone: "${milestone?.title ?? ""}", id: ${sendResult.id}`,
         );
 
         return { success: true, recipients: to, cc };
@@ -511,7 +515,6 @@ export async function dispatchAutoCompleteMilestoneEmails(
         return;
     }
 
-    const resend = new Resend(process.env.RESEND_API_KEY);
 
     // One send per stage, not per party: every family member's copy of the same
     // auto-completed stage collapses into a single group.
@@ -565,7 +568,6 @@ export async function dispatchAutoCompleteMilestoneEmails(
                 recipients: pending,
                 milestone: { title: group[0].stageName, status: "Completed" },
                 template,
-                resend,
                 // Every entry in a stage group is one family's file, so any of
                 // them answers for the firm.
                 firm: await getDealFirmKey(group[0].dealId ?? null),

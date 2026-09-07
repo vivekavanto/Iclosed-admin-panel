@@ -12,14 +12,19 @@ const TOKEN_BYTES = 48;
 const MAX_CONSUMPTIONS = 10;
 
 // 'invite' / 'recovery' are AUTH tokens — /api/auth/activate spends them for a
-// Supabase session. 'retainer_sign' and 'final_report' are scoped tokens
-// validated by their own handlers (the portal's retainer page,
-// /api/final-report/download) and must never reach the auth exchange.
+// Supabase session. 'retainer_sign', 'final_report' and 'doc_link' are scoped
+// tokens validated by their own handlers (the portal's retainer page,
+// /api/final-report/download, /api/document-link/download) and must never reach
+// the auth exchange.
+//
+// Every value here is also in the invitation_tokens_type_check constraint —
+// adding one needs the matching migration run first, or the INSERT fails.
 export type InvitationType =
   | "invite"
   | "recovery"
   | "retainer_sign"
-  | "final_report";
+  | "final_report"
+  | "doc_link";
 
 export type ConsumedInvitation = {
   type: InvitationType;

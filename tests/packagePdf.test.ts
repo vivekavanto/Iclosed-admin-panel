@@ -36,12 +36,19 @@ const META = {
   price: 1250000,
 };
 
-type Kind = "text" | "blank" | "vector" | "scaffold";
+/** A 1x1 PNG. */
+const PNG_1PX = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+type Kind = "text" | "blank" | "vector" | "scaffold" | "image";
 
 /** A stand-in uploaded PDF whose pages are described by `kinds`. */
 async function makeSource(kinds: Kind[]): Promise<PDFDocument> {
   const doc = await PDFDocument.create();
   const font = await doc.embedFont(StandardFonts.Helvetica);
+  const png = await doc.embedPng(PNG_1PX);
   for (const kind of kinds) {
     const page = doc.addPage([A4.w, A4.h]);
     if (kind === "text") {
@@ -49,6 +56,10 @@ async function makeSource(kinds: Kind[]): Promise<PDFDocument> {
     } else if (kind === "vector") {
       // A signature line and nothing else: sparse, but NOT blank.
       page.drawLine({ start: { x: 64, y: 200 }, end: { x: 300, y: 200 }, thickness: 1 });
+    } else if (kind === "image") {
+      // A scanned page: one placed image and nothing else, which is every page
+      // of a client's phone-scanned ID.
+      page.drawImage(png, { x: 64, y: 200, width: 300, height: 400 });
     } else if (kind === "scaffold") {
       // An older iClosed export's chrome, and nothing else of substance.
       page.drawText("DEAL FILE - 26S-0456", { x: 64, y: 785, size: 8, font });
@@ -65,12 +76,6 @@ async function sourceBytes(kinds: Kind[]): Promise<Uint8Array> {
   return await (await makeSource(kinds)).save();
 }
 
-/** A 1x1 PNG. */
-const PNG_1PX = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
-  "base64",
-);
-
 // ───────────────────────── content-stream helpers ─────────────────────────
 
 test("textDrawCount counts every string form a producer may use", () => {
@@ -83,6 +88,21 @@ test("textDrawCount counts every string form a producer may use", () => {
 test("paintsXObject spots a placed image or form", () => {
   assert.equal(paintsXObject("q 100 0 0 50 0 0 cm /X1 Do Q"), true);
   assert.equal(paintsXObject("0 0 100 100 re f"), false);
+});
+
+test("paintsXObject reads an XObject name with any legal character in it", () => {
+  // The page content of a real client ID scan. The old pattern read the name as
+  // [A-Za-z0-9_.]+, so the hyphen made this page look blank — every page of the
+  // scan was dropped and the document vanished from the package.
+  assert.equal(
+    paintsXObject("q 1 0 0 1 0 0 cm 319 0 0 425 0 0 cm /Image-7098480789 Do Q"),
+    true,
+    "hyphen — what phone scanner apps emit",
+  );
+  assert.equal(paintsXObject("/Im#201 Do"), true, "a #-escaped name");
+  assert.equal(paintsXObject("/Fm+2 Do"), true);
+  assert.equal(paintsXObject("BT (Do) Tj ET"), false, "the word inside a string is not the operator");
+  assert.equal(paintsXObject("/Do 12 Tf"), false, "a name that happens to be /Do is not a paint");
 });
 
 test("shownText recovers both literal and hex-encoded text", () => {
@@ -128,6 +148,16 @@ test("an empty page is blank; a page with text or a vector mark is not", async (
     isBlankPage(src, src.getPage(2)),
     false,
     "a signature line is content, not an empty page",
+  );
+});
+
+test("a scanned page — one placed image, no text — survives the merge", async () => {
+  const src = await makeSource(["image", "blank"]);
+  assert.equal(isBlankPage(src, src.getPage(0)), false, "a scan is content");
+  assert.deepEqual(
+    keepablePageIndices(src),
+    [0],
+    "the scan is kept and the genuinely empty page is dropped",
   );
 });
 

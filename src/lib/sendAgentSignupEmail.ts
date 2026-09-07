@@ -1,10 +1,10 @@
-import { Resend } from "resend";
+import { sendEmail } from "./email/emailTransport";
 import supabaseAdmin from "./supabaseAdmin";
 import { interpolate } from "./sendWelcomeEmail";
 import { maskEmail } from "./maskEmail";
 import { decodeTemplateBraces } from "./renderEmailTemplate";
 import { logger } from "./logger";
-import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "./emailIdentity";
+import { normalizeRecipientEmail } from "./emailIdentity";
 import { getLeadFirmKey } from "./leadFirm";
 import { brandEmailHtml } from "./emailBrand";
 
@@ -304,36 +304,26 @@ export async function sendAgentSignupEmail(
     escape: false,
   });
 
-  // 7. Send
-  if (!process.env.RESEND_API_KEY) {
-    return {
-      success: false,
-      error: "Email service not configured (missing RESEND_API_KEY)",
-      statusCode: 500,
-    };
-  }
-
-  // The agent hears from the firm that is acting on their client's file.
+  // 7. Send — the agent hears from the firm acting on their client's file.
   const firm = await getLeadFirmKey(leadId);
-  const resend = new Resend(process.env.RESEND_API_KEY);
-  const fromEmail = emailFrom(firm);
 
-  const { data: sendResult, error: sendError } = await resend.emails.send({
-    from: fromEmail,
-    replyTo: emailReplyTo(firm),
-    to: [normalizeRecipientEmail(agentEmail)],
-    subject,
-    html: brandEmailHtml(htmlBody, firm),
-  });
+  const sendResult = await sendEmail(
+    {
+      to: [normalizeRecipientEmail(agentEmail)],
+      subject,
+      html: brandEmailHtml(htmlBody, firm),
+    },
+    { firm, label: "agent-signup" },
+  );
 
-  if (sendError) {
+  if (!sendResult.ok) {
     console.error(
-      `[Agent Signup Email] Resend error (source=${opts.source ?? "unknown"}):`,
-      sendError,
+      `[Agent Signup Email] send failed (source=${opts.source ?? "unknown"}):`,
+      sendResult.error,
     );
     return {
       success: false,
-      error: `Email send failed: ${sendError.message}`,
+      error: `Email send failed: ${sendResult.error}`,
       statusCode: 500,
     };
   }
@@ -354,12 +344,12 @@ export async function sendAgentSignupEmail(
   // SEC-022/CMP-008: mask the recipient and omit the subject (it contains the
   // client's name/address) so PII isn't written to server logs.
   logger.info(
-    `[Agent Signup Email] Sent to ${maskEmail(agentEmail)} (source=${opts.source ?? "unknown"}), id=${sendResult?.id}`,
+    `[Agent Signup Email] Sent to ${maskEmail(agentEmail)} (source=${opts.source ?? "unknown"}), id=${sendResult.id}`,
   );
 
   return {
     success: true,
-    emailId: sendResult?.id,
+    emailId: sendResult.id,
     templateUsed: template?.name,
     agentEmail,
   };

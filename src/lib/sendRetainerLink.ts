@@ -1,4 +1,4 @@
-import { Resend } from "resend";
+import { sendEmail } from "./email/emailTransport";
 import supabaseAdmin from "./supabaseAdmin";
 import { createRetainerSignToken, type RetainerSide } from "./retainerSignToken";
 import {
@@ -6,7 +6,7 @@ import {
   buildLeadAddressPartsForEmail,
   renderTransactionPhrase,
 } from "./leadEmailAddress";
-import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "./emailIdentity";
+import { normalizeRecipientEmail } from "./emailIdentity";
 import { getLeadFirmKey } from "./leadFirm";
 import { brandEmailHtml } from "./emailBrand";
 
@@ -255,28 +255,20 @@ export async function sendRetainerLinkEmail(opts: {
     url,
   });
 
-  // 4. Send via Resend.
-  if (!process.env.RESEND_API_KEY) {
-    return {
-      success: false,
-      error: "Email service not configured (missing RESEND_API_KEY)",
-    };
-  }
-
+  // 4. Send.
   const firm = await getLeadFirmKey(leadId);
-  const resend = new Resend(process.env.RESEND_API_KEY);
-  const fromEmail = emailFrom(firm);
 
-  const { error: sendError } = await resend.emails.send({
-    from: fromEmail,
-    replyTo: emailReplyTo(firm),
-    to: [normalizeRecipientEmail(email)],
-    subject,
-    html: brandEmailHtml(html, firm),
-  });
+  const result = await sendEmail(
+    {
+      to: [normalizeRecipientEmail(email)],
+      subject,
+      html: brandEmailHtml(html, firm),
+    },
+    { firm, label: "retainer-link" },
+  );
 
-  if (sendError) {
-    return { success: false, error: `Resend send failed: ${sendError.message}` };
+  if (!result.ok) {
+    return { success: false, error: `Email send failed: ${result.error}` };
   }
 
   return { success: true };

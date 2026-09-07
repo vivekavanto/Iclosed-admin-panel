@@ -37,7 +37,7 @@ import supabaseAdmin from "./supabaseAdmin";
 import { logger } from "./logger";
 import { getFamilyDealIds } from "./familyDeals";
 import { resolvePrimaryDealId } from "./primaryDeal";
-import { emailFrom, emailReplyTo } from "./emailIdentity";
+import { sendEmail } from "./email/emailTransport";
 import { getLeadFirmKey } from "./leadFirm";
 import { brandEmailHtml } from "./emailBrand";
 import { formatCurrency } from "./formatCurrency";
@@ -54,7 +54,6 @@ import {
   renderTemplateSafe,
   type TemplateValue,
 } from "./renderEmailTemplate";
-import { withRetry } from "./retry";
 
 /** `email_templates.name` that owns the wording. Substring, case-insensitive. */
 export const DEPOSIT_PROOF_TEMPLATE_NAME = "Deposit Proof Received";
@@ -75,7 +74,13 @@ export type DepositProofResult = {
     | "not_completed"
     | "no_recipients"
     | "email_not_configured"
+    // The email was attempted and refused. Previously unrepresentable: the send
+    // wrapped a promise that resolves on rejection, so a refusal reported as
+    // `sent: true` and there was no outcome for this case to report.
+    | "send_failed"
     | "error";
+  /** Present with `send_failed` — the provider's own message. */
+  error?: string;
 };
 
 function splitAddresses(raw: string | null | undefined): string[] {
@@ -333,18 +338,25 @@ export async function sendDepositProofEmail(taskId: string): Promise<DepositProo
     // Branded off the file's own firm, not the recipient's — this goes to the
     // deposit desk about a specific transaction.
     const firm = await getLeadFirmKey(deal?.lead_id ?? null);
-    const { Resend } = await import("resend");
-    const resend = new Resend(process.env.RESEND_API_KEY);
-    await withRetry(() =>
-      resend.emails.send({
-        from: emailFrom(firm),
-        replyTo: emailReplyTo(firm),
+
+    // This previously wrapped resend.emails.send() in withRetry() — but the SDK
+    // RESOLVES on an API-level rejection rather than throwing, so the retry never
+    // fired and the failure was invisible: the log said sent, the caller returned
+    // { sent: true }, and nothing left Resend. sendEmail() retries internally and
+    // reports honestly.
+    const result = await sendEmail(
+      {
         to: recipients,
         subject,
         html: brandEmailHtml(html, firm),
         ...(attachments.length > 0 ? { attachments } : {}),
-      }),
+      },
+      { firm, label: "deposit-proof" },
     );
+    if (!result.ok) {
+      logger.error(`[DepositProof] task=${task.id} send failed: ${result.error}`);
+      return { sent: false, reason: "send_failed", error: result.error };
+    }
 
     logger.info(
       `[DepositProof] task=${task.id} sent to ${recipients.join(", ")} attachments=${attachments.length}`,

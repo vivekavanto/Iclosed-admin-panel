@@ -1,4 +1,4 @@
-import { Resend } from "resend";
+import { sendEmail } from "./email/emailTransport";
 import supabaseAdmin from "./supabaseAdmin";
 import {
   formatLeadTypeLabel,
@@ -13,8 +13,7 @@ import {
 } from "./renderEmailTemplate";
 import { maskEmail } from "./maskEmail";
 import { logger } from "./logger";
-import { withRetry } from "./retry";
-import { emailFrom, emailReplyTo, normalizeRecipientEmail } from "./emailIdentity";
+import { normalizeRecipientEmail } from "./emailIdentity";
 import { getLeadFirmKey } from "./leadFirm";
 import { brandEmailHtml } from "./emailBrand";
 import { buildAgentCcList } from "./agentCc";
@@ -372,8 +371,6 @@ export async function sendWelcomeEmail(
 
   // Which firm this file is retained under decides the sender and the lockup.
   const firm = await getLeadFirmKey(leadId);
-  const resend = new Resend(process.env.RESEND_API_KEY);
-  const fromEmail = emailFrom(firm);
 
   // "Shared with agent?" templates copy everyone attached to the file — the
   // partner's primary agent, their additional partner_contacts, and the deal's
@@ -388,30 +385,21 @@ export async function sendWelcomeEmail(
       })
     : [];
 
-  // GAP-012: retry the send a few times with backoff so a transient Resend/API
-  // blip doesn't drop the welcome email. Resend returns { error } instead of
-  // throwing, so we throw on error to drive the retry.
-  let sendResult: { id?: string } | null = null;
-  try {
-    sendResult = await withRetry(
-      async () => {
-        const { data, error } = await resend.emails.send({
-          from: fromEmail,
-          replyTo: emailReplyTo(firm),
-          to: [normalizeRecipientEmail(lead.email)],
-          ...(ccList.length > 0 ? { cc: ccList } : {}),
-          subject,
-          html: brandEmailHtml(htmlBody, firm),
-        });
-        if (error) throw new Error(error.message);
-        return data;
-      },
-      { attempts: 3, label: "welcome-email" },
-    );
-  } catch (sendErr: any) {
+  // GAP-012: sendEmail() retries transient failures with backoff so a blip
+  // doesn't drop the welcome email, and reports honestly rather than throwing.
+  const sendResult = await sendEmail(
+    {
+      to: [normalizeRecipientEmail(lead.email)],
+      ...(ccList.length > 0 ? { cc: ccList } : {}),
+      subject,
+      html: brandEmailHtml(htmlBody, firm),
+    },
+    { firm, label: "welcome" },
+  );
+
+  if (!sendResult.ok) {
     logger.error(
-      `[Welcome Email] Resend failed after retries (source=${opts.source ?? "unknown"}):`,
-      sendErr,
+      `[Welcome Email] send failed (source=${opts.source ?? "unknown"}): ${sendResult.error}`,
     );
     // GAP-011: the send failed — release the claim so a later retry can send.
     if (claimedSend) {
@@ -422,7 +410,7 @@ export async function sendWelcomeEmail(
     }
     return {
       success: false,
-      error: `Email send failed: ${sendErr?.message ?? "unknown error"}`,
+      error: `Email send failed: ${sendResult.error}`,
       statusCode: 500,
     };
   }
@@ -442,12 +430,12 @@ export async function sendWelcomeEmail(
   // SEC-022/CMP-008: mask the recipient and omit the subject (it contains the
   // customer's name/address) so PII isn't written to server logs.
   logger.info(
-    `[Welcome Email] Sent to ${maskEmail(lead.email)} (source=${opts.source ?? "unknown"}), id=${sendResult?.id}`,
+    `[Welcome Email] Sent to ${maskEmail(lead.email)} (source=${opts.source ?? "unknown"}), id=${sendResult.id}`,
   );
 
   return {
     success: true,
-    emailId: sendResult?.id,
+    emailId: sendResult.id,
     templateUsed: template?.name ?? "Default Welcome",
   };
 }

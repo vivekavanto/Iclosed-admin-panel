@@ -1,10 +1,8 @@
-import { NextResponse } from "next/server";
-import { get } from "@vercel/blob";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { logger } from "@/lib/logger";
 import { rateLimitOk, requestIp } from "@/lib/rateLimit";
 import { isUuid } from "@/lib/isUuid";
-import { isPrivateBlobUrl, blobTokenForUrl } from "@/lib/blobPrivacy";
+import { serveBlobFile, safeFilename } from "@/lib/serveBlobFile";
 import { escapeHtml } from "@/lib/renderEmailTemplate";
 import { getLeadFirmKey } from "@/lib/leadFirm";
 import { getFirm } from "@/lib/firms";
@@ -45,25 +43,6 @@ function portalUrl(): string {
     process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ?? "https://dev.iclosed.ca"
   ).replace(/\/+$/, "");
 }
-
-/**
- * Content types we are willing to render INLINE.
- *
- * An allowlist rather than a blocklist because the private-blob branch below
- * streams the file from OUR OWN origin: anything scriptable served inline there
- * (HTML, SVG) would run as us. uploadValidation.ts already refuses those on the
- * way in — this is the second lock, for rows that predate it. Anything not on
- * the list is still delivered, just as a download.
- */
-const INLINE_SAFE_TYPES = new Set([
-  "application/pdf",
-  "image/jpeg",
-  "image/jpg",
-  "image/png",
-  "image/webp",
-  "image/gif",
-  "text/plain",
-]);
 
 /** The one page shell both the listing and every error state render into. */
 function page(opts: {
@@ -232,62 +211,24 @@ export async function GET(req: Request) {
       );
     }
 
-    const fileUrl = doc.file_url as string;
-    const filename = (doc.file_name || "final-report.pdf").replace(/["\\\r\n]/g, "");
-
-    // A public blob is already a CDN-served file — hand the browser straight to
-    // it, so a 30 MB package never streams through this function. Blob serves it
-    // inline by default, which is exactly what we want here; its ?download=1 is
-    // added ONLY for the explicit save link. Only a private blob, which the
-    // browser cannot read on its own, is proxied.
-    if (!isPrivateBlobUrl(fileUrl)) {
-      const direct = new URL(fileUrl);
-      if (forceDownload) direct.searchParams.set("download", "1");
-      else direct.searchParams.delete("download");
-      return NextResponse.redirect(direct.toString(), 302);
-    }
-
-    try {
-      const result = await get(fileUrl, {
-        access: "private",
-        token: blobTokenForUrl(fileUrl),
-      });
-      if (!result?.stream) {
-        return errorPage(
+    const served = await serveBlobFile({
+      fileUrl: doc.file_url as string,
+      filename: safeFilename(doc.file_name, "final-report.pdf"),
+      forceDownload,
+      logLabel: "[FinalReport download]",
+    });
+    if (served.ok) return served.response;
+    return served.reason === "missing"
+      ? errorPage(
           "This package is no longer available",
           "The document this link pointed at could not be found.",
           410,
+        )
+      : errorPage(
+          "Something went wrong",
+          "We could not fetch your document just now. Please try again shortly.",
+          500,
         );
-      }
-      const headers = new Headers();
-      const contentType = result.blob?.contentType || "application/octet-stream";
-      headers.set("Content-Type", contentType);
-      if (result.blob?.size != null) {
-        headers.set("Content-Length", String(result.blob.size));
-      }
-      // Inline so the report renders in the browser, the same as the public
-      // branch above — unless the save link was used, or the type is not one we
-      // will render from our own origin (see INLINE_SAFE_TYPES).
-      const inlineSafe = INLINE_SAFE_TYPES.has(
-        contentType.split(";")[0].trim().toLowerCase(),
-      );
-      const disposition = !forceDownload && inlineSafe ? "inline" : "attachment";
-      headers.set(
-        "Content-Disposition",
-        `${disposition}; filename="${filename}"`,
-      );
-      // Never let a browser render an unexpected type as something else.
-      headers.set("X-Content-Type-Options", "nosniff");
-      headers.set("Cache-Control", "private, no-store");
-      return new Response(result.stream as ReadableStream, { status: 200, headers });
-    } catch (err) {
-      logger.error("[FinalReport download] blob read failed:", err);
-      return errorPage(
-        "Something went wrong",
-        "We could not fetch your document just now. Please try again shortly.",
-        500,
-      );
-    }
   }
 
   // ── Several documents: list what this link covers ──

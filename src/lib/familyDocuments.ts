@@ -44,6 +44,7 @@
 import { get } from "@vercel/blob";
 import supabaseAdmin from "./supabaseAdmin";
 import { isPrivateBlobUrl, blobTokenForUrl, docDownloadHref } from "./blobPrivacy";
+import { createDocumentLink } from "./documentLink";
 import { logger } from "./logger";
 
 /**
@@ -72,8 +73,14 @@ export interface EmailAttachment {
 /** A document that could not be attached — surfaced as a link instead. */
 export interface LinkedDocument {
   filename: string;
-  /** Absolute URL an admin can open (private docs go via the download proxy). */
+  /**
+   * Where the recipient is sent. Defaults to the ADMIN download proxy, which
+   * only works for someone already signed into the admin app; pass the package
+   * through withEmailDocumentLinks() before emailing it to anyone else.
+   */
   href: string;
+  /** The blob itself, so a caller can mint a tokenised link over it. */
+  fileUrl: string;
   /** Why it wasn't attached, for the log and the email footnote. */
   reason: "budget" | "too_large" | "download_failed";
 }
@@ -511,6 +518,7 @@ export async function collectFamilyDocuments(
       // docDownloadHref returns a relative proxy path for private blobs; an
       // email needs an absolute one.
       href: href.startsWith("/") ? `${baseUrl}${href}` : href,
+      fileUrl: doc.fileUrl,
       reason,
     });
   };
@@ -546,6 +554,42 @@ export async function collectFamilyDocuments(
     linked,
     total: attachments.length + linked.length,
     attachedBytes,
+  };
+}
+
+/**
+ * Swap the admin-proxy hrefs for ONE tokenised link the recipient can actually
+ * open, and return the package with those links in place.
+ *
+ * Call this on any package whose `linked` list is about to be EMAILED. The
+ * default hrefs point at /api/admin/documents/download, which middleware.ts
+ * gates on an admin session — clicking one from an inbox returned
+ * {"success":false,"error":"Unauthorized"}, which is precisely the document the
+ * recipient did not otherwise get.
+ *
+ * Degrades rather than fails: if the token cannot be minted (most likely the
+ * invitation_tokens type CHECK not yet widened for 'doc_link' — it is applied by
+ * hand) the package comes back untouched, with the old links, and the email
+ * still sends with all of its attachments.
+ */
+export async function withEmailDocumentLinks(
+  pkg: FamilyDocumentPackage,
+  opts: { email: string; dealId: string },
+): Promise<FamilyDocumentPackage> {
+  if (pkg.linked.length === 0) return pkg;
+
+  const minted = await createDocumentLink({
+    email: opts.email,
+    dealId: opts.dealId,
+    docs: pkg.linked.map((d) => ({ url: d.fileUrl, name: d.filename })),
+  });
+  if (!minted) return pkg;
+
+  return {
+    ...pkg,
+    // Index order matches the order the docs were put on the token above, which
+    // is what the route resolves `&i=` against.
+    linked: pkg.linked.map((d, i) => ({ ...d, href: `${minted.url}&i=${i}` })),
   };
 }
 
@@ -595,7 +639,7 @@ export function renderLinkedDocsHtml(linked: LinkedDocument[]): string {
     `<div style="margin-top:20px;padding-top:12px;border-top:1px solid #e2e8f0;">` +
     `<p style="font-size:13px;color:#64748b;margin:0 0 6px;">` +
     `${linked.length} document${linked.length === 1 ? " was" : "s were"} too large to attach — ` +
-    `open ${linked.length === 1 ? "it" : "them"} in the portal:</p>` +
+    `open ${linked.length === 1 ? "it" : "them"} here:</p>` +
     `<ul style="font-size:13px;color:#64748b;margin:0;padding-left:18px;">${items}</ul>` +
     `</div>`
   );

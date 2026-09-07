@@ -67,6 +67,13 @@ const nextConfig: NextConfig = {
   // CDN asset (which is what the email templates need) but does NOT put it in a
   // serverless function's filesystem, so it has to be named here too. Without
   // it the package silently falls back to the plain text wordmark.
+  // nodemailer is a CJS package that resolves ./lib/well-known/services.json and
+  // its own package.json by relative path, and requires node builtins
+  // conditionally. It is not in Next's default externals list, so without this
+  // the bundler pulls it into every function that can reach the email module.
+  // Leaving it external eliminates a class of build-succeeds/runtime-fails
+  // divergence you would only discover in production.
+  serverExternalPackages: ["nodemailer"],
   outputFileTracingIncludes: {
     "/api/admin/deals/[id]/deposit-task": ["./assets/funds-transfer-instructions.pdf"],
     "/api/admin/deals/[id]/package": ["./public/email-logo.png"],

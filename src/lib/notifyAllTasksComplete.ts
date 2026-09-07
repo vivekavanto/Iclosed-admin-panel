@@ -1,4 +1,4 @@
-import { Resend } from "resend";
+import { sendEmail } from "./email/emailTransport";
 import supabaseAdmin from "./supabaseAdmin";
 import { getFamilyDealIds } from "./familyDeals";
 import { resolvePrimaryDealId } from "./primaryDeal";
@@ -13,10 +13,13 @@ import {
   decodeTemplateBraces,
   type TemplateValue,
 } from "./renderEmailTemplate";
-import { collectFamilyDocuments, renderDocumentSummaryHtml } from "./familyDocuments";
+import {
+  collectFamilyDocuments,
+  renderDocumentSummaryHtml,
+  withEmailDocumentLinks,
+} from "./familyDocuments";
 import { ALL_TASKS_COMPLETE_TYPE } from "./notificationTypes";
 import { logger } from "./logger";
-import { withRetry } from "./retry";
 
 /**
  * Fires the back-office "this client is done" alert: when a client AND their
@@ -386,7 +389,12 @@ async function dispatchAlert(
   // reviewer has the package in hand rather than having to open the file. Done
   // AFTER the template checks so an inactive template costs us no downloads.
   const familyLeadIds = (familyLeads ?? []).map((l) => l.id);
-  const docs = await collectFamilyDocuments(familyDealIds, familyLeadIds, adminBaseUrl());
+  // Same treatment as the clerk email: anything too big to attach travels as a
+  // link that works from an inbox, not one that needs an admin session.
+  const docs = await withEmailDocumentLinks(
+    await collectFamilyDocuments(familyDealIds, familyLeadIds, adminBaseUrl()),
+    { email: recipients[0], dealId: deal.id },
+  );
 
   const values: Record<string, string> = {
     client_name: clientName,
@@ -431,36 +439,34 @@ async function dispatchAlert(
     return { notified: true, reason: "email_not_configured", emailedTo: 0 };
   }
 
-  const resend = new Resend(process.env.RESEND_API_KEY);
-  const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <support@iclosed.ca>";
+  // Internal staff alert: firm-agnostic by design, so `firm: null` keeps the
+  // legacy sender and pins it to Resend regardless of any SMTP rollout. Like the
+  // clerk email this can carry 25 MB of attachments, which is the payload least
+  // likely to survive an SMTP server's SIZE limit. `replyTo: null` preserves the
+  // existing behaviour of setting none.
+  const result = await sendEmail(
+    {
+      to: recipients,
+      subject,
+      html,
+      ...(docs.attachments.length > 0 ? { attachments: docs.attachments } : {}),
+    },
+    { firm: null, label: "all-tasks-complete", replyTo: null },
+  );
 
-  try {
-    await withRetry(
-      async () => {
-        const { data, error } = await resend.emails.send({
-          from: fromEmail,
-          to: recipients,
-          subject,
-          html,
-          ...(docs.attachments.length > 0 ? { attachments: docs.attachments } : {}),
-        });
-        if (error) throw new Error(error.message);
-        return data;
-      },
-      { attempts: 3, label: "all-tasks-complete-email" },
-    );
+  if (result.ok) {
     logger.info(
       `[AllTasksComplete] alerted ${recipients.length} admin(s) — deal=${deal.id} ` +
         `file=${fileNumber} docs=${docs.attachments.length} attached / ${docs.linked.length} linked ` +
         `(${Math.round(docs.attachedBytes / 1024)}KB)`,
     );
-  } catch (sendErr) {
+  } else {
     // Deliberately NOT releasing the claim: the in-app notification is already
     // written, and releasing would re-insert a duplicate on the next task edit.
     // The alert is not lost — it's in the bell — so just surface the failure.
     logger.error(
-      `[AllTasksComplete] email send failed after retries — deal=${deal.id} (in-app notification was still created):`,
-      sendErr,
+      `[AllTasksComplete] email send failed after retries — deal=${deal.id} ` +
+        `(in-app notification was still created): ${result.error}`,
     );
     return { notified: true, reason: "error", emailedTo: 0 };
   }

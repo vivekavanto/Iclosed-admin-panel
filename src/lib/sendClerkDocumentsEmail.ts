@@ -63,20 +63,20 @@
 // deploy. renderBody()/defaultSubject() below are the fallback used when the row
 // is missing, inactive or empty — never a silent failure to send.
 
-import { Resend } from "resend";
+import { sendEmail } from "./email/emailTransport";
 import supabaseAdmin from "./supabaseAdmin";
 import { getFamilyDealIds } from "./familyDeals";
 import {
   ATTACHMENT_BUDGET_BYTES,
   collectFamilyDocuments,
   renderLinkedDocsHtml,
+  withEmailDocumentLinks,
   type EmailAttachment,
 } from "./familyDocuments";
 import { buildDealPackage, sanitizeEntryName } from "./dealPackage";
 import { formatLeadTypeLabel, buildLeadAddressPartsForEmail, renderTransactionPhrase } from "./leadEmailAddress";
 import { decodeTemplateBraces, renderTemplateSafe, type TemplateValue } from "./renderEmailTemplate";
 import { logger } from "./logger";
-import { withRetry } from "./retry";
 
 /** Firm defaults; override per-environment without a deploy. */
 const DEFAULT_PURCHASE_CLERK = "iclosed.purchase@navawilson.law";
@@ -488,10 +488,20 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
   // the package consumes no blobs, so `excludeUrls` is empty and this sweep is
   // what actually carries the documents — anything past the budget becomes a
   // link rather than being dropped.
-  const docs = await collectFamilyDocuments(dealIds, familyLeadIds, adminBaseUrl(), {
+  const collected = await collectFamilyDocuments(dealIds, familyLeadIds, adminBaseUrl(), {
     fileNumber,
     excludeUrls: consumedByEmail,
     budgetBytes: Math.max(0, ATTACHMENT_BUDGET_BYTES - packageBytes),
+  });
+  // Whatever spilled past the budget goes out as a tokenised link the clerk can
+  // open from their inbox. Without this the overflow list points at
+  // /api/admin/documents/download, which middleware.ts gates on an admin
+  // session: the clerk clicked the one document that had NOT arrived and got
+  // {"success":false,"error":"Unauthorized"}. Falls back to the old href if the
+  // token cannot be minted, so the email always sends.
+  const docs = await withEmailDocumentLinks(collected, {
+    email: recipients[0],
+    dealId,
   });
 
   const attachments = [...packageAttachments, ...docs.attachments];
@@ -594,32 +604,26 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
     ? renderTemplateSafe(template.subject, resolve, { escape: false })
     : defaultSubject(facts);
 
-  if (!process.env.RESEND_API_KEY) {
-    return { ...empty, error: "Email is not configured (RESEND_API_KEY missing)" };
-  }
+  // Internal mail: firm-agnostic on purpose (see CLAUDE.md), so `firm: null`
+  // keeps the legacy sender AND pins this to Resend whatever the SMTP rollout
+  // does. That matters here more than anywhere else — this email carries up to
+  // 25 MB of attachments (~33 MB on the wire), which is exactly the payload most
+  // likely to be refused by an SMTP server's SIZE limit.
+  //
+  // `replyTo: null` preserves the existing behaviour of setting none at all.
+  const result = await sendEmail(
+    {
+      to: recipients,
+      subject,
+      html,
+      ...(attachments.length > 0 ? { attachments } : {}),
+    },
+    { firm: null, label: "clerk-documents", replyTo: null },
+  );
 
-  const resend = new Resend(process.env.RESEND_API_KEY);
-  const fromEmail = process.env.RESEND_FROM_EMAIL || "iClosed <support@iclosed.ca>";
-
-  try {
-    await withRetry(
-      async () => {
-        const { data, error } = await resend.emails.send({
-          from: fromEmail,
-          to: recipients,
-          subject,
-          html,
-          ...(attachments.length > 0 ? { attachments } : {}),
-        });
-        if (error) throw new Error(error.message);
-        return data;
-      },
-      { attempts: 3, label: "clerk-documents-email" },
-    );
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    logger.error(`[ClerkDocuments] send failed — deal=${dealId}:`, err);
-    return { ...empty, error: `Could not send the email: ${message}` };
+  if (!result.ok) {
+    logger.error(`[ClerkDocuments] send failed — deal=${dealId}: ${result.error}`);
+    return { ...empty, error: `Could not send the email: ${result.error}` };
   }
 
   logger.info(

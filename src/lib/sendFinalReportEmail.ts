@@ -28,7 +28,7 @@
 
 import supabaseAdmin from "./supabaseAdmin";
 import { logger } from "./logger";
-import { emailFrom, emailReplyTo } from "./emailIdentity";
+import { sendEmail } from "./email/emailTransport";
 import { createFinalReportDownloadLink } from "./finalReportLink";
 import { getLeadFirmKey } from "./leadFirm";
 import { brandEmailHtml } from "./emailBrand";
@@ -166,11 +166,8 @@ export async function sendFinalReportEmail(opts: {
     };
   }
 
-  const { Resend } = await import("resend");
-  const resend = new Resend(process.env.RESEND_API_KEY);
   // One firm per file; `opts.leads` is that one file's family.
   const firm = await getLeadFirmKey(opts.leads?.[0]?.id ?? null);
-  const fromEmail = emailFrom(firm);
 
   // Every final-report document on the file, across the whole family — a
   // co-purchaser's package may have been uploaded against the primary's lead.
@@ -321,25 +318,25 @@ export async function sendFinalReportEmail(opts: {
         { escape: false },
       );
 
-      // The SDK RETURNS { data, error } — it does not throw on an API-level
-      // rejection. Awaiting it and ignoring the result is what made a refused
-      // send report as a successful one: the documents were stamped "emailed",
-      // the toast said sent, and nothing left Resend. The commonest rejection
-      // here is a 403 for an unverified sender domain — see emailIdentity.ts,
-      // where a firm with no RESEND_FROM_EMAIL_* override falls back to its
-      // hardcoded address, which has to be a verified domain in Resend.
-      const { error: sendError } = await resend.emails.send({
-        from: fromEmail,
-        replyTo: emailReplyTo(firm),
-        to,
-        subject,
-        html: brandEmailHtml(html, firm),
-      });
-      if (sendError) {
+      // sendEmail() reports a rejection rather than returning it to be ignored.
+      // That distinction is what this send was fixed for once already: awaiting
+      // the SDK and dropping its { data, error } made a refused send look
+      // successful — documents stamped "emailed", toast said sent, nothing left
+      // Resend. The commonest rejection here is a 403 for an unverified sender
+      // domain, which is exactly the state navawilson.law is in today.
+      const sendResult = await sendEmail(
+        {
+          to,
+          subject,
+          html: brandEmailHtml(html, firm),
+        },
+        { firm, label: "final-report" },
+      );
+      if (!sendResult.ok) {
         // Thrown so the catch below records it per recipient, exactly like a
-        // network failure. The message is Resend's own and names the cause
-        // ("the X domain is not verified"), so it is worth showing the admin.
-        throw new Error(sendError.message || "Resend rejected the send");
+        // network failure. The message names the cause ("the X domain is not
+        // verified"), so it is worth showing the admin.
+        throw new Error(sendResult.error || "The email was rejected");
       }
 
       for (const doc of group.documents) sentDocIds.add(doc.id);

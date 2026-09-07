@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server"
 import supabaseAdmin from "@/lib/supabaseAdmin"
-import { Resend } from "resend"
 import { getFamilyDealIds } from "@/lib/familyDeals"
 import { guardServiceRequest } from "@/lib/verifyServiceSignature"
 import { getDealFirmKey } from "@/lib/leadFirm"
@@ -88,7 +87,6 @@ async function handlePortalRequest(body: Record<string, any>) {
         return NextResponse.json({ success: false, error: "Email service not configured" }, { status: 500 })
     }
 
-    const resend = new Resend(process.env.RESEND_API_KEY)
     const firm = await getDealFirmKey(deal_id ?? null)
 
     // Find all deals in the family (purchaser + co-purchasers)
@@ -123,7 +121,6 @@ async function handlePortalRequest(body: Record<string, any>) {
         recipients,
         milestone: { title: milestone_title },
         template,
-        resend,
         firm,
         milestoneSide,
     })
@@ -270,7 +267,6 @@ export async function POST(req: Request) {
             )
         }
 
-        const resend = new Resend(process.env.RESEND_API_KEY)
         const firm = await getDealFirmKey(dealId ?? null)
 
         // On a Purchase & Sale file every family deal carries BOTH sides'
@@ -340,7 +336,6 @@ export async function POST(req: Request) {
             recipients,
             milestone,
             template,
-            resend,
             firm,
             milestoneSide,
         })

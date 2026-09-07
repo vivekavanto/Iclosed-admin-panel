@@ -43,7 +43,11 @@ import {
 } from "pdf-lib";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { BRAND_LOGO_FILE, BRAND_LOGO_HEADER } from "./brandLogo";
+// Explicit ".ts", the same as every other module the unit tests load: Node's
+// test runner resolves this file as ESM, where an extensionless specifier does
+// not resolve. Without it tests/packagePdf.test.ts could not even be imported —
+// the whole file's assertions were silently not running.
+import { BRAND_LOGO_FILE, BRAND_LOGO_HEADER } from "./brandLogo.ts";
 
 // A4 in points, matching the browser export's `new jsPDF({ unit: "pt", format: "a4" })`.
 export const A4 = { w: 595.28, h: 841.89 };
@@ -263,9 +267,32 @@ export function textDrawCount(content: string): number {
   return content.match(/(?:\)|>|\])\s*(?:Tj|TJ|'|")/g)?.length ?? 0;
 }
 
-/** Any image or form XObject painted on the page. */
+/**
+ * Any image or form XObject painted on the page.
+ *
+ * TWO patterns, because the first one used to be the only one and it was wrong.
+ * It read the XObject's NAME as `[A-Za-z0-9_.]+`, but a PDF name may hold any
+ * character that is not whitespace or a delimiter — and the scanner apps clients
+ * photograph their ID with emit names like `/Image-7098480789`. The hyphen fell
+ * outside that class, so a page whose entire content was
+ *
+ *   q 319 0 0 425 0 0 cm /Image-7098480789 Do Q
+ *
+ * matched nothing, counted as blank, and was dropped by keepablePageIndices().
+ * A four-page scan of a client's ID reduced to zero pages: the ZIP entry became
+ * a single "contained no printable pages" note and the original never shipped,
+ * which is the "some of the files are empty (blank page)" report.
+ *
+ * The second pattern is the belt to that braces: the bare `Do` OPERATOR, whose
+ * spelling cannot drift however a producer names its objects. It is matched only
+ * after whitespace or the close of an operand, so `(Do)` inside a string and a
+ * `/Do` name both stay out of it.
+ */
+const XOBJECT_NAME_DO = /\/[^\s()<>[\]{}/%]+\s+Do\b/;
+const BARE_DO_OPERATOR = /(?:^|[\s\])>])Do(?=[\s\r\n]|$)/m;
+
 export function paintsXObject(content: string): boolean {
-  return /\/[A-Za-z0-9_.]+\s+Do\b/.test(content);
+  return XOBJECT_NAME_DO.test(content) || BARE_DO_OPERATOR.test(content);
 }
 
 /**
@@ -304,16 +331,33 @@ export function shownText(content: string): string {
  * not blank — so path-painting operators are checked too.
  */
 export function isBlankPage(src: PDFDocument, page: PDFPage): boolean {
+  // An annotation carries its own appearance stream — a signature, a stamp, a
+  // filled form field — which never appears in the page's content stream. A page
+  // holding one is not blank whatever else it does or doesn't draw.
+  if (hasAnnotations(src, page)) return false;
+
   const content = decodePageContent(src, page);
   if (content === null) return false; // couldn't read it → keep it
   if (textDrawCount(content) > 0) return false;
   if (paintsXObject(content)) return false;
   // Path painting: fill, stroke, fill+stroke and their even-odd/close variants,
   // matched as whole operators so the "f" inside a name or number never counts.
-  if (/(?:^|[\s\]>])(?:f\*?|F|B\*?|b\*?|S|s)(?=[\s\r\n]|$)/m.test(content)) return false;
+  // `sh` paints a shading, which is a mark like any other.
+  if (/(?:^|[\s\]>])(?:f\*?|F|B\*?|b\*?|S|s|sh)(?=[\s\r\n]|$)/m.test(content)) return false;
   // Inline images.
   if (/\bBI\b[\s\S]*?\bEI\b/.test(content)) return false;
   return true;
+}
+
+/** Does the page carry any annotation (signature, stamp, filled form field)? */
+export function hasAnnotations(src: PDFDocument, page: PDFPage): boolean {
+  try {
+    const annots = src.context.lookup(page.node.get(PDFName.of("Annots")));
+    if (annots instanceof PDFArray) return annots.size() > 0;
+    return Boolean(annots);
+  } catch {
+    return false;
+  }
 }
 
 /** A page of our own scaffolding inside an uploaded copy of an older export. */
@@ -744,14 +788,27 @@ export class PackageDoc {
         const merged = await this.mergePdf(bytes);
         if (merged === 0) {
           // Every page was blank or our own scaffolding. The document exists, so
-          // say so rather than silently dropping it.
+          // say so rather than silently dropping it — AND report it as skipped,
+          // which is what actually ships the file: dealPackage builds the ZIP's
+          // `Originals/` folder from `skipped`, and the clerk email attaches
+          // them. Without that report this branch was a hole. A wrong blank
+          // verdict (see paintsXObject) turned a client's four-page ID scan into
+          // one "no printable pages" note with the document nowhere in the
+          // archive — the page looked empty AND the file was gone.
           this.notePage(
             index,
             total,
             section,
             fileName,
-            "This document contained no printable pages.",
+            "This document contained no printable pages. It is included in its original form.",
           );
+          this.skipped.push({
+            fileUrl,
+            fileName,
+            reason: "every page was blank or an earlier package export",
+          });
+          // Still consumed: the note page represents it, so the leftover sweep
+          // must not build a second entry for the same blob.
           this.consumedUrls.push(fileUrl);
           return true;
         }

@@ -8,9 +8,9 @@
 // authoritative document and the one the firm stands behind.
 
 import { escapeHtml } from "./renderEmailTemplate";
-import { emailFrom, emailReplyTo } from "./emailIdentity";
 import { brandEmailHtml } from "./emailBrand";
 import { resolveFirmKey } from "./firms";
+import { sendEmail } from "./email/emailTransport";
 import type { Statement } from "./closingCosts";
 import type { StatementTypeConfig } from "./closingCostSettings";
 
@@ -117,28 +117,27 @@ export async function sendClosingEstimateEmail(
   `;
 
   const firm = resolveFirmKey(params.firmKey ?? config.firm_key);
-  const { Resend } = await import("resend");
-  const resend = new Resend(process.env.RESEND_API_KEY);
-  const fromEmail = emailFrom(firm);
 
-  try {
-    await resend.emails.send({
-      from: fromEmail,
-      replyTo: emailReplyTo(firm),
+  // Previously this awaited resend.emails.send() and DISCARDED the { data, error }
+  // it returns, then returned success unconditionally — so a refused send (most
+  // often a 403 for an unverified sender domain) was reported to the admin as
+  // delivered. sendEmail() reports honestly; the caller's own error handling
+  // already exists for the invalid-address case above.
+  const result = await sendEmail(
+    {
       to: [to],
       subject: params.fileNo
         ? `${statementType.label} — closing costs (File ${params.fileNo})`
         : `${statementType.label} — your closing costs`,
       html: brandEmailHtml(html, firm),
-      attachments: pdf
-        ? [{ filename: pdf.fileName, content: Buffer.from(pdf.bytes) }]
-        : undefined,
-    });
-    return { success: true };
-  } catch (err) {
-    return {
-      success: false,
-      error: err instanceof Error ? err.message : "Could not send the email",
-    };
-  }
+      ...(pdf
+        ? { attachments: [{ filename: pdf.fileName, content: Buffer.from(pdf.bytes) }] }
+        : {}),
+    },
+    { firm, label: "closing-estimate" },
+  );
+
+  return result.ok
+    ? { success: true }
+    : { success: false, error: result.error || "Could not send the email" };
 }
