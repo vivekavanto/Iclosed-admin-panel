@@ -41,7 +41,7 @@ import { sendEmail } from "./email/emailTransport";
 import { getLeadFirmKey } from "./leadFirm";
 import { brandEmailHtml } from "./emailBrand";
 import { formatCurrency } from "./formatCurrency";
-import { clerkRecipientsForType } from "./sendClerkDocumentsEmail";
+import { clerkRecipientsForType } from "./clerkRecipients";
 import { readBlobDocument } from "./blobDocument";
 import { PROOF_OF_DEPOSIT_DOC_TYPE, isDepositTask } from "./depositTask";
 import {

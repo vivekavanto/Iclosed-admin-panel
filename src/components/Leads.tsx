@@ -355,23 +355,32 @@ const Leads: React.FC = () => {
   // every co-lead), and it is the one field an admin flips on its own, on a
   // file they are otherwise only reading. Burying it behind Edit → Save would
   // make the common case the awkward one.
-  const [savingFirm, setSavingFirm] = useState(false);
+  // Which row is mid-save, not a bare boolean: the same handler backs the
+  // per-row control in the LIST, where many files are on screen at once and
+  // only the one being changed may show a spinner.
+  const [firmSavingId, setFirmSavingId] = useState<string | null>(null);
   const [firmResult, setFirmResult] = useState<{
     success: boolean;
     message: string;
   } | null>(null);
+  // The list has no result banner to write into, so it gets a transient toast.
+  const [firmToast, setFirmToast] = useState<{
+    success: boolean;
+    message: string;
+  } | null>(null);
 
-  async function saveFirm(nextFirm: FirmKey) {
-    if (!selectedLead || savingFirm) return;
-    if (resolveFirmKey(selectedLead.firmKey) === nextFirm) return;
+  async function saveFirm(nextFirm: FirmKey, target?: LeadUser) {
+    const lead = target ?? selectedLead;
+    if (!lead || firmSavingId) return;
+    if (resolveFirmKey(lead.firmKey) === nextFirm) return;
 
-    setSavingFirm(true);
+    setFirmSavingId(lead.id);
     setFirmResult(null);
     try {
       const res = await fetch(`/api/admin/leads`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: selectedLead.id, firmKey: nextFirm }),
+        body: JSON.stringify({ id: lead.id, firmKey: nextFirm }),
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
@@ -381,30 +390,47 @@ const Leads: React.FC = () => {
       // The server writes the firm to every lead in the family. Mirror that
       // locally or the co-leads in the list keep showing the old firm until a
       // reload — which reads as "the change did not take".
-      const rootId = selectedLead.parentLeadId ?? selectedLead.id;
+      const rootId = lead.parentLeadId ?? lead.id;
       const inFamily = (l: LeadUser) =>
         l.id === rootId || l.parentLeadId === rootId;
       setLeads((prev) =>
         prev.map((l) => (inFamily(l) ? { ...l, firmKey: nextFirm } : l)),
       );
-      setSelectedLead((prev) => (prev ? { ...prev, firmKey: nextFirm } : prev));
+      // Guarded by inFamily because the list can now change a file that is NOT
+      // the one open behind it — an unguarded write would relabel whichever
+      // lead happens to be selected.
+      setSelectedLead((prev) =>
+        prev && inFamily(prev) ? { ...prev, firmKey: nextFirm } : prev,
+      );
 
       const warning = (data.warnings ?? [])[0] as string | undefined;
-      setFirmResult({
+      const result = {
         success: !warning,
         message:
           warning ??
           `This file is now a ${FIRMS[nextFirm].label} file. Emails and the retainer will use its address and logo.`,
-      });
+      };
+      setFirmResult(result);
+      setFirmToast(result);
     } catch (err: any) {
-      setFirmResult({
+      const result = {
         success: false,
         message: err.message ?? "Failed to change the firm.",
-      });
+      };
+      setFirmResult(result);
+      setFirmToast(result);
     } finally {
-      setSavingFirm(false);
+      setFirmSavingId(null);
     }
   }
+
+  // Auto-dismiss the list toast. The detail banner stays until the next change,
+  // which is what an admin reading one file expects.
+  useEffect(() => {
+    if (!firmToast) return;
+    const t = setTimeout(() => setFirmToast(null), 4000);
+    return () => clearTimeout(t);
+  }, [firmToast]);
 
   // ── Referral agent (partner) linking ───────────────────────────────────────
   // Intake is the only place that could originally attach an agent, so a file
@@ -1136,6 +1162,8 @@ const Leads: React.FC = () => {
       l.referralSource,
       l.price,
       statusLabel,
+      // The firm label, so "nava" / "iclosed llp" narrows the list to one firm.
+      FIRMS[resolveFirmKey(l.firmKey)].label,
       // Co-purchaser / co-seller names so searching by a family member finds
       // the primary record they roll up under.
       ...coLeads.flatMap((c) => [c.firstName, c.lastName, `${c.firstName ?? ""} ${c.lastName ?? ""}`, c.email, c.corporateName]),
@@ -1448,6 +1476,7 @@ const Leads: React.FC = () => {
         {(() => {
           const current = resolveFirmKey(selectedLead.firmKey);
           const isCoLead = !!selectedLead.parentLeadId;
+          const savingFirm = firmSavingId === selectedLead.id;
           return (
             <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -2718,6 +2747,17 @@ const Leads: React.FC = () => {
   // ── LIST VIEW ─────────────────────────────────────────────────────────────
   return (
     <div className="max-w-7xl mx-auto space-y-6 animate-in fade-in duration-500 py-4">
+      {/* Firm-change feedback. The list has no detail banner to write into, and
+          a firm change is invisible from the row alone once the select settles. */}
+      {firmToast && (
+        <div
+          className={`fixed top-6 right-6 z-50 px-5 py-3 rounded-lg shadow-lg text-sm font-medium text-white ${
+            firmToast.success ? "bg-green-600" : "bg-red-600"
+          }`}
+        >
+          {firmToast.message}
+        </div>
+      )}
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div>
@@ -2772,7 +2812,7 @@ const Leads: React.FC = () => {
             </p>
           </div>
         ) : (
-          <table className="w-full min-w-[900px] text-left border-t border-slate-200">
+          <table className="w-full min-w-[1000px] text-left border-t border-slate-200">
             <thead>
               <tr className="bg-white text-slate-800 text-xs font-bold border-b border-slate-200">
                 <th className="px-4 py-3 w-12">No.</th>
@@ -2781,6 +2821,7 @@ const Leads: React.FC = () => {
                 <th className="px-4 py-3 w-24">Lead Type</th>
                 <th className="px-4 py-3 w-28">Price</th>
                 <th className="px-4 py-3 w-28">Status</th>
+                <th className="px-4 py-3 w-32">Firm</th>
                 <th className="px-4 py-3 w-24 text-center">Action</th>
               </tr>
             </thead>
@@ -2845,6 +2886,45 @@ const Leads: React.FC = () => {
                       </span>
                     )}
                   </td>
+                  {/* Firm — assignable straight from the list. It is a property
+                      of the whole FILE: the PUT cascades it to every co-lead,
+                      and only primary leads are listed here, so one change per
+                      row covers the family. */}
+                  <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                    {(() => {
+                      const currentFirm = resolveFirmKey(lead.firmKey);
+                      const saving = firmSavingId === lead.id;
+                      return (
+                        <div className="relative inline-flex items-center">
+                          <select
+                            value={currentFirm}
+                            // Locked while ANY row is saving: two overlapping
+                            // cascades on one family would race each other.
+                            disabled={firmSavingId !== null}
+                            onChange={(e) => saveFirm(e.target.value as FirmKey, lead)}
+                            aria-label={`Firm for ${lead.firstName ?? ""} ${lead.lastName ?? ""}`}
+                            title="Sets the sending address, the email logo and the retainer wording for this file and every co-client on it"
+                            className={`appearance-none pl-2 pr-6 py-1 rounded-md border text-[10px] font-bold cursor-pointer outline-none transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                              currentFirm === "iclosed"
+                                ? "bg-indigo-50 text-indigo-700 border-indigo-200"
+                                : "bg-slate-100 text-slate-700 border-slate-200"
+                            }`}
+                          >
+                            {FIRM_KEYS.map((key) => (
+                              <option key={key} value={key}>
+                                {FIRMS[key].label}
+                              </option>
+                            ))}
+                          </select>
+                          {saving ? (
+                            <Loader2 size={11} className="absolute right-1.5 animate-spin text-slate-500" />
+                          ) : (
+                            <ChevronDown size={11} className="absolute right-1.5 pointer-events-none text-slate-400" />
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </td>
                   <td className="px-4 py-3 text-center">
                     <div className="flex justify-center items-center gap-1">
                       <button
@@ -2867,7 +2947,7 @@ const Leads: React.FC = () => {
                 );
               })}
               {filteredLeads.length === 0 && (
-                <tr><td colSpan={7} className="px-6 py-12 text-center text-slate-500"><p>No leads found.</p></td></tr>
+                <tr><td colSpan={8} className="px-6 py-12 text-center text-slate-500"><p>No leads found.</p></td></tr>
               )}
             </tbody>
           </table>

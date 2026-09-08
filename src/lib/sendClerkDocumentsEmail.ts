@@ -33,10 +33,14 @@
 //                     the thread.
 //
 // CLERK_ALWAYS_EMAIL rides along on top of whichever of those resolved — the
-// firm wants one supervising address on every file regardless of side. It is
-// added only when a side ALREADY resolved, so it deliberately does NOT rescue a
-// file whose type we cannot route (Refinance, blank): those still return [] and
-// the caller still refuses to send rather than quietly mailing a partial list.
+// firm wants one supervising address on EVERY file regardless of side, and
+// "every file" is meant literally: it is added even when no side resolves, so a
+// Refinance (or a blank type) still reaches that address instead of refusing the
+// send outright. Only turning it off (CLERK_ALWAYS_EMAIL="off") can leave such a
+// file with no inbox, and then the caller still refuses rather than guessing.
+//
+// The deposit-proof email does NOT share that last part — see
+// clerkRecipientsForType() vs clerkDocumentRecipients() below.
 //
 // CLERK_DOCUMENTS_EMAIL overrides all of that when it is set: it IS the
 // recipient list, verbatim, for every file regardless of type. It exists
@@ -77,20 +81,13 @@ import { buildDealPackage, sanitizeEntryName } from "./dealPackage";
 import { formatLeadTypeLabel, buildLeadAddressPartsForEmail, renderTransactionPhrase } from "./leadEmailAddress";
 import { decodeTemplateBraces, renderTemplateSafe, type TemplateValue } from "./renderEmailTemplate";
 import { logger } from "./logger";
+import { clerkDocumentRecipients, clerkDocumentsOverride } from "./clerkRecipients";
 
-/** Firm defaults; override per-environment without a deploy. */
-const DEFAULT_PURCHASE_CLERK = "iclosed.purchase@navawilson.law";
-const DEFAULT_SALE_CLERK = "iclosed.sale@navawilson.law";
-
-/**
- * On every routable file, whichever side it is. Override with CLERK_ALWAYS_EMAIL
- * (comma-separated); set it to "off" to drop it.
- *
- * Kept separate from the two side lists rather than baked into both, so an
- * environment that overrides CLERK_PURCHASE_EMAIL / CLERK_SALE_EMAIL does not
- * silently lose it.
- */
-const DEFAULT_ALWAYS_CLERK = "aliya@navawilson.law";
+// Recipient rules live in ./clerkRecipients — a dependency-free module, so the
+// addresses can be unit-tested (tests/clerkRecipients.test.ts) without loading
+// Supabase, the email transport and the PDF builder. Import them from there, not
+// through this file: one path to the addresses is what keeps this email and the
+// deposit-proof email from drifting apart.
 
 /**
  * email_templates row that owns this email's wording. Matched with ILIKE
@@ -128,62 +125,6 @@ function adminBaseUrl(): string {
   if (explicit) return explicit.replace(/\/+$/, "");
   if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
   return "http://localhost:3000";
-}
-
-function splitAddresses(raw: string): string[] {
-  return raw
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-/**
- * Which clerk inbox(es) this file belongs to.
- *
- * Matches the same "combined means both" rule as formatLeadTypeLabel: anything
- * naming both purchase and sale is a P&S file. A type we don't recognise
- * (Refinance, blank) returns [] and the caller refuses to send rather than
- * guessing an inbox.
- */
-export function clerkRecipientsForType(rawType: string | null | undefined): string[] {
-  const purchase = splitAddresses(process.env.CLERK_PURCHASE_EMAIL || DEFAULT_PURCHASE_CLERK);
-  const sale = splitAddresses(process.env.CLERK_SALE_EMAIL || DEFAULT_SALE_CLERK);
-
-  const configuredAlways = (process.env.CLERK_ALWAYS_EMAIL ?? DEFAULT_ALWAYS_CLERK).trim();
-  const always =
-    !configuredAlways || configuredAlways.toLowerCase() === "off"
-      ? []
-      : splitAddresses(configuredAlways);
-
-  const lt = (rawType ?? "").toLowerCase().trim();
-  const hasPurchase = lt.includes("purchase");
-  const hasSale = lt.includes("sale");
-
-  // The Set dedupes an address that appears on both sides AND in `always`, so a
-  // Purchase & Sale file still mails each person once.
-  if (hasPurchase && hasSale) return Array.from(new Set([...purchase, ...sale, ...always]));
-  if (hasSale) return Array.from(new Set([...sale, ...always]));
-  if (hasPurchase) return Array.from(new Set([...purchase, ...always]));
-  return [];
-}
-
-/**
- * The CLERK_DOCUMENTS_EMAIL override, or null when it is unset.
- *
- * Comma-separated, and deliberately NOT merged with the per-type lists: the
- * point of it is to say "these addresses and no others" for an environment.
- * Returning null (rather than []) for a blank value is what lets the caller
- * tell "not configured" from "configured as this list", so an unset variable
- * falls through to clerkRecipientsForType() untouched.
- *
- * Read ONLY by this email. clerkRecipientsForType() stays as it was, so the
- * deposit-proof email that shares it is unaffected.
- */
-export function clerkDocumentsOverride(): string[] | null {
-  const raw = (process.env.CLERK_DOCUMENTS_EMAIL ?? "").trim();
-  if (!raw) return null;
-  const list = splitAddresses(raw);
-  return list.length > 0 ? list : null;
 }
 
 function escapeHtml(s: string): string {
@@ -414,7 +355,10 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
   // An override also bypasses the "which side is this file" gate below, which
   // is the point: a type we cannot route (Refinance, blank) has an inbox once
   // one is named outright.
-  const recipients = clerkDocumentsOverride() ?? clerkRecipientsForType(rawType);
+  const recipients = clerkDocumentsOverride() ?? clerkDocumentRecipients(rawType);
+  // Only reachable now with CLERK_ALWAYS_EMAIL="off" AND an unroutable type, or
+  // with every clerk variable blanked — i.e. a deliberate configuration, not an
+  // ordinary Refinance file.
   if (recipients.length === 0) {
     return {
       ...empty,
