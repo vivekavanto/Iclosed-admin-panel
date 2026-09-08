@@ -2748,10 +2748,18 @@ const Leads: React.FC = () => {
   return (
     <div className="max-w-7xl mx-auto space-y-6 animate-in fade-in duration-500 py-4">
       {/* Firm-change feedback. The list has no detail banner to write into, and
-          a firm change is invisible from the row alone once the select settles. */}
+          a firm change is invisible from the row alone once the select settles.
+
+          Offset by --app-header-h, NOT a bare top-6: <main> is the scroll root
+          and AppHeader is sticky at the top of it, so anything fixed within the
+          first 56px of the viewport lands underneath the header and shows only
+          its bottom sliver. The variable is published by ClientLayout for
+          exactly this, and falls back to 0 on a page rendered without that
+          shell — same rule the calculator's action bar follows. */}
       {firmToast && (
         <div
-          className={`fixed top-6 right-6 z-50 px-5 py-3 rounded-lg shadow-lg text-sm font-medium text-white ${
+          style={{ top: "calc(var(--app-header-h, 0px) + 1.5rem)" }}
+          className={`fixed right-6 z-[60] px-5 py-3 rounded-lg shadow-lg text-sm font-medium text-white ${
             firmToast.success ? "bg-green-600" : "bg-red-600"
           }`}
         >

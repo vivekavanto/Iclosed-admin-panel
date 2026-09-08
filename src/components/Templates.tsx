@@ -213,9 +213,15 @@ const Templates: React.FC = () => {
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
-      {/* Toast */}
+      {/* Toast. Offset by --app-header-h: <main> is the scroll root and
+          AppHeader is sticky at the top of it, so a bare top-6 lands underneath
+          the header. ClientLayout publishes the height for this; it falls back
+          to 0 outside that shell. */}
       {toast && (
-        <div className={`fixed top-6 right-6 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium text-white ${toast.type === 'success' ? 'bg-green-500' : 'bg-red-500'}`}>
+        <div
+          style={{ top: "calc(var(--app-header-h, 0px) + 1.5rem)" }}
+          className={`fixed right-6 z-[60] px-4 py-3 rounded-lg shadow-lg text-sm font-medium text-white ${toast.type === 'success' ? 'bg-green-500' : 'bg-red-500'}`}
+        >
           {toast.message}
         </div>
       )}

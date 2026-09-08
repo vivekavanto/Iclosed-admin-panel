@@ -3873,10 +3873,14 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
 
   return (
     <div className="flex flex-col h-full bg-slate-50">
-      {/* Toast */}
+      {/* Toast. Offset by --app-header-h: <main> is the scroll root and
+          AppHeader is sticky at the top of it, so a bare top-6 lands underneath
+          the header. ClientLayout publishes the height for this; it falls back
+          to 0 outside that shell. */}
       {toast && (
         <div
-          className={`fixed top-6 right-6 z-50 px-5 py-3 rounded-lg shadow-lg text-sm font-medium text-white transition-all ${
+          style={{ top: "calc(var(--app-header-h, 0px) + 1.5rem)" }}
+          className={`fixed right-6 z-[60] px-5 py-3 rounded-lg shadow-lg text-sm font-medium text-white transition-all ${
             toast.type === "success" ? "bg-green-600" : "bg-red-600"
           }`}
         >
