@@ -57,8 +57,8 @@ const TEMPLATE_BODY = `<div style="font-family: -apple-system, BlinkMacSystemFon
   <p style="margin: 32px 0 0 0; font-size: 12px; color: #6b7280;">
     If you didn't expect this email, you can safely ignore it. If the button doesn't work, <a href="{{ confirmation_url }}" style="color: #DC2626;">use this link</a> instead.
   </p>
-</div>
-<br><img src="https://iclosed-admin-panel.vercel.app/logo.png" alt="iClosed by Nava Wilson" style="width:70px;height:auto;" />`;
+  <img src="https://iclosed-admin-panel.vercel.app/logo.png" alt="iClosed by Nava Wilson" style="display:block;margin:32px 0 0 0;width:70px;max-width:100%;height:auto;border:0;" />
+</div>`;
 
 // Find an existing retainer "please sign" template (name ~ retainer, not "signed").
 const { data: existing, error: queryErr } = await supabase
