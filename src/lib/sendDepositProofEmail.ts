@@ -41,7 +41,10 @@ import { sendEmail } from "./email/emailTransport";
 import { getLeadFirmKey } from "./leadFirm";
 import { brandEmailHtml } from "./emailBrand";
 import { formatCurrency } from "./formatCurrency";
-import { clerkRecipientsForType } from "./clerkRecipients";
+// Recipients live in ./clerkRecipients with the document email's — one file
+// holds every address these two emails can reach, and tests/clerkRecipients.
+// test.ts pins them.
+import { depositProofRecipients } from "./clerkRecipients";
 import { readBlobDocument } from "./blobDocument";
 import { PROOF_OF_DEPOSIT_DOC_TYPE, isDepositTask } from "./depositTask";
 import {
@@ -57,12 +60,6 @@ import {
 
 /** `email_templates.name` that owns the wording. Substring, case-insensitive. */
 export const DEPOSIT_PROOF_TEMPLATE_NAME = "Deposit Proof Received";
-
-/**
- * Always copied, on every file. Override per-environment with
- * DEPOSIT_BOOKKEEPING_EMAIL (comma-separated); set it to "off" to drop them.
- */
-const DEFAULT_BOOKKEEPING = "bookkeeping@navawilson.law";
 
 export type DepositProofResult = {
   sent: boolean;
@@ -82,42 +79,6 @@ export type DepositProofResult = {
   /** Present with `send_failed` — the provider's own message. */
   error?: string;
 };
-
-function splitAddresses(raw: string | null | undefined): string[] {
-  return Array.from(
-    new Set(
-      (raw ?? "")
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean),
-    ),
-  );
-}
-
-function bookkeepingRecipients(): string[] {
-  const configured = (process.env.DEPOSIT_BOOKKEEPING_EMAIL ?? DEFAULT_BOOKKEEPING).trim();
-  if (!configured || configured.toLowerCase() === "off") return [];
-  return splitAddresses(configured);
-}
-
-/**
- * Who this email goes to.
- *
- * DEPOSIT_PROOF_EMAIL wins outright when set — it is not merged with the clerk
- * or bookkeeping lists, because the point of it is to say "these addresses and
- * no others" for an environment. "off" disables the email entirely (no
- * recipients means the caller returns `no_recipients` without sending), which
- * is how a preview deployment stops mailing real staff.
- */
-function depositProofRecipients(dealType: string | null | undefined): string[] {
-  const override = (process.env.DEPOSIT_PROOF_EMAIL ?? "").trim();
-  if (override) {
-    return override.toLowerCase() === "off" ? [] : splitAddresses(override);
-  }
-  return Array.from(
-    new Set([...clerkRecipientsForType(dealType), ...bookkeepingRecipients()]),
-  );
-}
 
 function adminBaseUrl(): string {
   const explicit = process.env.ADMIN_PORTAL_URL || process.env.NEXT_PUBLIC_ADMIN_URL;

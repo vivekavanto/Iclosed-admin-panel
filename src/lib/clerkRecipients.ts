@@ -1,4 +1,5 @@
-// WHO the clerk emails are addressed to.
+// WHO the clerk emails are addressed to — both of them: the document package
+// ("Email to Clerk") and the proof-of-deposit alert.
 //
 // Split out of sendClerkDocumentsEmail.ts and kept dependency-free on purpose.
 // A wrong address here does not fail loudly: it delivers a client's whole
@@ -14,6 +15,10 @@
 //   Sale            → iclosed.sale@navawilson.law       (CLERK_SALE_EMAIL)
 //   Purchase & Sale → BOTH of the above, on ONE email
 //   EVERY file      → aliya@navawilson.law as well      (CLERK_ALWAYS_EMAIL)
+//
+// The proof-of-deposit alert adds bookkeeping@navawilson.law on top of that
+// (DEPOSIT_BOOKKEEPING_EMAIL) — money reaching the trust account is their record
+// to keep, not the clerk's.
 //
 // Every one of them is an environment override with a shipped default, so an
 // address can be changed without a deploy — and so a STALE override silently
@@ -119,4 +124,49 @@ export function clerkDocumentsOverride(): string[] | null {
   if (!raw) return null;
   const list = splitAddresses(raw);
   return list.length > 0 ? list : null;
+}
+
+// ── Proof of deposit ────────────────────────────────────────────────────────
+// The "client sent their closing funds" alert. Same clerk routing as above,
+// plus bookkeeping.
+
+/**
+ * Copied on every proof-of-deposit alert. Override with
+ * DEPOSIT_BOOKKEEPING_EMAIL (comma-separated); "off" drops it.
+ */
+export const DEFAULT_BOOKKEEPING = "bookkeeping@navawilson.law";
+
+export function bookkeepingRecipients(): string[] {
+  const configured = (process.env.DEPOSIT_BOOKKEEPING_EMAIL ?? DEFAULT_BOOKKEEPING).trim();
+  if (!configured || configured.toLowerCase() === "off") return [];
+  return splitAddresses(configured);
+}
+
+/**
+ * Who the proof-of-deposit alert goes to.
+ *
+ * The side's clerk (which already carries the always-address) plus bookkeeping,
+ * so a Purchase file reaches iclosed.purchase@, aliya@ and bookkeeping@.
+ *
+ * DEPOSIT_PROOF_EMAIL wins outright when set — it is not merged with either
+ * list, because the point of it is to say "these addresses and no others" for an
+ * environment. "off" disables the email entirely (no recipients means the caller
+ * returns `no_recipients` without sending), which is how a preview deployment
+ * stops mailing real staff.
+ *
+ * Unlike the document package this does NOT fall back to the always-address on a
+ * file with no purchase or sale side: telling a supervisor that closing funds
+ * arrived on a refinance is a message nobody asked for. Bookkeeping still gets
+ * it — the money did move.
+ */
+export function depositProofRecipients(dealType: string | null | undefined): string[] {
+  const override = (process.env.DEPOSIT_PROOF_EMAIL ?? "").trim();
+  if (override) {
+    return override.toLowerCase() === "off" ? [] : dedupe(splitAddresses(override));
+  }
+  return dedupe([...clerkRecipientsForType(dealType), ...bookkeepingRecipients()]);
+}
+
+function dedupe(list: string[]): string[] {
+  return Array.from(new Set(list));
 }

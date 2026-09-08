@@ -23,17 +23,23 @@ import {
   clerkRecipientsForType,
   clerkDocumentRecipients,
   alwaysClerkRecipients,
+  depositProofRecipients,
+  bookkeepingRecipients,
 } from "../src/lib/clerkRecipients.ts";
 
 const PURCHASE = "iclosed.purchase@navawilson.law";
 const SALE = "iclosed.sale@navawilson.law";
 const ALWAYS = "aliya@navawilson.law";
 
+const BOOKKEEPING = "bookkeeping@navawilson.law";
+
 const CLERK_VARS = [
   "CLERK_PURCHASE_EMAIL",
   "CLERK_SALE_EMAIL",
   "CLERK_ALWAYS_EMAIL",
   "CLERK_DOCUMENTS_EMAIL",
+  "DEPOSIT_PROOF_EMAIL",
+  "DEPOSIT_BOOKKEEPING_EMAIL",
 ] as const;
 
 /** Run `fn` with every clerk override cleared, then put the environment back. */
@@ -149,5 +155,62 @@ test('CLERK_ALWAYS_EMAIL="off" drops the supervising address entirely', () => {
       assert.deepEqual(clerkDocumentRecipients("Refinance"), []);
     },
     { CLERK_ALWAYS_EMAIL: "off" },
+  );
+});
+
+// ── Proof of deposit ────────────────────────────────────────────────────────
+// A different email with the same addresses: the side's clerk, aliya, and
+// bookkeeping — who need it because the money moved, not because the file did.
+
+test("the proof-of-deposit alert reaches the clerk, aliya and bookkeeping", () => {
+  withCleanEnv(() => {
+    assert.deepEqual(depositProofRecipients("Purchase"), [PURCHASE, ALWAYS, BOOKKEEPING]);
+    assert.deepEqual(depositProofRecipients("Sale"), [SALE, ALWAYS, BOOKKEEPING]);
+    assert.deepEqual(depositProofRecipients("Purchase & Sale"), [
+      PURCHASE,
+      SALE,
+      ALWAYS,
+      BOOKKEEPING,
+    ]);
+    assert.deepEqual(bookkeepingRecipients(), [BOOKKEEPING]);
+  });
+});
+
+test("a deposit on a file with no side tells bookkeeping only", () => {
+  withCleanEnv(() => {
+    // No clerk to route it to, and the supervising address is deliberately not
+    // rescued here the way it is for the document package — but the money did
+    // move, so bookkeeping still hears about it.
+    assert.deepEqual(depositProofRecipients("Refinance"), [BOOKKEEPING]);
+  });
+});
+
+test("DEPOSIT_PROOF_EMAIL replaces the whole deposit list, and 'off' silences it", () => {
+  withCleanEnv(
+    () => {
+      // Verbatim: neither the clerk nor bookkeeping is merged back in.
+      assert.deepEqual(depositProofRecipients("Purchase"), ["only@example.com"]);
+    },
+    { DEPOSIT_PROOF_EMAIL: "only@example.com" },
+  );
+  withCleanEnv(
+    () => {
+      assert.deepEqual(depositProofRecipients("Purchase"), []);
+    },
+    { DEPOSIT_PROOF_EMAIL: "off" },
+  );
+});
+
+test("the deposit list never repeats an address", () => {
+  withCleanEnv(
+    () => {
+      // aliya named on the side list AND as the always-address AND as
+      // bookkeeping: one row in To:, not three.
+      assert.deepEqual(depositProofRecipients("Purchase"), [PURCHASE, ALWAYS]);
+    },
+    {
+      CLERK_PURCHASE_EMAIL: `${PURCHASE},${ALWAYS}`,
+      DEPOSIT_BOOKKEEPING_EMAIL: ALWAYS,
+    },
   );
 });
