@@ -1,0 +1,48 @@
+-- Make iClosed LLP the default firm for NEW files.
+-- ---------------------------------------------------------------------------
+-- Until now every file landed on Nava Wilson: 2026-09-01-lead-firm-key.sql
+-- added `leads.firm_key text NOT NULL DEFAULT 'navawilson'` because that is what
+-- every file already was. New business is written under iClosed LLP, so the
+-- default moves.
+--
+-- ── THIS RE-BRANDS NOTHING THAT EXISTS ─────────────────────────────────────
+-- A column DEFAULT applies only to rows inserted WITHOUT a value for it. Every
+-- existing lead already carries its own firm_key (the column is NOT NULL, and
+-- the earlier migration backfilled it), so every live file keeps the firm it
+-- has. Nothing about a signed retainer, a sent email or an open file changes.
+--
+-- Deliberately NO backfill. Re-branding live files is a business decision, not a
+-- side effect of a default, and it would break the promise the retainer already
+-- made to those clients. To move a file, an admin flips it on the lead detail
+-- page (or the Firm column on the leads list), which cascades to the co-clients.
+--
+-- ── WHY THE DEFAULT IS WHAT DECIDES IT ─────────────────────────────────────
+-- The portal's intake insert (`iclosed_dev_web/src/app/api/intake/route.ts`)
+-- does NOT name a firm on the primary lead, so the column default is the only
+-- thing that stamps a new file. Co-purchasers / co-sellers inherit the primary's
+-- value explicitly (both repos), so a family can never be split by this change.
+--
+-- src/lib/firms.ts DEFAULT_FIRM_KEY moves to 'iclosed' in the same release.
+-- That constant only covers unrecognised values and FAILED lookups; it never
+-- writes a row. Changing one without the other is the trap: the code would
+-- insist the default is iClosed while every new intake lead came out Nava
+-- Wilson (or the reverse). Run this WITH that deploy, either order — no live
+-- read depends on it.
+--
+-- Idempotent: safe to re-run.
+
+ALTER TABLE leads
+  ALTER COLUMN firm_key SET DEFAULT 'iclosed';
+
+-- Verify the default moved (expect: 'iclosed'::text):
+--   SELECT column_default
+--     FROM information_schema.columns
+--    WHERE table_name = 'leads' AND column_name = 'firm_key';
+--
+-- Verify nothing was re-branded — the counts must match what they were before:
+--   SELECT firm_key, count(*) FROM leads GROUP BY firm_key ORDER BY firm_key;
+--
+-- After the next intake, the newest file should read 'iclosed':
+--   SELECT id, first_name, last_name, firm_key, created_at
+--     FROM leads WHERE parent_lead_id IS NULL
+--    ORDER BY created_at DESC LIMIT 5;

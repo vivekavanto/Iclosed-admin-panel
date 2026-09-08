@@ -19,10 +19,13 @@ import { logger } from "@/lib/logger";
  * ── Failure behaviour ───────────────────────────────────────────────────
  * Every path returns a firm; none throws. A lookup that fails (missing row,
  * a deploy that ran the code before the migration) resolves to
- * DEFAULT_FIRM_KEY = Nava Wilson, which is what every file was before this
- * feature existed. The alternative — letting a send blow up because a firm
- * could not be resolved — would trade a wrong logo for an email that never
- * arrives.
+ * DEFAULT_FIRM_KEY, which is iClosed LLP since 2026-09-08. The alternative —
+ * letting a send blow up because a firm could not be resolved — would trade a
+ * wrong logo for an email that never arrives.
+ *
+ * Note this fallback is NOT how a normal file gets its firm: every leads row
+ * carries its own value, so a Nava Wilson file stays Nava Wilson whatever this
+ * constant says.
  */
 
 /** Firm for any lead in a family, resolved from the ROOT lead. */

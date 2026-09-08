@@ -26,7 +26,9 @@
  * ── Mirror in the portal ────────────────────────────────────────────────
  * `iclosed_dev_web/src/lib/firms.ts` is the same registry, because the retainer
  * agreement is rendered over there. The two files read `leads.firm_key` out of
- * the SAME database, so the keys and the legal names must not drift.
+ * the SAME database, so the keys, the legal names AND DEFAULT_FIRM_KEY must not
+ * drift — a lookup that fails in one repo would otherwise brand the file
+ * differently from the other.
  */
 
 /** The stored value of `leads.firm_key`. */
@@ -35,15 +37,24 @@ export type FirmKey = "navawilson" | "iclosed";
 /**
  * The firm a lead belongs to when nothing says otherwise.
  *
- * Nava Wilson, because it is what every file was BEFORE this feature existed:
- * the shipped email lockup is the "iClosed — powered by Nava Wilson" artwork
- * and the retainer already named Nava Wilson PC. Defaulting anywhere else would
- * silently re-brand every live file the moment this deployed.
+ * iClosed LLP since 2026-09-08. It was 'navawilson' — what every file was before
+ * the split — and the files created under that default KEEP it. Nothing is
+ * re-branded by this constant changing, because nothing reads it for a stored
+ * file: leads.firm_key is NOT NULL with a CHECK constraint, so every existing
+ * row already says which firm it is. This value decides two other things:
  *
- * The intake form is still shared between the firms, so new leads land here too
- * until intake URLs are split per firm.
+ *   • what an UNRECOGNISED value resolves to (resolveFirmKey below), and
+ *   • what a FAILED lookup falls back to (leadFirm.ts — a deleted lead, a
+ *     database error). Those used to land on Nava Wilson; they now land on
+ *     iClosed LLP.
+ *
+ * What actually stamps a NEW file is the database column default, because the
+ * portal's intake insert does not name a firm — see
+ * migrations/2026-09-08-default-firm-iclosed.sql. The two must be changed
+ * together: moving only this constant would leave every new intake lead on
+ * 'navawilson' while the code insisted the default was iClosed.
  */
-export const DEFAULT_FIRM_KEY: FirmKey = "navawilson";
+export const DEFAULT_FIRM_KEY: FirmKey = "iclosed";
 
 export interface FirmProfile {
   key: FirmKey;
@@ -128,9 +139,11 @@ export function isFirmKey(value: unknown): value is FirmKey {
 /**
  * Coerce anything read out of the database (or off a request body) to a firm.
  *
- * NULL is expected and normal: rows written before the firm_key column existed,
- * and any row the backfill has not reached, both read as null. They are Nava
- * Wilson files — see DEFAULT_FIRM_KEY.
+ * NULL should no longer occur — the column is NOT NULL with a CHECK constraint —
+ * but this stays tolerant because a lookup can still hand us undefined (a row
+ * that was not selected, a deal with no lead). Anything unrecognised resolves to
+ * DEFAULT_FIRM_KEY, which is iClosed LLP; a file that must be Nava Wilson says
+ * so in its own column and never reaches this fallback.
  */
 export function resolveFirmKey(value: unknown): FirmKey {
   return isFirmKey(value) ? value : DEFAULT_FIRM_KEY;

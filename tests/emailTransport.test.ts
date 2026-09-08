@@ -16,7 +16,11 @@ import test from "node:test";
 import { withRetry } from "../src/lib/retry.ts";
 import { EmailSendError } from "../src/lib/email/types.ts";
 import type { EmailErrorType, EmailMessage, EmailProvider } from "../src/lib/email/types.ts";
-import { createSmtpProvider, readSmtpConfig } from "../src/lib/email/smtpProvider.ts";
+import {
+  createSmtpProvider,
+  readSmtpConfig,
+  smtpAllowsSelfSigned,
+} from "../src/lib/email/smtpProvider.ts";
 import type { MakeTransport } from "../src/lib/email/smtpProvider.ts";
 
 // ── Fakes ──────────────────────────────────────────────────────────────
@@ -313,6 +317,10 @@ test("SMTP failures are classified so retry can tell permanent from transient", 
     [{ code: "EENVELOPE" }, "rejected", false],
     [{ responseCode: 550 }, "rejected", false],
     [{ responseCode: 451 }, "timeout", true], // 4xx = try later
+    // A chain that will not verify is a local trust-store problem, not a blip:
+    // permanent, so the send is attempted once instead of twice.
+    [{ code: "SELF_SIGNED_CERT_IN_CHAIN" }, "not_configured", false],
+    [{ code: "ESOCKET", cause: { code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE" } }, "not_configured", false],
   ];
 
   for (const [shape, expectedType, expectedRetryable] of cases) {
@@ -360,5 +368,76 @@ test("an incomplete SMTP config reads as null, so the caller can fail closed", (
     assert.equal(cfg.port, 587, "defaults to 587 when unset");
   } finally {
     process.env = prev;
+  }
+});
+
+// ── TLS trust ──────────────────────────────────────────────────────────
+// A developer machine that re-signs TLS (antivirus, proxy, VPN) cannot verify
+// smtp.gmail.com's chain, and every send fails with "self-signed certificate in
+// certificate chain". The escape hatch for that must not be reachable from a
+// deployment — an unverified certificate in production is a MITM nobody sees.
+
+test("nodemailer's own ESOCKET wording is still recognised as a trust failure", async () => {
+  const make: MakeTransport = async () => ({
+    async sendMail() {
+      throw Object.assign(new Error("self-signed certificate in certificate chain"), {
+        code: "ESOCKET",
+      });
+    },
+    close() {},
+  });
+  const provider = createSmtpProvider({ host: "h", port: 587, user: "u", pass: "p" }, make);
+
+  await provider.send(msg()).then(
+    () => assert.fail("should have thrown"),
+    (err: unknown) => {
+      assert.ok(err instanceof EmailSendError);
+      // ESOCKET alone would have read as a timeout and been retried.
+      assert.equal(err.type, "not_configured");
+      assert.equal(err.retryable, false);
+      // The message has to say what to do — the admin UI shows it verbatim.
+      assert.match(err.message, /NODE_EXTRA_CA_CERTS/);
+      assert.match(err.message, /SMTP_TLS_ALLOW_SELF_SIGNED/);
+    },
+  );
+});
+
+test("certificate verification can only be relaxed off a deployment", () => {
+  const saved = {
+    flag: process.env.SMTP_TLS_ALLOW_SELF_SIGNED,
+    vercel: process.env.VERCEL,
+    nodeEnv: process.env.NODE_ENV,
+  };
+  const set = (k: string, v: string | undefined) => {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  };
+  try {
+    delete process.env.VERCEL;
+    set("NODE_ENV", "development");
+
+    // Off by default, and only an explicit opt-in turns it on.
+    delete process.env.SMTP_TLS_ALLOW_SELF_SIGNED;
+    assert.equal(smtpAllowsSelfSigned(), false);
+    for (const value of ["", "0", "no", "false"]) {
+      process.env.SMTP_TLS_ALLOW_SELF_SIGNED = value;
+      assert.equal(smtpAllowsSelfSigned(), false, `for ${JSON.stringify(value)}`);
+    }
+    for (const value of ["1", "true", "TRUE"]) {
+      process.env.SMTP_TLS_ALLOW_SELF_SIGNED = value;
+      assert.equal(smtpAllowsSelfSigned(), true, `for ${JSON.stringify(value)}`);
+    }
+
+    // Neither Vercel nor a production build honours it, whatever it says.
+    process.env.SMTP_TLS_ALLOW_SELF_SIGNED = "1";
+    process.env.VERCEL = "1";
+    assert.equal(smtpAllowsSelfSigned(), false);
+    delete process.env.VERCEL;
+    set("NODE_ENV", "production");
+    assert.equal(smtpAllowsSelfSigned(), false);
+  } finally {
+    set("SMTP_TLS_ALLOW_SELF_SIGNED", saved.flag);
+    set("VERCEL", saved.vercel);
+    set("NODE_ENV", saved.nodeEnv);
   }
 });

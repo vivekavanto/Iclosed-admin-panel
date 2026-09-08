@@ -65,10 +65,16 @@ A single real-estate "file" can involve several people:
 ## Firms (Nava Wilson vs iClosed LLP)
 
 Clients are served under two entities, recorded per file on `leads.firm_key`
-(`navawilson` | `iclosed`, defaulting to `navawilson` — what every file was
-before the split). An admin flips it on the lead detail page; the PUT handler
-cascades it to every co-lead, and `src/lib/leadFirm.ts` resolves it from the
-**root** lead so a family can never be branded two ways.
+(`navawilson` | `iclosed`). **New files default to `iclosed`** since
+2026-09-08; files created before that keep `navawilson` — the default was never
+backfilled, because re-branding a live file is a business decision. Two places
+hold that default and must move together: the column DEFAULT (the portal's
+intake insert names no firm, so it is what actually stamps a new file) and
+`DEFAULT_FIRM_KEY` in `firms.ts` (unrecognised values and failed lookups only).
+An admin flips a file on the lead detail page or from the Firm column on the
+leads list; the PUT handler cascades it to every co-lead, and
+`src/lib/leadFirm.ts` resolves it from the **root** lead so a family can never be
+branded two ways.
 
 The label drives three client-visible things:
 

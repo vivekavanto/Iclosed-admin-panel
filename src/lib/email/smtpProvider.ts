@@ -100,6 +100,12 @@ function classify(err: unknown): EmailErrorType {
   const reply = e?.responseCode;
   const text = (e?.message ?? "").toLowerCase();
 
+  // Checked BEFORE the socket codes below, because nodemailer wraps a TLS
+  // handshake failure as ESOCKET, which would otherwise read as a timeout and
+  // be retried. Nothing about the second attempt is different: the certificate
+  // chain will not become trusted between tries.
+  if (isTlsTrustFailure(err)) return "not_configured";
+
   if (code === "EAUTH" || reply === 535 || reply === 534) return "auth";
   if (code === "ETIMEDOUT" || code === "ESOCKET" || text.includes("timeout")) return "timeout";
   if (code === "ECONNECTION" || code === "ECONNREFUSED" || code === "ENOTFOUND") {
@@ -109,6 +115,63 @@ function classify(err: unknown): EmailErrorType {
   if (code === "EENVELOPE" || (typeof reply === "number" && reply >= 500)) return "rejected";
   if (typeof reply === "number" && reply >= 400) return "timeout"; // 4xx = try later
   return "unknown";
+}
+
+/**
+ * OpenSSL verification codes for "I could not build a trusted chain to a root I
+ * hold". On a public host like smtp.gmail.com these never mean the server is
+ * misconfigured — they mean something local is re-signing TLS with its own root
+ * (antivirus / corporate proxy / VPN inspection), and Node does not read the
+ * Windows certificate store where that root was installed.
+ */
+const TLS_TRUST_CODES = new Set([
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+  "CERT_UNTRUSTED",
+]);
+
+/** True for a TLS chain-of-trust failure, however deeply nodemailer wrapped it. */
+function isTlsTrustFailure(err: unknown): boolean {
+  const e = err as { code?: string; cause?: { code?: string }; message?: string };
+  const codes = [e?.code, e?.cause?.code].map((c) => (c ?? "").toUpperCase());
+  if (codes.some((c) => TLS_TRUST_CODES.has(c))) return true;
+  // Node surfaces the reason in prose when the code is the generic ESOCKET.
+  const text = (e?.message ?? "").toLowerCase();
+  return (
+    text.includes("self-signed certificate") ||
+    text.includes("self signed certificate") ||
+    text.includes("unable to verify the first certificate") ||
+    text.includes("unable to get local issuer certificate")
+  );
+}
+
+/** What to actually DO about a trust failure, appended to the error. */
+const TLS_TRUST_HINT =
+  "the TLS chain could not be verified — something local is intercepting the " +
+  "connection (antivirus, a proxy or a VPN). Point NODE_EXTRA_CA_CERTS at that " +
+  "interceptor's root CA, or for LOCAL DEV ONLY set SMTP_TLS_ALLOW_SELF_SIGNED=1";
+
+/**
+ * Whether to accept an unverifiable certificate. False everywhere that matters.
+ *
+ * This exists for one situation: a developer whose machine re-signs TLS cannot
+ * reach smtp.gmail.com at all, and the alternative they reach for is
+ * NODE_TLS_REJECT_UNAUTHORIZED=0 — which disables verification for the WHOLE
+ * process, Supabase and Blob and Resend included. Narrowing that to this one
+ * transport, off by default, is strictly safer than the workaround it replaces.
+ *
+ * Deliberately impossible to enable on a deployment: on Vercel, or with
+ * NODE_ENV=production, the flag is ignored no matter what it says. A mail path
+ * that silently accepts a MITM'd certificate in production is the exact failure
+ * this whole file is written to prevent.
+ */
+export function smtpAllowsSelfSigned(): boolean {
+  const flag = (process.env.SMTP_TLS_ALLOW_SELF_SIGNED ?? "").trim().toLowerCase();
+  if (flag !== "1" && flag !== "true") return false;
+  if (process.env.VERCEL || process.env.NODE_ENV === "production") return false;
+  return true;
 }
 
 /**
@@ -122,6 +185,16 @@ function classify(err: unknown): EmailErrorType {
  */
 const defaultMakeTransport: MakeTransport = async (config) => {
   const nodemailer = await import("nodemailer");
+
+  const allowSelfSigned = smtpAllowsSelfSigned();
+  if (allowSelfSigned) {
+    // Loud, every transport, no LOG_LEVEL gate: an unverified TLS session must
+    // never be something you have to go looking for.
+    console.warn(
+      "[smtp] TLS certificate verification is OFF (SMTP_TLS_ALLOW_SELF_SIGNED). " +
+        "Local development only — this connection can be intercepted.",
+    );
+  }
 
   return nodemailer.default.createTransport({
     host: config.host,
@@ -145,9 +218,11 @@ const defaultMakeTransport: MakeTransport = async (config) => {
 
     tls: {
       minVersion: "TLSv1.2",
-      // NEVER false. A certificate that will not validate means the hostname is
-      // wrong; disabling the check makes the connection MITM-able instead.
-      rejectUnauthorized: true,
+      // True unless a developer has explicitly opted out on their own machine —
+      // see smtpAllowsSelfSigned(), which cannot return true on a deployment.
+      // Otherwise NEVER false: a certificate that will not validate means the
+      // connection is MITM-able, and turning the check off accepts the MITM.
+      rejectUnauthorized: !allowSelfSigned,
       servername: config.host,
     },
 
@@ -195,7 +270,12 @@ export function createSmtpProvider(
         return { id: info?.messageId };
       } catch (err) {
         const text = err instanceof Error ? err.message : String(err);
-        throw new EmailSendError(`SMTP send failed: ${text}`, classify(err));
+        // The bare OpenSSL wording ("self-signed certificate in certificate
+        // chain") reads as a server problem and sends people to the mail
+        // provider's docs. It is a local trust-store problem, so say so where
+        // the message is actually read — the admin UI surfaces this verbatim.
+        const detail = isTlsTrustFailure(err) ? `${text} — ${TLS_TRUST_HINT}` : text;
+        throw new EmailSendError(`SMTP send failed: ${detail}`, classify(err));
       } finally {
         // Always, even on failure — a half-open socket left behind is what keeps
         // a serverless instance from freezing.
