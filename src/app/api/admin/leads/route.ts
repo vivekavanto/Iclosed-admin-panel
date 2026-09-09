@@ -315,17 +315,26 @@ export async function PUT(req: NextRequest) {
     // src/lib/leadFirm.ts reads the ROOT lead, so branding stays coherent even
     // if this cascade fails; the write is still worth doing so a direct SQL read
     // of any single row tells the truth. Hence a warning, not a 500.
+    //
+    // Two separate updates, not one .or(): an OR filter on a WRITE fails on some
+    // Supabase versions with `42703: column leads.parent_lead_id does not exist`.
     if (updateData.firm_key !== undefined && lead) {
       const rootId = lead.parent_lead_id ?? lead.id;
-      const { error: firmErr } = await supabaseAdmin
-        .from('leads')
-        .update({ firm_key: updateData.firm_key })
-        .or(`id.eq.${rootId},parent_lead_id.eq.${rootId}`);
-      if (firmErr) {
-        console.error('PUT /api/admin/leads firm cascade error:', firmErr);
-        warnings.push(
-          'Saved on this person, but the firm could not be applied to the rest of the file.',
-        );
+      for (const [column, value] of [
+        ["id", rootId],
+        ["parent_lead_id", rootId],
+      ] as const) {
+        const { error: firmErr } = await supabaseAdmin
+          .from("leads")
+          .update({ firm_key: updateData.firm_key })
+          .eq(column, value);
+        if (firmErr) {
+          console.error('PUT /api/admin/leads firm cascade error:', firmErr);
+          warnings.push(
+            'Saved on this person, but the firm could not be applied to the rest of the file.',
+          );
+          break;
+        }
       }
     }
 
