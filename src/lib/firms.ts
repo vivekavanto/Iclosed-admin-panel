@@ -92,6 +92,43 @@ export interface FirmProfile {
    * Re-derive if either file is re-cropped.
    */
   logoWidth: number;
+  /**
+   * Brand lockup for the retainer PDF, read from THIS app's `public/` at send
+   * time, plus the geometry to draw it at. MIRROR of FirmProfile.pdfLogo in
+   * `iclosed_dev_web/src/lib/firms.ts` — the portal renders the same document
+   * at signing, and the two must produce the same letterhead.
+   *
+   * `file` is the only field that legitimately differs between the repos: the
+   * Nava Wilson lockup ships here as `email-logo.png` and in the portal as
+   * `logo-full.png`. They are the SAME artwork, byte for byte, so every number
+   * below carries over unchanged.
+   *
+   * The numbers are MEASURED, not guessed:
+   *
+   *     file                    size      wordmark is...  padding above/below
+   *     email-logo.png          1108x480  41% of height   16% / 21%
+   *     logo.png                  90x29   79% of height   14% /  7%
+   *
+   * `height` is chosen so the word "iClosed" measures the ~22pt it has rendered
+   * at since this document existed; `lift` cancels that file's own built-in
+   * whitespace so the ink starts on the same line either way; `gap` is what the
+   * cursor advances by afterwards; `inkLeft` is the transparent padding on the
+   * file's LEFT edge as a fraction of its width, which the renderer subtracts so
+   * the wordmark lines up with the left margin instead of sitting right of it.
+   *
+   * Re-measure all four here AND in the portal if either file is re-cropped.
+   */
+  pdfLogo: {
+    file: string;
+    /** Drawn height, in points. */
+    height: number;
+    /** drawImage y = cursor - height + lift. */
+    lift: number;
+    /** Extra advance below the image, in points. */
+    gap: number;
+    /** Left transparent padding, as a fraction of the file's width. */
+    inkLeft: number;
+  };
   /** Env vars that override the two addresses per deployment. */
   fromEnvVar: string;
   replyToEnvVar: string;
@@ -107,6 +144,9 @@ export const FIRMS: Record<FirmKey, FirmProfile> = {
     replyToEmail: "iclosed@navawilson.law",
     logoPath: "/email-logo.png",
     logoWidth: 85,
+    // Ink starts at pixel 87 of 1108 across, 16% down. Same artwork the portal
+    // ships as logo-full.png.
+    pdfLogo: { file: "email-logo.png", height: 54, lift: 13, gap: 2, inkLeft: 87 / 1108 },
     fromEnvVar: "RESEND_FROM_EMAIL_NAVAWILSON",
     replyToEnvVar: "RESEND_REPLY_TO_EMAIL_NAVAWILSON",
   },
@@ -123,6 +163,10 @@ export const FIRMS: Record<FirmKey, FirmProfile> = {
     // "iClosed", not "iClosed LLP"; the entity is spelled out in the copy.
     logoPath: "/logo.png",
     logoWidth: 60,
+    // The same bare wordmark, and NOT email-logo.png, for the same reason: an
+    // iClosed LLP retainer must not carry the "POWERED BY NAVA WILSON" tagline.
+    // Ink starts at pixel 2 of 90 across.
+    pdfLogo: { file: "logo.png", height: 28, lift: 8, gap: 16, inkLeft: 2 / 90 },
     fromEnvVar: "RESEND_FROM_EMAIL_ICLOSED",
     replyToEnvVar: "RESEND_REPLY_TO_EMAIL_ICLOSED",
   },

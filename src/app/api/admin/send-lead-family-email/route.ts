@@ -5,8 +5,7 @@ import { sendWelcomeEmail } from "@/lib/sendWelcomeEmail";
 import { sendAuthEmailViaResend } from "@/lib/sendAuthEmail";
 import { formatLeadTypeLabel, buildLeadAddressPartsForEmail } from "@/lib/leadEmailAddress";
 import { guardServiceRequest } from "@/lib/verifyServiceSignature";
-import { get } from "@vercel/blob";
-import { isPrivateBlobUrl, blobTokenForUrl } from "@/lib/blobPrivacy";
+import { generateRetainerPdf } from "@/lib/generateRetainerPdf";
 import { normalizeRecipientEmail } from "@/lib/emailIdentity";
 import { getLeadFirmKey } from "@/lib/leadFirm";
 import { brandEmailHtml } from "@/lib/emailBrand";
@@ -132,54 +131,41 @@ async function sendRetainerEmail(
     };
   }
 
-  // 2. Download each PDF so Resend can carry it as an attachment. Private blobs
-  //    (SEC-003) can't be fetched by URL alone, so pull them server-side with a
-  //    blob token via get(); public/legacy URLs use a plain fetch as before.
-  const attachments: { filename: string; content: Buffer }[] = [];
-  for (const doc of validDocs) {
-    try {
-      let bytes: Buffer;
-      if (isPrivateBlobUrl(doc.file_url as string)) {
-        const result = await get(doc.file_url as string, {
-          access: "private",
-          token: blobTokenForUrl(doc.file_url as string),
-        });
-        if (!result || !result.stream) {
-          return {
-            success: false,
-            error: "Failed to download retainer PDF (private blob not found)",
-          };
-        }
-        bytes = Buffer.from(await new Response(result.stream).arrayBuffer());
-      } else {
-        const res = await fetch(doc.file_url as string);
-        if (!res.ok) {
-          return {
-            success: false,
-            error: `Failed to download retainer PDF (status ${res.status})`,
-          };
-        }
-        bytes = Buffer.from(await res.arrayBuffer());
-      }
-      attachments.push({
-        filename: doc.file_name || "retainer-agreement.pdf",
-        content: bytes,
-      });
-    } catch (err: any) {
-      return {
-        success: false,
-        error: `Failed to download retainer PDF: ${err?.message ?? "unknown error"}`,
-      };
-    }
-  }
+  // 2. Re-render each retainer under the firm the file is on TODAY, instead of
+  //    downloading the stored PDF.
+  //
+  //    The stored file is a SNAPSHOT taken at signing: it carries whichever firm
+  //    the file was on at that moment, and re-assigning the file afterwards
+  //    updates leads.firm_key and nothing else. Attaching it verbatim is what
+  //    sent a client an iClosed-branded email carrying a Nava Wilson retainer —
+  //    the body is branded here, at send time, so the attachment has to be too.
+  //
+  //    The stored document is deliberately NOT overwritten. That file is the
+  //    artifact the client signed and it stays as signed; only the copy being
+  //    emailed follows the firm.
+  //
+  //    One caveat, and it is visible to the client: the reference printed under
+  //    the signature is re-derived from the signature row, because the original
+  //    was a live COUNT at signing time and is stored nowhere. It is stable
+  //    across re-sends, but it does not match the number on the copy the portal
+  //    stored at signing.
+  const { data: sigRows, error: sigErr } = await supabaseAdmin
+    .from("retainer_signatures")
+    .select("id, full_name, signature, signed_date, side")
+    .eq("lead_id", lead.id);
 
-  // 3. Compute the variable set the auto-flow uses. We're attaching all PDFs in
-  //    one email so side-specific labels stay blank — the template body still
-  //    renders cleanly because side_label/side_suffix/property_role_row are all
-  //    optional. propertyRoleRow is emitted as an HTML <tr><td> so the retainer
-  //    template's signature-block table layout doesn't break.
-  const firstName = (lead.first_name ?? "").trim();
-  const fullName = `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim();
+  if (sigErr) {
+    return {
+      success: false,
+      error: `Failed to look up retainer signature: ${sigErr.message}`,
+    };
+  }
+  if (!sigRows || sigRows.length === 0) {
+    return {
+      success: false,
+      error: "Retainer agreement is not signed yet — no signature to render",
+    };
+  }
 
   // Transaction label scoped to the side THIS recipient is party to. A co-person
   // on a Purchase & Sale deal retains us for only one side, so a co-purchaser
@@ -197,6 +183,76 @@ async function sendRetainerEmail(
           ? "Purchase"
           : baseLeadType
       : baseLeadType;
+
+  // A combined P&S retainer lists both properties under their own labels; a
+  // single-side recipient sees only their own. Mirrors the portal's sign route.
+  const rendersBothSides =
+    recipientSide === "combined" &&
+    Boolean(parts.purchase) &&
+    Boolean(parts.selling);
+  const pdfPropertyAddress = rendersBothSides
+    ? [parts.purchase, parts.selling].filter(Boolean).join(" / ")
+    : recipientSide === "sale"
+      ? parts.selling
+      : parts.purchase;
+
+  const attachments: { filename: string; content: Buffer }[] = [];
+  for (const doc of validDocs) {
+    // Match each stored document to the signature that produced it. `side` is
+    // null on a combined retainer and on legacy rows, so a lone signature
+    // answers for whatever single document is on the file.
+    const docSide = (doc.side ?? null) as "purchase" | "sale" | null;
+    const sig =
+      sigRows.find((s) => (s.side ?? null) === docSide) ??
+      (sigRows.length === 1 ? sigRows[0] : null);
+
+    if (!sig) {
+      return {
+        success: false,
+        error: `No retainer signature matches the ${docSide ?? "combined"} agreement on this file`,
+      };
+    }
+
+    try {
+      const dateKey = (sig.signed_date ?? "").replace(/-/g, "");
+      const idSuffix = sig.id.replace(/-/g, "").slice(0, 4).toUpperCase();
+
+      const bytes = await generateRetainerPdf({
+        fullName: sig.full_name ?? "",
+        signature: sig.signature ?? "",
+        signedDate: sig.signed_date ?? "",
+        propertyAddress: pdfPropertyAddress,
+        leadType,
+        uniqueId: `IC-${dateKey}-${idSuffix}`,
+        side: docSide,
+        purchaseAddress: rendersBothSides ? parts.purchase : undefined,
+        saleAddress: rendersBothSides ? parts.selling : undefined,
+        // Resolved from the lead by the caller — the same firm whose lockup
+        // brandEmailHtml is about to put on the email carrying this file.
+        firmKey: firm,
+      });
+
+      attachments.push({
+        filename: doc.file_name || "retainer-agreement.pdf",
+        content: Buffer.from(bytes),
+      });
+    } catch (err) {
+      return {
+        success: false,
+        error: `Failed to render retainer PDF: ${
+          err instanceof Error ? err.message : "unknown error"
+        }`,
+      };
+    }
+  }
+
+  // 3. Compute the variable set the auto-flow uses. We're attaching all PDFs in
+  //    one email so side-specific labels stay blank — the template body still
+  //    renders cleanly because side_label/side_suffix/property_role_row are all
+  //    optional. propertyRoleRow is emitted as an HTML <tr><td> so the retainer
+  //    template's signature-block table layout doesn't break.
+  const firstName = (lead.first_name ?? "").trim();
+  const fullName = `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim();
 
   // Address, role and subject suffix scoped to the side this recipient sees
   // (recipientSide already honors co_person_role and backfills the missing
