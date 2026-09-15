@@ -593,36 +593,6 @@ export async function withEmailDocumentLinks(
   };
 }
 
-/**
- * The document block appended to the alert email, generated in CODE rather than
- * templated.
- *
- * Deliberately not `{{ placeholders }}` in the email_templates row. That row
- * lives in the SHARED Supabase database, so it is read by every environment at
- * once — local, dev deploy, production — while the code that resolves its
- * placeholders ships per-deploy. Adding a new placeholder to the template
- * therefore renders as a literal "{{ attached_count }}" in any environment that
- * hasn't deployed the matching code yet, which is exactly what happened on
- * 2026-08-10. Generating this block here keeps the template stable and the
- * feature self-contained: an old deploy simply omits the block instead of
- * emailing raw template syntax.
- *
- * Returns "" when the family has no documents at all, so the email just doesn't
- * mention them.
- */
-export function renderDocumentSummaryHtml(pkg: FamilyDocumentPackage): string {
-  if (pkg.total === 0) return "";
-
-  const attached = pkg.attachments.length;
-  const sentence =
-    attached > 0
-      ? `<p style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#0f172a;">` +
-        `${attached === pkg.total ? "All " : ""}${attached} of their uploaded ` +
-        `document${attached === 1 ? " is" : "s are"} attached to this email.</p>`
-      : "";
-
-  return sentence + renderLinkedDocsHtml(pkg.linked);
-}
 
 /** Renders the "not attached" list as an HTML fragment, or "" when there is none. */
 export function renderLinkedDocsHtml(linked: LinkedDocument[]): string {

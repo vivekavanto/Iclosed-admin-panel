@@ -14,10 +14,13 @@ import {
   type TemplateValue,
 } from "./renderEmailTemplate";
 import {
+  ATTACHMENT_BUDGET_BYTES,
   collectFamilyDocuments,
-  renderDocumentSummaryHtml,
+  renderLinkedDocsHtml,
   withEmailDocumentLinks,
 } from "./familyDocuments";
+import { buildDealPackage, type DealPackageResult } from "./dealPackage";
+import { packageEntryAttachments, renderPackageSummaryHtml } from "./packageAttachments";
 import { ALL_TASKS_COMPLETE_TYPE } from "./notificationTypes";
 import { logger } from "./logger";
 
@@ -42,9 +45,18 @@ import { logger } from "./logger";
  *     2026-08-26 migration. Those must not hold the alert: the closing-funds
  *     task is switched on in response to this very alert.
  *
- * The email carries the family's whole document package as attachments (see
- * familyDocuments.ts) so the reviewer doesn't have to open the file to read it.
- * Anything over the size budget is listed as a download link instead.
+ * The email carries the file's WHOLE package as attachments, built the same way
+ * "Email to Clerk" builds it (sendClerkDocumentsEmail.ts) so the two can't
+ * disagree about what is on a file:
+ *
+ *   • the GENERATED pages from buildDealPackage(deal, { mergeDocuments: false })
+ *     — personal information, property information, one PDF per task of that
+ *     task's typed answers — attached FIRST, because no blob exists behind them;
+ *   • then every uploaded DOCUMENT (familyDocuments.ts), each in its own bytes.
+ *
+ * Anything over the size budget is listed as a download link instead, and a
+ * generated page that somehow doesn't fit is NAMED in the body rather than
+ * quietly left off.
  *
  * Idempotency: `deals.all_tasks_notified_at` on the family's PRIMARY deal is
  * claimed with a conditional UPDATE (NULL → now()), so two task completions
@@ -385,16 +397,79 @@ async function dispatchAlert(
     return { notified: true, reason: "template_inactive", emailedTo: 0 };
   }
 
-  // Every document the family has uploaded rides along with the alert, so the
-  // reviewer has the package in hand rather than having to open the file. Done
-  // AFTER the template checks so an inactive template costs us no downloads.
+  // The file's WHOLE package rides along with the alert, so the reviewer has it
+  // in hand rather than having to open the file. Done AFTER the template checks
+  // so an inactive template costs us no downloads.
+  //
+  // Two halves, and for a long time this had only the second:
+  //
+  //   1. The package's GENERATED pages — PERSONAL INFORMATION (every party's
+  //      answers), PROPERTY INFORMATION (the lock box code and the rental
+  //      equipment answers) and one PDF per TASK of that task's typed answers.
+  //      Nothing else carries them: they are answers a client TYPED, and the
+  //      document sweep below reads task_responses filtered to
+  //      `field_type = "file"`, so no document exists to stand in for them.
+  //      Their absence is what the clerks reported on 2026-09-15 (#26P-0564 went
+  //      out with 14 uploads and not one line of the clients' details).
+  //   2. Every uploaded DOCUMENT, each in the bytes it was uploaded with.
+  //
+  // Built exactly the way "Email to Clerk" builds it — same buildDealPackage,
+  // same packageEntryAttachments, same collectFamilyDocuments — because these
+  // two emails going out with different contents is the whole bug.
   const familyLeadIds = (familyLeads ?? []).map((l) => l.id);
-  // Same treatment as the clerk email: anything too big to attach travels as a
-  // link that works from an inbox, not one that needs an admin session.
-  const docs = await withEmailDocumentLinks(
-    await collectFamilyDocuments(familyDealIds, familyLeadIds, adminBaseUrl()),
-    { email: recipients[0], dealId: deal.id },
-  );
+
+  // Best-effort by contract: a package failure must cost the alert its generated
+  // pages, never the documents or the email itself.
+  let pkg: DealPackageResult | null = null;
+  try {
+    pkg = await buildDealPackage(deal.id, { mergeDocuments: false });
+  } catch (err) {
+    logger.error(`[AllTasksComplete] deal package failed for deal=${deal.id}:`, err);
+  }
+  if (!pkg) {
+    logger.error(
+      `[AllTasksComplete] no deal package for deal=${deal.id} — the alert goes out with ` +
+        `uploaded documents only (no personal/property information)`,
+    );
+  }
+
+  // Spend the budget on the generated pages FIRST: they are small, and unlike a
+  // document there is no blob behind them to fall back to a download link.
+  const entries = pkg
+    ? packageEntryAttachments(pkg.entries, {
+        fileNumber,
+        budgetBytes: ATTACHMENT_BUDGET_BYTES,
+      })
+    : packageEntryAttachments([], { fileNumber, budgetBytes: ATTACHMENT_BUDGET_BYTES });
+  if (entries.omitted.length) {
+    // error, not warn: a generated page has no blob to link in its place, so
+    // this is the package genuinely losing a section. The body says so too.
+    logger.error(
+      `[AllTasksComplete] generated entries too large to attach — deal=${deal.id}: ` +
+        `${entries.omitted.join(", ")}`,
+    );
+  }
+
+  // Whatever budget is left carries the documents. Nothing is dropped: anything
+  // past the budget, over the per-file ceiling, or whose blob won't download
+  // comes back in `linked` and is listed as a download link below.
+  //
+  // Same `<file number> - <task name> - <client name>` naming the clerk email
+  // uses — this alert lands in the same clerk's inbox, and a file arriving under
+  // two different names depending on which email carried it is what made the two
+  // packages hard to reconcile in the first place.
+  const collected = await collectFamilyDocuments(familyDealIds, familyLeadIds, adminBaseUrl(), {
+    fileNumber,
+    excludeUrls: entries.consumedUrls,
+    budgetBytes: Math.max(0, ATTACHMENT_BUDGET_BYTES - entries.bytes),
+  });
+  // Anything too big to attach travels as a link that works from an inbox, not
+  // one that needs an admin session.
+  const docs = await withEmailDocumentLinks(collected, {
+    email: recipients[0],
+    dealId: deal.id,
+  });
+  const attachments = [...entries.attachments, ...docs.attachments];
 
   const values: Record<string, string> = {
     client_name: clientName,
@@ -408,8 +483,16 @@ async function dispatchAlert(
     lead_type: leadTypeLabel,
     task_count: String(taskCount),
     deal_url: dealUrl,
-    document_count: String(docs.total),
-    attached_count: String(docs.attachments.length),
+    // Counts now cover the WHOLE package, generated pages included, so a
+    // template that renders {{ attached_count }} matches what is on the email.
+    document_count: String(attachments.length + docs.linked.length),
+    attached_count: String(attachments.length),
+    linked_count: String(docs.linked.length),
+    separate_count: String(docs.attachments.length),
+    identification_count: String(pkg?.identificationDocs ?? 0),
+    aps_count: String(pkg?.apsDocs ?? 0),
+    personal_info_count: String(pkg?.personalInfoPeople ?? 0),
+    property_info_count: String(pkg?.propertyInfoRows ?? 0),
   };
   const resolve = (name: string): TemplateValue | null => {
     const key = name.toLowerCase().replace(/^\.+/, "");
@@ -419,13 +502,28 @@ async function dispatchAlert(
     return { value: values[key], raw: key === "deal_url" };
   };
 
-  // The document block ("N documents attached" + any too-large links) is
-  // appended rather than templated. See renderDocumentSummaryHtml — the
-  // template row is shared by every environment via the database, so a new
-  // {{ placeholder }} in it renders literally wherever the code hasn't shipped.
+  // The "Attached:" breakdown and the "too large to attach" links are APPENDED
+  // rather than templated. The template row is shared by every environment via
+  // the database, so a new {{ placeholder }} in it renders literally wherever
+  // the code hasn't shipped (this bit us on 2026-08-10).
+  //
+  // This replaced the old "N of their uploaded documents are attached" sentence
+  // — accurate only while the alert attached nothing BUT uploads, and the line
+  // that told the clerks the package was complete when it was missing every
+  // client's personal information. The shared breakdown names each part, so a
+  // missing section is now visible in the email itself.
   const html =
     renderTemplateSafe(decodeTemplateBraces(template.body), resolve) +
-    renderDocumentSummaryHtml(docs);
+    renderPackageSummaryHtml({
+      identification: pkg?.identificationDocs ?? 0,
+      aps: pkg?.apsDocs ?? 0,
+      personalInfo: pkg?.personalInfoPeople ?? 0,
+      propertyInfo: pkg?.propertyInfoRows ?? 0,
+      taskPdfs: entries.taskPdfs,
+      separate: docs.attachments.length,
+      omitted: entries.omitted,
+    }) +
+    renderLinkedDocsHtml(docs.linked);
   const subject = renderTemplateSafe(
     template.subject?.trim() ? template.subject : template.name,
     resolve,
@@ -449,7 +547,7 @@ async function dispatchAlert(
       to: recipients,
       subject,
       html,
-      ...(docs.attachments.length > 0 ? { attachments: docs.attachments } : {}),
+      ...(attachments.length > 0 ? { attachments } : {}),
     },
     { firm: null, label: "all-tasks-complete", replyTo: null },
   );
@@ -457,8 +555,12 @@ async function dispatchAlert(
   if (result.ok) {
     logger.info(
       `[AllTasksComplete] alerted ${recipients.length} admin(s) — deal=${deal.id} ` +
-        `file=${fileNumber} docs=${docs.attachments.length} attached / ${docs.linked.length} linked ` +
-        `(${Math.round(docs.attachedBytes / 1024)}KB)`,
+        `file=${fileNumber} attached=${attachments.length} ` +
+        `(generated=${entries.attachments.length} [personal info for ${pkg?.personalInfoPeople ?? 0}, ` +
+        `property rows=${pkg?.propertyInfoRows ?? 0}, task pdfs=${entries.taskPdfs}], ` +
+        `documents=${docs.attachments.length}) / ${docs.linked.length} linked` +
+        `${entries.omitted.length ? ` — OMITTED: ${entries.omitted.join(", ")}` : ""} ` +
+        `(${Math.round((entries.bytes + docs.attachedBytes) / 1024)}KB)`,
     );
   } else {
     // Deliberately NOT releasing the claim: the in-app notification is already

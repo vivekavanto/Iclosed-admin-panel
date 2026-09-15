@@ -75,9 +75,9 @@ import {
   collectFamilyDocuments,
   renderLinkedDocsHtml,
   withEmailDocumentLinks,
-  type EmailAttachment,
 } from "./familyDocuments";
-import { buildDealPackage, sanitizeEntryName } from "./dealPackage";
+import { buildDealPackage } from "./dealPackage";
+import { packageEntryAttachments, renderPackageSummaryHtml } from "./packageAttachments";
 import { formatLeadTypeLabel, buildLeadAddressPartsForEmail, renderTransactionPhrase } from "./leadEmailAddress";
 import { decodeTemplateBraces, renderTemplateSafe, type TemplateValue } from "./renderEmailTemplate";
 import { logger } from "./logger";
@@ -209,71 +209,6 @@ function renderBody(f: ClerkEmailFacts): string {
   );
 }
 
-/**
- * "What's attached" — the generated answer PDFs first, then the documents, every
- * one of which travels as its own file.
- *
- * Generated in CODE and appended after the body, for the same reason the
- * "too large to attach" list is: it's a shape that changes with the code, and a
- * template row referencing a placeholder this deploy doesn't know would email
- * raw "{{ }}" syntax (see the note on renderBody). Returns "" when there is
- * nothing to describe.
- */
-function renderPackageSummaryHtml(pkg: {
-  identification: number;
-  aps: number;
-  personalInfo: number;
-  propertyInfo: number;
-  taskPdfs: number;
-  separate: number;
-}): string {
-  const items: string[] = [];
-  if (pkg.identification > 0) {
-    items.push(
-      `<strong>Identification</strong> — ${pkg.identification} ID document` +
-        `${pkg.identification === 1 ? "" : "s"} combined into one PDF`,
-    );
-  }
-  if (pkg.aps > 0) {
-    items.push(
-      `<strong>Agreement of Purchase and Sale</strong> — ${pkg.aps === 1 ? "the agreement" : `all ${pkg.aps} agreements and amendments`} ` +
-        `combined into one PDF`,
-    );
-  }
-  if (pkg.personalInfo > 0) {
-    items.push(
-      `<strong>Personal Information</strong> — ${pkg.personalInfo === 1 ? "the client's" : `all ${pkg.personalInfo} clients'`} ` +
-        `details in one PDF`,
-    );
-  }
-  if (pkg.propertyInfo > 0) {
-    items.push(
-      `<strong>Property Information</strong> — the lock box code and rental ` +
-        `equipment details for the property`,
-    );
-  }
-  if (pkg.taskPdfs > 0) {
-    items.push(
-      `${pkg.taskPdfs} task PDF${pkg.taskPdfs === 1 ? "" : "s"} — the answers the client ` +
-        `gave on ${pkg.taskPdfs === 1 ? "that task" : "those tasks"}`,
-    );
-  }
-  if (pkg.separate > 0) {
-    items.push(
-      `${pkg.separate} document${pkg.separate === 1 ? "" : "s"}, each attached ` +
-        `individually in the format it was uploaded in`,
-    );
-  }
-  if (items.length === 0) return "";
-
-  return (
-    `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#0f172a;">` +
-    `<p style="margin:0 0 4px;"><strong>Attached:</strong></p>` +
-    `<ul style="margin:0 0 16px;padding-left:20px;">` +
-    items.map((i) => `<li>${i}</li>`).join("") +
-    `</ul></div>`
-  );
-}
 
 /**
  * `deals.closing_date` is a DATE — format its Y/M/D parts in UTC so it doesn't
@@ -401,30 +336,25 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
   // Spend the attachment budget on the generated entries first — they are small
   // and no other copy of them exists — then leave the rest to the documents
   // below, which can be linked when they're too large as a generated PDF cannot.
-  const stem = fileNumber ? `${fileNumber} - ` : "";
-  const packageAttachments: EmailAttachment[] = [];
-  const consumedByEmail = new Set<string>();
-  let packageBytes = 0;
-  // The per-task answer PDFs, which the body's "Attached:" breakdown counts on
-  // their own. Counted by entry.kind, not by title: the two title comparisons
-  // this used to make went stale the moment the APS and property entries were
-  // added.
-  let taskPdfCount = 0;
-  for (const entry of pkg.entries) {
-    if (packageBytes + entry.bytes.byteLength > ATTACHMENT_BUDGET_BYTES) {
-      logger.warn(
-        `[ClerkDocuments] entry "${entry.title}" (${entry.bytes.byteLength} bytes) exceeds the ` +
-          `attachment budget — its source documents are attached or linked separately instead`,
-      );
-      continue;
-    }
-    packageBytes += entry.bytes.byteLength;
-    packageAttachments.push({
-      filename: `${stem}${sanitizeEntryName(entry.title)}.pdf`,
-      content: Buffer.from(entry.bytes),
-    });
-    if (entry.kind === "task" || entry.kind === "leftover") taskPdfCount++;
-    for (const url of entry.consumedUrls) consumedByEmail.add(url);
+  // packageEntryAttachments is shared with the all-tasks-complete alert; see the
+  // note on packageAttachments.ts for why the two must not do this differently.
+  const {
+    attachments: packageAttachments,
+    bytes: packageBytes,
+    consumedUrls: consumedByEmail,
+    taskPdfs: taskPdfCount,
+    omitted: omittedEntries,
+  } = packageEntryAttachments(pkg.entries, {
+    fileNumber,
+    budgetBytes: ATTACHMENT_BUDGET_BYTES,
+  });
+  if (omittedEntries.length) {
+    // error, not warn: a generated page has no blob to link in its place, so
+    // this is the package genuinely losing a section. The body says so too.
+    logger.error(
+      `[ClerkDocuments] generated entries too large to attach — deal=${dealId}: ` +
+        `${omittedEntries.join(", ")}`,
+    );
   }
 
   // EVERY document on the file, each as its own attachment in the bytes it was
@@ -541,6 +471,7 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
       propertyInfo: pkg.propertyInfoRows,
       taskPdfs: taskPdfCount,
       separate: docs.attachments.length,
+      omitted: omittedEntries,
     }) +
     renderLinkedDocsHtml(docs.linked);
 

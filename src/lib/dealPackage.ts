@@ -58,6 +58,7 @@
 import supabaseAdmin from "./supabaseAdmin";
 import { getFamilyDealIds } from "./familyDeals";
 import { downloadDoc } from "./familyDocuments";
+import { sanitizeEntryName } from "./packageAttachments";
 import {
   PackageDoc,
   MAIL_FORWARDING_HEADING,
@@ -66,6 +67,12 @@ import {
   type SkippedDoc,
 } from "./packagePdf";
 import { logger } from "./logger";
+
+// sanitizeEntryName and the rules for packing these entries onto an email live in
+// ./packageAttachments — a dependency-free module, so tests can pin them without
+// loading Supabase, the blob store or the PDF builder. Re-exported here because
+// the ZIP route has always imported it from this module.
+export { sanitizeEntryName };
 
 export interface PackagePerson {
   leadId: string;
@@ -180,16 +187,6 @@ function humanise(value: string | null | undefined, fallback: string): string {
   const raw = String(value ?? "").trim();
   if (!raw) return fallback;
   return raw.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-/** Strip characters a ZIP entry or an email attachment shouldn't carry. */
-export function sanitizeEntryName(name: string): string {
-  return (
-    String(name ?? "")
-      .replace(/[\\/:*?"<>|]+/g, " ")
-      .replace(/\s+/g, " ")
-      .trim() || "Document"
-  );
 }
 
 /**
