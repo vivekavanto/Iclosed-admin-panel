@@ -20,7 +20,13 @@ import {
   withEmailDocumentLinks,
 } from "./familyDocuments";
 import { buildDealPackage, type DealPackageResult } from "./dealPackage";
-import { packageEntryAttachments, renderPackageSummaryHtml } from "./packageAttachments";
+import {
+  dedupeAttachmentNames,
+  packageEntryAttachments,
+  reconcileTaskCoverage,
+  renderPackageSummaryHtml,
+  renderUncoveredTasksHtml,
+} from "./packageAttachments";
 import { ALL_TASKS_COMPLETE_TYPE } from "./notificationTypes";
 import { logger } from "./logger";
 
@@ -469,7 +475,35 @@ async function dispatchAlert(
     email: recipients[0],
     dealId: deal.id,
   });
-  const attachments = [...entries.attachments, ...docs.attachments];
+  // One name per attachment across both halves — a task's own PDF and a PDF
+  // uploaded against that same task by that same person are otherwise named
+  // identically, and the recipient loses one on save. Same guard as the clerk
+  // email, because this lands in the same inbox.
+  const attachments = dedupeAttachmentNames([...entries.attachments, ...docs.attachments]);
+
+  const omittedTitles = new Set(entries.omitted);
+  /** Entry KINDS genuinely on the message, so the summary below can't overclaim. */
+  const shipped = new Set(
+    (pkg?.entries ?? []).filter((e) => !omittedTitles.has(e.title)).map((e) => e.kind),
+  );
+
+  // Every task on the file has to leave with this email, as its own PDF or
+  // through one of its uploads. Checked once, here, where the whole message is
+  // known — see reconcileTaskCoverage.
+  const reachableUrls = new Set<string>([
+    ...docs.attachedUrls,
+    ...docs.linked.map((d) => d.fileUrl),
+  ]);
+  const uncovered = pkg
+    ? reconcileTaskCoverage(pkg.coverage, entries.omitted, reachableUrls)
+    : [];
+  if (uncovered.length > 0) {
+    logger.error(
+      `[AllTasksComplete] ${uncovered.length} task(s) are on NEITHER an attachment nor a link — ` +
+        `deal=${deal.id} file=${fileNumber}: ` +
+        uncovered.map((u) => `${u.label} (${u.reason})`).join(", "),
+    );
+  }
 
   const values: Record<string, string> = {
     client_name: clientName,
@@ -515,15 +549,19 @@ async function dispatchAlert(
   const html =
     renderTemplateSafe(decodeTemplateBraces(template.body), resolve) +
     renderPackageSummaryHtml({
-      identification: pkg?.identificationDocs ?? 0,
-      aps: pkg?.apsDocs ?? 0,
-      personalInfo: pkg?.personalInfoPeople ?? 0,
-      propertyInfo: pkg?.propertyInfoRows ?? 0,
+      // Off the entries that actually shipped, not the package's own tallies:
+      // those are set while a section is being built and outlive the entry being
+      // dropped, so the list could name a PDF the email does not carry.
+      identification: shipped.has("identification") ? (pkg?.identificationDocs ?? 0) : 0,
+      aps: shipped.has("aps") ? (pkg?.apsDocs ?? 0) : 0,
+      personalInfo: shipped.has("personal-info") ? (pkg?.personalInfoPeople ?? 0) : 0,
+      propertyInfo: shipped.has("property") ? (pkg?.propertyInfoRows ?? 0) : 0,
       taskPdfs: entries.taskPdfs,
       separate: docs.attachments.length,
       omitted: entries.omitted,
     }) +
-    renderLinkedDocsHtml(docs.linked);
+    renderLinkedDocsHtml(docs.linked) +
+    renderUncoveredTasksHtml(uncovered);
   const subject = renderTemplateSafe(
     template.subject?.trim() ? template.subject : template.name,
     resolve,

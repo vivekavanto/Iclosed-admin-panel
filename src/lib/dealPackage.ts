@@ -54,6 +54,23 @@
 // Everything is best-effort: a blob that can't be fetched or embedded costs that
 // one document (and is reported in `skipped`, so the clerk email can attach the
 // original instead), never the package.
+//
+// No task may vanish between sections
+// ───────────────────────────────────────────────
+// Sections 1-4 take four kinds of task OUT of section 5 because they merge that
+// content family-wide instead. That hand-off used to be made on the task's TITLE
+// and unconditionally, while the merging itself was conditional on a query, a
+// lead resolving, and a `try` that logs and continues — so any section that
+// failed took its tasks off the package with it, and the package said nothing.
+// A file then reaches the clerks with its uploads present and, say, both
+// clients' personal information simply absent, which is what was reported on
+// 2026-09-16.
+//
+// Now a section claims a task only once it has PROVED it carried it
+// (`absorbedBy`), section 5 excludes by that rather than by title, and the
+// result carries `coverage` — one row per task and where its content went — so
+// the senders can refuse to let a task leave unaccounted for. Worst case is a
+// duplicate; it can no longer be a hole.
 
 import supabaseAdmin from "./supabaseAdmin";
 import { getFamilyDealIds } from "./familyDeals";
@@ -152,6 +169,34 @@ export interface DealPackageResult {
   propertyInfoRows: number;
   /** Whether source documents were merged into the entries — see the options. */
   mergedDocuments: boolean;
+  /**
+   * One row per task that HAS something to ship, and where that something went.
+   *
+   * The caller uses it to prove the package is complete: every covered task must
+   * end up on the email either as its own entry or through one of its blobs. See
+   * reconcileTaskCoverage() in packageAttachments.ts.
+   */
+  coverage: TaskCoverage[];
+}
+
+/**
+ * Where one task's content ended up.
+ *
+ * `entryTitle` is set when the task has a PDF of its own (or was merged into a
+ * combined one); `fileUrls` are its uploads, which travel as attachments in
+ * their own right when merging is off. A task with neither — `entryTitle: null`
+ * and no reachable url — is a task the recipient will not see, which is the
+ * thing this type exists to make visible.
+ */
+export interface TaskCoverage {
+  taskId: string;
+  title: string;
+  /** Whose copy of the task this is, for the log line and the email note. */
+  owner: string;
+  /** Entry carrying its answers, or null when nothing carried them. */
+  entryTitle: string | null;
+  /** Blobs uploaded against it. */
+  fileUrls: string[];
 }
 
 interface TaskRow {
@@ -414,6 +459,25 @@ export async function buildDealPackage(
 
   const entries: PackageEntry[] = [];
   const consumedUrls = new Set<string>();
+  // ── Which tasks a merged section ACTUALLY carried ──────────────────────────
+  // Sections 1-4 pull four kinds of task out of the per-task loop below —
+  // identification, the APS, personal information, the lock box / rental
+  // answers — because their content is merged family-wide instead.
+  //
+  // That exclusion used to be made on the task's TITLE alone, and unconditional:
+  // a title matching `isPersonalInfoTitle` was dropped from section 5 whether or
+  // not section 3 had managed to carry it. Every one of those sections is
+  // wrapped in a `try` that logs and continues, and each also declines to emit
+  // an entry when it drew nothing — so a failed lookup, an unresolvable lead or
+  // a thrown query meant the task was in NO entry at all, and nothing said so.
+  // That is how a file can arrive at the clerks with its documents present and
+  // the clients' personal information simply absent.
+  //
+  // So: a section records a task here only once it has genuinely placed that
+  // task's content into an entry that was emitted, and section 5 excludes by
+  // THIS rather than by title. A section that fails now costs its own formatting
+  // (the answers arrive as a plain per-task PDF instead) and nothing else.
+  const absorbedBy = new Map<string, string>();
   const skipped: SkippedDoc[] = [];
   // A file response whose blob could not be resolved at all is already lost —
   // report it the same way a failed download is, so the caller can warn.
@@ -458,12 +522,62 @@ export async function buildDealPackage(
    */
   const toMerge = <T>(docs: T[]): T[] => (mergeDocuments ? docs : []);
 
-  /** Finish a PackageDoc into an entry, dropping it when nothing was drawn. */
+  const responsesByTask = new Map<string, ResponseRow[]>();
+  for (const r of responseRows) {
+    responsesByTask.set(r.task_id, [...(responsesByTask.get(r.task_id) ?? []), r]);
+  }
+  const textRowsOf = (taskId: string) =>
+    (responsesByTask.get(taskId) ?? []).filter(
+      (r) => r.field_type !== "file" && String(r.value ?? "").trim(),
+    );
+  const fileRowsOf = (taskId: string) =>
+    (responsesByTask.get(taskId) ?? []).filter((r) => r.field_type === "file" && r.file_url);
+
+  /**
+   * Hand a task over to a merged section — but only once that section has
+   * genuinely taken everything the per-task loop would otherwise have shown.
+   *
+   * `emitted` is finish()'s answer: a section whose PDF was dropped for being
+   * empty has carried nothing, so it may not claim anything. `answers` says
+   * whether the section draws the task's TYPED responses; sections 1 and 2 merge
+   * uploads but (for identification) never render answers, so a deck that asks a
+   * question on that task would lose it silently. And a merge that left one of
+   * the task's blobs behind — `consumedUrls` is the receipt — leaves the task in
+   * section 5, where the upload gets a PDF of its own.
+   *
+   * The conservative outcome is a duplicate, not a hole: a task released back to
+   * section 5 is at worst shown twice. Losing it entirely is what this exists to
+   * prevent.
+   */
+  const absorb = (
+    taskId: string,
+    sectionTitle: string,
+    emitted: boolean,
+    opts: { answers: boolean },
+  ): void => {
+    if (!emitted) return;
+    if (!opts.answers && textRowsOf(taskId).length > 0) return;
+    if (
+      mergeDocuments &&
+      fileRowsOf(taskId).some((r) => !consumedUrls.has(r.file_url as string))
+    ) {
+      return;
+    }
+    absorbedBy.set(taskId, sectionTitle);
+  };
+
+  /**
+   * Finish a PackageDoc into an entry, dropping it when nothing was drawn.
+   *
+   * Returns whether an entry was actually emitted. Sections 1-4 gate
+   * `absorbedBy` on that answer: a dropped entry must not take its tasks
+   * off the package with it.
+   */
   const finish = async (
     title: string,
     pdf: PackageDoc,
     kind: PackageEntryKind,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     const bytes = await pdf.save();
     skipped.push(...pdf.skipped);
     // packagePdf is deliberately logger-free, so its complaints surface here.
@@ -473,7 +587,7 @@ export async function buildDealPackage(
     for (const doc of pdf.skipped) {
       logger.warn(`[dealPackage] "${title}" left out ${doc.fileName} — ${doc.reason}`);
     }
-    if (!bytes) return;
+    if (!bytes) return false;
     for (const url of pdf.consumedUrls) consumedUrls.add(url);
     entries.push({
       title: sanitizeEntryName(title),
@@ -482,6 +596,7 @@ export async function buildDealPackage(
       documents: pdf.documents,
       consumedUrls: [...pdf.consumedUrls],
     });
+    return true;
   };
 
   // ── 1. Identification ──────────────────────────────────────────────────────
@@ -516,7 +631,12 @@ export async function buildDealPackage(
       }
     }
     identificationDocs = idPdf.documents;
-    await finish("Identification", idPdf, "identification");
+    const emitted = await finish("Identification", idPdf, "identification");
+    // This section merges uploads and never renders answers, so `answers: false`
+    // — an ID task carrying a typed field keeps its own PDF in section 5.
+    for (const t of taskRows.filter((t) => isIdentificationTitle(t.title))) {
+      absorb(t.id, "Identification", emitted, { answers: false });
+    }
   } catch (err) {
     logger.error("[dealPackage] identification entry failed:", err);
   }
@@ -568,7 +688,12 @@ export async function buildDealPackage(
       }
 
       apsDocs = apsPdf.documents;
-      await finish("Agreement of Purchase and Sale", apsPdf, "aps");
+      const emitted = await finish("Agreement of Purchase and Sale", apsPdf, "aps");
+      // loadApsMaterial reads the APS task's typed answers as well as its
+      // uploads, so this section genuinely carries both.
+      for (const t of taskRows.filter((t) => isApsTitle(t.title))) {
+        absorb(t.id, "Agreement of Purchase and Sale", emitted, { answers: true });
+      }
     }
   } catch (err) {
     logger.error("[dealPackage] agreement of purchase and sale entry failed:", err);
@@ -576,7 +701,7 @@ export async function buildDealPackage(
 
   // ── 3. Personal Information ────────────────────────────────────────────────
   try {
-    const rowsByLead = await loadPersonalInfo(leadIds, dealIds);
+    const { byLead: rowsByLead, carriedTaskIds } = await loadPersonalInfo(leadIds, dealIds);
     const withRows = people.filter((p) => (rowsByLead.get(p.leadId) ?? []).length > 0);
     if (withRows.length > 0) {
       const infoPdf = await PackageDoc.create(meta);
@@ -594,17 +719,28 @@ export async function buildDealPackage(
           );
         }
       }
-      personalInfoPeople = withRows.length;
-      await finish("Personal Information", infoPdf, "personal-info");
+      const emitted = await finish("Personal Information", infoPdf, "personal-info");
+      // The counter moves INSIDE the `emitted` check: set before finish(), it
+      // survived the entry being dropped for drawing nothing, and the email's
+      // "Attached:" list read it back as "all 2 clients' details in one PDF" on
+      // a message carrying no such PDF.
+      //
+      // Only the tasks whose answers actually reached the PDF. A party whose
+      // responses could not be tied back to a family lead (`known` in
+      // loadPersonalInfo) is NOT in here, so their task falls through to section
+      // 5 and their details still travel — which is precisely the hole this
+      // closes: the title-based exclusion used to drop it either way.
+      if (emitted) {
+        personalInfoPeople = withRows.length;
+        for (const taskId of carriedTaskIds) {
+          absorb(taskId, "Personal Information", true, { answers: true });
+        }
+      }
     }
   } catch (err) {
     logger.error("[dealPackage] personal information entry failed:", err);
   }
 
-  const responsesByTask = new Map<string, ResponseRow[]>();
-  for (const r of responseRows) {
-    responsesByTask.set(r.task_id, [...(responsesByTask.get(r.task_id) ?? []), r]);
-  }
 
   // ── 4. Property Information ────────────────────────────────────────────────
   // What the clerks reported missing. Neither fact is a document, which is
@@ -640,11 +776,16 @@ export async function buildDealPackage(
     // pass it on every call and it appears once, or not at all when the file has
     // nothing to say there.
     const printedHeadings = new Set<string>();
-    const addRow = (label: string, value: string, heading?: string) => {
+    // Returns whether the value is now IN this entry — true for a row it just
+    // drew and equally true for one it deduped away, since a shared task copied
+    // onto three deals says the same thing three times and the answer is
+    // present either way. Only an empty value is "not carried", and the task it
+    // came from then keeps its place in the per-task loop.
+    const addRow = (label: string, value: string, heading?: string): boolean => {
       const clean = String(value ?? "").trim();
-      if (!clean) return;
+      if (!clean) return false;
       const key = `${label.toLowerCase()}::${clean.toLowerCase()}`;
-      if (seenRow.has(key)) return;
+      if (seenRow.has(key)) return true;
       seenRow.add(key);
       if (rows === 0) {
         propertyPdf.newPage();
@@ -654,7 +795,13 @@ export async function buildDealPackage(
       const head = heading && !printedHeadings.has(heading) ? heading : undefined;
       if (head) printedHeadings.add(head);
       propertyPdf.kvRow(label, clean, head);
+      return true;
     };
+
+    // Which lock box / rental tasks this entry genuinely speaks for. A task that
+    // contributed nothing here stays in the per-task loop rather than being
+    // dropped for matching `isLockboxTitle` / `isRentalTitle`.
+    const propertyTaskIds = new Set<string>();
 
     // Deal columns first — the lock box code as staff actually enter it today.
     // Ordered by party so a family reads primary-first like every other entry.
@@ -674,11 +821,15 @@ export async function buildDealPackage(
         (a, b) => fieldOrder(a) - fieldOrder(b),
       )) {
         if (r.field_type === "file") continue;
-        addRow(
-          humanise(r.field_label || r.field_id, "Lock Box Code"),
-          String(r.value ?? ""),
-          "Property access",
-        );
+        if (
+          addRow(
+            humanise(r.field_label || r.field_id, "Lock Box Code"),
+            String(r.value ?? ""),
+            "Property access",
+          )
+        ) {
+          propertyTaskIds.add(task.id);
+        }
       }
     }
 
@@ -688,11 +839,15 @@ export async function buildDealPackage(
         (a, b) => fieldOrder(a) - fieldOrder(b),
       )) {
         if (r.field_type === "file") continue;
-        addRow(
-          String(r.field_label || r.field_id || "Rental equipment"),
-          String(r.value ?? ""),
-          "Rental equipment",
-        );
+        if (
+          addRow(
+            String(r.field_label || r.field_id || "Rental equipment"),
+            String(r.value ?? ""),
+            "Rental equipment",
+          )
+        ) {
+          propertyTaskIds.add(task.id);
+        }
       }
     }
 
@@ -765,7 +920,10 @@ export async function buildDealPackage(
     // and dropping the entry here would strand that note AND lose the skip
     // report the clerk email needs to attach the original.
     if (rows > 0 || propertyPdf.documents > 0 || propertyPdf.skipped.length > 0) {
-      await finish("Property Information", propertyPdf, "property");
+      const emitted = await finish("Property Information", propertyPdf, "property");
+      for (const taskId of propertyTaskIds) {
+        absorb(taskId, "Property Information", emitted, { answers: true });
+      }
     }
     // The symptom that started this — "the client's lock box uploads are not in
     // the property PDF" — was invisible in the logs. Say it out loud.
@@ -793,14 +951,42 @@ export async function buildDealPackage(
   // The tasks whose content has already been merged family-wide above are left
   // out here — identification, personal information, the APS, and the lock box
   // and rental tasks that section 4 absorbed — so nothing ships twice.
-  const packagedTasks = taskRows.filter(
+  //
+  // By ID, not by title. See the note on `absorbedBy`: a task is only taken
+  // out of this loop once one of those sections has PROVED it carried it, so a
+  // section that threw, found nothing, or could not resolve a party leaves the
+  // task here with a PDF of its own rather than deleting it from the package.
+  const packagedTasks = taskRows.filter((t) => !absorbedBy.has(t.id));
+  // What sections 1-4 already merged, frozen before this loop adds to it.
+  //
+  // A task released back here because its section could not carry ALL of it —
+  // one ID of three failed to download, say — must ship the remainder only. Read
+  // live, `consumedUrls` would also hide a blob that an earlier task in THIS
+  // loop merged, which is a different (and deliberate) behaviour: a shared task
+  // copied onto three deals merges its document into all three PDFs today, and
+  // "Download All" is not the place to change that.
+  const mergedUrls = new Set(consumedUrls);
+  const releasedTasks = taskRows.filter(
     (t) =>
-      !isIdentificationTitle(t.title) &&
-      !isPersonalInfoTitle(t.title) &&
-      !isApsTitle(t.title) &&
-      !isLockboxTitle(t.title) &&
-      !isRentalTitle(t.title),
+      !absorbedBy.has(t.id) &&
+      (isIdentificationTitle(t.title) ||
+        isPersonalInfoTitle(t.title) ||
+        isApsTitle(t.title) ||
+        isLockboxTitle(t.title) ||
+        isRentalTitle(t.title)) &&
+      (textRowsOf(t.id).length > 0 || fileRowsOf(t.id).length > 0),
   );
+  if (releasedTasks.length > 0) {
+    // Loud on purpose. Reaching this means a merged section did NOT carry a task
+    // it is meant to own — the package is still complete (the task gets its own
+    // PDF below), but the formatting the clerks asked for has silently degraded
+    // and somebody should look at why.
+    logger.warn(
+      `[dealPackage] ${releasedTasks.length} task(s) a merged section should have ` +
+        `carried fell back to their own entry: ` +
+        releasedTasks.map((t) => `"${t.title}"`).join(", "),
+    );
+  }
   // What a task is a copy OF — template id when there is one, its title
   // otherwise, so a manually-added twin still pairs up with its peer.
   const peerKey = (t: TaskRow) =>
@@ -823,9 +1009,14 @@ export async function buildDealPackage(
   const copies = new Map<string, number>();
   for (const t of ordered) copies.set(peerKey(t), (copies.get(peerKey(t)) ?? 0) + 1);
 
+  /** Tasks that got a PDF of their own here, by the name it went out under. */
+  const taskEntryTitle = new Map<string, string>();
+
   for (const task of ordered) {
     const rows = responsesByTask.get(task.id) ?? [];
-    const fileRows = rows.filter((r) => r.field_type === "file" && r.file_url);
+    const fileRows = rows.filter(
+      (r) => r.field_type === "file" && r.file_url && !mergedUrls.has(r.file_url),
+    );
     const textRows = rows
       .filter((r) => r.field_type !== "file" && String(r.value ?? "").trim())
       .sort((a, b) => fieldOrder(a) - fieldOrder(b));
@@ -876,7 +1067,7 @@ export async function buildDealPackage(
 
       const named =
         (copies.get(peerKey(task)) ?? 1) > 1 && ownerName ? `${title} - ${ownerName}` : title;
-      await finish(named, pdf, "task");
+      if (await finish(named, pdf, "task")) taskEntryTitle.set(task.id, sanitizeEntryName(named));
     } catch (err) {
       logger.error(`[dealPackage] task entry "${title}" failed:`, err);
       failed.push(title);
@@ -1033,6 +1224,33 @@ export async function buildDealPackage(
     originals.push({ fileName: sanitizeEntryName(doc.fileName), bytes });
   }
 
+  // ── Coverage ───────────────────────────────────────────────────────────────
+  // One row per task that has anything to ship, and where that something went.
+  // The senders reconcile against it before the email leaves, so "this task is
+  // on neither an attachment nor a link" is a thing the code can notice — rather
+  // than something a clerk discovers weeks later and reports as "some documents
+  // are missing", with no way left to tell which.
+  const coverage: TaskCoverage[] = taskRows
+    .map((t) => {
+      const fileUrls = Array.from(
+        new Set(
+          [
+            ...fileRowsOf(t.id).map((r) => r.file_url as string),
+            ...(t.document_url ? [t.document_url] : []),
+          ].filter(Boolean),
+        ),
+      );
+      return {
+        taskId: t.id,
+        title: String(t.title ?? "Task"),
+        owner: leadNameById.get(leadByDeal.get(t.deal_id) ?? "") ?? "",
+        entryTitle: absorbedBy.get(t.id) ?? taskEntryTitle.get(t.id) ?? null,
+        fileUrls,
+      };
+    })
+    // A task with no answers and no uploads has nothing to be missing.
+    .filter((c) => c.entryTitle !== null || c.fileUrls.length > 0 || textRowsOf(c.taskId).length > 0);
+
   return {
     meta,
     fileNumber,
@@ -1047,6 +1265,7 @@ export async function buildDealPackage(
     personalInfoPeople,
     propertyInfoRows,
     mergedDocuments: mergeDocuments,
+    coverage,
   };
 }
 
@@ -1384,13 +1603,25 @@ async function loadApsMaterial(leadIds: string[], dealIds: string[]): Promise<Ap
  *
  * File-type answers are skipped: the merged report is about the ANSWERS, and any
  * document attached to the task still reaches the clerk as its own attachment.
+ *
+ * `carriedTaskIds` names the tasks whose answers genuinely made it into the map.
+ * It is NOT the same as "every personal-information task": a response whose deal
+ * resolves to a lead outside the family roster is dropped below, and the caller
+ * has to know that so the task can keep its own PDF instead of being excluded
+ * from the per-task loop on the strength of its title alone.
  */
+interface PersonalInfoResult {
+  byLead: Map<string, PackageInfoRow[]>;
+  carriedTaskIds: Set<string>;
+}
+
 async function loadPersonalInfo(
   leadIds: string[],
   dealIds: string[],
-): Promise<Map<string, PackageInfoRow[]>> {
+): Promise<PersonalInfoResult> {
   const byLead = new Map<string, PackageInfoRow[]>();
-  if (dealIds.length === 0) return byLead;
+  const carriedTaskIds = new Set<string>();
+  if (dealIds.length === 0) return { byLead, carriedTaskIds };
 
   const [{ data: deals }, { data: tasks }] = await Promise.all([
     supabaseAdmin.from("deals").select("id, lead_id").in("id", dealIds),
@@ -1402,7 +1633,7 @@ async function loadPersonalInfo(
   ]);
 
   const infoTasks = (tasks ?? []).filter((t) => isPersonalInfoTitle(t.title as string));
-  if (infoTasks.length === 0) return byLead;
+  if (infoTasks.length === 0) return { byLead, carriedTaskIds };
 
   const leadByDeal = new Map<string, string>(
     (deals ?? []).map((d) => [d.id as string, (d.lead_id as string) ?? ""]),
@@ -1453,6 +1684,7 @@ async function loadPersonalInfo(
     if (!value) continue;
     const leadId = leadByDeal.get(dealByTask.get(r.task_id as string) ?? "") ?? "";
     if (!known.has(leadId)) continue;
+    carriedTaskIds.add(r.task_id as string);
     grouped.set(leadId, [
       ...(grouped.get(leadId) ?? []),
       {
@@ -1470,5 +1702,5 @@ async function loadPersonalInfo(
         .map((r) => r.row),
     );
   }
-  return byLead;
+  return { byLead, carriedTaskIds };
 }

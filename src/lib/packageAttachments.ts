@@ -18,7 +18,7 @@
 // loading Supabase, the blob store, the email transport or the PDF builder.
 // Nothing here logs — the callers own that, and they report `omitted`.
 
-import type { PackageEntry } from "./dealPackage";
+import type { PackageEntry, TaskCoverage } from "./dealPackage";
 import type { EmailAttachment } from "./familyDocuments";
 
 /** Strip characters a ZIP entry or an email attachment shouldn't carry. */
@@ -86,6 +86,121 @@ export function packageEntryAttachments(
   }
 
   return { attachments, bytes, consumedUrls, taskPdfs, omitted };
+}
+
+/**
+ * Number repeated filenames so no attachment can overwrite another.
+ *
+ * The two halves of these emails are named by rules that DO collide. A task
+ * carried by two parties is titled "<task> - <person>" so the copies can be told
+ * apart, and every uploaded document is renamed
+ * "<file number> - <task name> - <client name>.<ext>" — so a multi-party task
+ * holding both typed answers and a PDF upload produces two attachments with
+ * byte-identical names. Each half deduped only within itself (dedupe() in
+ * familyDocuments.ts; nothing at all here), so the collision survived into the
+ * message.
+ *
+ * MIME allows it and Resend sends it, which is what made this invisible: the
+ * count in the log was right and the email showed both. It bites the recipient —
+ * "Save all attachments" writes one file over the other, and that is a document
+ * that silently never arrived.
+ *
+ * The ZIP export has guarded against exactly this from the start (see the `used`
+ * set in the package route, "most extractors then keep only the last one"). This
+ * is the same guard for the email, applied across BOTH halves at once, which is
+ * the only place it works.
+ */
+export function dedupeAttachmentNames(attachments: EmailAttachment[]): EmailAttachment[] {
+  const seen = new Map<string, number>();
+  return attachments.map((a) => {
+    const key = a.filename.toLowerCase();
+    const count = seen.get(key) ?? 0;
+    seen.set(key, count + 1);
+    if (count === 0) return a;
+    const dot = a.filename.lastIndexOf(".");
+    const filename =
+      dot > 0
+        ? `${a.filename.slice(0, dot)} (${count + 1})${a.filename.slice(dot)}`
+        : `${a.filename} (${count + 1})`;
+    return { ...a, filename };
+  });
+}
+
+/** A task whose content reached neither an attachment nor a link. */
+export interface UncoveredTask {
+  /** "Provide Personal Information — Jane Doe", for the log and the email. */
+  label: string;
+  /** Why it isn't on the email, as far as this can tell. */
+  reason: "no_entry" | "entry_omitted" | "documents_unreachable";
+}
+
+/**
+ * Prove the email carries every task, and name the ones it doesn't.
+ *
+ * This is the backstop for the whole packaging path. Everything upstream is
+ * best-effort by design — every section of buildDealPackage catches and
+ * continues, every document sweep degrades to a link, every download failure
+ * costs one file — and each of those is individually right. Together they meant
+ * a task could go missing with no single place that knew, which is how a file
+ * reaches the clerks looking complete while a client's personal information
+ * simply isn't on it.
+ *
+ * So the senders ask this, once, after the message is assembled: for each task
+ * that HAS something to ship, did something actually ship? A task is covered by
+ * its own (or its merged section's) PDF being attached, or by at least one of
+ * its uploads being attached or linked.
+ *
+ * Callers log the result as an error and name it in the email body — never
+ * silently.
+ *
+ * @param coverage        buildDealPackage's per-task record
+ * @param omittedEntries  entry titles packageEntryAttachments could not fit
+ * @param reachableUrls   blob urls that were attached OR linked on this email
+ */
+export function reconcileTaskCoverage(
+  coverage: readonly TaskCoverage[],
+  omittedEntries: readonly string[],
+  reachableUrls: ReadonlySet<string>,
+): UncoveredTask[] {
+  const omitted = new Set(omittedEntries.map((t) => t.toLowerCase()));
+  const uncovered: UncoveredTask[] = [];
+
+  for (const task of coverage) {
+    const entryShipped = task.entryTitle !== null && !omitted.has(task.entryTitle.toLowerCase());
+    if (entryShipped) continue;
+    if (task.fileUrls.some((u) => reachableUrls.has(u))) continue;
+
+    uncovered.push({
+      label: task.owner ? `${task.title} — ${task.owner}` : task.title,
+      reason:
+        task.entryTitle !== null
+          ? "entry_omitted"
+          : task.fileUrls.length > 0
+            ? "documents_unreachable"
+            : "no_entry",
+    });
+  }
+
+  return uncovered;
+}
+
+/**
+ * The "not on this email" note. Returns "" when nothing is missing, which is the
+ * normal case — this block should be a surprise every time it appears.
+ */
+export function renderUncoveredTasksHtml(uncovered: readonly UncoveredTask[]): string {
+  if (uncovered.length === 0) return "";
+  const items = uncovered
+    .map((u) => `<li>${escapeHtml(u.label)}</li>`)
+    .join("");
+  return (
+    `<div style="margin-top:20px;padding:12px 14px;border:1px solid #fecaca;background:#fef2f2;border-radius:8px;">` +
+    `<p style="font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#b91c1c;margin:0 0 6px;font-weight:600;">` +
+    `${uncovered.length === 1 ? "1 task is" : `${uncovered.length} tasks are`} NOT on this email — ` +
+    `open the file to view ${uncovered.length === 1 ? "it" : "them"}:</p>` +
+    `<ul style="font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#b91c1c;margin:0;padding-left:18px;">` +
+    `${items}</ul></div>`
+  );
 }
 
 function escapeHtml(s: string): string {
