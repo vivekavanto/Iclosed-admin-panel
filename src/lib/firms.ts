@@ -155,8 +155,8 @@ export const FIRMS: Record<FirmKey, FirmProfile> = {
     label: "iClosed LLP",
     legalName: "iClosed LLP",
     introName: "iClosed LLP",
-    fromEmail: "iClosed <support@iclosed.ca>",
-    replyToEmail: "support@iclosed.ca",
+    fromEmail: "iClosed <hello@iclosed.ca>",
+    replyToEmail: "hello@iclosed.ca",
     // The bare iClosed wordmark. Intentionally NOT email-logo.png — that
     // lockup carries the "POWERED BY NAVA WILSON" tagline, which is exactly
     // what an iClosed LLP email must not say. Note the artwork reads

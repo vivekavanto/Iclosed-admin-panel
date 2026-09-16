@@ -12,7 +12,7 @@
  * decides which one its mail comes from (see firms.ts / leadFirm.ts):
  *
  *   Nava Wilson  →  iclosed@navawilson.law
- *   iClosed LLP  →  support@iclosed.ca
+ *   iClosed LLP  →  hello@iclosed.ca
  *
  * Pass the firm and you get its addresses. Call with NO argument and you get
  * the LEGACY, firm-agnostic behaviour — byte-for-byte what this returned
@@ -39,8 +39,8 @@
 
 import { getFirm, type FirmKey } from "./firms.ts";
 
-export const DEFAULT_FROM_EMAIL = "iClosed <support@iclosed.ca>";
-export const DEFAULT_REPLY_TO_EMAIL = "support@iclosed.ca";
+export const DEFAULT_FROM_EMAIL = "iClosed <hello@iclosed.ca>";
+export const DEFAULT_REPLY_TO_EMAIL = "hello@iclosed.ca";
 
 /**
  * From address for Resend sends.
