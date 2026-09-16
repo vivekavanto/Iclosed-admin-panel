@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { X, Loader2, AlertCircle, CheckCircle2, UserCog } from "lucide-react";
 import Button from "@/components/ui/Button";
 import AddressAutocomplete from "./shared/AddressAutocomplete";
+import { isVisibleByRules, ruleSource } from "@/lib/visibleWhen";
 import {
   formatPostalCode,
   isCityField,
@@ -35,6 +36,7 @@ interface FormField {
   required: boolean;
   order_index: number;
   options: FieldOption[] | Record<string, unknown> | null;
+  visible_when?: unknown;
 }
 
 interface ExistingResponse {
@@ -290,6 +292,7 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
             required: !!f.required,
             order_index: f.order_index ?? 0,
             options: f.options ?? null,
+            visible_when: f.visible_when ?? null,
           }))
           // Personal-information tasks are text/select based; skip any file
           // fields (handled by the dedicated upload flows, not this popup).
@@ -404,9 +407,12 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
     });
   }
 
+  const isVisible = (field: FormField) => isVisibleByRules(ruleSource(field), fields, values);
+
   function validate(): boolean {
     const next: Record<string, string> = {};
     for (const field of fields) {
+      if (!isVisible(field)) continue;
       const val = (values[field.id] ?? "").trim();
       if (field.field_type === "checkbox") {
         if (field.required && values[field.id] !== "true") {
@@ -468,8 +474,10 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
       }
 
       for (const field of fields) {
-        const value =
-          field.field_type === "checkbox"
+        // Hidden answers are cleared, matching the client portal.
+        const value = !isVisible(field)
+          ? ""
+          : field.field_type === "checkbox"
             ? values[field.id] === "true"
               ? "true"
               : "false"
@@ -656,7 +664,7 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
           )}
 
           {!loading && !loadError && !saved && !draftSaved &&
-            fields.map((field) => {
+            fields.filter(isVisible).map((field) => {
               const hasError = !!errors[field.id];
               const labelEl = (
                 <label className="text-sm font-semibold text-gray-800 mb-2 block">

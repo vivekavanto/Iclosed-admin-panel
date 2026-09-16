@@ -60,6 +60,7 @@ import EditDealModal from "./EditDealModal";
 import PostClosureDocuments from "./PostClosureDocuments";
 import AddCoClientModal from "./AddCoClientModal";
 import AddressAutocomplete from "./shared/AddressAutocomplete";
+import { isVisibleByRules, ruleSource } from "@/lib/visibleWhen";
 import {
   formatPostalCode,
   isCityField,
@@ -483,6 +484,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
     required: boolean | null;
     order_index: number;
     options: any;
+    visible_when?: unknown;
   };
 
   // Mapping from a form-field's (normalized lowercase) label to the
@@ -942,6 +944,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
             required: f.required ?? false,
             order_index: f.order_index ?? 0,
             options: f.options ?? null,
+            visible_when: f.visible_when ?? null,
           }));
           setEditTaskFormFields(fields);
 
@@ -1081,6 +1084,15 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
       editTaskResponses.find((r) => !r.field_id && r.field_label === field.label) ??
       null
     );
+  };
+
+  const isEditFieldVisible = (field: TaskFormField): boolean => {
+    const values: Record<string, string> = {};
+    for (const f of editTaskFormFields) {
+      const r = findResponseForField(f);
+      values[f.id] = r && !r.deleted ? (r.value ?? "") : "";
+    }
+    return isVisibleByRules(ruleSource(field), editTaskFormFields, values);
   };
 
   // All (non-deleted) responses backing a field. A file field can hold more
@@ -1356,7 +1368,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
     if (editTaskFormFields.length > 0) {
       const errors: Record<string, string> = {};
       for (const field of editTaskFormFields) {
-        if (field.field_type === "file") continue;
+        if (field.field_type === "file" || !isEditFieldVisible(field)) continue;
         const resp = findResponseForField(field);
         const value = (resp?.value ?? "").trim();
         if (field.required && !value && !resp?.deleted) {
@@ -1418,7 +1430,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
       // auto-complete server-side via maybeCompleteFileTask on the final
       // upload; this is the save-time equivalent for the rest of the fields.
       const statusUnchanged = editTaskStatus === (editingTask.status ?? "Pending");
-      const requiredFields = editTaskFormFields.filter((f) => f.required);
+      const requiredFields = editTaskFormFields.filter((f) => f.required && isEditFieldVisible(f));
       const allRequiredFilled =
         requiredFields.length > 0 &&
         requiredFields.every((field) => {
@@ -6695,7 +6707,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                         </p>
                       </div>
                     )}
-                    {editTaskFormFields.map((field) => {
+                    {editTaskFormFields.filter(isEditFieldVisible).map((field) => {
                       const resp = findResponseForField(field);
                       const currentValue = resp?.value ?? "";
                       const isFile = field.field_type === "file";

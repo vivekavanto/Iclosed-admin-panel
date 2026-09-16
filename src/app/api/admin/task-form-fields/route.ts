@@ -26,7 +26,8 @@ export async function GET(req: Request) {
 
   const { data, error } = await supabaseAdmin
     .from("task_form_fields")
-    .select("id, task_template_id, field_type, label, placeholder, required, order_index, options")
+    // "*" so visible_when is picked up once migrated without breaking before.
+    .select("*")
     .eq("task_template_id", taskTemplateId)
     .neq("field_type", "note")
     .order("order_index", { ascending: true });
