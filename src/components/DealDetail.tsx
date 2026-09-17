@@ -58,6 +58,7 @@ import CoPersonPersonalInfoModal from "./CoPersonPersonalInfoModal";
 import ClonePreviousDealDrawer from "./ClonePreviousDealDrawer";
 import EditDealModal from "./EditDealModal";
 import PostClosureDocuments from "./PostClosureDocuments";
+import OtherDocuments from "./OtherDocuments";
 import AddCoClientModal from "./AddCoClientModal";
 import AddressAutocomplete from "./shared/AddressAutocomplete";
 import { isVisibleByRules, ruleSource } from "@/lib/visibleWhen";
@@ -5190,6 +5191,11 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
               </div>
             </div>
           </div>
+
+          {/* Other Documents — free-form, multi-file drop zone for anything on
+              the file that doesn't fit an existing document type. Sits above
+              Post Closure Documents. */}
+          <OtherDocuments dealId={deal.id} />
 
           {/* Post Closure Documents — the final reporting package, uploaded
               after closing and emailed to the client(s). Sits directly under

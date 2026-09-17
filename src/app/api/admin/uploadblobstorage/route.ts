@@ -48,6 +48,7 @@ async function insertDocRow(
   fields: DocFields,
   file_name: string,
   file_url: string,
+  file_size: number | null,
 ) {
   return supabaseAdmin.from("lead_corporate_docs").insert({
     lead_id: fields.lead_id,
@@ -55,6 +56,7 @@ async function insertDocRow(
     custom_type: fields.custom_type || null,
     file_name,
     file_url,
+    file_size,
     is_identification: fields.is_identification,
     document_type: fields.document_type,
     side: fields.side,
@@ -119,6 +121,7 @@ async function registerUploadedBlob(req: Request) {
   const check = validateUploadMeta(
     { name: file_name, size: meta.size, type: meta.contentType },
     maxUploadBytesForDocType(doc_type),
+    doc_type,
   );
   if (!check.ok) {
     // The blob exists but isn't something we'll accept — drop it rather than
@@ -148,7 +151,7 @@ async function registerUploadedBlob(req: Request) {
       typeof body.detection_reason === "string" ? body.detection_reason : null,
   };
 
-  const { error } = await insertDocRow(fields, file_name, file_url);
+  const { error } = await insertDocRow(fields, file_name, file_url, meta.size ?? null);
 
   if (error) {
     // GAP-008: the bytes are in Blob storage but the DB row failed — delete the
@@ -184,8 +187,9 @@ async function uploadMultipart(req: Request) {
   if (!lead_id) throw new Error("No lead_id provided");
   if (!doc_type) throw new Error("No doc_type provided");
 
-  // GAP-009: reject oversized or non-document uploads server-side.
-  const check = validateUpload(file);
+  // GAP-009: reject oversized or non-document uploads server-side. Same
+  // per-doc_type cap and allow-list as the direct-to-Blob path below.
+  const check = validateUpload(file, doc_type);
   if (!check.ok) {
     return NextResponse.json(
       { success: false, error: check.error },
@@ -219,6 +223,7 @@ async function uploadMultipart(req: Request) {
     },
     file.name,
     blob.url,
+    file.size,
   );
 
   if (error) {
