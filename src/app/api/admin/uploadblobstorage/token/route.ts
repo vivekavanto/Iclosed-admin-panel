@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { blobToken } from "@/lib/blobPrivacy";
 import {
-  ALLOWED_UPLOAD_CONTENT_TYPES,
+  allowedUploadContentTypesForDocType,
   maxUploadBytesForDocType,
 } from "@/lib/uploadValidation";
 
@@ -64,7 +64,7 @@ export async function POST(request: Request) {
           // Blob rejects the PUT itself if the browser lies about either of
           // these — this is the real server-side enforcement point now that the
           // bytes don't pass through the app.
-          allowedContentTypes: ALLOWED_UPLOAD_CONTENT_TYPES,
+          allowedContentTypes: allowedUploadContentTypesForDocType(docType),
           maximumSizeInBytes: maxUploadBytesForDocType(docType),
           tokenPayload: JSON.stringify({ leadId, docType }),
           addRandomSuffix: false,
