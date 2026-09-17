@@ -5,6 +5,8 @@ import { createPortal } from "react-dom";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { formatPostalCode } from "@/lib/addressFields";
+import { docDownloadHref, docFetchCredentials } from "@/lib/blobPrivacy";
+import { openDocForViewing } from "@/lib/docViewer";
 import {
   FIRMS,
   FIRM_KEYS,
@@ -43,6 +45,9 @@ import {
   Trash2,
   Edit3,
   Save,
+  Eye,
+  Download,
+  Paperclip,
 } from "lucide-react";
 
 // A row from the `partners` master — the referral agent/broker on a file.
@@ -54,6 +59,19 @@ interface ReferralPartner {
   brokerage_type: string | null;
   brokerage_name: string | null;
   referral_code: string | null;
+}
+
+// One agreement on the file, as /api/admin/leads/[id]/aps-documents returns it.
+// Already filtered to the APS, family-wide, deduped by blob URL and ordered
+// purchase-side first — see leadApsDocuments.ts. Declared locally rather than
+// imported so the server-only module behind that route stays out of this bundle.
+interface ApsDocRow {
+  /** Whose upload it was; "" when the source row has no lead. */
+  leadId: string;
+  fileUrl: string;
+  fileName: string;
+  /** "Purchase" / "Sale", or "" when the agreement is not side-specific. */
+  label: string;
 }
 
 interface LeadUser {
@@ -215,7 +233,19 @@ const Leads: React.FC = () => {
     "selling-address",
     "property-personal",
     "client-leads", // Partner Details — expanded by default
+    "documents", // The intake agreement — expanded by default; the team reads it
+                 // before they ever call the client, so it must not be a click away
   ]);
+
+  // ── The agreement uploaded at intake ───────────────────────────────────────
+  // The agreement was always in the database — it was just never read here. It
+  // lands in one of two stores depending on how it arrived (intake form vs the
+  // APS task in the client portal), and the route reads both; reading only
+  // `lead_corporate_docs` is what made an existing customer's agreement show on
+  // the deal page but not here. See leadApsDocuments.ts.
+  const [apsDocs, setApsDocs] = useState<ApsDocRow[]>([]);
+  const [apsDocsLoading, setApsDocsLoading] = useState(false);
+  const [apsDocsError, setApsDocsError] = useState<string | null>(null);
 
   // ── Edit-mode state for the detail view ────────────────────────────────────
   type LeadEditForm = Pick<
@@ -1045,10 +1075,14 @@ const Leads: React.FC = () => {
     title,
     id,
     icon: Icon,
+    count,
   }: {
     title: string;
     id: string;
     icon: any;
+    /** Optional tally shown beside the title — so a collapsed section still
+     *  tells the admin whether there is anything in it. */
+    count?: number;
   }) => (
     <button
       onClick={() => toggleSection(id)}
@@ -1063,6 +1097,11 @@ const Leads: React.FC = () => {
           <Icon size={18} />
         </div>
         <h3 className="font-bold text-slate-800 tracking-tight">{title}</h3>
+        {typeof count === "number" && count > 0 && (
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-slate-100 text-slate-600 border border-slate-200">
+            {count}
+          </span>
+        )}
       </div>
       <ChevronDown
         size={20}
@@ -1276,6 +1315,101 @@ const Leads: React.FC = () => {
       cancelled = true;
     };
   }, [emailModalOpen, isRetainerTemplateSelected, emailRecipients.map((r) => r.lead.id).join(",")]);
+
+  // Load the agreement as soon as a lead is opened. The route does the family
+  // resolution and reads both stores; everything here just renders the answer.
+  useEffect(() => {
+    const leadId = view === "DETAIL" ? selectedLead?.id : undefined;
+    let cancelled = false;
+    (async () => {
+      if (!leadId) {
+        setApsDocs([]);
+        setApsDocsError(null);
+        setApsDocsLoading(false);
+        return;
+      }
+      // Drop the previous lead's agreement before fetching: showing one
+      // client's agreement under another client's name, even for a moment, is
+      // the one failure mode this section must not have.
+      setApsDocs([]);
+      setApsDocsLoading(true);
+      setApsDocsError(null);
+      try {
+        const res = await fetch(
+          `/api/admin/leads/${encodeURIComponent(leadId)}/aps-documents`,
+        );
+        const data = await res.json();
+        if (cancelled) return;
+        if (data?.success && Array.isArray(data.documents)) {
+          setApsDocs(data.documents as ApsDocRow[]);
+        } else {
+          // Say so rather than rendering an empty list — "no agreement" and
+          // "we couldn't look" lead staff to opposite conclusions before a
+          // client call.
+          setApsDocs([]);
+          setApsDocsError(
+            typeof data?.error === "string" ? data.error : "Could not load the agreement",
+          );
+        }
+      } catch {
+        if (!cancelled) {
+          setApsDocs([]);
+          setApsDocsError("Could not load the agreement");
+        }
+      } finally {
+        if (!cancelled) setApsDocsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [view, selectedLead?.id]);
+
+  // Open in a new tab. Goes through openDocForViewing so private blobs stream
+  // via the auth-gated proxy and a HEIC photo is converted to something a
+  // browser will actually render inline. That helper takes the stored column
+  // names, hence the shim.
+  const viewApsDoc = async (doc: ApsDocRow) => {
+    if (!doc.fileUrl) return;
+    const opened = await openDocForViewing({
+      file_url: doc.fileUrl,
+      file_name: doc.fileName,
+    });
+    if (!opened) {
+      alert("Could not open the file — allow pop-ups and try again.");
+    }
+  };
+
+  // Fetch-then-blob so a cross-origin Blob URL downloads instead of navigating
+  // away; falls back to a plain anchor when fetch is blocked by CORS.
+  const downloadApsDoc = async (doc: ApsDocRow) => {
+    if (!doc.fileUrl) return;
+    const href = docDownloadHref(doc.fileUrl);
+    try {
+      const res = await fetch(href, {
+        credentials: docFetchCredentials(doc.fileUrl),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = doc.fileName || "download";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+    } catch {
+      const a = document.createElement("a");
+      a.href = href;
+      a.download = doc.fileName || "download";
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+  };
 
   // ── DETAIL VIEW ───────────────────────────────────────────────────────────
   if (view === "DETAIL" && selectedLead) {
@@ -2154,6 +2288,132 @@ const Leads: React.FC = () => {
                         Applies to everyone on this file.
                       </span>
                     </div>
+                  </div>
+                )}
+              </>
+            );
+          })()}
+
+          {/* ── Agreement of Purchase and Sale ─────────────────────────────
+              The agreement on this file, from wherever it was uploaded: the
+              intake form, the APS task in the client portal, or a staff upload.
+              All three land in one of two different stores, which is why this
+              comes from its own route rather than a table read — see
+              leadApsDocuments.ts. Read-only, and read-only on purpose: this
+              section exists so the file can be looked at BEFORE conversion,
+              which is when the first client call happens. Uploading and
+              removing still belong to the deal page, which owns the
+              task-completion side effects. */}
+          {(() => {
+            const rootLeadId = selectedLead.parentLeadId ?? selectedLead.id;
+
+            return (
+              <>
+                <SectionHeader
+                  title="Agreement of Purchase and Sale"
+                  id="documents"
+                  icon={Paperclip}
+                  count={apsDocs.length}
+                />
+                {expandedSections.includes("documents") && (
+                  <div className="animate-in slide-in-from-top-2 duration-300 border-t border-slate-50">
+                    {apsDocsLoading ? (
+                      <div className="flex items-center gap-2 px-6 py-6 text-sm font-medium text-slate-500">
+                        <Loader2 size={16} className="animate-spin" />
+                        Loading…
+                      </div>
+                    ) : apsDocsError ? (
+                      <div className="flex items-start gap-2 mx-6 my-5 px-4 py-3 rounded-lg border border-red-200 bg-red-50 text-sm text-red-700">
+                        <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" />
+                        <span>{apsDocsError}</span>
+                      </div>
+                    ) : apsDocs.length === 0 ? (
+                      <div className="px-6 py-8 text-center">
+                        <FileText size={28} className="mx-auto text-slate-300" />
+                        <p className="mt-2 text-sm font-bold text-slate-500">
+                          No agreement on this file yet
+                        </p>
+                        <p className="mt-1 text-xs text-slate-400">
+                          It appears here as soon as the client attaches one — at
+                          intake or against the agreement task.
+                        </p>
+                      </div>
+                    ) : (
+                      <ul className="px-6 py-4 space-y-2">
+                        {apsDocs.map((doc) => {
+                          // Only name the owner when it is NOT the person being
+                          // viewed — on a single-client file that would just
+                          // repeat the page heading.
+                          const ownerName =
+                            !doc.leadId || doc.leadId === selectedLead.id
+                              ? null
+                              : getLeadDisplayName(doc.leadId);
+                          const isRoot = doc.leadId === rootLeadId;
+                          return (
+                            <li
+                              key={doc.fileUrl}
+                              className="flex items-center justify-between gap-3 p-3 rounded-lg bg-slate-50 border border-slate-100"
+                            >
+                              <div className="flex items-start gap-3 min-w-0">
+                                <FileText
+                                  size={16}
+                                  className="text-slate-400 flex-shrink-0 mt-0.5"
+                                />
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <p className="text-sm font-bold text-slate-800 truncate">
+                                      {doc.fileName || "Untitled file"}
+                                    </p>
+                                    {doc.label && (
+                                      <span
+                                        className={`flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] font-black border ${
+                                          doc.label === "Sale"
+                                            ? "bg-orange-100 text-orange-700 border-orange-200"
+                                            : "bg-blue-100 text-blue-700 border-blue-200"
+                                        }`}
+                                      >
+                                        {doc.label}
+                                      </span>
+                                    )}
+                                  </div>
+                                  {ownerName && (
+                                    <p className="text-xs text-slate-400 mt-0.5">
+                                      Uploaded under {ownerName}
+                                      {isRoot ? " (primary)" : ""}
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1 flex-shrink-0">
+                                <a
+                                  href={docDownloadHref(doc.fileUrl)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    void viewApsDoc(doc);
+                                  }}
+                                  className="inline-flex items-center justify-center w-8 h-8 rounded-md text-slate-500 hover:text-brand-primary hover:bg-white transition-colors"
+                                  title="View"
+                                  aria-label={`View ${doc.fileName || "file"}`}
+                                >
+                                  <Eye size={16} />
+                                </a>
+                                <button
+                                  type="button"
+                                  onClick={() => void downloadApsDoc(doc)}
+                                  className="inline-flex items-center justify-center w-8 h-8 rounded-md text-slate-500 hover:text-brand-primary hover:bg-white transition-colors"
+                                  title="Download"
+                                  aria-label={`Download ${doc.fileName || "file"}`}
+                                >
+                                  <Download size={16} />
+                                </button>
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
                   </div>
                 )}
               </>

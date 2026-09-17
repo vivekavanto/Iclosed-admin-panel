@@ -1,6 +1,6 @@
-import supabaseAdmin from "./supabaseAdmin";
-import { normalizeRecipientEmail } from "./emailIdentity";
-import { logger } from "./logger";
+import supabaseAdmin from "./supabaseAdmin.ts";
+import { normalizeRecipientEmail } from "./emailIdentity.ts";
+import { logger } from "./logger.ts";
 
 /**
  * Builds the CC list for a file's outbound email.
@@ -13,6 +13,8 @@ import { logger } from "./logger";
  *   1. `partners.agent_email`        — the partner's primary contact (unchanged)
  *   2. `partner_contacts`            — additional people for that partner
  *   3. `deals.cc_emails`             — one-off addresses for THIS file only
+ *   4. the standing CC below         — staff copied on all agent-facing mail,
+ *                                      and only when 1–3 put someone on the CC
  *
  * De-duped case-insensitively, with the client's own address removed so nobody
  * appears in both To and CC.
@@ -35,6 +37,81 @@ import { logger } from "./logger";
 // Same shape as the guard used when saving a lead email. Intentionally loose:
 // we only need to catch the values that would make Resend reject the send.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * Staff copied on EVERY email an agent receives — whether the agent is the
+ * recipient (agent signup, referral code) or merely CC'd on the client's mail.
+ *
+ * This is an oversight copy, not a file participant, which is why it lives here
+ * as a constant rather than as a `partner_contacts` row per partner. Rows would
+ * have to be repeated for every partner that exists, would be silently missing
+ * for every partner created afterwards, and would make `partnerCcAddresses()`
+ * report the address as one of that brokerage's own contacts — it would then
+ * show on the deal page as a partner contact and be rejected as a duplicate
+ * `cc_emails` entry. None of that is true of it.
+ *
+ * Override per deployment with `AGENT_CC_ALWAYS` (comma-separated). Setting it
+ * to the EMPTY STRING turns the standing CC off entirely, so it can be removed
+ * without a deploy — hence the `undefined` check rather than `|| DEFAULT`, which
+ * would read "" as "unset" and make that kill switch impossible.
+ */
+const DEFAULT_STANDING_AGENT_CC = "saru@iclosed.ca";
+
+function standingAgentCcAddresses(): string[] {
+  const raw = process.env.AGENT_CC_ALWAYS;
+  if (raw === undefined) return [DEFAULT_STANDING_AGENT_CC];
+  return raw.split(",");
+}
+
+/**
+ * Normalise, validate and de-dupe CC candidates, dropping anything excluded.
+ *
+ * Extracted so the standing CC passes through exactly the same guards as an
+ * address read out of the database: a typo in `AGENT_CC_ALWAYS` is dropped and
+ * logged like any other malformed CC, rather than making Resend reject the whole
+ * send and take the client's email down with it.
+ */
+function sanitizeCcList(
+  raws: (string | null | undefined)[],
+  exclude: (string | null | undefined)[],
+): string[] {
+  const excluded = new Set(
+    exclude.map((e) => normalizeRecipientEmail(e).toLowerCase()).filter(Boolean),
+  );
+
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of raws) {
+    const email = normalizeRecipientEmail(raw);
+    if (!email) continue;
+    if (!EMAIL_RE.test(email)) {
+      logger.warn(`[agentCc] dropping malformed CC address ${JSON.stringify(raw)}`);
+      continue;
+    }
+    const key = email.toLowerCase();
+    if (excluded.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    out.push(email);
+  }
+
+  return out;
+}
+
+/**
+ * The standing CC for an email addressed TO an agent.
+ *
+ * For the two sends where the agent is the recipient rather than a copy —
+ * `sendAgentSignupEmail` and `sendPartnerCodeEmail`. Neither has a partner or
+ * deal whose contacts should be copied (the referral-code email is not about a
+ * file at all), so they cannot use {@link buildAgentCcList}; they need only the
+ * oversight copy. Pass the To address as `exclude` so an agent is never CC'd on
+ * their own email.
+ */
+export function standingAgentCcList(
+  exclude: (string | null | undefined)[] = [],
+): string[] {
+  return sanitizeCcList(standingAgentCcAddresses(), exclude);
+}
 
 export async function buildAgentCcList(opts: {
   /** Partner whose primary + additional contacts should be copied. */
@@ -90,23 +167,18 @@ export async function buildAgentCcList(opts: {
     }
   }
 
-  const excluded = new Set(
-    exclude.map((e) => normalizeRecipientEmail(e).toLowerCase()).filter(Boolean),
-  );
+  const out = sanitizeCcList(collected, exclude);
 
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const raw of collected) {
-    const email = normalizeRecipientEmail(raw);
-    if (!email) continue;
-    if (!EMAIL_RE.test(email)) {
-      logger.warn(`[agentCc] dropping malformed CC address ${JSON.stringify(raw)}`);
-      continue;
-    }
-    const key = email.toLowerCase();
-    if (excluded.has(key) || seen.has(key)) continue;
-    seen.add(key);
-    out.push(email);
+  // The standing CC rides along only when someone is ACTUALLY being copied.
+  //
+  // An empty list at this point means the file has no partner, no partner
+  // contacts and no per-file `cc_emails` — nobody but the client is on this
+  // email. Appending staff to it would turn a one-to-one client email into a
+  // copied one, which is not what "CC on every email an agent receives" asks
+  // for. Callers already gate on the template's `shared_with_agent` flag, so a
+  // template that never reaches an agent never reaches here either.
+  if (out.length > 0) {
+    out.push(...sanitizeCcList(standingAgentCcAddresses(), [...exclude, ...out]));
   }
 
   return out;

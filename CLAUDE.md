@@ -92,6 +92,24 @@ Internal/staff mail (`notifyAllTasksComplete`, `sendClerkDocumentsEmail`) and
 file-less mail (`sendPartnerCodeEmail`, the public calculator) stay on the
 firm-agnostic sender on purpose.
 
+## Partner referral codes
+
+`partners.referral_code` is **first name + the initial of the SECOND name + the
+year** — `Sarujan Kana` → `SARUJANK2026`, `Aliya Ali Shaikha` → `ALIYAA2026`
+(the second token, not the last). A clash takes one more letter of the second
+name, first come first served: `Raninder Khal` → `RANINDERK2026`, so a later
+`Raninder Khali` → `RANINDERKH2026`. A code is written once at creation and is
+never recomputed.
+
+`src/lib/referralCode.ts` owns the rule and is **mirrored** in the portal
+(`iclosed_dev_web/src/lib/referralCode.ts`), because intake find-or-creates a
+partner for a keyed-in agent (`resolvePartner.ts`) against the same table — both
+must mint identical codes. The year is a constant, not `getFullYear()`; moving
+to a new cohort means editing both copies. The old scheme (name prefix + global
+sequence, `SARUJAN0001`) was rewritten in place by
+`migrations/2026-09-17-referral-codes-2026.sql`, which is **not** reversible —
+codes clients already hold stopped validating.
+
 ## Key flows
 
 | Flow | Path |
@@ -118,6 +136,9 @@ Rotation cadence is in `docs/key-rotation.md`.
   `RESEND_REPLY_TO_EMAIL_*`) — per-firm sender overrides; see "Firms" below.
   The legacy firm-agnostic `RESEND_FROM_EMAIL` no longer applies to
   file-scoped mail
+- `AGENT_CC_ALWAYS` — comma-separated staff CC'd on every agent-facing email
+  (defaults to `saru@iclosed.ca` in `agentCc.ts`; set it to the empty string to
+  turn the standing CC off without a deploy)
 - `NEXT_PUBLIC_PRIVATE_BLOB` — flag that switches document storage to private
   (requires a private-capable Blob store; see the remediation tracker)
 
@@ -141,6 +162,13 @@ The review and remediation status live in
 Plain SQL files in `migrations/` (named `YYYY-MM-DD-description.sql`), applied
 manually via the Supabase SQL editor. They are NOT auto-run — after adding one,
 run it before deploying code that depends on it.
+
+`migrations/` is **gitignored** since 2026-09-17, so a NEW migration is never
+pushed — it lives only on the machine that wrote it. The 102 files committed
+before that date are still tracked (a `.gitignore` rule does not untrack what git
+already follows). Two consequences to work around: a new migration cannot be
+reviewed in a PR, and a fresh clone cannot reconstruct the schema from the repo,
+so the SQL has to reach whoever applies it by another route.
 
 ## Local dev
 

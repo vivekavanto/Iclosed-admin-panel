@@ -1238,7 +1238,7 @@ async function loadIdentificationDocs(
 }
 
 /** One agreement on the file. */
-interface ApsDoc {
+export interface ApsDoc {
   /** Whose upload it was — "" when the row belongs to a deal with no lead. */
   leadId: string;
   fileUrl: string;
@@ -1254,7 +1254,7 @@ interface ApsAnswer {
   value: string;
 }
 
-interface ApsMaterial {
+export interface ApsMaterial {
   docs: ApsDoc[];
   answers: ApsAnswer[];
 }
@@ -1270,7 +1270,7 @@ interface ApsMaterial {
  * as task_responses, but only for files it has run over, and a client answering
  * the task writes only task_responses. Reading one store alone loses agreements.
  */
-async function loadApsMaterial(leadIds: string[], dealIds: string[]): Promise<ApsMaterial> {
+export async function loadApsMaterial(leadIds: string[], dealIds: string[]): Promise<ApsMaterial> {
   const docs: ApsDoc[] = [];
   const answers: ApsAnswer[] = [];
   if (leadIds.length === 0 && dealIds.length === 0) return { docs, answers };

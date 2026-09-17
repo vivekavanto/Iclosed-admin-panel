@@ -1,21 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
+import { buildReferralCode } from "@/lib/referralCode";
 
 const supabase = supabaseAdmin;
 
 // Partners are the referral sources stored in the `partners` table (a partner is
-// a Mortgage Broker or Real Estate Agent). Each gets a unique referral_code: a
-// name-derived prefix + a GLOBALLY sequential number, so no two codes ever
-// share the same number (JANE0001, SARAH0002, JOHN0003…). Numbering globally
-// (rather than per-prefix) avoids two different partners both showing "0001".
+// a Mortgage Broker or Real Estate Agent). Each gets a unique referral_code —
+// first name + the second name's initial + the year (SARUJANK2026), built by
+// src/lib/referralCode.ts, which owns the scheme and the collision rule.
+//
+// It used to be a name prefix + a globally sequential number (SARUJAN0001);
+// migrations/2026-09-17-referral-codes-2026.sql renamed the existing rows.
 //
 // agent_name is the person and brokerage_name the firm; only agent_name is
 // required. Coupons are not read here — the per-partner code is the only
 // referral code.
 //
-// This file is the canonical source of the code-generation scheme. The public
-// web app mirrors it when intake find-or-creates a partner for a keyed-in agent
-// — keep both in sync: D:\iclosed_dev_web\src\lib\resolvePartner.ts
+// The public web app generates codes too, when intake find-or-creates a partner
+// for a keyed-in agent. It imports the SAME module, mirrored at
+// D:\iclosed_dev_web\src\lib\referralCode.ts — keep the two copies identical.
 
 // True when another non-deleted partner already uses this email (case-
 // insensitive). Blank emails are allowed to repeat since email is optional.
@@ -30,16 +33,6 @@ async function emailTaken(email: string, excludeId?: string): Promise<boolean> {
   return (data ?? []).some(
     (r) => (r.agent_email ?? "").trim().toLowerCase() === normalized && r.id !== excludeId,
   );
-}
-
-// Derive the code prefix from the partner's first name (fallback: email
-// local-part, fallback: PTNR). Uppercased letters only, capped at 8 chars.
-function derivePrefix(name?: string | null, email?: string | null): string {
-  const firstToken = (name ?? "").trim().split(/\s+/)[0] ?? "";
-  const emailLocal = (email ?? "").split("@")[0] ?? "";
-  const source = firstToken || emailLocal || "PTNR";
-  const cleaned = source.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 8);
-  return cleaned || "PTNR";
 }
 
 // GET /api/admin/partners — list partners (newest first) + clients_referred count
@@ -94,26 +87,27 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const prefix = derivePrefix(agent_name, agent_email);
-
-  // Scan-max the trailing number across ALL existing codes (any prefix, including
-  // soft-deleted partners), so the next code's number is globally unique and a
-  // retired partner's number is never reissued. Then insert with retry on the
-  // unique index (23505).
+  // Read EVERY existing code, including soft-deleted partners', so a retired
+  // partner's code is never reissued and a name collision extends into the
+  // second name instead. Then insert with retry on the unique index (23505).
   const { data: existing } = await supabase
     .from("partners")
     .select("referral_code");
 
-  let maxNum = 0;
+  const taken = new Set<string>();
   for (const row of existing ?? []) {
-    const m = /(\d+)$/.exec(row.referral_code ?? "");
-    if (!m) continue;
-    const n = parseInt(m[1], 10);
-    if (!isNaN(n) && n > maxNum) maxNum = n;
+    const code = (row.referral_code ?? "").trim().toUpperCase();
+    if (code) taken.add(code);
   }
 
   for (let attempt = 1; attempt <= 10; attempt++) {
-    const referral_code = `${prefix}${String(maxNum + attempt).padStart(4, "0")}`;
+    // Rebuilt each pass: a 23505 means a concurrent insert took this code, so the
+    // loser adds it to `taken` below and the next pass extends past it.
+    const referral_code = buildReferralCode({
+      name: agent_name,
+      email: agent_email,
+      taken,
+    });
     const { data, error } = await supabase
       .from("partners")
       .insert([
@@ -132,8 +126,12 @@ export async function POST(req: NextRequest) {
     if (!error) {
       return NextResponse.json({ ...data, clients_referred: 0 }, { status: 201 });
     }
-    // Unique violation on referral_code — another insert took this number; retry.
-    if (error.code === "23505") continue;
+    // Unique violation on referral_code — another insert took this code; retry
+    // with it marked as taken so the next candidate is a longer one.
+    if (error.code === "23505") {
+      taken.add(referral_code.toUpperCase());
+      continue;
+    }
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 

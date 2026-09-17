@@ -7,6 +7,7 @@ import { logger } from "./logger";
 import { normalizeRecipientEmail } from "./emailIdentity";
 import { getLeadFirmKey } from "./leadFirm";
 import { brandEmailHtml } from "./emailBrand";
+import { standingAgentCcList } from "./agentCc";
 
 export type AgentSignupEmailResult = {
   success: boolean;
@@ -307,9 +308,15 @@ export async function sendAgentSignupEmail(
   // 7. Send — the agent hears from the firm acting on their client's file.
   const firm = await getLeadFirmKey(leadId);
 
+  // The agent is the recipient here, so the standing staff CC applies with no
+  // partner/deal contacts to resolve. Excluding the To address keeps an agent
+  // off their own CC line in the (unlikely) case the two coincide.
+  const ccList = standingAgentCcList([agentEmail]);
+
   const sendResult = await sendEmail(
     {
       to: [normalizeRecipientEmail(agentEmail)],
+      ...(ccList.length > 0 ? { cc: ccList } : {}),
       subject,
       html: brandEmailHtml(htmlBody, firm),
     },

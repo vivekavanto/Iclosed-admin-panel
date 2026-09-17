@@ -2,10 +2,11 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { upload } from "@vercel/blob/client";
-import { FileText, Loader2, Upload, Sparkles } from "lucide-react";
+import { FileText, Loader2, Trash2, Upload, Sparkles } from "lucide-react";
 import { BLOB_ACCESS, docDownloadHref } from "@/lib/blobPrivacy";
 import { STATEMENT_OF_ACCOUNT_DOC_TYPE } from "@/lib/depositTask";
 import { formatLocalDate } from "@/lib/formatDate";
+import DepositFundsDrawer from "./DepositFundsDrawer";
 
 /**
  * The admin half of "Deposit Funds Into Our Trust Account", rendered inline
@@ -36,12 +37,26 @@ type StatementDoc = {
   created_at: string | null;
 };
 
+/**
+ * One proof of deposit on the file. Either id can be null: the client's answer
+ * lives in `task_responses` and the bytes in `lead_corporate_docs`, and a
+ * response row frequently records only a file name.
+ */
+type ProofDoc = {
+  response_id: string | null;
+  doc_id: string | null;
+  file_name: string | null;
+  file_url: string | null;
+  created_at: string | null;
+};
+
 type DepositTaskState = {
   id: string;
   status: string | null;
   balance_due: number | null;
   activation_required: boolean | null;
   activated_at: string | null;
+  completed_at: string | null;
   is_inactive: boolean;
 };
 
@@ -67,9 +82,12 @@ export default function DepositTaskPanel({
   const [loading, setLoading] = useState(true);
   const [task, setTask] = useState<DepositTaskState | null>(null);
   const [statement, setStatement] = useState<StatementDoc | null>(null);
+  const [proofs, setProofs] = useState<ProofDoc[]>([]);
   const [primaryLeadId, setPrimaryLeadId] = useState<string | null>(null);
 
   const [uploading, setUploading] = useState(false);
+  const [proofDrawerOpen, setProofDrawerOpen] = useState(false);
+  const [removingProof, setRemovingProof] = useState<string | null>(null);
   const [extracting, setExtracting] = useState(false);
   const [activating, setActivating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -101,6 +119,7 @@ export default function DepositTaskPanel({
       }
       setTask(data.task ?? null);
       setStatement(data.statement ?? null);
+      setProofs(data.proofs ?? []);
       setPrimaryLeadId(data.primary_lead_id ?? null);
       setBalanceInput(
         data.task?.balance_due === null || data.task?.balance_due === undefined
@@ -255,6 +274,67 @@ export default function DepositTaskPanel({
     }
   };
 
+  /**
+   * The drawer has filed the receipt. It returns the refreshed task and the
+   * proofs on the file, so nothing needs refetching here — but the deal page's
+   * task row does, because the task has just gone Completed.
+   */
+  const handleProofUploaded = (data: {
+    task?: unknown;
+    proofs?: unknown;
+    task_completed?: boolean;
+  }) => {
+    setTask((data.task as DepositTaskState | null) ?? null);
+    setProofs((data.proofs as ProofDoc[]) ?? []);
+    notify(
+      data.task_completed
+        ? "Proof of deposit uploaded — task completed and the clerk notified"
+        : "Proof of deposit uploaded",
+    );
+    onActivated?.();
+  };
+
+  /** Remove a receipt — one filed against the wrong file, or a corrected copy. */
+  const removeProof = async (proof: ProofDoc) => {
+    const key = proof.response_id ?? proof.doc_id;
+    if (!key) return;
+    if (
+      !window.confirm(
+        "Remove this proof of deposit? The task goes back to Pending if it is the only one on the file.",
+      )
+    ) {
+      return;
+    }
+
+    setRemovingProof(key);
+    try {
+      const params = new URLSearchParams();
+      if (proof.response_id) params.set("response_id", proof.response_id);
+      if (proof.doc_id) params.set("doc_id", proof.doc_id);
+      const res = await fetch(
+        `/api/admin/deals/${dealId}/deposit-task/proof?${params.toString()}`,
+        { method: "DELETE" },
+      );
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.error || "Could not remove the proof of deposit");
+      }
+      setTask(data.task ?? null);
+      setProofs(data.proofs ?? []);
+      notify(
+        data.reopened ? "Proof removed — the task is Pending again" : "Proof removed",
+      );
+      onActivated?.();
+    } catch (err) {
+      notify(
+        err instanceof Error ? err.message : "Could not remove the proof of deposit",
+        "error",
+      );
+    } finally {
+      setRemovingProof(null);
+    }
+  };
+
   const handleActivate = async (resend = false) => {
     setActivating(true);
     try {
@@ -313,6 +393,7 @@ export default function DepositTaskPanel({
     );
   }
 
+  const isCompleted = task.status === "Completed" || !!task.completed_at;
   const hasBalance = balanceInput.trim() !== "" && Number(balanceInput) > 0;
   const canActivate = !!statement?.file_url && hasBalance && !isActive;
 
@@ -477,6 +558,112 @@ export default function DepositTaskPanel({
             </span>
           )}
         </div>
+      )}
+
+      {/* ── Proof of deposit ──
+          Normally the client's own answer to this task. An admin files it here
+          when the funds arrived off-portal, which is the only way to close the
+          task on those files. */}
+      <div className="border-t border-slate-200 pt-4">
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-sm font-semibold text-slate-800">Proof of deposit</p>
+          {isCompleted && (
+            <span className="text-xs font-semibold text-emerald-700">Received</span>
+          )}
+        </div>
+
+        {proofs.length > 0 && (
+          <ul className="space-y-2 mb-3">
+            {proofs.map((proof, i) => {
+              const key = proof.response_id ?? proof.doc_id ?? String(i);
+              return (
+                <li
+                  key={key}
+                  className="flex items-center gap-3 bg-white border border-slate-200 rounded-lg px-4 py-3"
+                >
+                  <span className="shrink-0 w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center">
+                    <FileText size={18} className="text-emerald-600" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    {proof.file_url ? (
+                      <a
+                        href={docDownloadHref(proof.file_url)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block text-sm font-semibold text-slate-800 truncate hover:text-brand-primary transition-colors"
+                        title={proof.file_name ?? "Proof of deposit"}
+                      >
+                        {proof.file_name ?? "Proof of deposit"}
+                      </a>
+                    ) : (
+                      // A response row that recorded only a file name — the
+                      // document itself never reached either store.
+                      <p className="text-sm font-semibold text-slate-800 truncate">
+                        {proof.file_name ?? "Proof of deposit"}
+                      </p>
+                    )}
+                    <p className="text-xs text-slate-500">
+                      {proof.created_at
+                        ? `Uploaded ${formatLocalDate(proof.created_at)}`
+                        : proof.file_url
+                          ? "Uploaded"
+                          : "Recorded without a file"}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void removeProof(proof)}
+                    disabled={removingProof !== null}
+                    className="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:text-[#C10007] hover:border-red-200 hover:bg-red-50 transition-colors disabled:opacity-50"
+                    title="Remove this proof"
+                    aria-label="Remove this proof of deposit"
+                  >
+                    {removingProof === (proof.response_id ?? proof.doc_id) ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
+                      <Trash2 size={14} />
+                    )}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
+        <button
+          type="button"
+          onClick={() => setProofDrawerOpen(true)}
+          disabled={removingProof !== null}
+          className="w-full flex items-center gap-3 border-2 border-dashed border-slate-300 rounded-lg px-4 py-3 text-left hover:border-brand-primary hover:bg-white/60 transition-colors disabled:opacity-60"
+        >
+          <span className="shrink-0 w-9 h-9 rounded-full bg-slate-100 flex items-center justify-center">
+            <Upload size={16} className="text-slate-500" />
+          </span>
+          <span>
+            <span className="block text-sm font-semibold text-slate-700">
+              {proofs.length > 0
+                ? "Upload another proof for the client"
+                : "Upload proof of deposit for the client"}
+            </span>
+            <span className="block text-xs text-slate-500">
+              Opens the client&apos;s own screen · completes the task and emails the clerk
+            </span>
+          </span>
+        </button>
+      </div>
+
+      {/* The client's screen, so an admin uploading for them sees the balance,
+          the statement and the transfer instructions the client is reading. */}
+      {proofDrawerOpen && (
+        <DepositFundsDrawer
+          open
+          onClose={() => setProofDrawerOpen(false)}
+          dealId={dealId}
+          leadId={primaryLeadId}
+          balanceDue={task.balance_due}
+          statement={statement}
+          onUploaded={handleProofUploaded}
+        />
       )}
 
       {error && !showToast && <p className="text-sm text-[#C10007]">{error}</p>}

@@ -4,6 +4,7 @@
 
 import { normalizeRecipientEmail } from "./emailIdentity";
 import { sendEmail } from "./email/emailTransport";
+import { standingAgentCcList } from "./agentCc";
 
 interface PartnerLike {
   agent_name?: string | null;
@@ -51,9 +52,15 @@ export async function sendPartnerCodeEmail(
   //
   // The old code awaited the send and DISCARDED its { data, error }, returning
   // success unconditionally; only a thrown transport error was ever reported.
+  // Addressed to the agent, so it carries the standing staff CC too. There is no
+  // file here, hence no partner/deal contacts to resolve — the code itself is
+  // not confidential to a client, it is the agent's own referral code.
+  const ccList = standingAgentCcList([email]);
+
   const result = await sendEmail(
     {
       to: [normalizeRecipientEmail(email)],
+      ...(ccList.length > 0 ? { cc: ccList } : {}),
       subject: `Your iClosed referral code: ${code}`,
       html,
     },
