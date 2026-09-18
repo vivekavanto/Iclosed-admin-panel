@@ -57,7 +57,8 @@ import SubmitOnBehalfSection, { OnBehalfCoPerson } from "./SubmitOnBehalfSection
 import CoPersonPersonalInfoModal from "./CoPersonPersonalInfoModal";
 import ClonePreviousDealDrawer from "./ClonePreviousDealDrawer";
 import EditDealModal from "./EditDealModal";
-import PostClosureDocuments from "./PostClosureDocuments";
+// Hidden for now — see the render site further down for why.
+// import PostClosureDocuments from "./PostClosureDocuments";
 import OtherDocuments from "./OtherDocuments";
 import AddCoClientModal from "./AddCoClientModal";
 import AddressAutocomplete from "./shared/AddressAutocomplete";
@@ -65,8 +66,10 @@ import { isVisibleByRules, ruleSource } from "@/lib/visibleWhen";
 import {
   formatPostalCode,
   isCityField,
+  isMailSameAsPropertyField,
   isPostalCodeField,
   isStreetAddressField,
+  isUnitField,
 } from "@/lib/addressFields";
 
 interface DealDetailProps {
@@ -1085,6 +1088,26 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
       editTaskResponses.find((r) => !r.field_id && r.field_label === field.label) ??
       null
     );
+  };
+
+  // The four fields the "Mail address same as purchase property" checkbox stands in for.
+  const isMailForwardingField = (field: TaskFormField): boolean =>
+    field.field_type === "text" &&
+    (isStreetAddressField(field.label) ||
+      isUnitField(field.label) ||
+      isCityField(field.label) ||
+      isPostalCodeField(field.label));
+
+  const mailForwardingValue = (field: TaskFormField): string => {
+    const street = (rawDeal?.lead_address_street as string | null | undefined) ?? "";
+    const unit = (rawDeal?.lead_address_unit as string | null | undefined) ?? "";
+    const city = (rawDeal?.lead_address_city as string | null | undefined) ?? "";
+    const postal = (rawDeal?.lead_address_postal_code as string | null | undefined) ?? "";
+    if (isStreetAddressField(field.label)) return street;
+    if (isUnitField(field.label)) return unit;
+    if (isCityField(field.label)) return city;
+    if (isPostalCodeField(field.label)) return formatPostalAsTyped(postal);
+    return "";
   };
 
   const isEditFieldVisible = (field: TaskFormField): boolean => {
@@ -5197,10 +5220,8 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
               Post Closure Documents. */}
           <OtherDocuments dealId={deal.id} />
 
-          {/* Post Closure Documents — the final reporting package, uploaded
-              after closing and emailed to the client(s). Sits directly under
-              Milestones because it is the step that follows them. */}
-          <PostClosureDocuments dealId={deal.id} />
+          {/* Hidden for now to shorten this page; nothing else touched. */}
+          {/* <PostClosureDocuments dealId={deal.id} /> */}
 
           {/* Lock Box Code — Purchase files only. Sits under Milestones and
               above Partner Details. Editable inline; saves to the deal via PATCH
@@ -6864,7 +6885,17 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                               <input
                                 type="checkbox"
                                 checked={currentValue === "true" || currentValue === "1" || currentValue === "yes"}
-                                onChange={(e) => setFieldValue(field, e.target.checked ? "true" : "false")}
+                                onChange={(e) => {
+                                  const checked = e.target.checked;
+                                  setFieldValue(field, checked ? "true" : "false");
+                                  // Pre-fill the mail-forwarding fields from
+                                  // this lead's own purchase property address.
+                                  if (checked && isMailSameAsPropertyField(field.label)) {
+                                    for (const f of editTaskFormFields) {
+                                      if (isMailForwardingField(f)) setFieldValue(f, mailForwardingValue(f));
+                                    }
+                                  }
+                                }}
                                 className="rounded border-gray-300 text-[#C10007] focus:ring-[#C10007]"
                               />
                               {field.placeholder || "Yes"}
