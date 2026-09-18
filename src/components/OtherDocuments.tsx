@@ -36,6 +36,7 @@ interface OtherDoc {
   file_size: number | null;
   custom_type: string | null;
   created_at: string | null;
+  hidden_from_client: boolean;
 }
 
 function formatUploadedDate(iso: string | null): string {
@@ -173,6 +174,28 @@ const OtherDocuments: React.FC<{ dealId: string }> = ({ dealId }) => {
       if (!res.ok || !data?.success) throw new Error(data?.error || "Could not rename");
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Could not rename", "error");
+      await load();
+    }
+  };
+
+  const toggleVisibility = async (doc: OtherDoc) => {
+    const hidden_from_client = !doc.hidden_from_client;
+    setDocuments((prev) =>
+      prev.map((d) => (d.id === doc.id ? { ...d, hidden_from_client } : d)),
+    );
+    try {
+      const res = await fetch(
+        `/api/admin/deals/${dealId}/other-documents?doc_id=${doc.id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ hidden_from_client }),
+        },
+      );
+      const data = await res.json();
+      if (!res.ok || !data?.success) throw new Error(data?.error || "Could not update visibility");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Could not update visibility", "error");
       await load();
     }
   };
@@ -326,6 +349,22 @@ const OtherDocuments: React.FC<{ dealId: string }> = ({ dealId }) => {
                     </p>
                   </div>
                   <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => void toggleVisibility(doc)}
+                      title={
+                        doc.hidden_from_client
+                          ? "Internal only — the client cannot see this document"
+                          : "Default — the client can see this document"
+                      }
+                      className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
+                        doc.hidden_from_client
+                          ? "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                          : "border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100"
+                      }`}
+                    >
+                      {doc.hidden_from_client ? "Internal" : "Default"}
+                    </button>
                     <button
                       type="button"
                       onClick={() => void openDocForViewing(doc)}
