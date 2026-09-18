@@ -4,6 +4,8 @@
 
 import { normalizeRecipientEmail } from "./emailIdentity";
 import { sendEmail } from "./email/emailTransport";
+import { agentEmailCcRecipients } from "./agentEmailCc";
+import { logger } from "./logger";
 
 interface PartnerLike {
   agent_name?: string | null;
@@ -51,9 +53,17 @@ export async function sendPartnerCodeEmail(
   //
   // The old code awaited the send and DISCARDED its { data, error }, returning
   // success unconditionally; only a thrown transport error was ever reported.
+  // The back office is copied on everything addressed to an agent, this
+  // included — see agentEmailCc.ts.
+  const to = normalizeRecipientEmail(email);
+  const cc = agentEmailCcRecipients([to], (dropped) =>
+    logger.warn(`[Partner Code Email] dropping malformed AGENT_EMAIL_CC address ${JSON.stringify(dropped)}`),
+  );
+
   const result = await sendEmail(
     {
-      to: [normalizeRecipientEmail(email)],
+      to: [to],
+      ...(cc.length > 0 ? { cc } : {}),
       subject: `Your iClosed referral code: ${code}`,
       html,
     },
