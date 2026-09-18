@@ -74,7 +74,7 @@ export async function GET() {
 // POST /api/admin/partners — create a partner + generate its referral_code
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { agent_name, agent_email, agent_phone, brokerage_type, brokerage_name } = body;
+  const { agent_name, agent_email, agent_phone, brokerage_type, brokerage_name, comment } = body;
 
   if (!agent_name || !String(agent_name).trim()) {
     return NextResponse.json({ error: "Name is required" }, { status: 400 });
@@ -117,6 +117,7 @@ export async function POST(req: NextRequest) {
           agent_phone: agent_phone || null,
           brokerage_type: brokerage_type || null,
           brokerage_name: brokerage_name || null,
+          comment: comment || null,
           referral_code,
         },
       ])
@@ -144,7 +145,7 @@ export async function POST(req: NextRequest) {
 // PUT /api/admin/partners — update fields (referral_code is stable, never changed)
 export async function PUT(req: NextRequest) {
   const body = await req.json();
-  const { id, agent_name, agent_email, agent_phone, brokerage_type, brokerage_name } = body;
+  const { id, agent_name, agent_email, agent_phone, brokerage_type, brokerage_name, comment } = body;
 
   if (!id) {
     return NextResponse.json({ error: "ID is required" }, { status: 400 });
@@ -163,6 +164,7 @@ export async function PUT(req: NextRequest) {
   if (agent_phone !== undefined) updateData.agent_phone = agent_phone || null;
   if (brokerage_type !== undefined) updateData.brokerage_type = brokerage_type || null;
   if (brokerage_name !== undefined) updateData.brokerage_name = brokerage_name || null;
+  if (comment !== undefined) updateData.comment = comment || null;
 
   const { data, error } = await supabase
     .from("partners")
