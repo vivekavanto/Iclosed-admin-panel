@@ -7,6 +7,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { formatPostalCode } from "@/lib/addressFields";
 import { docDownloadHref, docFetchCredentials } from "@/lib/blobPrivacy";
 import { openDocForViewing } from "@/lib/docViewer";
+import { markNewLeadsSeen } from "@/lib/newLeadBadge";
 import {
   FIRMS,
   FIRM_KEYS,
@@ -163,6 +164,16 @@ const Leads: React.FC = () => {
       setSelectedLead(null);
     }
   }, [leadParam]);
+
+  // Opening this page IS "looking into iClosed for the details", which is what
+  // the new-lead alert tells staff to do — so arriving here clears the yellow
+  // dot on the sidebar's Leads button and the matching bell entries, for this
+  // admin only. Runs once per mount: a same-route click keeps the component
+  // mounted, but a lead arriving while the page is already open should still
+  // light the dot until the admin comes back.
+  useEffect(() => {
+    markNewLeadsSeen();
+  }, []);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [newClientType, setNewClientType] = useState<
     "residential" | "corporate"

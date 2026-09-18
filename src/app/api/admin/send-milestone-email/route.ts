@@ -165,6 +165,8 @@ async function handlePortalRequest(body: Record<string, any>) {
         emails_failed: sendResult.success ? 0 : 1,
         email_sent_to: sendResult.recipients,
         cc: sendResult.cc,
+        ...(sendResult.agentOnly ? { agent_only: true } : {}),
+        ...(sendResult.skipped ? { skipped: sendResult.skipped } : {}),
         ...(sendResult.error ? { error: sendResult.error } : {}),
     })
 }
@@ -384,6 +386,11 @@ export async function POST(req: Request) {
             email_sent_to: sendResult.recipients,
             recipient_count: sendResult.recipients.length,
             cc: sendResult.cc,
+            // An agent-only template addressed the agent, not the client — so
+            // email_sent_to is the agent list, and an empty one with
+            // skipped="no_agent" means this file has no agent to tell.
+            ...(sendResult.agentOnly ? { agent_only: true } : {}),
+            ...(sendResult.skipped ? { skipped: sendResult.skipped } : {}),
             ...(milestoneSide ? { milestone_side: milestoneSide } : {}),
         })
 

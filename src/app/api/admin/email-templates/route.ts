@@ -3,6 +3,20 @@ import supabaseAdmin from '@/lib/supabaseAdmin';
 
 const supabase = supabaseAdmin;
 
+/**
+ * True when the error is PostgREST saying it has never heard of a column —
+ * i.e. migrations/2026-09-18-agent-only-email-templates.sql has not been run on
+ * this database yet. Migrations here are applied by hand, so code can reach
+ * production first; a template save must not start failing because of it.
+ */
+function isUnknownColumn(error: { code?: string; message?: string } | null, column: string) {
+  if (!error) return false;
+  return (
+    (error.code === 'PGRST204' || error.code === '42703') &&
+    (error.message ?? '').includes(column)
+  );
+}
+
 // GET /api/admin/email-templates
 export async function GET() {
   const { data, error } = await supabase
@@ -21,7 +35,7 @@ export async function GET() {
 // POST /api/admin/email-templates
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { name, body: emailBody, is_active, subject, shared_with_agent } = body;
+  const { name, body: emailBody, is_active, subject, shared_with_agent, agent_only } = body;
 
   if (!name || !emailBody) {
     return NextResponse.json(
@@ -30,17 +44,30 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { data, error } = await supabase
+  const row: Record<string, unknown> = {
+    name,
+    body: emailBody,
+    is_active: is_active ?? true,
+    subject: subject || null,
+    shared_with_agent: shared_with_agent ?? false,
+    agent_only: agent_only ?? false,
+  };
+
+  let { data, error } = await supabase
     .from('email_templates')
-    .insert([{
-      name,
-      body: emailBody,
-      is_active: is_active ?? true,
-      subject: subject || null,
-      shared_with_agent: shared_with_agent ?? false,
-    }])
+    .insert([row])
     .select()
     .single();
+
+  if (isUnknownColumn(error, 'agent_only')) {
+    console.warn('[EmailTemplates] agent_only column missing — run the 2026-09-18 migration');
+    delete row.agent_only;
+    ({ data, error } = await supabase
+      .from('email_templates')
+      .insert([row])
+      .select()
+      .single());
+  }
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -53,7 +80,7 @@ export async function POST(req: NextRequest) {
 export async function PUT(req: NextRequest) {
   try {
     const body = await req.json();
-    const { id, name, body: emailBody, is_active, subject, shared_with_agent } = body;
+    const { id, name, body: emailBody, is_active, subject, shared_with_agent, agent_only } = body;
 
     if (!id) {
       return NextResponse.json({ error: "ID required" }, { status: 400 });
@@ -67,16 +94,31 @@ export async function PUT(req: NextRequest) {
     if (subject !== undefined) updateData.subject = subject || null;
     // Lets the inline column checkbox persist by PUT-ing just { id, shared_with_agent }.
     if (shared_with_agent !== undefined) updateData.shared_with_agent = shared_with_agent;
+    if (agent_only !== undefined) updateData.agent_only = agent_only;
 
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from("email_templates")
       .update(updateData)
       .eq("id", id)
       .select();
 
+    if (isUnknownColumn(error, 'agent_only')) {
+      console.warn('[EmailTemplates] agent_only column missing — run the 2026-09-18 migration');
+      delete updateData.agent_only;
+      ({ data, error } = await supabase
+        .from("email_templates")
+        .update(updateData)
+        .eq("id", id)
+        .select());
+    }
+
     if (error) {
       console.error(error);
       return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    if (!data || data.length === 0) {
+      return NextResponse.json({ error: "Template not found" }, { status: 404 });
     }
 
     return NextResponse.json(data[0]);

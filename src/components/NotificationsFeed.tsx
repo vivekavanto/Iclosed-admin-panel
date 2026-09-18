@@ -2,10 +2,12 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Bell, CheckCheck, ChevronRight, Loader2, UserPlus, ListChecks } from "lucide-react";
+import { Bell, CheckCheck, ChevronRight, Loader2, UserPlus, ListChecks, UserRoundPlus } from "lucide-react";
 import {
   CLIENT_SIGNUP_TYPE,
   ALL_TASKS_COMPLETE_TYPE,
+  NEW_LEAD_TYPE,
+  notificationHref,
   type NotificationRow,
 } from "@/lib/notificationTypes";
 
@@ -41,6 +43,7 @@ function timeLabel(iso: string): string {
 
 function iconFor(type: string) {
   if (type === CLIENT_SIGNUP_TYPE) return <UserPlus size={16} />;
+  if (type === NEW_LEAD_TYPE) return <UserRoundPlus size={16} />;
   if (type === ALL_TASKS_COMPLETE_TYPE) return <ListChecks size={16} />;
   return <Bell size={16} />;
 }
@@ -94,7 +97,8 @@ const NotificationsFeed: React.FC = () => {
 
   const openNotification = async (n: NotificationRow) => {
     if (!n.read) await markRead({ ids: [n.id] });
-    if (n.deal_id) router.push(`/admin/deals/${n.deal_id}`);
+    const href = notificationHref(n);
+    if (href) router.push(href);
   };
 
   // Preserves the server's newest-first order: rows are already sorted, so the

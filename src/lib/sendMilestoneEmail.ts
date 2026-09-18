@@ -7,7 +7,7 @@ import { normalizeRecipientEmail } from "./emailIdentity";
 import { getDealFirmKey } from "./leadFirm";
 import { brandEmailHtml } from "./emailBrand";
 import type { FirmKey } from "./firms";
-import { buildAgentCcList } from "./agentCc";
+import { buildAgentCcList, buildAgentRecipients } from "./agentCc";
 import { loadDealTemplateFacts } from "./dealTemplateFacts";
 import {
     resolveLeadRecipientSide,
@@ -43,6 +43,17 @@ import {
  *
  * Only MILESTONE email is combined. Account activation, password reset, the
  * retainer signing link (personal token) and the welcome email stay per-person.
+ *
+ * ── AGENT-ONLY TEMPLATES ────────────────────────────────────────────────
+ * A template flagged `agent_only` inverts the recipients: the referral agent is
+ * written TO, and the client is not on the email at all — not in `to`, not CC'd.
+ * It is for milestones the agent needs to know about and the client does not
+ * ("your client's signing has been booked"), which `shared_with_agent` cannot
+ * express: that flag only ever adds a copy to the client's own email.
+ *
+ * In that mode `user.*` is the AGENT (the person being greeted) and the client
+ * moves to `client_*`. The file-level placeholders — address, closing date,
+ * file number — are unchanged, because they describe the same file either way.
  */
 
 export type MilestoneRecipient = {
@@ -65,6 +76,14 @@ export type MilestoneSendResult = {
     /** Addresses CC'd (the referral agent), if any. */
     cc: string[];
     error?: string;
+    /** True when the template was agent_only — `recipients` are agents, not clients. */
+    agentOnly?: boolean;
+    /**
+     * Why nothing was sent, for an outcome that is legitimate rather than a
+     * failure: `no_clients` (everyone filtered out by side scoping),
+     * `no_agent` (an agent-only template on a file with no agent on it).
+     */
+    skipped?: "no_clients" | "no_agent";
 };
 
 const DEAL_COLUMNS =
@@ -206,6 +225,54 @@ async function resolveAgentCc(
 }
 
 /**
+ * Who an agent-only email is addressed to: the union of every family deal's
+ * agent side, with every client address excluded by construction.
+ *
+ * The union runs over the whole family for the same reason the CC does — a
+ * partner contact or per-file CC hanging off one deal still belongs on the one
+ * merged email. The greeting name comes from the FIRST partner that has one
+ * (the anchor's, since recipients are sorted primary-first), because a single
+ * "Hi ..." cannot address two brokerages.
+ */
+async function resolveAgentAudience(
+    recipients: MilestoneRecipient[],
+    clientAddresses: string[],
+): Promise<{ to: string[]; cc: string[]; agentName: string | null }> {
+    const pairs = new Map<string, { partnerId: string | null; dealId: string | null }>();
+    for (const r of recipients) {
+        const partnerId = r.deal?.partner_id ?? r.lead?.partner_id ?? null;
+        const dealId = r.deal?.id ?? null;
+        pairs.set(`${partnerId ?? ""}|${dealId ?? ""}`, { partnerId, dealId });
+    }
+
+    const seen = new Set<string>();
+    const to: string[] = [];
+    let agentName: string | null = null;
+
+    for (const { partnerId, dealId } of pairs.values()) {
+        const part = await buildAgentRecipients({
+            partnerId,
+            dealId,
+            exclude: clientAddresses,
+        });
+        if (!agentName && part.agentName) agentName = part.agentName;
+        for (const addr of part.to) {
+            const key = addr.toLowerCase();
+            if (seen.has(key)) continue;
+            seen.add(key);
+            to.push(addr);
+        }
+    }
+
+    // The standing oversight copy is computed once, against the final To list.
+    const cc = to.length
+        ? (await buildAgentRecipients({ exclude: [...clientAddresses, ...to] })).cc
+        : [];
+
+    return { to, cc, agentName };
+}
+
+/**
  * Renders the template once for the whole recipient set and sends a single
  * email. Returns `success: true` with an empty recipient list when there is
  * nobody to email (every family member was filtered out by side scoping) —
@@ -214,7 +281,14 @@ async function resolveAgentCc(
 export async function sendCombinedMilestoneEmail(opts: {
     recipients: MilestoneRecipient[];
     milestone: { title?: string | null; status?: string | null };
-    template: { name?: string | null; subject?: string | null; body: string; shared_with_agent?: boolean | null };
+    template: {
+        name?: string | null;
+        subject?: string | null;
+        body: string;
+        shared_with_agent?: boolean | null;
+        /** Sends TO the referral agent instead of the client. See the file header. */
+        agent_only?: boolean | null;
+    };
     /** The firm the file is retained under — sets the sender and the lockup. */
     firm: FirmKey;
     milestoneSide: Side | null;
@@ -228,7 +302,7 @@ export async function sendCombinedMilestoneEmail(opts: {
     const { recipients, milestone, template, firm, milestoneSide } = opts;
 
     if (recipients.length === 0) {
-        return { success: true, recipients: [], cc: [] };
+        return { success: true, recipients: [], cc: [], skipped: "no_clients" };
     }
 
     try {
@@ -251,6 +325,37 @@ export async function sendCombinedMilestoneEmail(opts: {
             recipients.map((r) => `${r.firstName} ${r.lastName}`.trim()),
         );
         const emailList = recipients.map((r) => r.email).join(", ");
+
+        // An agent-only template writes TO the agent. Resolve them before
+        // rendering: they are the person the body greets, and a file with no
+        // agent on it has nobody to send to at all.
+        const agentOnly = !!template.agent_only;
+        const clientAddresses = recipients
+            .map((r) => normalizeRecipientEmail(r.email))
+            .filter(Boolean);
+        const agentAudience = agentOnly
+            ? await resolveAgentAudience(recipients, clientAddresses)
+            : { to: [] as string[], cc: [] as string[], agentName: null as string | null };
+
+        if (agentOnly && agentAudience.to.length === 0) {
+            logger.info(
+                `[Milestone Email] agent-only template "${template.name ?? ""}" not sent — no agent, partner contact or cc address on this file. milestone: "${milestone?.title ?? ""}"`,
+            );
+            return { success: true, recipients: [], cc: [], agentOnly: true, skipped: "no_agent" };
+        }
+
+        // The greeting. In agent-only mode `user.*` is the AGENT — they are who
+        // the email is written to — and the client moves to `client_*`.
+        const agentTokens = (agentAudience.agentName ?? "").trim().split(/\s+/).filter(Boolean);
+        const agentFirstName = agentTokens[0] ?? "";
+        const agentLastName = agentTokens.slice(1).join(" ");
+        const agentFullName = (agentAudience.agentName ?? "").trim();
+        const agentEmailList = agentAudience.to.join(", ");
+
+        const greetFirst = agentOnly ? agentFirstName : firstName;
+        const greetLast = agentOnly ? agentLastName : lastName;
+        const greetFull = agentOnly ? agentFullName : fullName;
+        const greetEmail = agentOnly ? agentEmailList : emailList;
 
         // Lock box code is stored per-deal on the primary PURCHASE deal (it's
         // deliberately not mirrored across the family). A co-purchaser's own
@@ -335,17 +440,36 @@ export async function sendCombinedMilestoneEmail(opts: {
                     [`{{${k}}}`, v],
                 ]),
             ),
-            // User placeholders
-            "{{ user.first_name }}": firstName,
-            "{{ user.last_name }}": lastName,
-            "{{ user.full_name }}": fullName,
-            "{{ user.get_full_name }}": fullName,
-            "{{ user.email }}": emailList,
-            "{{user.first_name}}": firstName,
-            "{{user.last_name}}": lastName,
-            "{{user.full_name}}": fullName,
-            "{{user.get_full_name}}": fullName,
-            "{{user.email}}": emailList,
+            // User placeholders — whoever this email is ADDRESSED to, which is
+            // the agent on an agent-only template and the client otherwise.
+            "{{ user.first_name }}": greetFirst,
+            "{{ user.last_name }}": greetLast,
+            "{{ user.full_name }}": greetFull,
+            "{{ user.get_full_name }}": greetFull,
+            "{{ user.email }}": greetEmail,
+            "{{user.first_name}}": greetFirst,
+            "{{user.last_name}}": greetLast,
+            "{{user.full_name}}": greetFull,
+            "{{user.get_full_name}}": greetFull,
+            "{{user.email}}": greetEmail,
+            // The client, named explicitly — the only way an agent-only body can
+            // say "your client Alice Smith". Always the client, in both modes.
+            "{{ client_first_name }}": firstName,
+            "{{ client_last_name }}": lastName,
+            "{{ client_name }}": fullName,
+            "{{ client_full_name }}": fullName,
+            "{{ client_email }}": emailList,
+            "{{client_first_name}}": firstName,
+            "{{client_last_name}}": lastName,
+            "{{client_name}}": fullName,
+            "{{client_full_name}}": fullName,
+            "{{client_email}}": emailList,
+            // The agent, named explicitly. Empty on a file whose only agent
+            // addresses came from `deals.cc_emails`, where nobody has a name.
+            "{{ agent_first_name }}": agentFirstName,
+            "{{ agent_name }}": agentFullName,
+            "{{agent_first_name}}": agentFirstName,
+            "{{agent_name}}": agentFullName,
             // Lead / deal placeholders
             "{{ lead_address }}": leadAddress,
             "{{lead_address}}": leadAddress,
@@ -403,11 +527,17 @@ export async function sendCombinedMilestoneEmail(opts: {
                 v,
             );
         }
-        processedBody = processedBody.replace(/\{\{\s*user\.get_full_name\s*\}\}/gi, fullName);
-        processedBody = processedBody.replace(/\{\{\s*user\.first_name\s*\}\}/gi, firstName);
-        processedBody = processedBody.replace(/\{\{\s*user\.last_name\s*\}\}/gi, lastName);
-        processedBody = processedBody.replace(/\{\{\s*user\.full_name\s*\}\}/gi, fullName);
-        processedBody = processedBody.replace(/\{\{\s*user\.email\s*\}\}/gi, emailList);
+        processedBody = processedBody.replace(/\{\{\s*user\.get_full_name\s*\}\}/gi, greetFull);
+        processedBody = processedBody.replace(/\{\{\s*user\.first_name\s*\}\}/gi, greetFirst);
+        processedBody = processedBody.replace(/\{\{\s*user\.last_name\s*\}\}/gi, greetLast);
+        processedBody = processedBody.replace(/\{\{\s*user\.full_name\s*\}\}/gi, greetFull);
+        processedBody = processedBody.replace(/\{\{\s*user\.email\s*\}\}/gi, greetEmail);
+        processedBody = processedBody.replace(/\{\{\s*client_first_name\s*\}\}/gi, firstName);
+        processedBody = processedBody.replace(/\{\{\s*client_last_name\s*\}\}/gi, lastName);
+        processedBody = processedBody.replace(/\{\{\s*client_(full_)?name\s*\}\}/gi, fullName);
+        processedBody = processedBody.replace(/\{\{\s*client_email\s*\}\}/gi, emailList);
+        processedBody = processedBody.replace(/\{\{\s*agent_first_name\s*\}\}/gi, agentFirstName);
+        processedBody = processedBody.replace(/\{\{\s*agent_name\s*\}\}/gi, agentFullName);
         processedBody = processedBody.replace(/\{\{\s*lead_address\s*\}\}/gi, leadAddress);
         processedBody = processedBody.replace(/\{\{\s*lead\.address_line1\s*\}\}/gi, lead?.address_street ?? deal.property_address ?? "");
         processedBody = processedBody.replace(/\{\{\s*lead\.address_city\s*\}\}/gi, lead?.address_city ?? "");
@@ -440,16 +570,24 @@ export async function sendCombinedMilestoneEmail(opts: {
         }
         processedSubject = processedSubject.replace(/\{\{\s*lead_address\s*\}\}/gi, leadAddress);
         processedSubject = processedSubject.replace(/\{\{\s*lead\.file_number\s*\}\}/gi, fileNumber);
-        processedSubject = processedSubject.replace(/\{\{\s*user\.first_name\s*\}\}/gi, firstName);
-        processedSubject = processedSubject.replace(/\{\{\s*user\.full_name\s*\}\}/gi, fullName);
+        processedSubject = processedSubject.replace(/\{\{\s*user\.first_name\s*\}\}/gi, greetFirst);
+        processedSubject = processedSubject.replace(/\{\{\s*user\.full_name\s*\}\}/gi, greetFull);
+        processedSubject = processedSubject.replace(/\{\{\s*client_(full_)?name\s*\}\}/gi, fullName);
+        processedSubject = processedSubject.replace(/\{\{\s*agent_first_name\s*\}\}/gi, agentFirstName);
+        processedSubject = processedSubject.replace(/\{\{\s*agent_name\s*\}\}/gi, agentFullName);
         processedSubject = processedSubject.replace(/\{\{\s*first_name\s*\}\}/gi, firstName);
         processedSubject = processedSubject.replace(/\{\{\s*full_name\s*\}\}/gi, fullName);
         processedSubject = processedSubject.replace(/\{\{\s*property_address\s*\}\}/gi, leadAddress);
         processedSubject = processedSubject.replace(/\{\{\s*file_number\s*\}\}/gi, fileNumber);
         processedSubject = processedSubject.replace(/\{\{\s*side_suffix\s*\}\}/gi, sideSuffix);
 
-        const to = recipients.map((r) => normalizeRecipientEmail(r.email)).filter(Boolean);
-        const cc = await resolveAgentCc(template, recipients, to);
+        // Agent-only: the agents are the recipients and the clients are on
+        // neither line. Otherwise: the clients, with the agent CC'd if the
+        // template says to share it.
+        const to = agentOnly ? agentAudience.to : clientAddresses;
+        const cc = agentOnly
+            ? agentAudience.cc
+            : await resolveAgentCc(template, recipients, to);
 
         const sendResult = await sendEmail(
             {
@@ -462,16 +600,16 @@ export async function sendCombinedMilestoneEmail(opts: {
         );
 
         if (!sendResult.ok) {
-            return { success: false, recipients: to, cc, error: sendResult.error };
+            return { success: false, recipients: to, cc, agentOnly, error: sendResult.error };
         }
 
         logger.info(
-            `[Milestone Email] Sent to ${to.join(", ")}` +
+            `[Milestone Email] Sent${agentOnly ? " (agent only)" : ""} to ${to.join(", ")}` +
             `${cc.length ? ` (cc ${cc.length}: ${cc.join(", ")})` : template.shared_with_agent ? " (shared_with_agent on, but no cc addresses on file — no cc)" : ""}` +
             `, milestone: "${milestone?.title ?? ""}", id: ${sendResult.id}`,
         );
 
-        return { success: true, recipients: to, cc };
+        return { success: true, recipients: to, cc, agentOnly };
     } catch (err: any) {
         return { success: false, recipients: [], cc: [], error: err.message };
     }
@@ -529,7 +667,7 @@ export async function dispatchAutoCompleteMilestoneEmails(
         try {
             const { data: template } = await supabaseAdmin
                 .from("email_templates")
-                .select("name, subject, body, is_active, shared_with_agent")
+                .select("name, subject, body, is_active, shared_with_agent, agent_only")
                 .eq("id", group[0].emailTemplateId)
                 .maybeSingle();
 

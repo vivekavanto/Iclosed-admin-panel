@@ -39,7 +39,7 @@ export async function GET(req: Request) {
 
   const { data: rows, error } = await supabaseAdmin
     .from("notifications")
-    .select("id, type, title, body, deal_id, file_number, metadata, created_at")
+    .select("id, type, title, body, deal_id, lead_id, file_number, metadata, created_at")
     .order("created_at", { ascending: false })
     .limit(limit);
 

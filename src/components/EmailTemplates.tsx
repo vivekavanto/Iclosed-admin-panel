@@ -22,17 +22,23 @@ interface EmailTemplate {
   body: string;
   is_active: boolean;
   shared_with_agent: boolean;
+  /** Sends TO the referral agent instead of the client. */
+  agent_only: boolean;
   created_at: string;
 }
 
 const EMAIL_VARIABLES = [
-  { key: "{{ user.first_name }}", description: "Client's first name" },
+  { key: "{{ user.first_name }}", description: "Recipient's first name (the agent on an agent-only template)" },
   { key: "{{ user.last_name }}", description: "Client's last name" },
   { key: "{{ user.get_full_name }}", description: "Client's full name" },
   { key: "{{ first_name }}", description: "Short alias for first name" },
   { key: "{{ last_name }}", description: "Short alias for last name" },
   { key: "{{ full_name }}", description: "Short alias for full name" },
   { key: "{{ email }}", description: "Client's email address" },
+  { key: "{{ agent_name }}", description: "Referral agent's name (agent-only templates)" },
+  { key: "{{ agent_first_name }}", description: "Referral agent's first name (agent-only templates)" },
+  { key: "{{ client_name }}", description: "Client's full name — use this when the email goes to the agent" },
+  { key: "{{ client_first_name }}", description: "Client's first name — use this when the email goes to the agent" },
   { key: "{{ lead_address }}", description: "Formatted address string" },
   { key: "{{ property_address }}", description: "Short alias for formatted address" },
   { key: "{{ property_street }}", description: "Street line only, no city/postal (All Tasks Completed alert)" },
@@ -68,6 +74,7 @@ const EmailTemplates: React.FC = () => {
     body: "",
     is_active: true,
     shared_with_agent: false,
+    agent_only: false,
   });
 
   const handleCopy = (key: string) => {
@@ -80,7 +87,15 @@ const EmailTemplates: React.FC = () => {
     setForm((prev) => ({ ...prev, body: prev.body + key }));
   };
   const resetForm = () => {
-    setForm({ id: "", name: "", subject: "", body: "", is_active: true, shared_with_agent: false });
+    setForm({
+      id: "",
+      name: "",
+      subject: "",
+      body: "",
+      is_active: true,
+      shared_with_agent: false,
+      agent_only: false,
+    });
   };
 
   // Inline toggle of the "Shared with agent?" column. Optimistically flips the
@@ -135,6 +150,7 @@ const EmailTemplates: React.FC = () => {
       body: template.body ?? "",
       is_active: template.is_active ?? true,
       shared_with_agent: template.shared_with_agent ?? false,
+      agent_only: template.agent_only ?? false,
     });
     setIsModalOpen(true);
   };
@@ -297,14 +313,27 @@ const EmailTemplates: React.FC = () => {
                   </td>
                   <td className="px-4 py-4 text-center">
                     <div className="flex justify-center">
-                      <input
-                        type="checkbox"
-                        checked={template.shared_with_agent ?? false}
-                        onChange={() => toggleSharedWithAgent(template)}
-                        className="h-4 w-4 rounded border-slate-300 text-brand-primary accent-[#C10007] cursor-pointer focus:ring-brand-primary/30"
-                        title="CC the client's referral agent/broker on this email"
-                        aria-label={`Shared with agent: ${template.name}`}
-                      />
+                      {/* An agent-only template has no CC to toggle — the agent
+                          is the recipient, and the client is not on the email
+                          at all. Say which it is rather than show a checkbox
+                          that would read as "agent not copied". */}
+                      {template.agent_only ? (
+                        <span
+                          className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-50 text-amber-700 ring-1 ring-amber-200"
+                          title="Sent TO the referral agent — the client is not emailed or CC'd"
+                        >
+                          Agent only
+                        </span>
+                      ) : (
+                        <input
+                          type="checkbox"
+                          checked={template.shared_with_agent ?? false}
+                          onChange={() => toggleSharedWithAgent(template)}
+                          className="h-4 w-4 rounded border-slate-300 text-brand-primary accent-[#C10007] cursor-pointer focus:ring-brand-primary/30"
+                          title="CC the client's referral agent/broker on this email"
+                          aria-label={`Shared with agent: ${template.name}`}
+                        />
+                      )}
                     </div>
                   </td>
                   <td className="px-4 py-4 text-center">
@@ -582,10 +611,42 @@ const EmailTemplates: React.FC = () => {
                     onClick={() =>
                       setForm((prev) => ({ ...prev, shared_with_agent: !prev.shared_with_agent }))
                     }
-                    className={`relative w-12 h-6 rounded-full transition-colors duration-200 focus:outline-none ${form.shared_with_agent ? "bg-[#C10007]" : "bg-slate-300"}`}
+                    className={`relative w-12 h-6 rounded-full transition-colors duration-200 focus:outline-none ${form.shared_with_agent ? "bg-[#C10007]" : "bg-slate-300"} ${form.agent_only ? "opacity-40 cursor-not-allowed" : ""}`}
+                    disabled={form.agent_only}
+                    title={
+                      form.agent_only
+                        ? "Not used by an agent-only template — the agent is already the recipient."
+                        : undefined
+                    }
                   >
                     <span
                       className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ${form.shared_with_agent ? "translate-x-6" : "translate-x-0"}`}
+                    />
+                  </button>
+                </div>
+
+                {/* Agent only toggle */}
+                <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-gray-100">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-800">
+                      Agent only
+                    </p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      When on, this email goes TO the client&apos;s referral agent and the
+                      client is not emailed or CC&apos;d at all. Write it to the agent:
+                      use <code>{"{{ agent_first_name }}"}</code> to greet them and{" "}
+                      <code>{"{{ client_name }}"}</code> for the client.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setForm((prev) => ({ ...prev, agent_only: !prev.agent_only }))
+                    }
+                    className={`relative w-12 h-6 rounded-full transition-colors duration-200 focus:outline-none ${form.agent_only ? "bg-[#C10007]" : "bg-slate-300"}`}
+                  >
+                    <span
+                      className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ${form.agent_only ? "translate-x-6" : "translate-x-0"}`}
                     />
                   </button>
                 </div>

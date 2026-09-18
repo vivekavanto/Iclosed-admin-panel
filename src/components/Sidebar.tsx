@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
@@ -28,6 +28,12 @@ import {
 } from "lucide-react";
 import { NAV_ITEMS } from "../constants";
 import { useAuth } from "@/lib/AuthProvider";
+import { NEW_LEADS_SEEN_EVENT } from "@/lib/newLeadBadge";
+
+// How often the sidebar asks whether a new lead is waiting. Intake is a
+// human-paced event and the endpoint reads ids only, so a minute is plenty —
+// it matches the header bell's cadence so the two dots light up together.
+const NEW_LEAD_POLL_MS = 60_000;
 
 interface SidebarProps {
   onSearchClick?: () => void;
@@ -77,6 +83,44 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed =
   const pathname = usePathname();
   const { user, signOut } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  // Yellow dot on the Leads button: lit while this admin has an unseen
+  // lead.created notification, empty otherwise. Per-admin, so it doesn't go
+  // dark for everyone the moment one person opens the list.
+  const [newLeadCount, setNewLeadCount] = useState(0);
+
+  const loadNewLeadCount = useCallback(async () => {
+    try {
+      const res = await fetch("/api/admin/notifications/new-leads");
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data?.success) setNewLeadCount(Number(data.count) || 0);
+    } catch {
+      // Leave the last known value alone — a transient blip shouldn't blink
+      // the dot off and make staff think they had already looked.
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const tick = () => {
+      if (!cancelled) loadNewLeadCount();
+    };
+    // Deferred rather than run inline so mounting the sidebar doesn't set
+    // state synchronously inside the effect body.
+    const initial = setTimeout(tick, 0);
+    const timer = setInterval(tick, NEW_LEAD_POLL_MS);
+    // The leads list clears the badge server-side and then fires this, so the
+    // dot goes out on arrival instead of lingering until the next poll.
+    const onSeen = () => setNewLeadCount(0);
+    window.addEventListener(NEW_LEADS_SEEN_EVENT, onSeen);
+    return () => {
+      cancelled = true;
+      clearTimeout(initial);
+      clearInterval(timer);
+      window.removeEventListener(NEW_LEADS_SEEN_EVENT, onSeen);
+    };
+  }, [loadNewLeadCount]);
 
   const isActive = (itemId: string) => {
     const route = ROUTE_MAP[itemId];
@@ -210,13 +254,18 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed =
               );
             }
 
+            // Only Leads carries a badge today. It sits on the <Link> rather
+            // than on the icon so it pins to the button's corner whether the
+            // rail is expanded or collapsed to icons.
+            const showNewLeadDot = item.id === "leads" && newLeadCount > 0;
+
             return (
               <div key={item.id}>
                 <Link
                   href={route}
                   onClick={() => { if (isMobile) setMobileOpen(false); }}
                   title={!showLabels ? item.label : undefined}
-                  className={`w-full flex items-center justify-center py-2.5 rounded-lg transition-all duration-200 ${showLabels ? "px-4 !justify-start gap-3" : ""} ${
+                  className={`relative w-full flex items-center justify-center py-2.5 rounded-lg transition-all duration-200 ${showLabels ? "px-4 !justify-start gap-3" : ""} ${
                     active
                       ? "bg-brand-primary text-white shadow-md shadow-brand-primary/20"
                       : "hover:bg-slate-800 hover:text-white"
@@ -224,6 +273,21 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed =
                 >
                   {iconMap[item.icon]}
                   {showLabels && <span className="font-medium text-sm">{item.label}</span>}
+                  {showNewLeadDot && (
+                    <>
+                      {/* Amber, not the brand red the bell uses: this says
+                          "something new to look at", not "something is wrong".
+                          The ring keeps it readable against both the dark rail
+                          and the red active pill. */}
+                      <span
+                        aria-hidden="true"
+                        className="absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full bg-amber-400 ring-2 ring-slate-900"
+                      />
+                      <span className="sr-only">
+                        {newLeadCount} new lead{newLeadCount === 1 ? "" : "s"}
+                      </span>
+                    </>
+                  )}
                 </Link>
               </div>
             );

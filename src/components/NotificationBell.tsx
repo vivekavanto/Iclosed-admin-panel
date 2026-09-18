@@ -4,14 +4,18 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Bell, ChevronRight, Loader2 } from "lucide-react";
+import { notificationHref } from "@/lib/notificationTypes";
 
 // The admin notification bell, mounted top-right in AppHeader.
 //
-// Two event types today, both raised server-side:
+// Three event types today, all raised server-side:
 //   • `deal.all_tasks_complete` — src/lib/notifyAllTasksComplete.ts, once a
 //     client AND their co-party finish every client-visible task on a file.
 //   • `client.signed_up`        — src/lib/notifyClientSignup.ts, when a client
 //     activates their portal account.
+//   • `lead.created`            — raised by the PORTAL at intake, straight into
+//     the shared notifications table (iclosed_dev_web/src/lib/notifyNewLead.ts).
+//     It has no deal yet, so it opens the lead rather than a file.
 //
 // The feed is a BROADCAST: every admin sees every row, and "read" is tracked
 // per admin in notification_reads. Clicking a row marks it read and opens the
@@ -27,6 +31,7 @@ type Notification = {
   title: string;
   body: string | null;
   deal_id: string | null;
+  lead_id: string | null;
   file_number: string | null;
   metadata: Record<string, unknown> | null;
   created_at: string;
@@ -157,7 +162,8 @@ const NotificationBell: React.FC = () => {
   const openNotification = async (n: Notification) => {
     setOpen(false);
     if (!n.read) await markRead({ ids: [n.id] });
-    if (n.deal_id) router.push(`/admin/deals/${n.deal_id}`);
+    const href = notificationHref(n);
+    if (href) router.push(href);
   };
 
   const visible = items.slice(0, PANEL_LIMIT);

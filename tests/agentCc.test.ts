@@ -80,3 +80,22 @@ test("null and undefined exclusions are ignored rather than matching", () => {
     assert.deepEqual(standingAgentCcList([null, undefined, ""]), ["ops@iclosed.ca"]);
   });
 });
+
+// Agent-only milestone emails (email_templates.agent_only) address the agent
+// instead of the client. The rule that matters is what happens when there is no
+// agent: nothing is sent. Falling back to the client would leak an internal
+// note ("your client's signing is booked") to the client it is about.
+//
+// Only the no-partner, no-deal path is exercised here — it is the one branch
+// that returns without touching Supabase.
+const { buildAgentRecipients } = await import("../src/lib/agentCc.ts");
+
+test("no partner and no deal means no agent recipients, and no standing CC either", async () => {
+  const audience = await buildAgentRecipients({ partnerId: null, dealId: null });
+  assert.deepEqual(audience.to, []);
+  // The oversight copy rides along only when someone is actually being written
+  // to; a CC with an empty To is an email to staff about a file nobody asked
+  // about.
+  assert.deepEqual(audience.cc, []);
+  assert.equal(audience.agentName, null);
+});

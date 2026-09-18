@@ -183,3 +183,83 @@ export async function buildAgentCcList(opts: {
 
   return out;
 }
+
+/**
+ * The agent side of a file as RECIPIENTS rather than copies.
+ *
+ * For "agent only" milestone emails (`email_templates.agent_only`), where the
+ * referral agent is told something about their client's file and the client is
+ * deliberately not on the email at all — not in `to`, not CC'd. Everything
+ * {@link buildAgentCcList} would have copied goes into `to` instead; the
+ * standing oversight address stays a CC, because it is watching the mail, not
+ * receiving it.
+ *
+ * `agentName` is the partner's own `agent_name` — what an agent-facing template
+ * greets. It is null for a file whose CC addresses come only from
+ * `deals.cc_emails`, where nobody has a name on record.
+ *
+ * Returns an empty `to` when the file has no partner, no partner contacts and
+ * no per-file CC addresses. That is a real outcome, not an error: an agent-only
+ * email for a file with no agent has nobody to go to, and the caller reports it
+ * rather than falling back to the client — which is exactly what this mode
+ * exists to prevent.
+ */
+export async function buildAgentRecipients(opts: {
+  partnerId?: string | null;
+  dealId?: string | null;
+  /** Addresses that must never receive this email — the file's clients. */
+  exclude?: (string | null | undefined)[];
+}): Promise<{ to: string[]; cc: string[]; agentName: string | null }> {
+  const { partnerId, dealId, exclude = [] } = opts;
+
+  const collected: string[] = [];
+  let agentName: string | null = null;
+
+  if (partnerId) {
+    const { data: partner } = await supabaseAdmin
+      .from("partners")
+      .select("agent_name, agent_email")
+      .eq("id", partnerId)
+      .eq("is_deleted", false)
+      .maybeSingle();
+    if (partner?.agent_email) collected.push(partner.agent_email);
+    if (partner?.agent_name) agentName = partner.agent_name;
+
+    const { data: contacts, error: contactsErr } = await supabaseAdmin
+      .from("partner_contacts")
+      .select("email")
+      .eq("partner_id", partnerId)
+      .eq("is_deleted", false);
+    if (contactsErr) {
+      logger.warn(
+        `[agentCc] partner_contacts unavailable (${contactsErr.code}) — using primary agent_email only. partner=${partnerId}`,
+      );
+    } else {
+      for (const c of contacts ?? []) if (c.email) collected.push(c.email);
+    }
+  }
+
+  if (dealId) {
+    const { data: deal, error: dealErr } = await supabaseAdmin
+      .from("deals")
+      .select("cc_emails")
+      .eq("id", dealId)
+      .maybeSingle();
+    if (dealErr) {
+      logger.warn(
+        `[agentCc] deals.cc_emails unavailable (${dealErr.code}) — skipping per-file CC. deal=${dealId}`,
+      );
+    } else {
+      for (const e of deal?.cc_emails ?? []) if (e) collected.push(e);
+    }
+  }
+
+  const to = sanitizeCcList(collected, exclude);
+  // Same rule as buildAgentCcList: the standing copy rides along only when
+  // somebody is actually being written to.
+  const cc = to.length
+    ? sanitizeCcList(standingAgentCcAddresses(), [...exclude, ...to])
+    : [];
+
+  return { to, cc, agentName };
+}
