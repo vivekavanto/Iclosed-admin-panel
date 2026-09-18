@@ -45,4 +45,4 @@ next-env.d.ts
 # they are kept local rather than pushed. NOTE: this only affects NEW files —
 # the migrations already tracked stay tracked until `git rm --cached` removes
 # them, and there is no applied-migration ledger anywhere else.
-/migrations/
+
