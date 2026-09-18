@@ -8,8 +8,10 @@ import { isVisibleByRules, ruleSource } from "@/lib/visibleWhen";
 import {
   formatPostalCode,
   isCityField,
+  isMailSameAsPropertyField,
   isPostalCodeField,
   isStreetAddressField,
+  isUnitField,
 } from "@/lib/addressFields";
 
 /**
@@ -71,6 +73,18 @@ interface Props {
 /* ── helpers ── */
 function isSelectOptions(opts: unknown): opts is FieldOption[] {
   return Array.isArray(opts);
+}
+
+// The four fields the "Mail address same as purchase property" checkbox
+// stands in for.
+function isMailForwardingField(field: FormField): boolean {
+  return (
+    field.field_type === "text" &&
+    (isStreetAddressField(field.label) ||
+      isUnitField(field.label) ||
+      isCityField(field.label) ||
+      isPostalCodeField(field.label))
+  );
 }
 
 function isPhoneField(field: FormField): boolean {
@@ -208,6 +222,24 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const initialName = useRef<{ first: string; last: string }>({ first: "", last: "" });
+  // This person's own purchase property address — feeds the "Mail address
+  // same as purchase property" checkbox. Absent → nothing to fill.
+  const [purchaseAddress, setPurchaseAddress] = useState<{
+    street: string | null;
+    unit: string | null;
+    city: string | null;
+    postalCode: string | null;
+  } | null>(null);
+
+  // What field, if checked, this person's mail-forwarding fields should copy.
+  function mailForwardingValue(field: FormField): string {
+    if (!purchaseAddress) return "";
+    if (isStreetAddressField(field.label)) return purchaseAddress.street ?? "";
+    if (isUnitField(field.label)) return purchaseAddress.unit ?? "";
+    if (isCityField(field.label)) return purchaseAddress.city ?? "";
+    if (isPostalCodeField(field.label)) return formatPostalCode(purchaseAddress.postalCode ?? "");
+    return "";
+  }
 
   // Resolve the existing response for a field — match on field_id, falling
   // back to field_label for legacy rows where field_id is null.
@@ -236,6 +268,7 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
     setFirstName("");
     setLastName("");
     initialName.current = { first: "", last: "" };
+    setPurchaseAddress(null);
 
     (async () => {
       try {
@@ -282,6 +315,12 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
         setFirstName(loadedFirst);
         setLastName(loadedLast);
         initialName.current = { first: loadedFirst, last: loadedLast };
+        setPurchaseAddress({
+          street: dealData?.lead_address_street ?? null,
+          unit: dealData?.lead_address_unit ?? null,
+          city: dealData?.lead_address_city ?? null,
+          postalCode: dealData?.lead_address_postal_code ?? null,
+        });
 
         const loadedFields: FormField[] = (Array.isArray(fieldsData) ? fieldsData : [])
           .map((f: any) => ({
@@ -675,6 +714,7 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
 
               if (field.field_type === "checkbox") {
                 const isChecked = values[field.id] === "true";
+                const isMailSame = isMailSameAsPropertyField(field.label);
                 return (
                   <div key={field.id}>
                     <label className="flex items-start gap-3 cursor-pointer group select-none">
@@ -682,7 +722,24 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
                         <input
                           type="checkbox"
                           checked={isChecked}
-                          onChange={(e) => setValue(field, e.target.checked ? "true" : "false")}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            setValue(field, checked ? "true" : "false");
+                            // Pre-fill the mail-forwarding fields from this
+                            // person's own purchase property address.
+                            if (checked && isMailSame && purchaseAddress) {
+                              const filled: Record<string, string> = {};
+                              for (const f of fields) {
+                                if (isMailForwardingField(f)) filled[f.id] = mailForwardingValue(f);
+                              }
+                              setValues((prev) => ({ ...prev, ...filled }));
+                              setErrors((prev) => {
+                                const next = { ...prev };
+                                for (const id of Object.keys(filled)) next[id] = "";
+                                return next;
+                              });
+                            }
+                          }}
                           className="sr-only"
                         />
                         <div
@@ -700,9 +757,27 @@ export default function CoPersonPersonalInfoModal({ open, onClose, coPerson, onS
                           )}
                         </div>
                       </div>
-                      <span className={["text-sm leading-snug pt-0.5", isChecked ? "text-gray-800 font-medium" : "text-gray-500"].join(" ")}>
-                        {field.placeholder || field.label}
-                      </span>
+                      {isMailSame && isChecked && purchaseAddress ? (
+                        <span className="leading-snug">
+                          <span className="block text-sm font-medium text-gray-800">
+                            {field.placeholder || field.label}
+                          </span>
+                          <span className="block mt-0.5 text-xs text-gray-500">
+                            {[
+                              purchaseAddress.unit
+                                ? `${purchaseAddress.street}, Unit ${purchaseAddress.unit}`
+                                : purchaseAddress.street,
+                              purchaseAddress.city,
+                            ]
+                              .filter(Boolean)
+                              .join(", ")}
+                          </span>
+                        </span>
+                      ) : (
+                        <span className={["text-sm leading-snug pt-0.5", isChecked ? "text-gray-800 font-medium" : "text-gray-500"].join(" ")}>
+                          {field.placeholder || field.label}
+                        </span>
+                      )}
                     </label>
                     {hasError && <p className="mt-1.5 text-xs text-[#C10007]">{errors[field.id]}</p>}
                   </div>

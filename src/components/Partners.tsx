@@ -27,6 +27,7 @@ interface Partner {
   brokerage_name: string | null;
   referral_code: string | null;
   clients_referred?: number;
+  comment: string | null;
   created_at: string;
 }
 
@@ -61,6 +62,7 @@ const emptyForm = {
   agent_phone: "",
   brokerage_type: "Real Estate Agent" as PartnerType,
   brokerage_name: "",
+  comment: "",
 };
 
 type TabFilter = "all" | "Real Estate Agent" | "Mortgage Broker";
@@ -189,6 +191,7 @@ const Partners: React.FC = () => {
       agent_phone: p.agent_phone ?? "",
       brokerage_type: p.brokerage_type ?? "Real Estate Agent",
       brokerage_name: p.brokerage_name ?? "",
+      comment: p.comment ?? "",
     });
     setCreatedPartner(null);
     setContacts([]);
@@ -219,6 +222,7 @@ const Partners: React.FC = () => {
         agent_phone: form.agent_phone.trim() || null,
         brokerage_type: form.brokerage_type || null,
         brokerage_name: form.brokerage_name.trim() || null,
+        comment: form.comment.trim() || null,
       };
       const res = await fetch("/api/admin/partners", {
         method,
@@ -384,7 +388,7 @@ const Partners: React.FC = () => {
 
       {/* List */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-x-auto">
-        <table className="w-full min-w-[1000px] text-left text-sm">
+        <table className="w-full min-w-[1150px] text-left text-sm">
           <thead className="bg-slate-50/30 border-b border-slate-100">
             <tr className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">
               <th className="px-6 py-5 w-12">#</th>
@@ -395,6 +399,7 @@ const Partners: React.FC = () => {
               <th className="px-4 py-5">Referral Code</th>
               <th className="px-4 py-5 text-center w-24">Clients</th>
               <th className="px-4 py-5 w-40">Date Added</th>
+              <th className="px-4 py-5">Comment</th>
               <th className="px-4 py-5 text-center w-28">Actions</th>
             </tr>
           </thead>
@@ -468,6 +473,11 @@ const Partners: React.FC = () => {
                 <td className="px-4 py-4">
                   <span className="text-xs text-slate-400 font-medium">
                     {formatLocalDate(p.created_at) || "—"}
+                  </span>
+                </td>
+                <td className="px-4 py-4">
+                  <span className="text-xs text-slate-600 truncate block max-w-[200px]" title={p.comment ?? undefined}>
+                    {p.comment || <span className="italic text-slate-300">—</span>}
                   </span>
                 </td>
                 <td className="px-4 py-4">
@@ -689,6 +699,18 @@ const Partners: React.FC = () => {
                         onChange={(e) => setForm((p) => ({ ...p, agent_phone: formatPhone(e.target.value) }))}
                       />
                     </div>
+                  </div>
+
+                  {/* Comment */}
+                  <div>
+                    <label className="text-sm font-semibold text-gray-800 block mb-2">Comment</label>
+                    <textarea
+                      rows={2}
+                      placeholder="Internal note about this partner"
+                      className={inputClasses}
+                      value={form.comment}
+                      onChange={(e) => setForm((p) => ({ ...p, comment: e.target.value }))}
+                    />
                   </div>
 
                   {/* Additional CC contacts. Needs a saved partner to attach to,
