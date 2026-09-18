@@ -58,7 +58,7 @@ async function familyDocs(dealId: string) {
 
   const { data, error } = await supabaseAdmin
     .from("lead_corporate_docs")
-    .select("id, lead_id, file_name, file_url, file_size, custom_type, created_at")
+    .select("id, lead_id, file_name, file_url, file_size, custom_type, created_at, hidden_from_client")
     .in("lead_id", leadIds)
     .eq("doc_type", OTHER_DOC_TYPE)
     .order("created_at", { ascending: false });
@@ -100,17 +100,30 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     return NextResponse.json({ success: false, error: "Invalid document id" }, { status: 400 });
   }
 
-  const body = (await req.json().catch(() => null)) as { label?: unknown } | null;
-  const label = typeof body?.label === "string" ? body.label.trim() : "";
+  const body = (await req.json().catch(() => null)) as
+    | { label?: unknown; hidden_from_client?: unknown }
+    | null;
 
   const docs = await familyDocs(id);
-  if (!docs.some((d) => d.id === docId)) {
+  const doc = docs.find((d) => d.id === docId);
+  if (!doc) {
     return NextResponse.json({ success: false, error: "Document not found" }, { status: 404 });
+  }
+
+  const update: { custom_type?: string | null; hidden_from_client?: boolean } = {};
+  if (typeof body?.label === "string") {
+    update.custom_type = body.label.trim() || null;
+  }
+  if (typeof body?.hidden_from_client === "boolean") {
+    update.hidden_from_client = body.hidden_from_client;
+  }
+  if (Object.keys(update).length === 0) {
+    return NextResponse.json({ success: false, error: "Nothing to update" }, { status: 400 });
   }
 
   const { error } = await supabaseAdmin
     .from("lead_corporate_docs")
-    .update({ custom_type: label || null })
+    .update(update)
     .eq("id", docId);
 
   if (error) {
