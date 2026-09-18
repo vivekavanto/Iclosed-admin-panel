@@ -103,3 +103,18 @@ test("a blank name falls back to the email local-part, then to PTNR", () => {
 test("the taken list is matched case- and whitespace-insensitively", () => {
   assert.equal(code("Sarujan Kana", [" sarujank2026 "]), "SARUJANKA2026");
 });
+
+// Regression, 2026-09-18: a partner added on 2026-09-17 was issued DINUSHA2027.
+// The OLD scheme built a code from the largest TRAILING NUMBER in the table plus
+// one, and once every code ended in 2026 that number WAS 2026 — so the year
+// started incrementing. Nothing here may read a number off an existing code.
+test("an existing 2026 code never pushes the next one to 2027", () => {
+  const taken = ["LEILANIE2026", "SARUJANK2026", "ALIYAA2026"];
+  assert.equal(code("Dinusha Hallinne Guruge", taken), "DINUSHAH2026");
+  for (const name of ["Priya Menon", "Omar Haddad", "Jean Tremblay"]) {
+    assert.ok(
+      code(name, taken).endsWith(REFERRAL_CODE_YEAR),
+      `${name} must still end in ${REFERRAL_CODE_YEAR}`,
+    );
+  }
+});
