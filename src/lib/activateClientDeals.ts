@@ -1,4 +1,5 @@
 import supabaseAdmin from "./supabaseAdmin";
+import { findRowByEmail } from "./emailLookup";
 
 /**
  * Promote Inactive deals to Active for a client identified by lead_id,
@@ -19,11 +20,13 @@ export async function activateClientDeals(opts: {
   let resolvedLeadId = leadId ?? null;
 
   if (!resolvedClientId && email) {
-    const { data: client } = await supabaseAdmin
-      .from("clients")
-      .select("id")
-      .eq("email", email)
-      .maybeSingle();
+    // Whitespace-tolerant on purpose. An exact .eq() here missed every client
+    // whose stored address carried a stray space — the portal used to save the
+    // raw typed value while Supabase Auth trims the one it registers — so this
+    // returned "No lead_id, client_id, or email to resolve", the deal was never
+    // promoted off Inactive, and sendAgentSignupEmail's activation gate then
+    // suppressed the agent notification for good. See emailLookup.ts.
+    const client = await findRowByEmail<{ id: string }>("clients", "id", email);
     resolvedClientId = client?.id ?? null;
   }
 

@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import supabaseAdmin from "@/lib/supabaseAdmin";
 import { activateClientDeals } from "@/lib/activateClientDeals";
 import { sendWelcomeEmail } from "@/lib/sendWelcomeEmail";
 import { sendAgentSignupEmail } from "@/lib/sendAgentSignupEmail";
 import { guardServiceRequest } from "@/lib/verifyServiceSignature";
+import { findRowByEmail } from "@/lib/emailLookup";
 
 /**
  * POST /api/webhooks/new-lead
@@ -37,13 +37,10 @@ export async function POST(req: NextRequest) {
     let leadId: string | null = body.lead_id ?? null;
 
     if (!leadId && body.email) {
-      const { data } = await supabaseAdmin
-        .from("leads")
-        .select("id")
-        .eq("email", body.email)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      // Trim-tolerant: an exact .eq() missed leads stored with a stray space,
+      // so this webhook 404'd for them and neither the welcome nor the agent
+      // signup email ever fired. See emailLookup.ts.
+      const data = await findRowByEmail<{ id: string }>("leads", "id", body.email);
 
       if (!data) {
         return NextResponse.json(

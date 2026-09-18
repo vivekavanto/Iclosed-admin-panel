@@ -198,8 +198,18 @@ export async function sendAgentSignupEmail(
     (d: any) => d.status && d.status !== "Inactive",
   );
   if (!activatedDeal) {
-    logger.info(
-      `[Agent Signup Email] Skipped — client has not activated yet (no non-Inactive deal). lead=${leadId} source=${opts.source ?? "unknown"}`,
+    // A file that HAS an agent and is still Inactive is the shape of a real
+    // fault, not a routine skip: the client signed up, so something upstream
+    // (activateClientDeals, the portal webhook) failed to promote the deal and
+    // this notification is now stuck forever. It used to log at info alongside
+    // the ordinary "no agent on file" case, which is why a whole class of
+    // missing agent emails left no trace. Warn so it shows up.
+    const pendingAgent = await resolveAgentEmail(lead);
+    const log = pendingAgent ? logger.warn : logger.info;
+    log(
+      `[Agent Signup Email] Skipped — client has not activated yet (no non-Inactive deal). ` +
+        `lead=${leadId} source=${opts.source ?? "unknown"}` +
+        (pendingAgent ? ` — AGENT NOTIFICATION IS STUCK for ${maskEmail(pendingAgent)}` : ""),
     );
     return {
       success: true,
