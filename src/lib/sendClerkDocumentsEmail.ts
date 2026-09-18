@@ -62,6 +62,22 @@
 // lead_corporate_docs row with an "aps" doc_type), which keeps the name it was
 // uploaded under. See collectFamilyDocuments().
 //
+// Completeness is CHECKED, not assumed. After the message is assembled, every
+// task on the file is reconciled against it (reconcileTaskCoverage): a task is
+// only allowed to leave if its own PDF is attached or one of its uploads is
+// attached or linked. Anything else is logged as an error, named in the body and
+// recorded on the audit row. Every step of the packaging is best-effort by
+// design — sections catch and continue, documents degrade to links, downloads
+// fail one file at a time — and each of those is right on its own; together they
+// meant a task could go missing with no single place that knew. This is that
+// place.
+//
+// Attachment names are deduped across BOTH halves before sending. The generated
+// entries and the uploaded documents are named by rules that never saw each
+// other and DO collide (a two-party task's PDF vs a PDF uploaded against that
+// same task by that same person), and two identically-named attachments mean the
+// recipient saves one over the other — a document that silently never arrived.
+//
 // Wording: the subject and body come from the "Client Documents to Clerk"
 // email_templates row when one exists, so staff can retune them without a
 // deploy. renderBody()/defaultSubject() below are the fallback used when the row
@@ -77,7 +93,13 @@ import {
   withEmailDocumentLinks,
 } from "./familyDocuments";
 import { buildDealPackage } from "./dealPackage";
-import { packageEntryAttachments, renderPackageSummaryHtml } from "./packageAttachments";
+import {
+  dedupeAttachmentNames,
+  packageEntryAttachments,
+  reconcileTaskCoverage,
+  renderPackageSummaryHtml,
+  renderUncoveredTasksHtml,
+} from "./packageAttachments";
 import { formatLeadTypeLabel, buildLeadAddressPartsForEmail, renderTransactionPhrase } from "./leadEmailAddress";
 import { decodeTemplateBraces, renderTemplateSafe, type TemplateValue } from "./renderEmailTemplate";
 import { logger } from "./logger";
@@ -116,6 +138,12 @@ export type ClerkEmailResult = {
   personalInfo: number;
   /** Facts (lock box code, rental answers) in the property-information PDF. */
   propertyInfo: number;
+  /**
+   * Tasks that reached NEITHER an attachment nor a link — empty on a healthy
+   * send. Audited with the rest, so that when a clerk reports a missing document
+   * weeks later there is a record of what this email did and did not carry.
+   */
+  uncovered: string[];
   error?: string;
 };
 
@@ -271,6 +299,7 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
     aps: 0,
     personalInfo: 0,
     propertyInfo: 0,
+    uncovered: [],
   };
 
   const { data: deal } = await supabaseAdmin
@@ -378,9 +407,35 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
     dealId,
   });
 
-  const attachments = [...packageAttachments, ...docs.attachments];
+  // One name per attachment, across BOTH halves. A task's own PDF and a PDF
+  // uploaded against that same task by that same person are named identically by
+  // rules that never saw each other — see dedupeAttachmentNames.
+  const attachments = dedupeAttachmentNames([...packageAttachments, ...docs.attachments]);
   if (attachments.length === 0 && docs.linked.length === 0) {
     return { ...empty, error: "There are no uploaded documents on this file yet" };
+  }
+
+  // Does every task on this file actually leave with the email? Asked here, at
+  // the one point where the whole message is known, because everything upstream
+  // is individually best-effort and no single step can answer it. Anything that
+  // isn't covered is named in the body and logged — never dropped in silence.
+  const omittedTitles = new Set(omittedEntries);
+  /** Entry KINDS that are genuinely on the message — see the summary below. */
+  const shipped = new Set(
+    pkg.entries.filter((e) => !omittedTitles.has(e.title)).map((e) => e.kind),
+  );
+
+  const reachableUrls = new Set<string>([
+    ...docs.attachedUrls,
+    ...docs.linked.map((d) => d.fileUrl),
+  ]);
+  const uncovered = reconcileTaskCoverage(pkg.coverage, omittedEntries, reachableUrls);
+  if (uncovered.length > 0) {
+    logger.error(
+      `[ClerkDocuments] ${uncovered.length} task(s) are on NEITHER an attachment nor a link — ` +
+        `deal=${dealId} file=${fileNumber}: ` +
+        uncovered.map((u) => `${u.label} (${u.reason})`).join(", "),
+    );
   }
 
   const leadTypeLabel = formatLeadTypeLabel(rawType);
@@ -465,15 +520,21 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
       ? renderTemplateSafe(decodeTemplateBraces(template.body), resolve)
       : renderBody(facts)) +
     renderPackageSummaryHtml({
-      identification: pkg.identificationDocs,
-      aps: pkg.apsDocs,
-      personalInfo: pkg.personalInfoPeople,
-      propertyInfo: pkg.propertyInfoRows,
+      // Counted off the entries that ACTUALLY shipped, not off the package's
+      // own tallies. Those are set while a section is being built and survive
+      // the entry being dropped for drawing nothing — so the list could promise
+      // "all 2 clients' details in one PDF" on an email carrying no such PDF,
+      // which is worse than saying nothing: it tells the clerk to stop looking.
+      identification: shipped.has("identification") ? pkg.identificationDocs : 0,
+      aps: shipped.has("aps") ? pkg.apsDocs : 0,
+      personalInfo: shipped.has("personal-info") ? pkg.personalInfoPeople : 0,
+      propertyInfo: shipped.has("property") ? pkg.propertyInfoRows : 0,
       taskPdfs: taskPdfCount,
       separate: docs.attachments.length,
       omitted: omittedEntries,
     }) +
-    renderLinkedDocsHtml(docs.linked);
+    renderLinkedDocsHtml(docs.linked) +
+    renderUncoveredTasksHtml(uncovered);
 
   const subject = template?.subject?.trim()
     ? renderTemplateSafe(template.subject, resolve, { escape: false })
@@ -508,7 +569,8 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
       `ids=${pkg.identificationDocs}, aps=${pkg.apsDocs}, ` +
       `personal info for ${pkg.personalInfoPeople}, property rows=${pkg.propertyInfoRows}, ` +
       `task pdfs=${taskPdfCount}, documents=${docs.attachments.length}) ` +
-      `linked=${docs.linked.length}`,
+      `linked=${docs.linked.length}` +
+      (uncovered.length ? ` UNCOVERED=${uncovered.map((u) => u.label).join(", ")}` : ""),
   );
 
   return {
@@ -520,5 +582,6 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
     aps: pkg.apsDocs,
     personalInfo: pkg.personalInfoPeople,
     propertyInfo: pkg.propertyInfoRows,
+    uncovered: uncovered.map((u) => u.label),
   };
 }

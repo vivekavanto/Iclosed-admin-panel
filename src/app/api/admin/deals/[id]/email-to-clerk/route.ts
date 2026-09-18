@@ -63,6 +63,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         aps: result.aps,
         personalInfo: result.personalInfo,
         propertyInfo: result.propertyInfo,
+        // Empty on a healthy send. Recorded so that "some documents were missing
+        // from the clerk email" is answerable after the fact rather than a
+        // forensic exercise against a mailbox nobody here can read.
+        uncovered: result.uncovered,
       },
       req,
     });
@@ -76,6 +80,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       aps: result.aps,
       personalInfo: result.personalInfo,
       propertyInfo: result.propertyInfo,
+      uncovered: result.uncovered,
     });
   } catch (err) {
     logger.error(`POST /api/admin/deals/${id}/email-to-clerk error:`, err);

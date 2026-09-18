@@ -24,8 +24,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  dedupeAttachmentNames,
   packageEntryAttachments,
+  reconcileTaskCoverage,
   renderPackageSummaryHtml,
+  renderUncoveredTasksHtml,
 } from "../src/lib/packageAttachments.ts";
 
 type Entry = Parameters<typeof packageEntryAttachments>[0][number];
@@ -177,4 +180,145 @@ test("nothing to describe renders nothing at all", () => {
     }),
     "",
   );
+});
+
+// ── Nothing leaves without a name of its own, and nothing leaves unaccounted ──
+//
+// The two guards added after "2 files (personal information) missing in the
+// email to clerk", 2026-09-16. Neither half of the message could see the other:
+// the generated entries were named `<file number> - <entry title>.pdf` with no
+// dedupe at all, the documents were named
+// `<file number> - <task name> - <client name>.<ext>` and deduped only among
+// themselves, and nothing anywhere asked whether a task had reached the email.
+
+test("attachments sharing a name are numbered rather than left to collide", () => {
+  const out = dedupeAttachmentNames([
+    { filename: "26P-0564 - Mortgage Details - Jane Doe.pdf", content: Buffer.from("a") },
+    { filename: "26P-0564 - Mortgage Details - Jane Doe.pdf", content: Buffer.from("b") },
+    { filename: "26P-0564 - Personal Information.pdf", content: Buffer.from("c") },
+    { filename: "26P-0564 - Mortgage Details - Jane Doe.pdf", content: Buffer.from("d") },
+  ]);
+
+  assert.deepEqual(
+    out.map((a) => a.filename),
+    [
+      "26P-0564 - Mortgage Details - Jane Doe.pdf",
+      "26P-0564 - Mortgage Details - Jane Doe (2).pdf",
+      "26P-0564 - Personal Information.pdf",
+      "26P-0564 - Mortgage Details - Jane Doe (3).pdf",
+    ],
+  );
+  // Every attachment survives — numbering, not dropping, is the fix.
+  assert.equal(out.length, 4);
+  assert.deepEqual(new Set(out.map((a) => a.filename)).size, 4);
+});
+
+test("a name collision across the two halves is caught, not just within one", () => {
+  // The generated entry for a two-party task and a PDF uploaded against that
+  // same task by that same person are built by rules that never see each other.
+  const generated = packageEntryAttachments(
+    [entry("Mortgage Details - Jane Doe", "task", 100)],
+    { fileNumber: "26P-0564", budgetBytes: 25 * 1024 * 1024 },
+  );
+  const documents = [
+    { filename: "26P-0564 - Mortgage Details - Jane Doe.pdf", content: Buffer.from("x") },
+  ];
+
+  const out = dedupeAttachmentNames([...generated.attachments, ...documents]);
+  assert.equal(new Set(out.map((a) => a.filename)).size, 2);
+});
+
+test("a task carried by an attached entry is covered", () => {
+  const uncovered = reconcileTaskCoverage(
+    [
+      {
+        taskId: "t1",
+        title: "Provide Personal Information",
+        owner: "Jane Doe",
+        entryTitle: "Personal Information",
+        fileUrls: [],
+      },
+    ],
+    [],
+    new Set(),
+  );
+  assert.deepEqual(uncovered, []);
+});
+
+test("a task covered only by one of its uploads still counts as covered", () => {
+  const uncovered = reconcileTaskCoverage(
+    [
+      {
+        taskId: "t1",
+        title: "Upload Identification",
+        owner: "Jane Doe",
+        entryTitle: null,
+        fileUrls: ["https://blob/licence.jpg", "https://blob/passport.jpg"],
+      },
+    ],
+    [],
+    // Attached OR linked — a link the recipient can open is delivery too.
+    new Set(["https://blob/passport.jpg"]),
+  );
+  assert.deepEqual(uncovered, []);
+});
+
+test("a task whose entry was omitted for budget is reported as uncovered", () => {
+  const uncovered = reconcileTaskCoverage(
+    [
+      {
+        taskId: "t1",
+        title: "Provide Personal Information",
+        owner: "Jane Doe",
+        entryTitle: "Personal Information",
+        fileUrls: [],
+      },
+    ],
+    ["Personal Information"],
+    new Set(),
+  );
+  assert.deepEqual(uncovered, [
+    { label: "Provide Personal Information — Jane Doe", reason: "entry_omitted" },
+  ]);
+});
+
+test("a task with neither an entry nor a reachable upload is reported", () => {
+  const uncovered = reconcileTaskCoverage(
+    [
+      {
+        taskId: "t1",
+        title: "Provide Personal Information",
+        owner: "Jane Doe",
+        entryTitle: null,
+        fileUrls: [],
+      },
+      {
+        taskId: "t2",
+        title: "Home Insurance",
+        owner: "",
+        entryTitle: null,
+        fileUrls: ["https://blob/policy.pdf"],
+      },
+    ],
+    [],
+    new Set(),
+  );
+  assert.deepEqual(uncovered, [
+    { label: "Provide Personal Information — Jane Doe", reason: "no_entry" },
+    { label: "Home Insurance", reason: "documents_unreachable" },
+  ]);
+});
+
+test("the uncovered block names every task and is empty when nothing is missing", () => {
+  assert.equal(renderUncoveredTasksHtml([]), "");
+
+  const html = renderUncoveredTasksHtml([
+    { label: "Provide Personal Information — Jane Doe", reason: "no_entry" },
+    { label: "Provide Personal Information — John <Doe>", reason: "no_entry" },
+  ]);
+  assert.match(html, /2 tasks are NOT on this email/);
+  assert.match(html, /Provide Personal Information — Jane Doe/);
+  // Client-supplied names are escaped like everywhere else in these bodies.
+  assert.match(html, /John &lt;Doe&gt;/);
+  assert.doesNotMatch(html, /John <Doe>/);
 });

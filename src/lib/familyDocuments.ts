@@ -92,6 +92,16 @@ export interface FamilyDocumentPackage {
   total: number;
   /** Sum of attached bytes, for logging. */
   attachedBytes: number;
+  /**
+   * Blob urls that made it onto the email as attachments.
+   *
+   * Kept beside the attachments rather than ON them: an EmailAttachment is
+   * handed straight to Resend/nodemailer, and a field neither provider models is
+   * a field one of them may choke on. The caller needs the urls to prove every
+   * task is covered (reconcileTaskCoverage), and `linked` already carries its
+   * own.
+   */
+  attachedUrls: string[];
 }
 
 interface CandidateDoc {
@@ -296,6 +306,7 @@ export async function collectFamilyDocuments(
     linked: [],
     total: 0,
     attachedBytes: 0,
+    attachedUrls: [],
   };
 
   const candidates: CandidateDoc[] = [];
@@ -508,6 +519,7 @@ export async function collectFamilyDocuments(
   const budget = naming.budgetBytes ?? ATTACHMENT_BUDGET_BYTES;
 
   const attachments: EmailAttachment[] = [];
+  const attachedUrls: string[] = [];
   const linked: LinkedDocument[] = [];
   let attachedBytes = 0;
 
@@ -539,6 +551,7 @@ export async function collectFamilyDocuments(
         continue;
       }
       attachments.push({ filename: doc.fileName, content });
+      attachedUrls.push(doc.fileUrl);
       attachedBytes += content.byteLength;
     } catch (err) {
       logger.warn(
@@ -554,6 +567,7 @@ export async function collectFamilyDocuments(
     linked,
     total: attachments.length + linked.length,
     attachedBytes,
+    attachedUrls,
   };
 }
 

@@ -228,7 +228,7 @@ test("EmailSendError marks only connection and timeout as retryable", () => {
 
 function msg(): EmailMessage {
   return {
-    from: "iClosed <support@iclosed.ca>",
+    from: "iClosed <hello@iclosed.ca>",
     to: ["client@example.com"],
     subject: "Test",
     html: "<p>Test</p>",

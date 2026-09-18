@@ -4,6 +4,7 @@ import { activateClientDeals } from "@/lib/activateClientDeals";
 import { sendAgentSignupEmail } from "@/lib/sendAgentSignupEmail";
 import { notifyClientSignup } from "@/lib/notifyClientSignup";
 import { guardServiceRequest } from "@/lib/verifyServiceSignature";
+import { findRowsByEmail } from "@/lib/emailLookup";
 
 /**
  * Every lead row this activation refers to.
@@ -34,12 +35,14 @@ async function resolveLeadsToNotify(opts: {
   }
 
   if (opts.email) {
-    const { data } = await supabaseAdmin
-      .from("leads")
-      .select("id")
-      .ilike("email", opts.email.trim())
-      .limit(20);
-    for (const row of data ?? []) ids.add(row.id);
+    // A wildcard-free .ilike() is an EXACT (case-insensitive) match, so it
+    // missed any lead whose stored address carried a stray space — the client
+    // signed up, nothing resolved here, and the agent was never told. The
+    // helper trims both sides. See emailLookup.ts.
+    const rows = await findRowsByEmail<{ id: string }>("leads", "id", opts.email, {
+      limit: 20,
+    });
+    for (const row of rows) ids.add(row.id);
   }
 
   return [...ids];
