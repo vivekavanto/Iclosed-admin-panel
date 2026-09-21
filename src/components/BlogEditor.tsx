@@ -6,8 +6,6 @@ import {
   Sparkles,
   Loader2,
   AlertTriangle,
-  Eye,
-  Code2,
   Search,
   Plus,
   X,
@@ -16,19 +14,31 @@ import {
   Upload,
   ImagePlus,
 } from "lucide-react";
-import BlogArticleBody from "./blog/BlogArticleBody";
+import BlogRichTextEditor from "./blog/BlogRichTextEditor";
+import { editorHtmlToSourceText, plainTextToHtml } from "./blog/blogEditorText";
 
 /**
  * Create / edit screen for one blog post.
  *
- * Two ways in, both ending in the same place:
+ * ── One article box ─────────────────────────────────────────────────────
+ * The article lives in a single rich-text editor (BlogRichTextEditor), and
+ * what is in it is exactly what gets published. There used to be two boxes —
+ * a plain-text draft and a read-only "formatted article" beneath it — which
+ * meant the admin edited one and published the other, and every correction
+ * after formatting had to be made in raw HTML.
  *
- *   Paste   paste the article as plain text, press Format with AI, read what
- *           came back, fix anything, draft the search metadata with AI, fix
- *           that, save, publish.
- *   Upload  drop in the .docx/.pdf/.md/.txt/.html the article was written in
- *           and POST /api/admin/blog/import does the extraction, the
- *           formatting and the metadata in one round trip.
+ * `content_html` is therefore the only copy of the article this screen holds.
+ * The `content_source` column is still written on save, derived from the
+ * editor, because the AI steps and the portal both want the words without the
+ * markup — but it is no longer something anyone types into.
+ *
+ * Two ways to fill it, both ending in the same editor:
+ *
+ *   Write/paste  type into the editor, or paste from Word — ProseMirror
+ *                coerces the markup into the allowed tags on the way in.
+ *   Upload       drop in the .docx/.pdf/.md/.txt/.html the article was written
+ *                in and POST /api/admin/blog/import does the extraction, the
+ *                formatting and the search metadata in one round trip.
  *
  * Every AI step is deliberately separate from saving, so the admin always sees
  * what the model produced before it becomes the stored copy — the draft is
@@ -85,9 +95,24 @@ export const EMPTY_POST: EditorPost = {
   seo_source: "manual",
 };
 
-/** A row from GET /api/admin/blog/[id], mapped onto the editor's shape. */
+/**
+ * A row from GET /api/admin/blog/[id], mapped onto the editor's shape.
+ *
+ * Carries one piece of history. Before the article became a single rich-text
+ * box, a draft could sit in the table with its raw text in `content_source`
+ * and `content_html` still empty — the author had pasted it but never pressed
+ * Format with AI. Opening such a row against an editor that reads only
+ * `content_html` would show an empty page, and saving it would then overwrite
+ * the one copy of the text that existed. So the raw text is promoted into
+ * paragraphs on the way in, which is lossless and leaves Format with AI able
+ * to do its job afterwards.
+ */
 export function toEditorPost(row: Record<string, unknown>): EditorPost {
   const str = (v: unknown, fallback = "") => (typeof v === "string" ? v : fallback);
+
+  const storedHtml = str(row.content_html);
+  const storedSource = str(row.content_source);
+
   return {
     id: str(row.id) || null,
     slug: str(row.slug),
@@ -97,8 +122,8 @@ export function toEditorPost(row: Record<string, unknown>): EditorPost {
     // controlled, and a null turns one into an uncontrolled input that React
     // warns about on the first keystroke.
     excerpt: str(row.excerpt),
-    content_html: str(row.content_html),
-    content_source: str(row.content_source),
+    content_html: storedHtml || plainTextToHtml(storedSource),
+    content_source: storedSource,
     cover_image_url: str(row.cover_image_url),
     cover_image_alt: str(row.cover_image_alt),
     author: str(row.author, EMPTY_POST.author),
@@ -172,7 +197,6 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
   const [warnings, setWarnings] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [showHtml, setShowHtml] = useState(false);
 
   const importInput = useRef<HTMLInputElement>(null);
   const coverInput = useRef<HTMLInputElement>(null);
@@ -195,9 +219,9 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
     setNotice(null);
     setWarnings([]);
 
-    if (post.content_source.trim() || post.content_html.trim()) {
+    if (post.content_html.trim()) {
       setError(
-        "This post already has an article in it. Clear the article text and the formatted HTML first, or start a new post — importing replaces both.",
+        "This post already has an article in it. Clear the editor first, or start a new post — importing replaces everything in it.",
       );
       return;
     }
@@ -221,8 +245,10 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
       setPost((p) => ({
         ...p,
         title: json.title || p.title,
-        content_source: json.text ?? "",
-        content_html: json.html ?? "",
+        // If the formatting step failed the server still returns the extracted
+        // text, so it goes into the editor as plain paragraphs rather than
+        // being thrown away with the error. Format with AI can be pressed after.
+        content_html: json.html || plainTextToHtml(json.text ?? ""),
         format_source: json.formatSource ?? "manual",
         ...(seo
           ? {
@@ -289,14 +315,23 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
     }
   }
 
+  /**
+   * Re-marks-up whatever is in the editor: headings, paragraphs, lists.
+   *
+   * It reads the editor's content back out as plain text first. Sending the
+   * HTML instead would break the check that gives this route its point —
+   * formatBlogHtml() measures how much of the author's wording survived, and
+   * with HTML on the "before" side every tag name counts as a word the model
+   * is then found to have dropped.
+   */
   async function handleFormat() {
     setError(null);
     setNotice(null);
     setWarnings([]);
 
-    const body = post.content_source.trim();
+    const body = editorHtmlToSourceText(post.content_html).trim();
     if (!body) {
-      setError("Paste the article text into the draft box first.");
+      setError("Write or upload the article first.");
       return;
     }
 
@@ -341,7 +376,7 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
     setNotice(null);
     setWarnings([]);
 
-    const body = (post.content_html || post.content_source).trim();
+    const body = post.content_html.trim();
     if (!body) {
       setError("Write the article before drafting its search metadata.");
       return;
@@ -416,7 +451,13 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
         slug: post.slug || undefined,
         excerpt: post.excerpt,
         content_html: post.content_html,
-        content_source: post.content_source,
+        // Derived, never typed: the words without the markup, which is what the
+        // AI steps and the portal read. Recomputed on every save so it cannot
+        // drift from the article it is supposed to describe — but never
+        // narrowed to nothing, because saving a post whose body is still empty
+        // would otherwise erase the stored text on its way past.
+        content_source:
+          editorHtmlToSourceText(post.content_html) || post.content_source,
         cover_image_url: post.cover_image_url || null,
         cover_image_alt: post.cover_image_alt || null,
         author: post.author,
@@ -587,126 +628,95 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
             />
           </Field>
 
-          {/* ── Import ──────────────────────────────────
-              The alternative to pasting: one file in, a whole draft out. It
-              fills the boxes below and saves nothing, exactly like the two AI
-              buttons. */}
-          <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/60 p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="text-[12.5px] font-semibold text-slate-700">
-                  Upload the article instead
-                </p>
-                <p className="mt-0.5 text-[11px] leading-relaxed text-slate-400">
-                  Word (.docx), PDF, Markdown, plain text or HTML, up to 10 MB.
-                  Gemini formats it and drafts the meta title, description,
-                  excerpt, keyword, tags and FAQ in one go.
-                </p>
-              </div>
+          {/* ── The article ─────────────────────────────
+              One box. The two buttons that can fill or reshape it sit on top
+              of it, and both write into the same editor the admin then edits.
+              Neither saves anything. */}
+          <div>
+            <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+              <label className="text-[12.5px] font-semibold text-slate-700">Article</label>
 
-              <input
-                ref={importInput}
-                type="file"
-                accept={IMPORT_ACCEPT}
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) void handleImport(file);
-                }}
-              />
-              <button
-                onClick={() => importInput.current?.click()}
-                disabled={busy}
-                className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-slate-900 bg-white px-4 py-2 text-[13px] font-medium text-slate-900 transition hover:bg-slate-900 hover:text-white disabled:opacity-50"
-              >
-                {importing ? (
-                  <>
-                    <Loader2 size={14} className="animate-spin" />
-                    Reading the document…
-                  </>
-                ) : (
-                  <>
-                    <Upload size={14} />
-                    Upload document
-                  </>
-                )}
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  ref={importInput}
+                  type="file"
+                  accept={IMPORT_ACCEPT}
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void handleImport(file);
+                  }}
+                />
+                <button
+                  onClick={() => importInput.current?.click()}
+                  disabled={busy}
+                  className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-[13px] font-medium text-slate-700 transition hover:border-slate-300 disabled:opacity-50"
+                >
+                  {importing ? (
+                    <>
+                      <Loader2 size={14} className="animate-spin" />
+                      Reading the document…
+                    </>
+                  ) : (
+                    <>
+                      <Upload size={14} />
+                      Upload document
+                    </>
+                  )}
+                </button>
+
+                <button
+                  onClick={handleFormat}
+                  disabled={busy}
+                  className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-[13px] font-medium text-white transition hover:bg-slate-800 disabled:opacity-50"
+                >
+                  {formatting ? (
+                    <>
+                      <Loader2 size={14} className="animate-spin" />
+                      Formatting…
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles size={14} />
+                      Format with AI
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
 
+            <BlogRichTextEditor
+              value={post.content_html}
+              disabled={busy}
+              onChange={(html) =>
+                setPost((p) =>
+                  html === p.content_html
+                    ? p
+                    : {
+                        ...p,
+                        content_html: html,
+                        // Any hand edit means a human has been through it.
+                        format_source:
+                          p.format_source === "gemini" ? "gemini_edited" : p.format_source,
+                      },
+                )
+              }
+            />
+
+            <p className="mt-1.5 text-[11px] leading-relaxed text-slate-400">
+              Type here, paste from Word, or upload the document it was written
+              in — Word (.docx), PDF, Markdown, plain text or HTML, up to 10 MB.
+              An upload is formatted and written up for search in one pass.
+              Format with AI re-marks-up whatever is in the box: it adds the
+              headings, paragraphs and lists, and does not change your words.
+            </p>
+
             {importing && (
-              <p className="mt-3 text-[11px] leading-relaxed text-slate-400">
-                A long PDF can take up to a minute — it is read, formatted and
-                written up for search in one pass. Leave this tab open.
+              <p className="mt-1.5 text-[11px] leading-relaxed text-slate-400">
+                A long PDF can take up to a minute. Leave this tab open.
               </p>
             )}
           </div>
-
-          <Field
-            label="Article text"
-            hint="Paste the article as plain text, or upload it above. Gemini adds the headings, paragraphs and lists — it does not change your words."
-          >
-            <textarea
-              value={post.content_source}
-              onChange={(e) => set("content_source", e.target.value)}
-              rows={14}
-              placeholder="Paste the full article here…"
-              className={`${inputClass} font-mono text-[13px] leading-relaxed`}
-            />
-          </Field>
-
-          <button
-            onClick={handleFormat}
-            disabled={busy}
-            className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800 disabled:opacity-50"
-          >
-            {formatting ? (
-              <>
-                <Loader2 size={15} className="animate-spin" />
-                Formatting…
-              </>
-            ) : (
-              <>
-                <Sparkles size={15} />
-                Format with AI
-              </>
-            )}
-          </button>
-
-          {post.content_html && (
-            <div>
-              <div className="mb-2 flex items-center justify-between">
-                <p className="text-sm font-semibold text-slate-900">Formatted article</p>
-                <button
-                  onClick={() => setShowHtml((v) => !v)}
-                  className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-900"
-                >
-                  {showHtml ? <Eye size={13} /> : <Code2 size={13} />}
-                  {showHtml ? "Preview" : "Edit HTML"}
-                </button>
-              </div>
-
-              {showHtml ? (
-                <textarea
-                  value={post.content_html}
-                  onChange={(e) =>
-                    setPost((p) => ({
-                      ...p,
-                      content_html: e.target.value,
-                      // Any hand edit means a human has been through it.
-                      format_source:
-                        p.format_source === "gemini" ? "gemini_edited" : p.format_source,
-                    }))
-                  }
-                  rows={18}
-                  className={`${inputClass} font-mono text-[12.5px] leading-relaxed`}
-                />
-              ) : (
-                <div className="rounded-xl border border-slate-200 bg-white px-6 py-5">
-                  <BlogArticleBody html={post.content_html} />
-                </div>
-              )}
-            </div>
-          )}
         </div>
 
         {/* ── Right: metadata ────────────────────────── */}
