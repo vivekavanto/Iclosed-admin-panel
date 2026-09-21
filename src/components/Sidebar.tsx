@@ -24,6 +24,7 @@ import {
   UserCog,
   Handshake,
   Menu,
+  Newspaper,
   X,
 } from "lucide-react";
 import { NAV_ITEMS } from "../constants";
@@ -55,6 +56,7 @@ const ROUTE_MAP: Record<string, string> = {
   "task-templates": "/admin/templates/tasks",
   "email-templates": "/admin/templates/emails",
   leads: "/admin/leads",
+  blogs: "/admin/blogs",
   partners: "/admin/partners",
   staff: "/admin/users",
   settings: "/admin/settings",
@@ -74,6 +76,7 @@ const iconMap: Record<string, React.ReactNode> = {
   Users: <Users size={20} />,
   UserCog: <UserCog size={20} />,
   Handshake: <Handshake size={20} />,
+  Newspaper: <Newspaper size={20} />,
   Settings: <Settings size={20} />,
   Briefcase: <Briefcase size={20} />,
   FileText: <FileText size={20} />,
