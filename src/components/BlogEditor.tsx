@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Sparkles,
@@ -13,17 +13,28 @@ import {
   X,
   ArrowLeft,
   CheckCircle2,
+  Upload,
+  ImagePlus,
 } from "lucide-react";
 import BlogArticleBody from "./blog/BlogArticleBody";
 
 /**
  * Create / edit screen for one blog post.
  *
- * The flow it is built around: paste the article as plain text, press Format
- * with AI, read what came back, fix anything, draft the search metadata with
- * AI, fix that, save, publish. Both AI steps are deliberately separate from
- * saving, so the admin always sees what the model produced before it becomes
- * the stored copy — the draft is never overwritten by output nobody looked at.
+ * Two ways in, both ending in the same place:
+ *
+ *   Paste   paste the article as plain text, press Format with AI, read what
+ *           came back, fix anything, draft the search metadata with AI, fix
+ *           that, save, publish.
+ *   Upload  drop in the .docx/.pdf/.md/.txt/.html the article was written in
+ *           and POST /api/admin/blog/import does the extraction, the
+ *           formatting and the metadata in one round trip.
+ *
+ * Every AI step is deliberately separate from saving, so the admin always sees
+ * what the model produced before it becomes the stored copy — the draft is
+ * never overwritten by output nobody looked at. That holds for the upload path
+ * too: it fills the boxes on screen and nothing else, and Save is still a
+ * press away.
  *
  * Publishing writes to the table this app shares with the customer portal. The
  * portal's blog pages revalidate on a five-minute timer, so a post goes live
@@ -110,6 +121,13 @@ const META_DESC_MAX = 155;
 const inputClass =
   "w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-300 focus:border-brand-primary";
 
+// Kept in step with IMPORT_ACCEPT / IMPORT_LABEL in src/lib/blogImport.ts,
+// which is the server-side source of truth. Not imported from there: that
+// module pulls in jszip and the Gemini client, and neither belongs in a
+// browser bundle just to populate an accept attribute.
+const IMPORT_ACCEPT = ".docx,.pdf,.txt,.md,.markdown,.html,.htm";
+const COVER_ACCEPT = "image/png,image/jpeg,image/webp,image/avif";
+
 function CharCount({ value, max }: { value: string; max: number }) {
   const over = value.length > max;
   return (
@@ -148,14 +166,128 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
   const [post, setPost] = useState<EditorPost>(initial);
   const [formatting, setFormatting] = useState(false);
   const [seoLoading, setSeoLoading] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [coverUploading, setCoverUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [showHtml, setShowHtml] = useState(false);
 
+  const importInput = useRef<HTMLInputElement>(null);
+  const coverInput = useRef<HTMLInputElement>(null);
+
   const set = <K extends keyof EditorPost>(key: K, value: EditorPost[K]) =>
     setPost((p) => ({ ...p, [key]: value }));
+
+  /**
+   * Uploads a document and fills the whole draft from it — text, formatted
+   * HTML, title and every search field — in one request.
+   *
+   * Refuses to run over content that is already there. The import replaces the
+   * article and the metadata wholesale, and there is no undo in this editor; an
+   * admin who has typed half a post and then picks the wrong file would lose it
+   * silently. Clearing the box first is one extra action, and it makes the
+   * destructive step something they chose rather than something that happened.
+   */
+  async function handleImport(file: File) {
+    setError(null);
+    setNotice(null);
+    setWarnings([]);
+
+    if (post.content_source.trim() || post.content_html.trim()) {
+      setError(
+        "This post already has an article in it. Clear the article text and the formatted HTML first, or start a new post — importing replaces both.",
+      );
+      return;
+    }
+
+    setImporting(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      // The typed title wins over the one in the document; the server decides.
+      form.append("title", post.title);
+
+      const res = await fetch("/api/admin/blog/import", { method: "POST", body: form });
+      const json = await res.json();
+
+      if (!res.ok || !json.success) {
+        setError(json.error ?? "Could not read that file.");
+        return;
+      }
+
+      const seo = json.seo;
+      setPost((p) => ({
+        ...p,
+        title: json.title || p.title,
+        content_source: json.text ?? "",
+        content_html: json.html ?? "",
+        format_source: json.formatSource ?? "manual",
+        ...(seo
+          ? {
+              meta_title: seo.metaTitle ?? p.meta_title,
+              meta_description: seo.metaDescription ?? p.meta_description,
+              excerpt: seo.excerpt || p.excerpt,
+              focus_keyword: seo.focusKeyword ?? p.focus_keyword,
+              tags: seo.tags?.length ? seo.tags : p.tags,
+              faq: seo.faq ?? p.faq,
+              seo_source: "gemini",
+            }
+          : {}),
+      }));
+
+      setWarnings(json.warnings ?? []);
+      setNotice(
+        `Imported ${json.fileName}${
+          json.wordsPreserved != null
+            ? ` — ${Math.round(json.wordsPreserved * 100)}% of the document's wording preserved`
+            : ""
+        }. Nothing is saved yet: read it through, then press Save draft.`,
+      );
+    } catch {
+      setError("Could not reach the server. Check your connection and try again.");
+    } finally {
+      setImporting(false);
+      // Reset the picker so choosing the SAME file again still fires onChange.
+      if (importInput.current) importInput.current.value = "";
+    }
+  }
+
+  /** Uploads a cover image to the public blob store and points the post at it. */
+  async function handleCoverUpload(file: File) {
+    setError(null);
+    setNotice(null);
+
+    setCoverUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      // So the route can bin the image this one is taking over from, unless a
+      // saved post still points at it.
+      form.append("replaces", post.cover_image_url);
+
+      const res = await fetch("/api/admin/blog/cover", { method: "POST", body: form });
+      const json = await res.json();
+
+      if (!res.ok || !json.success) {
+        setError(json.error ?? "Could not upload the image.");
+        return;
+      }
+
+      setPost((p) => ({ ...p, cover_image_url: json.url }));
+      setNotice(
+        post.cover_image_alt.trim()
+          ? "Cover image uploaded."
+          : "Cover image uploaded. Add alt text describing it — screen readers and Google both read it.",
+      );
+    } catch {
+      setError("Could not reach the server. Check your connection and try again.");
+    } finally {
+      setCoverUploading(false);
+      if (coverInput.current) coverInput.current.value = "";
+    }
+  }
 
   async function handleFormat() {
     setError(null);
@@ -364,7 +496,7 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
   }
 
   const isPublished = post.status === "published";
-  const busy = saving || formatting || seoLoading;
+  const busy = saving || formatting || seoLoading || importing || coverUploading;
 
   return (
     <div className="max-w-6xl mx-auto py-4 space-y-5 animate-in fade-in duration-300">
@@ -455,9 +587,63 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
             />
           </Field>
 
+          {/* ── Import ──────────────────────────────────
+              The alternative to pasting: one file in, a whole draft out. It
+              fills the boxes below and saves nothing, exactly like the two AI
+              buttons. */}
+          <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/60 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-[12.5px] font-semibold text-slate-700">
+                  Upload the article instead
+                </p>
+                <p className="mt-0.5 text-[11px] leading-relaxed text-slate-400">
+                  Word (.docx), PDF, Markdown, plain text or HTML, up to 10 MB.
+                  Gemini formats it and drafts the meta title, description,
+                  excerpt, keyword, tags and FAQ in one go.
+                </p>
+              </div>
+
+              <input
+                ref={importInput}
+                type="file"
+                accept={IMPORT_ACCEPT}
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) void handleImport(file);
+                }}
+              />
+              <button
+                onClick={() => importInput.current?.click()}
+                disabled={busy}
+                className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-slate-900 bg-white px-4 py-2 text-[13px] font-medium text-slate-900 transition hover:bg-slate-900 hover:text-white disabled:opacity-50"
+              >
+                {importing ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin" />
+                    Reading the document…
+                  </>
+                ) : (
+                  <>
+                    <Upload size={14} />
+                    Upload document
+                  </>
+                )}
+              </button>
+            </div>
+
+            {importing && (
+              <p className="mt-3 text-[11px] leading-relaxed text-slate-400">
+                A long PDF can take up to a minute — it is read, formatted and
+                written up for search in one pass. Leave this tab open.
+              </p>
+            )}
+          </div>
+
           <Field
             label="Article text"
-            hint="Paste the article as plain text. Gemini adds the headings, paragraphs and lists — it does not change your words."
+            hint="Paste the article as plain text, or upload it above. Gemini adds the headings, paragraphs and lists — it does not change your words."
           >
             <textarea
               value={post.content_source}
@@ -555,8 +741,8 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
           </Field>
 
           <Field
-            label="Cover image URL"
-            hint="Must be a PUBLIC url. An image in the private blob store renders as a broken image on the client website."
+            label="Cover image"
+            hint="Upload one, or paste a URL. A pasted URL must be PUBLIC — an image in the private blob store renders as a broken image on the client website."
           >
             <input
               value={post.cover_image_url}
@@ -564,9 +750,67 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
               placeholder="/blog1.png"
               className={inputClass}
             />
+
+            <input
+              ref={coverInput}
+              type="file"
+              accept={COVER_ACCEPT}
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void handleCoverUpload(file);
+              }}
+            />
+
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                onClick={() => coverInput.current?.click()}
+                disabled={busy}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-700 transition hover:border-slate-300 disabled:opacity-50"
+              >
+                {coverUploading ? (
+                  <>
+                    <Loader2 size={13} className="animate-spin" />
+                    Uploading…
+                  </>
+                ) : (
+                  <>
+                    <ImagePlus size={13} />
+                    {post.cover_image_url ? "Replace image" : "Upload image"}
+                  </>
+                )}
+              </button>
+
+              {post.cover_image_url && (
+                <button
+                  onClick={() => set("cover_image_url", "")}
+                  disabled={busy}
+                  className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[12px] font-medium text-slate-400 transition hover:text-brand-primary disabled:opacity-50"
+                >
+                  <X size={13} />
+                  Remove
+                </button>
+              )}
+            </div>
+
+            {/* A plain <img>, not next/image: the URL can be any host an admin
+                pastes, and next/image refuses a domain that is not in
+                next.config.ts — which would make the preview fail exactly when
+                it is most worth having. */}
+            {post.cover_image_url && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={post.cover_image_url}
+                alt={post.cover_image_alt || "Cover image preview"}
+                className="mt-2 aspect-[16/9] w-full rounded-xl border border-slate-200 bg-slate-50 object-cover"
+              />
+            )}
           </Field>
 
-          <Field label="Cover image alt text">
+          <Field
+            label="Cover image alt text"
+            hint="What the image shows, for screen readers and for Google Images."
+          >
             <input
               value={post.cover_image_alt}
               onChange={(e) => set("cover_image_alt", e.target.value)}

@@ -1,7 +1,7 @@
-import { logger } from "./logger";
+import { logger } from "./logger.ts";
 
 /**
- * One Gemini JSON call, with the fallback ladder around it.
+ * One Gemini call, with the fallback ladder around it.
  *
  * MIRRORED from the customer portal (iclosed_dev_web/src/lib/geminiJson.ts),
  * renamed here because this app has other Gemini callers and nothing outside
@@ -31,6 +31,18 @@ export const BLOG_MODEL_LADDER: readonly GeminiRung[] = [
   { id: "gemini-3.1-flash-lite", timeoutMs: 20_000 },
 ] as const;
 
+/**
+ * The ladder for a call that carries a PDF rather than a few thousand
+ * characters of text. Same two rungs, roughly double the patience: the bytes
+ * have to be uploaded and every page read before a single token comes back, so
+ * the 30s budget above would time out a perfectly healthy transcription of a
+ * ten-page article.
+ */
+export const BLOG_FILE_LADDER: readonly GeminiRung[] = [
+  { id: "gemini-3.5-flash", timeoutMs: 60_000 },
+  { id: "gemini-3.1-flash-lite", timeoutMs: 40_000 },
+] as const;
+
 // NOTE: do not add generationConfig.thinkingConfig. The flash-lite tier answers
 // `thinkingBudget: 0` with "400 Request contains an invalid argument", which
 // would take out the fallback rung and leave nothing to fall back to.
@@ -43,7 +55,7 @@ export function geminiApiKey(): string | null {
   return process.env.GEMINI_API_KEY || process.env.GOOGLE_GEMINI_API_KEY || null;
 }
 
-/** Strips the ```json fences a model sometimes adds despite responseMimeType. */
+/** Strips the code fences a model sometimes adds despite responseMimeType. */
 export function stripJsonFences(text: string): string {
   return text
     .trim()
@@ -56,8 +68,23 @@ export type GeminiJsonOutcome<T> =
   | { ok: true; data: T; model: string }
   | { ok: false; error: string };
 
+/** A `contents[].parts[]` entry, in the REST API's snake_case spelling. */
+export type GeminiPart =
+  | { text: string }
+  | { inline_data: { mime_type: string; data: string } };
+
+type LadderOptions<T> = {
+  parts: GeminiPart[];
+  parse: (raw: string) => T;
+  label: string;
+  temperature?: number;
+  responseMimeType?: string;
+  maxOutputTokens?: number;
+  ladder?: readonly GeminiRung[];
+};
+
 /**
- * Runs `prompt` down the ladder until one rung returns JSON that `parse`
+ * Runs one request down the ladder until a rung returns text that `parse`
  * accepts, and returns whatever `parse` produced.
  *
  * `parse` throwing is treated exactly like a transport failure — the rung is
@@ -68,14 +95,7 @@ export type GeminiJsonOutcome<T> =
  *
  * `label` only ever appears in server logs.
  */
-export async function callGeminiJson<T>(opts: {
-  prompt: string;
-  parse: (raw: string) => T;
-  label: string;
-  /** Zero unless a caller genuinely wants variation. */
-  temperature?: number;
-  ladder?: readonly GeminiRung[];
-}): Promise<GeminiJsonOutcome<T>> {
+async function runLadder<T>(opts: LadderOptions<T>): Promise<GeminiJsonOutcome<T>> {
   const apiKey = geminiApiKey();
   if (!apiKey) {
     logger.error(`[${opts.label}] GEMINI_API_KEY is not set in process.env`);
@@ -83,13 +103,14 @@ export async function callGeminiJson<T>(opts: {
   }
 
   const requestBody = {
-    contents: [{ role: "user", parts: [{ text: opts.prompt }] }],
+    contents: [{ role: "user", parts: opts.parts }],
     generationConfig: {
       // Zero by default, not the warmer setting a copywriting task would want.
       // The same input should produce the same output twice, so that re-running
       // one of these is a no-op rather than a reshuffle.
       temperature: opts.temperature ?? 0,
-      responseMimeType: "application/json",
+      ...(opts.responseMimeType ? { responseMimeType: opts.responseMimeType } : {}),
+      ...(opts.maxOutputTokens ? { maxOutputTokens: opts.maxOutputTokens } : {}),
     },
   };
 
@@ -116,13 +137,18 @@ export async function callGeminiJson<T>(opts: {
       const json = (await res.json()) as {
         candidates?: { content?: { parts?: { text?: string }[] } }[];
       };
-      const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
+      // Long answers come back split across several parts, not one. Joining
+      // them matters for the PDF transcription, where taking parts[0] alone
+      // would silently truncate the article at whatever boundary the model chose.
+      const text = (json.candidates?.[0]?.content?.parts ?? [])
+        .map((p) => p.text ?? "")
+        .join("");
       if (!text) {
         failures.push(`${rung.id}: empty response`);
         continue;
       }
 
-      return { ok: true, data: opts.parse(stripJsonFences(text)), model: rung.id };
+      return { ok: true, data: opts.parse(text), model: rung.id };
     } catch (err: unknown) {
       const reason =
         err instanceof Error && err.name === "AbortError"
@@ -138,4 +164,50 @@ export async function callGeminiJson<T>(opts: {
 
   logger.error(`[${opts.label}] every model failed — ${failures.join(" | ")}`);
   return { ok: false, error: "GEMINI_ALL_RUNGS_FAILED" };
+}
+
+/** A JSON call: `prompt` in, `parse` applied to the de-fenced response. */
+export async function callGeminiJson<T>(opts: {
+  prompt: string;
+  parse: (raw: string) => T;
+  label: string;
+  /** Zero unless a caller genuinely wants variation. */
+  temperature?: number;
+  ladder?: readonly GeminiRung[];
+}): Promise<GeminiJsonOutcome<T>> {
+  return runLadder({
+    parts: [{ text: opts.prompt }],
+    // De-fenced here rather than in runLadder: a plain-text answer may
+    // legitimately contain a fenced block, and stripping it would corrupt a
+    // transcription.
+    parse: (raw) => opts.parse(stripJsonFences(raw)),
+    label: opts.label,
+    temperature: opts.temperature,
+    responseMimeType: "application/json",
+    ladder: opts.ladder,
+  });
+}
+
+/**
+ * A plain-text call, which may carry a file alongside the prompt.
+ *
+ * Used by the PDF branch of the blog importer, where the answer is the whole
+ * article and wrapping tens of thousands of characters in a JSON string only
+ * adds a way for the response to arrive unparseable.
+ */
+export async function callGeminiText(opts: {
+  parts: GeminiPart[];
+  label: string;
+  temperature?: number;
+  maxOutputTokens?: number;
+  ladder?: readonly GeminiRung[];
+}): Promise<GeminiJsonOutcome<string>> {
+  return runLadder({
+    ...opts,
+    parse: (raw) => {
+      const text = raw.trim();
+      if (!text) throw new Error("Model returned no text.");
+      return text;
+    },
+  });
 }
