@@ -134,7 +134,7 @@ export async function POST(req: Request) {
     warnings.push(...seo.data.warnings);
   } else {
     warnings.push(
-      `The article text was imported, but the search metadata could not be drafted: ${seo.error} Press "Draft SEO with AI" to retry.`,
+      `The article text was imported, but the search metadata could not be drafted: ${seo.error} Press "Format with AI" to retry.`,
     );
   }
 

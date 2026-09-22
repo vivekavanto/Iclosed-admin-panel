@@ -6,7 +6,6 @@ import {
   Sparkles,
   Loader2,
   AlertTriangle,
-  Search,
   Plus,
   X,
   ArrowLeft,
@@ -209,7 +208,6 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
   const router = useRouter();
   const [post, setPost] = useState<EditorPost>(initial);
   const [formatting, setFormatting] = useState(false);
-  const [seoLoading, setSeoLoading] = useState(false);
   const [importing, setImporting] = useState(false);
   const [coverUploading, setCoverUploading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -380,13 +378,23 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
   }
 
   /**
-   * Re-marks-up whatever is in the editor: headings, paragraphs, lists.
+   * The one AI pass over a draft: re-marks-up the article AND writes its
+   * search metadata from the result, in that order.
    *
-   * It reads the editor's content back out as plain text first. Sending the
-   * HTML instead would break the check that gives this route its point —
-   * formatBlogHtml() measures how much of the author's wording survived, and
-   * with HTML on the "before" side every tag name counts as a word the model
-   * is then found to have dropped.
+   * They used to be two buttons, and the second was routinely forgotten — a
+   * post would go out formatted but with an empty meta title and description.
+   * Running them together means one press leaves the whole draft filled in.
+   *
+   * The formatting step reads the editor's content back out as plain text
+   * first. Sending the HTML instead would break the check that gives that
+   * route its point — formatBlogHtml() measures how much of the author's
+   * wording survived, and with HTML on the "before" side every tag name counts
+   * as a word the model is then found to have dropped.
+   *
+   * The metadata step is then fed the freshly formatted HTML directly rather
+   * than reading it back off `post`, which has not re-rendered yet.
+   *
+   * Nothing is saved by either step. Save is still a press away.
    */
   async function handleFormat() {
     setError(null);
@@ -413,72 +421,75 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
         return;
       }
 
-      setPost((p) => ({ ...p, content_html: json.html, format_source: "gemini" }));
-      setWarnings(json.warnings ?? []);
+      const formattedHtml: string = json.html;
+      const notes: string[] = [...(json.warnings ?? [])];
+
+      // Second leg: the search metadata, drafted from what formatting just
+      // produced. A failure here is reported as a warning, not an error — the
+      // formatted article is good and must not be thrown away with it.
+      let seo: Record<string, unknown> | null = null;
+      try {
+        const seoRes = await fetch("/api/admin/blog/seo", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ body: formattedHtml, title: post.title }),
+        });
+        const seoJson = await seoRes.json();
+        if (seoRes.ok && seoJson.success) {
+          seo = seoJson.seo;
+          notes.push(...((seoJson.seo?.warnings as string[] | undefined) ?? []));
+        } else {
+          notes.push(
+            `The article was formatted, but the search metadata could not be drafted: ${
+              seoJson.error ?? "the model did not answer."
+            } Press Format with AI again to retry.`,
+          );
+        }
+      } catch {
+        notes.push(
+          "The article was formatted, but the search metadata could not be drafted — the server could not be reached. Press Format with AI again to retry.",
+        );
+      }
+
+      // One state write for both legs, so the screen never shows a formatted
+      // article next to metadata from the previous draft.
+      //
+      // The metadata is replaced wholesale rather than merged field by field:
+      // that is blunt on purpose — what is on screen is then exactly what the
+      // model proposed, instead of six half-updated boxes to reconcile.
+      setPost((p) => ({
+        ...p,
+        content_html: formattedHtml,
+        format_source: "gemini",
+        ...(seo
+          ? {
+              meta_title: (seo.metaTitle as string) ?? p.meta_title,
+              meta_description: (seo.metaDescription as string) ?? p.meta_description,
+              excerpt: (seo.excerpt as string) || p.excerpt,
+              focus_keyword: (seo.focusKeyword as string) ?? p.focus_keyword,
+              tags: (seo.tags as string[] | undefined)?.length
+                ? (seo.tags as string[])
+                : p.tags,
+              faq: SHOW_FAQ_EDITOR ? ((seo.faq as FaqItem[]) ?? p.faq) : p.faq,
+              seo_source: "gemini",
+            }
+          : {}),
+      }));
+
+      setWarnings(notes);
       setNotice(
-        `Formatted with ${json.model} — ${Math.round((json.wordsPreserved ?? 1) * 100)}% of your wording preserved.`,
+        seo
+          ? `Formatted with ${json.model} — ${Math.round(
+              (json.wordsPreserved ?? 1) * 100,
+            )}% of your wording preserved, and the search metadata drafted from it. Read both before publishing — these are the words Google and AI answers will quote. Nothing is saved yet.`
+          : `Formatted with ${json.model} — ${Math.round(
+              (json.wordsPreserved ?? 1) * 100,
+            )}% of your wording preserved. Nothing is saved yet.`,
       );
     } catch {
       setError("Could not reach the server. Check your connection and try again.");
     } finally {
       setFormatting(false);
-    }
-  }
-
-  /**
-   * Drafts the search metadata. Reads the formatted HTML when there is one and
-   * the raw draft otherwise, so this works before or after formatting.
-   *
-   * It overwrites meta title, meta description, excerpt, focus keyword, tags
-   * and FAQ in one go. That is blunt on purpose — a field-by-field merge would
-   * leave the admin comparing six half-updated boxes against a warning list,
-   * whereas replacing the set means what is on screen is exactly what the model
-   * proposed, and nothing is saved until they press Save.
-   */
-  async function handleGenerateSeo() {
-    setError(null);
-    setNotice(null);
-    setWarnings([]);
-
-    const body = post.content_html.trim();
-    if (!body) {
-      setError("Write the article before drafting its search metadata.");
-      return;
-    }
-
-    setSeoLoading(true);
-    try {
-      const res = await fetch("/api/admin/blog/seo", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body, title: post.title }),
-      });
-      const json = await res.json();
-
-      if (!res.ok || !json.success) {
-        setError(json.error ?? "Could not draft the search metadata.");
-        return;
-      }
-
-      const seo = json.seo;
-      setPost((p) => ({
-        ...p,
-        meta_title: seo.metaTitle ?? p.meta_title,
-        meta_description: seo.metaDescription ?? p.meta_description,
-        excerpt: seo.excerpt || p.excerpt,
-        focus_keyword: seo.focusKeyword ?? p.focus_keyword,
-        tags: seo.tags?.length ? seo.tags : p.tags,
-        faq: SHOW_FAQ_EDITOR ? seo.faq ?? p.faq : p.faq,
-        seo_source: "gemini",
-      }));
-      setWarnings(seo.warnings ?? []);
-      setNotice(
-        `Search metadata drafted with ${seo.model}. Read it before publishing — these are the words Google and AI answers will quote.`,
-      );
-    } catch {
-      setError("Could not reach the server. Check your connection and try again.");
-    } finally {
-      setSeoLoading(false);
     }
   }
 
@@ -601,7 +612,7 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
   }
 
   const isPublished = post.status === "published";
-  const busy = saving || formatting || seoLoading || importing || coverUploading;
+  const busy = saving || formatting || importing || coverUploading;
 
   return (
     <div className="max-w-6xl mx-auto py-4 space-y-5 animate-in fade-in duration-300">
@@ -630,11 +641,6 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
           {post.format_source === "gemini" && (
             <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-amber-700">
               AI formatted — unreviewed
-            </span>
-          )}
-          {post.seo_source === "gemini" && (
-            <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-amber-700">
-              AI SEO — unreviewed
             </span>
           )}
         </div>
@@ -771,8 +777,9 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
               Type here, paste from Word, or upload the document it was written
               in — Word (.docx), PDF, Markdown, plain text or HTML, up to 10 MB.
               An upload is formatted and written up for search in one pass.
-              Format with AI re-marks-up whatever is in the box: it adds the
-              headings, paragraphs and lists, and does not change your words.
+              Format with AI re-marks-up whatever is in the box — it adds the
+              headings, paragraphs and lists without changing your words — and
+              then writes the search metadata from the result.
             </p>
 
             {importing && (
@@ -796,27 +803,12 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
               Search appearance
             </p>
 
-            <button
-              onClick={handleGenerateSeo}
-              disabled={busy}
-              className="mb-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-900 bg-white px-4 py-2 text-[13px] font-medium text-slate-900 transition hover:bg-slate-900 hover:text-white disabled:opacity-50"
-            >
-              {seoLoading ? (
-                <>
-                  <Loader2 size={14} className="animate-spin" />
-                  Drafting…
-                </>
-              ) : (
-                <>
-                  <Search size={14} />
-                  Draft SEO with AI
-                </>
-              )}
-            </button>
             <p className="mb-4 text-[11px] leading-relaxed text-slate-400">
-              Fills these two, the excerpt, the tags and the focus keyword from
-              the article. It replaces whatever is there, and saves nothing
-              until you press Save.
+              Filled by Format with AI, along with the excerpt, the tags and
+              the focus keyword. Read them before publishing — these are the
+              words Google and AI answers will quote. Editing any of them here
+              overrides what the model wrote, and nothing is saved until you
+              press Save.
             </p>
 
             <Field
@@ -1085,7 +1077,7 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
 
             {post.faq.length === 0 ? (
               <p className="text-[12.5px] text-slate-400">
-                No questions yet. Draft SEO with AI, or add one by hand.
+                No questions yet. Format with AI drafts them, or add one by hand.
               </p>
             ) : (
               <div className="space-y-4">
