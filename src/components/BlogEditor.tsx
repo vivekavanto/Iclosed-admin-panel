@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Sparkles,
@@ -15,6 +15,7 @@ import {
   ImagePlus,
 } from "lucide-react";
 import BlogRichTextEditor from "./blog/BlogRichTextEditor";
+import { detectAuthorFromHtml } from "@/lib/blogAuthor";
 import { editorHtmlToSourceText, plainTextToHtml } from "./blog/blogEditorText";
 
 /**
@@ -138,6 +139,24 @@ export function toEditorPost(row: Record<string, unknown>): EditorPost {
   };
 }
 
+/**
+ * Whether the FAQ editor is shown at all.
+ *
+ * Off since the articles started arriving with their FAQ written into the
+ * body — an "FAQ" heading with the questions under it, like any other
+ * section. A second, separate list of questions in the sidebar would then be
+ * published on top of that one, and the reader would scroll past the same
+ * three answers twice.
+ *
+ * Kept in the file rather than deleted: the stored `faq` column is untouched
+ * (rows that already have questions keep them and still render), and the day
+ * the FAQ goes back to being structured data rather than prose, this is one
+ * word. While it is off, nothing WRITES to `post.faq` either — see the two
+ * guards on the AI paths below, without which the model would quietly refill
+ * a list no one on this screen can see.
+ */
+const SHOW_FAQ_EDITOR: boolean = false;
+
 // Google truncates past roughly these. Shown as a live count so the limit is
 // visible while typing rather than discovered in a search result weeks later.
 const META_TITLE_MAX = 60;
@@ -198,6 +217,46 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
+  // Re-read on every change to the article, so the name appears as soon as
+  // the byline is pasted in. Pure string work over the body — cheap enough to
+  // do inline.
+  const detectedAuthor = useMemo(
+    () => detectAuthorFromHtml(post.content_html),
+    [post.content_html],
+  );
+
+  /**
+   * Whether a human has typed in the Author field during this session.
+   *
+   * The field fills itself from the article (below), and this is what stops
+   * it from doing so a second time over a name the admin chose. Without it,
+   * an admin who deliberately credits the Law Desk on an article that carries
+   * a lawyer's byline would watch the field change back under them.
+   */
+  const authorTouched = useRef(false);
+
+  /**
+   * Fill the Author field from the article.
+   *
+   * Only while the field is still holding a value nobody chose — empty, or
+   * the house default a new post starts with. A name already typed, or one
+   * loaded from a saved post that differs, is left alone and offered as a
+   * prompt next to the field instead.
+   *
+   * Nothing is saved by this. It changes what is on screen, and Save is still
+   * a press away, which is the same rule every AI step on this screen follows.
+   */
+  useEffect(() => {
+    if (!detectedAuthor || authorTouched.current) return;
+
+    setPost((p) => {
+      const current = p.author.trim();
+      const unchosen = current === "" || current === EMPTY_POST.author;
+      if (!unchosen || current === detectedAuthor.name) return p;
+      return { ...p, author: detectedAuthor.name };
+    });
+  }, [detectedAuthor]);
+
   const importInput = useRef<HTMLInputElement>(null);
   const coverInput = useRef<HTMLInputElement>(null);
 
@@ -242,13 +301,18 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
       }
 
       const seo = json.seo;
+      // The Author field is not set here: putting the imported HTML into the
+      // post is enough, and the effect above fills the name from it. One rule
+      // for every way the article arrives — upload, paste or typing.
+      const importedHtml = json.html || plainTextToHtml(json.text ?? "");
+
       setPost((p) => ({
         ...p,
         title: json.title || p.title,
         // If the formatting step failed the server still returns the extracted
         // text, so it goes into the editor as plain paragraphs rather than
         // being thrown away with the error. Format with AI can be pressed after.
-        content_html: json.html || plainTextToHtml(json.text ?? ""),
+        content_html: importedHtml,
         format_source: json.formatSource ?? "manual",
         ...(seo
           ? {
@@ -257,7 +321,7 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
               excerpt: seo.excerpt || p.excerpt,
               focus_keyword: seo.focusKeyword ?? p.focus_keyword,
               tags: seo.tags?.length ? seo.tags : p.tags,
-              faq: seo.faq ?? p.faq,
+              faq: SHOW_FAQ_EDITOR ? seo.faq ?? p.faq : p.faq,
               seo_source: "gemini",
             }
           : {}),
@@ -404,7 +468,7 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
         excerpt: seo.excerpt || p.excerpt,
         focus_keyword: seo.focusKeyword ?? p.focus_keyword,
         tags: seo.tags?.length ? seo.tags : p.tags,
-        faq: seo.faq ?? p.faq,
+        faq: SHOW_FAQ_EDITOR ? seo.faq ?? p.faq : p.faq,
         seo_source: "gemini",
       }));
       setWarnings(seo.warnings ?? []);
@@ -721,6 +785,68 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
 
         {/* ── Right: metadata ────────────────────────── */}
         <div className="space-y-5">
+          {/* ── Search appearance ─────────────────────
+              First in the column, because the meta title and description are
+              what a post is actually judged on in a search result, and burying
+              them under the image and tag fields meant they were the thing
+              most often left on the AI's first draft. The remaining search
+              settings are in "Search options" at the bottom. */}
+          <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <p className="mb-3 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+              Search appearance
+            </p>
+
+            <button
+              onClick={handleGenerateSeo}
+              disabled={busy}
+              className="mb-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-900 bg-white px-4 py-2 text-[13px] font-medium text-slate-900 transition hover:bg-slate-900 hover:text-white disabled:opacity-50"
+            >
+              {seoLoading ? (
+                <>
+                  <Loader2 size={14} className="animate-spin" />
+                  Drafting…
+                </>
+              ) : (
+                <>
+                  <Search size={14} />
+                  Draft SEO with AI
+                </>
+              )}
+            </button>
+            <p className="mb-4 text-[11px] leading-relaxed text-slate-400">
+              Fills these two, the excerpt, the tags and the focus keyword from
+              the article. It replaces whatever is there, and saves nothing
+              until you press Save.
+            </p>
+
+            <Field
+              label="Meta title"
+              hint="Leave blank to use the post title."
+              right={<CharCount value={post.meta_title} max={META_TITLE_MAX} />}
+            >
+              <input
+                value={post.meta_title}
+                onChange={(e) => setSeoField("meta_title", e.target.value)}
+                className={inputClass}
+              />
+            </Field>
+
+            <div className="h-4" />
+
+            <Field
+              label="Meta description"
+              hint="Leave blank to use the excerpt."
+              right={<CharCount value={post.meta_description} max={META_DESC_MAX} />}
+            >
+              <textarea
+                value={post.meta_description}
+                onChange={(e) => setSeoField("meta_description", e.target.value)}
+                rows={3}
+                className={inputClass}
+              />
+            </Field>
+          </div>
+
           <Field
             label="Excerpt"
             hint="Shown on the blog listing and used as the fallback search description. A post cannot be published without one."
@@ -841,70 +967,61 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
             />
           </Field>
 
-          <Field label="Author">
+          <Field
+            label="Author"
+            hint="Printed under the title and submitted as the article's author in structured data."
+          >
             <input
               value={post.author}
-              onChange={(e) => set("author", e.target.value)}
+              onChange={(e) => {
+                // From here on the field is the admin's, and the article stops
+                // filling it — see authorTouched.
+                authorTouched.current = true;
+                set("author", e.target.value);
+              }}
               className={inputClass}
             />
+
+            {/* Filled from the article, and said so. Silent auto-fill of a
+                field that is published under someone's name is the kind of
+                thing that should be visible on the screen it happened on. */}
+            {detectedAuthor && detectedAuthor.name === post.author.trim() && (
+              <p className="mt-1.5 text-[11px] leading-relaxed text-green-700">
+                Taken from the article ({detectedAuthor.source}).
+              </p>
+            )}
+
+            {/* The article states its own author — in the byline under the
+                title, and again in "About the author" at the foot. When that
+                name is not the one in the field, the page credits one person
+                and the words beneath it credit another. Offered rather than
+                applied here: the field holds a name someone chose, and a pen
+                name or a guest post is a real thing. */}
+            {detectedAuthor && detectedAuthor.name !== post.author.trim() && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+                <span className="text-[11.5px] leading-relaxed text-amber-900">
+                  The article says <strong>{detectedAuthor.name}</strong>{" "}
+                  <span className="text-amber-700">({detectedAuthor.source})</span>
+                </span>
+                <button
+                  onClick={() => set("author", detectedAuthor.name)}
+                  className="ml-auto shrink-0 rounded-lg border border-amber-300 bg-white px-2.5 py-1 text-[11.5px] font-semibold text-amber-900 transition hover:border-amber-400"
+                >
+                  Use it
+                </button>
+              </div>
+            )}
           </Field>
 
-          {/* ── Search appearance ───────────────────── */}
+          {/* ── Search options ───────────────────────
+              The rest of the search settings. The two fields that are edited
+              on nearly every post — meta title and meta description — sit at
+              the top of this column instead; these two are set once and
+              rarely revisited, so they live down here out of the way. */}
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <p className="mb-3 text-[11px] font-bold uppercase tracking-wider text-slate-400">
-              Search appearance
+              Search options
             </p>
-
-            <button
-              onClick={handleGenerateSeo}
-              disabled={busy}
-              className="mb-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-900 bg-white px-4 py-2 text-[13px] font-medium text-slate-900 transition hover:bg-slate-900 hover:text-white disabled:opacity-50"
-            >
-              {seoLoading ? (
-                <>
-                  <Loader2 size={14} className="animate-spin" />
-                  Drafting…
-                </>
-              ) : (
-                <>
-                  <Search size={14} />
-                  Draft SEO with AI
-                </>
-              )}
-            </button>
-            <p className="mb-4 text-[11px] leading-relaxed text-slate-400">
-              Fills the fields below from the article. It replaces whatever is
-              there, and saves nothing until you press Save.
-            </p>
-
-            <Field
-              label="Meta title"
-              hint="Leave blank to use the post title."
-              right={<CharCount value={post.meta_title} max={META_TITLE_MAX} />}
-            >
-              <input
-                value={post.meta_title}
-                onChange={(e) => setSeoField("meta_title", e.target.value)}
-                className={inputClass}
-              />
-            </Field>
-
-            <div className="h-4" />
-
-            <Field
-              label="Meta description"
-              hint="Leave blank to use the excerpt."
-              right={<CharCount value={post.meta_description} max={META_DESC_MAX} />}
-            >
-              <textarea
-                value={post.meta_description}
-                onChange={(e) => setSeoField("meta_description", e.target.value)}
-                rows={3}
-                className={inputClass}
-              />
-            </Field>
-
-            <div className="h-4" />
 
             <Field
               label="Focus keyword"
@@ -938,11 +1055,14 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
           </div>
 
           {/* ── FAQ ─────────────────────────────────────
+              Switched off, not deleted — see SHOW_FAQ_EDITOR above.
+
               These render on the article AND are submitted as FAQPage
               structured data, which is what an AI Overview quotes. Google
               treats markup describing content a visitor cannot see as a
               manual-action-grade violation, so there is no way to add one here
               without it also appearing on the page. */}
+          {SHOW_FAQ_EDITOR && (
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <div className="mb-1 flex items-center justify-between gap-2">
               <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
@@ -1007,6 +1127,7 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
               </div>
             )}
           </div>
+          )}
         </div>
       </div>
     </div>

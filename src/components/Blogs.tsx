@@ -5,7 +5,6 @@ import Link from "next/link";
 import {
   Plus,
   Search,
-  Sparkles,
   Loader2,
   Trash2,
   Newspaper,
@@ -225,16 +224,6 @@ const Blogs: React.FC = () => {
                       : ""}
                   </p>
                 </Link>
-
-                {/* An unedited machine draft is the one thing worth surfacing
-                    in a list view: it is the post most likely to need a
-                    lawyer's eye before it goes near a reader. */}
-                {(post.format_source === "gemini" || post.seo_source === "gemini") && (
-                  <span className="inline-flex shrink-0 items-center gap-1 px-2 py-0.5 rounded-full border border-amber-200 bg-amber-50 text-[10px] font-bold uppercase tracking-wider text-amber-700">
-                    <Sparkles size={10} />
-                    Unreviewed AI
-                  </span>
-                )}
 
                 <span className="shrink-0 text-xs text-slate-400 w-28 text-right">
                   {formatDate(post.updated_at)}
