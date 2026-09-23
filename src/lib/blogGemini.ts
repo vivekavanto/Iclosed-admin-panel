@@ -25,10 +25,14 @@ export type GeminiRung = { id: string; timeoutMs: number };
  * a twelve-page scanned agreement could take 115 seconds to come back as a
  * 503. The blog's calls are a few thousand words of text in and text out, so
  * the budget is much smaller — but the fallback still matters.
+ *
+ * Reduced from 30s to 22s on first rung to speed up fallback to lite model if
+ * the primary is slow. Metadata generation (SEO) is consistently faster than
+ * markup (format), so budget is tighter there.
  */
 export const BLOG_MODEL_LADDER: readonly GeminiRung[] = [
-  { id: "gemini-3.5-flash", timeoutMs: 30_000 },
-  { id: "gemini-3.1-flash-lite", timeoutMs: 20_000 },
+  { id: "gemini-3.5-flash", timeoutMs: 22_000 },
+  { id: "gemini-3.1-flash-lite", timeoutMs: 18_000 },
 ] as const;
 
 /**

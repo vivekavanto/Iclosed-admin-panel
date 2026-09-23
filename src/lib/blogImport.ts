@@ -56,6 +56,12 @@ export type ExtractOutcome =
   | { ok: true; data: ExtractedArticle }
   | { ok: false; error: string };
 
+export type MultipleExtractOutcome =
+  | { ok: true; data: ExtractedArticle[] }
+  | { ok: false; error: string };
+
+export const MAX_ARTICLES_PER_UPLOAD = 10;
+
 const KIND_BY_EXT: Record<string, ImportKind> = {
   txt: "text",
   text: "text",
@@ -378,6 +384,56 @@ function normaliseBlankLines(s: string): string {
     .trim();
 }
 
+// ── Multiple article extraction ────────────────────────────────────────
+
+/**
+ * Splits a document into multiple articles based on common separators.
+ * Detects and splits on:
+ * - Markdown horizontal rules (---)
+ * - Multiple H1/H2 headers (##)
+ * Returns up to MAX_ARTICLES_PER_UPLOAD articles.
+ */
+function splitMultipleArticles(text: string): string[] {
+  let sections: string[] = [];
+
+  // Try to detect horizontal rule separator (---)
+  if (text.includes("\n---\n")) {
+    sections = text.split("\n---\n").map((s) => normaliseBlankLines(s)).filter((s) => s.length > 0);
+  } else {
+    // Try to split on H1/H2 markdown headers
+    const lines = text.split("\n");
+    let currentSection = "";
+    let headerCount = 0;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (/^#{1,2}\s+\S/.test(line)) {
+        if (currentSection.trim()) {
+          sections.push(currentSection);
+        }
+        currentSection = line;
+        headerCount++;
+      } else {
+        currentSection += (currentSection ? "\n" : "") + line;
+      }
+    }
+
+    if (currentSection.trim()) {
+      sections.push(currentSection);
+    }
+
+    // If we found multiple headers, use this split; otherwise treat as single article
+    if (headerCount <= 1) {
+      sections = [normaliseBlankLines(text)];
+    } else {
+      sections = sections.map((s) => normaliseBlankLines(s)).filter((s) => s.length > 0);
+    }
+  }
+
+  // Cap at MAX_ARTICLES_PER_UPLOAD
+  return sections.slice(0, MAX_ARTICLES_PER_UPLOAD);
+}
+
 // ── Entry point ────────────────────────────────────────────────────────
 
 export async function extractBlogArticle(file: File): Promise<ExtractOutcome> {
@@ -430,4 +486,58 @@ export async function extractBlogArticle(file: File): Promise<ExtractOutcome> {
   // A title taken from the document is only a suggestion; the route decides
   // whether to apply it, because the admin may already have typed one.
   return outcome;
+}
+
+/**
+ * Extracts multiple blog articles from a single file.
+ * Splits on common delimiters (--- or ## headers) and extracts up to 10 articles.
+ */
+export async function extractMultipleBlogArticles(file: File): Promise<MultipleExtractOutcome> {
+  // First, extract the full document as usual
+  const singleExtraction = await extractBlogArticle(file);
+  if (!singleExtraction.ok) {
+    return singleExtraction;
+  }
+
+  const { text } = singleExtraction.data;
+  const articles = splitMultipleArticles(text);
+
+  if (articles.length === 0) {
+    return { ok: false, error: "No article text found in the document." };
+  }
+
+  const results: ExtractedArticle[] = [];
+  for (const articleText of articles) {
+    if (articleText.trim().length === 0) continue;
+
+    if (articleText.length > MAX_EXTRACTED_CHARS) {
+      // Log warning but continue with other articles
+      logger.warn(
+        `[blogImport] article skipped: ${articleText.length.toLocaleString()} chars exceeds limit`,
+      );
+      continue;
+    }
+
+    // Extract title from markdown h1 if present
+    let title: string | null = null;
+    const firstLine = articleText.split("\n").find((l) => l.trim());
+    if (firstLine?.startsWith("# ")) {
+      title = firstLine.slice(2).trim();
+    }
+
+    results.push({
+      text: articleText,
+      title,
+      preformattedHtml: null,
+      kind: singleExtraction.data.kind,
+      warnings: [],
+      needsProofread: singleExtraction.data.needsProofread,
+    });
+  }
+
+  if (results.length === 0) {
+    return { ok: false, error: "No valid articles could be extracted from the document." };
+  }
+
+  return { ok: true, data: results };
 }

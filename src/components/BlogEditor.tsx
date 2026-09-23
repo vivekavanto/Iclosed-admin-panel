@@ -74,6 +74,18 @@ export type EditorPost = {
   seo_source: string;
 };
 
+export type ImportedBlogPost = {
+  title: string;
+  text: string;
+  html: string;
+  formatSource: "manual" | "gemini";
+  formatModel?: string;
+  wordsPreserved?: number;
+  needsProofread: boolean;
+  seo?: Record<string, unknown>;
+  warnings: string[];
+};
+
 export const EMPTY_POST: EditorPost = {
   id: null,
   slug: "",
@@ -214,6 +226,10 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
   const [warnings, setWarnings] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [importedBlogs, setImportedBlogs] = useState<ImportedBlogPost[]>([]);
+  const [showBatchImportDialog, setShowBatchImportDialog] = useState(false);
+  const [batchCreating, setBatchCreating] = useState(false);
+  const [importMultiple, setImportMultiple] = useState(false);
 
   // Re-read on every change to the article, so the name appears as soon as
   // the byline is pasted in. Pure string work over the body — cheap enough to
@@ -276,7 +292,7 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
     setNotice(null);
     setWarnings([]);
 
-    if (post.content_html.trim()) {
+    if (!importMultiple && post.content_html.trim()) {
       setError(
         "This post already has an article in it. Clear the editor first, or start a new post — importing replaces everything in it.",
       );
@@ -289,6 +305,7 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
       form.append("file", file);
       // The typed title wins over the one in the document; the server decides.
       form.append("title", post.title);
+      form.append("multiple", importMultiple ? "true" : "false");
 
       const res = await fetch("/api/admin/blog/import", { method: "POST", body: form });
       const json = await res.json();
@@ -298,18 +315,24 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
         return;
       }
 
+      // Handle multiple articles
+      if (json.isMultiple) {
+        const blogs = json.articles as ImportedBlogPost[];
+        setImportedBlogs(blogs);
+        setShowBatchImportDialog(true);
+        setNotice(
+          `Extracted ${blogs.length} blog posts from ${json.fileName}. Review them and click "Create All Posts" to save.`,
+        );
+        return;
+      }
+
+      // Handle single article (original behavior)
       const seo = json.seo;
-      // The Author field is not set here: putting the imported HTML into the
-      // post is enough, and the effect above fills the name from it. One rule
-      // for every way the article arrives — upload, paste or typing.
       const importedHtml = json.html || plainTextToHtml(json.text ?? "");
 
       setPost((p) => ({
         ...p,
         title: json.title || p.title,
-        // If the formatting step failed the server still returns the extracted
-        // text, so it goes into the editor as plain paragraphs rather than
-        // being thrown away with the error. Format with AI can be pressed after.
         content_html: importedHtml,
         format_source: json.formatSource ?? "manual",
         ...(seo
@@ -339,6 +362,67 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
       setImporting(false);
       // Reset the picker so choosing the SAME file again still fires onChange.
       if (importInput.current) importInput.current.value = "";
+    }
+  }
+
+  /**
+   * Batch create all imported blog posts.
+   */
+  async function handleBatchCreate() {
+    if (importedBlogs.length === 0) return;
+
+    setBatchCreating(true);
+    setError(null);
+    const createdIds: string[] = [];
+
+    try {
+      for (const blog of importedBlogs) {
+        const payload = {
+          title: blog.title,
+          slug: undefined,
+          excerpt: "",
+          content_html: blog.html,
+          content_source: blog.text,
+          cover_image_url: null,
+          cover_image_alt: null,
+          author: EMPTY_POST.author,
+          tags: [],
+          meta_title: (blog.seo as Record<string, unknown>)?.metaTitle || null,
+          meta_description: (blog.seo as Record<string, unknown>)?.metaDescription || null,
+          focus_keyword: (blog.seo as Record<string, unknown>)?.focusKeyword || null,
+          faq: [],
+          noindex: false,
+          format_source: blog.formatSource,
+          seo_source: "gemini",
+        };
+
+        const res = await fetch("/api/admin/blog", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        const json = await res.json();
+        if (!res.ok || !json.success) {
+          setError(`Failed to create "${blog.title}": ${json.error ?? "Unknown error"}`);
+          break;
+        }
+
+        createdIds.push(json.post.id);
+      }
+
+      if (createdIds.length > 0) {
+        setNotice(`Created ${createdIds.length} blog posts successfully.`);
+        setImportedBlogs([]);
+        setShowBatchImportDialog(false);
+        setImportMultiple(false);
+        // Redirect to the first created post
+        router.push(`/admin/blogs/${createdIds[0]}`);
+      }
+    } catch {
+      setError("Could not reach the server. Check your connection and try again.");
+    } finally {
+      setBatchCreating(false);
     }
   }
 
@@ -612,7 +696,7 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
   }
 
   const isPublished = post.status === "published";
-  const busy = saving || formatting || importing || coverUploading;
+  const busy = saving || formatting || importing || coverUploading || batchCreating;
 
   return (
     <div className="max-w-6xl mx-auto py-4 space-y-5 animate-in fade-in duration-300">
@@ -707,6 +791,20 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
               <label className="text-[12.5px] font-semibold text-slate-700">Article</label>
 
               <div className="flex flex-wrap items-center gap-2">
+                <label className="inline-flex items-center gap-2 text-[12px]">
+                  <input
+                    type="checkbox"
+                    checked={importMultiple}
+                    onChange={(e) => setImportMultiple(e.target.checked)}
+                    disabled={busy}
+                    className="h-4 w-4 accent-brand-primary"
+                  />
+                  <span className="text-slate-600">Import multiple blogs</span>
+                </label>
+              </div>
+            </div>
+
+            <div className="mb-3 flex flex-wrap items-center gap-2">
                 <input
                   ref={importInput}
                   type="file"
@@ -753,7 +851,6 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
                   )}
                 </button>
               </div>
-            </div>
 
             <BlogRichTextEditor
               value={post.content_html}
@@ -1122,6 +1219,93 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
           )}
         </div>
       </div>
+
+      {/* ── Batch Import Dialog ──────────────────────────────────────────── */}
+      {showBatchImportDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-xl font-bold text-slate-900">
+                Imported {importedBlogs.length} Blog Posts
+              </h2>
+              <button
+                onClick={() => setShowBatchImportDialog(false)}
+                disabled={batchCreating}
+                className="text-slate-400 hover:text-slate-700"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="mb-6 space-y-4">
+              {importedBlogs.map((blog, idx) => (
+                <div key={idx} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="mb-2 flex items-start justify-between gap-2">
+                    <div>
+                      <h3 className="font-semibold text-slate-900">{blog.title || `Article ${idx + 1}`}</h3>
+                      <p className="text-[12px] text-slate-500">
+                        {Math.round(blog.text.length / 100) * 100} characters
+                      </p>
+                    </div>
+                    <span className="rounded-full bg-blue-100 px-2 py-1 text-[11px] font-semibold text-blue-700">
+                      {idx + 1} of {importedBlogs.length}
+                    </span>
+                  </div>
+
+                  {blog.warnings.length > 0 && (
+                    <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2">
+                      <p className="text-[11px] font-semibold text-amber-900">Warnings:</p>
+                      <ul className="mt-1 space-y-1 pl-4 text-[11px] text-amber-800">
+                        {blog.warnings.map((w, i) => (
+                          <li key={i} className="list-disc">
+                            {w}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {blog.seo && (
+                    <div className="mt-2 text-[11px] text-slate-600">
+                      <p>
+                        <strong>Meta title:</strong> {(blog.seo as Record<string, unknown>).metaTitle as string}
+                      </p>
+                      <p>
+                        <strong>Meta description:</strong> {(blog.seo as Record<string, unknown>).metaDescription as string}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={handleBatchCreate}
+                disabled={batchCreating || importedBlogs.length === 0}
+                className="rounded-xl bg-brand-primary px-5 py-2.5 text-sm font-medium text-white transition hover:bg-brand-primaryHover disabled:opacity-50"
+              >
+                {batchCreating ? (
+                  <>
+                    <Loader2 size={14} className="mr-2 inline-block animate-spin" />
+                    Creating...
+                  </>
+                ) : (
+                  `Create All ${importedBlogs.length} Posts`
+                )}
+              </button>
+
+              <button
+                onClick={() => setShowBatchImportDialog(false)}
+                disabled={batchCreating}
+                className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-medium text-slate-700 transition hover:border-slate-300 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

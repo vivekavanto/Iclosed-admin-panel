@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 import { getActingAdmin } from "@/lib/getActingAdmin";
 import { rateLimitOk } from "@/lib/rateLimit";
-import { extractBlogArticle, MAX_IMPORT_BYTES, IMPORT_LABEL } from "@/lib/blogImport";
+import {
+  extractBlogArticle,
+  extractMultipleBlogArticles,
+  MAX_IMPORT_BYTES,
+  IMPORT_LABEL,
+  MAX_ARTICLES_PER_UPLOAD,
+} from "@/lib/blogImport";
 import { formatBlogHtml } from "@/lib/blogFormat";
 import { generateBlogSeo } from "@/lib/blogSeo";
 import { logger } from "@/lib/logger";
@@ -67,11 +73,14 @@ export async function POST(req: Request) {
 
   let file: File | null = null;
   let typedTitle = "";
+  let importMultiple = false;
   try {
     const form = await req.formData();
     file = form.get("file") as File | null;
     const t = form.get("title");
     typedTitle = typeof t === "string" ? t.trim() : "";
+    const m = form.get("multiple");
+    importMultiple = m === "true" || m === "1";
   } catch {
     return NextResponse.json(
       {
@@ -89,6 +98,82 @@ export async function POST(req: Request) {
     );
   }
 
+  // Handle multiple articles extraction
+  if (importMultiple) {
+    const extracted = await extractMultipleBlogArticles(file);
+    if (!extracted.ok) {
+      return NextResponse.json({ success: false, error: extracted.error }, { status: 400 });
+    }
+
+    const articles = extracted.data;
+    const results = [];
+
+    for (const article of articles) {
+      const { text, title: fileTitle, preformattedHtml, kind, needsProofread } = article;
+      const title = fileTitle || "";
+      const warnings: string[] = [...article.warnings];
+
+      const [formatted, seo] = await Promise.all([
+        preformattedHtml ? null : formatBlogHtml({ body: text, title: title || undefined }),
+        generateBlogSeo({ title, body: text }),
+      ]);
+
+      let html = preformattedHtml ?? "";
+      let formatSource: "manual" | "gemini" = preformattedHtml ? "manual" : "gemini";
+      let wordsPreserved: number | null = null;
+      let formatModel: string | null = null;
+
+      if (formatted) {
+        if (formatted.ok) {
+          html = formatted.data.html;
+          wordsPreserved = formatted.data.wordsPreserved;
+          formatModel = formatted.data.model;
+          warnings.push(...formatted.data.warnings);
+        } else {
+          formatSource = "manual";
+          warnings.push(
+            `The article text was imported, but formatting it failed: ${formatted.error} Press "Format with AI" to retry.`,
+          );
+        }
+      }
+
+      const seoFields = seo.ok ? seo.data : null;
+      if (seo.ok) {
+        warnings.push(...seo.data.warnings);
+      } else {
+        warnings.push(
+          `The article text was imported, but the search metadata could not be drafted: ${seo.error} Press "Format with AI" to retry.`,
+        );
+      }
+
+      results.push({
+        title,
+        text,
+        html,
+        formatSource,
+        formatModel,
+        wordsPreserved,
+        needsProofread,
+        seo: seoFields,
+        warnings,
+      });
+    }
+
+    logger.info(
+      `[blogImport] ${extracted.data[0]?.kind} ${file.name} — ${articles.length} articles extracted`,
+    );
+
+    return NextResponse.json({
+      success: true,
+      isMultiple: true,
+      articleCount: articles.length,
+      maxArticles: MAX_ARTICLES_PER_UPLOAD,
+      fileName: file.name,
+      articles: results,
+    });
+  }
+
+  // Handle single article extraction (original behavior)
   const extracted = await extractBlogArticle(file);
   if (!extracted.ok) {
     return NextResponse.json({ success: false, error: extracted.error }, { status: 400 });
@@ -144,6 +229,7 @@ export async function POST(req: Request) {
 
   return NextResponse.json({
     success: true,
+    isMultiple: false,
     kind,
     fileName: file.name,
     title,

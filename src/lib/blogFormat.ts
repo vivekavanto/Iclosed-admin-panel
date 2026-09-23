@@ -190,6 +190,7 @@ export async function formatBlogHtml(input: {
     prompt: buildPrompt(input.title, body),
     parse: parseFormatJson,
     label: "blogFormat",
+    maxOutputTokens: 8000,
   });
 
   if (!result.ok) {

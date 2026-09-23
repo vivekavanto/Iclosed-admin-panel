@@ -254,6 +254,7 @@ export async function generateBlogSeo(input: {
     prompt: buildPrompt(input.title, articleText),
     parse: parseSeoJson,
     label: "blogSeo",
+    maxOutputTokens: 2000,
   });
 
   if (!result.ok) {
