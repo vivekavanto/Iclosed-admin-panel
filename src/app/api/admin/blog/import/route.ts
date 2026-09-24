@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getActingAdmin } from "@/lib/getActingAdmin";
 import { rateLimitOk } from "@/lib/rateLimit";
+import { createPost } from "@/lib/blogPosts";
 import {
   extractBlogArticle,
   extractMultipleBlogArticles,
@@ -74,6 +75,8 @@ export async function POST(req: Request) {
   let file: File | null = null;
   let typedTitle = "";
   let importMultiple = false;
+  let createDrafts = false;
+  let extractOnly = false;
   try {
     const form = await req.formData();
     file = form.get("file") as File | null;
@@ -81,6 +84,10 @@ export async function POST(req: Request) {
     typedTitle = typeof t === "string" ? t.trim() : "";
     const m = form.get("multiple");
     importMultiple = m === "true" || m === "1";
+    const c = form.get("createDrafts");
+    createDrafts = c === "true" || c === "1";
+    const eo = form.get("extractOnly");
+    extractOnly = eo === "true" || eo === "1";
   } catch {
     return NextResponse.json(
       {
@@ -106,6 +113,37 @@ export async function POST(req: Request) {
     }
 
     const articles = extracted.data;
+
+    // extractOnly skips both Gemini steps: the popup that drives this needs to
+    // show "N blogs found" fast, before the admin has decided anything is worth
+    // formatting. Format/SEO still run, just later and in parallel across every
+    // article at once (BlogBatchManager's "Format All"), which is what actually
+    // keeps the total wait down — not doing it inline, one article at a time,
+    // during the extraction request.
+    if (extractOnly) {
+      logger.info(
+        `[blogImport] ${articles[0]?.kind} ${file.name} — ${articles.length} articles extracted (extractOnly)`,
+      );
+      return NextResponse.json({
+        success: true,
+        isMultiple: true,
+        articleCount: articles.length,
+        maxArticles: MAX_ARTICLES_PER_UPLOAD,
+        fileName: file.name,
+        articles: articles.map((a) => ({
+          title: a.title || "",
+          text: a.text,
+          html: a.preformattedHtml ?? "",
+          formatSource: a.preformattedHtml ? "manual" : ("manual" as const),
+          formatModel: null,
+          wordsPreserved: null,
+          needsProofread: a.needsProofread,
+          seo: null,
+          warnings: [...a.warnings],
+        })),
+      });
+    }
+
     const results = [];
 
     for (const article of articles) {
@@ -162,6 +200,54 @@ export async function POST(req: Request) {
     logger.info(
       `[blogImport] ${extracted.data[0]?.kind} ${file.name} — ${articles.length} articles extracted`,
     );
+
+    // Auto-create drafts if requested from the listing page
+    if (createDrafts) {
+      const createdIds: string[] = [];
+
+      for (const blog of results) {
+        const title = blog.title?.trim() || "Untitled";
+        const result = await createPost(
+          {
+            title,
+            status: "draft",
+            content_html: blog.html,
+            content_source: blog.text,
+            excerpt: "",
+            cover_image_url: null,
+            cover_image_alt: null,
+            author: "iClosed Real Estate Law Desk",
+            tags: [],
+            meta_title: (blog.seo as Record<string, unknown>)?.metaTitle as string || null,
+            meta_description: (blog.seo as Record<string, unknown>)?.metaDescription as string || null,
+            focus_keyword: (blog.seo as Record<string, unknown>)?.focusKeyword as string || null,
+            faq: [],
+            noindex: false,
+            format_source: blog.formatSource,
+            seo_source: blog.seo ? "gemini" : "manual",
+          },
+          email ?? "import-batch",
+        );
+
+        if (result.ok) {
+          createdIds.push(result.row.id);
+          logger.info(`[blogImport] Created draft: "${result.row.title}" (${result.row.id})`);
+        } else {
+          logger.error(`[blogImport] Failed to create draft "${blog.title}": ${result.error}`);
+        }
+      }
+
+      return NextResponse.json({
+        success: true,
+        isMultiple: true,
+        articleCount: articles.length,
+        maxArticles: MAX_ARTICLES_PER_UPLOAD,
+        fileName: file.name,
+        articlesCreated: createdIds.length,
+        articles: results,
+        createdIds,
+      });
+    }
 
     return NextResponse.json({
       success: true,

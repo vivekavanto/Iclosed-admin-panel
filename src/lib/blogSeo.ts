@@ -30,7 +30,7 @@ import { logger } from "./logger";
 export const META_TITLE_MAX = 60;
 export const META_DESC_MAX = 155;
 const EXCERPT_MAX = 220;
-const MAX_INPUT_CHARS = 60_000;
+const MAX_INPUT_CHARS = 300_000;
 
 export type BlogSeoFields = {
   metaTitle: string;

@@ -34,7 +34,7 @@ export type BlogFormatOutcome =
   | { ok: true; data: BlogFormatResult }
   | { ok: false; error: string };
 
-const MAX_INPUT_CHARS = 60_000;
+const MAX_INPUT_CHARS = 300_000;
 
 function buildPrompt(title: string | undefined, body: string): string {
   return `You are a typesetter for the blog of an Ontario real-estate law firm.

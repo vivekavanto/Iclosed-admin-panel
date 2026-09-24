@@ -10,7 +10,6 @@ import {
   X,
   ArrowLeft,
   CheckCircle2,
-  Upload,
   ImagePlus,
 } from "lucide-react";
 import BlogRichTextEditor from "./blog/BlogRichTextEditor";
@@ -32,19 +31,17 @@ import { editorHtmlToSourceText, plainTextToHtml } from "./blog/blogEditorText";
  * editor, because the AI steps and the portal both want the words without the
  * markup — but it is no longer something anyone types into.
  *
- * Two ways to fill it, both ending in the same editor:
- *
- *   Write/paste  type into the editor, or paste from Word — ProseMirror
- *                coerces the markup into the allowed tags on the way in.
- *   Upload       drop in the .docx/.pdf/.md/.txt/.html the article was written
- *                in and POST /api/admin/blog/import does the extraction, the
- *                formatting and the search metadata in one round trip.
+ * Filled by typing or pasting into the editor — ProseMirror coerces pasted
+ * markup (from Word, from anywhere) into the allowed tags on the way in.
+ * Document upload used to be a second way in here, going through
+ * POST /api/admin/blog/import; it was removed from this screen because it
+ * duplicated Blogs.tsx's own "Import blogs" popup, which is where bulk
+ * document upload now lives exclusively. A one-off post is written by pasting
+ * the text and pressing Format with AI.
  *
  * Every AI step is deliberately separate from saving, so the admin always sees
  * what the model produced before it becomes the stored copy — the draft is
- * never overwritten by output nobody looked at. That holds for the upload path
- * too: it fills the boxes on screen and nothing else, and Save is still a
- * press away.
+ * never overwritten by output nobody looked at.
  *
  * Publishing writes to the table this app shares with the customer portal. The
  * portal's blog pages revalidate on a five-minute timer, so a post goes live
@@ -72,18 +69,6 @@ export type EditorPost = {
   noindex: boolean;
   format_source: string;
   seo_source: string;
-};
-
-export type ImportedBlogPost = {
-  title: string;
-  text: string;
-  html: string;
-  formatSource: "manual" | "gemini";
-  formatModel?: string;
-  wordsPreserved?: number;
-  needsProofread: boolean;
-  seo?: Record<string, unknown>;
-  warnings: string[];
 };
 
 export const EMPTY_POST: EditorPost = {
@@ -176,11 +161,6 @@ const META_DESC_MAX = 155;
 const inputClass =
   "w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-300 focus:border-brand-primary";
 
-// Kept in step with IMPORT_ACCEPT / IMPORT_LABEL in src/lib/blogImport.ts,
-// which is the server-side source of truth. Not imported from there: that
-// module pulls in jszip and the Gemini client, and neither belongs in a
-// browser bundle just to populate an accept attribute.
-const IMPORT_ACCEPT = ".docx,.pdf,.txt,.md,.markdown,.html,.htm";
 const COVER_ACCEPT = "image/png,image/jpeg,image/webp,image/avif";
 
 function CharCount({ value, max }: { value: string; max: number }) {
@@ -220,16 +200,12 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
   const router = useRouter();
   const [post, setPost] = useState<EditorPost>(initial);
   const [formatting, setFormatting] = useState(false);
-  const [importing, setImporting] = useState(false);
   const [coverUploading, setCoverUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [importedBlogs, setImportedBlogs] = useState<ImportedBlogPost[]>([]);
-  const [showBatchImportDialog, setShowBatchImportDialog] = useState(false);
-  const [batchCreating, setBatchCreating] = useState(false);
-  const [importMultiple, setImportMultiple] = useState(false);
+  const [generatingImage, setGeneratingImage] = useState(false);
 
   // Re-read on every change to the article, so the name appears as soon as
   // the byline is pasted in. Pure string work over the body — cheap enough to
@@ -271,160 +247,10 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
     });
   }, [detectedAuthor]);
 
-  const importInput = useRef<HTMLInputElement>(null);
   const coverInput = useRef<HTMLInputElement>(null);
 
   const set = <K extends keyof EditorPost>(key: K, value: EditorPost[K]) =>
     setPost((p) => ({ ...p, [key]: value }));
-
-  /**
-   * Uploads a document and fills the whole draft from it — text, formatted
-   * HTML, title and every search field — in one request.
-   *
-   * Refuses to run over content that is already there. The import replaces the
-   * article and the metadata wholesale, and there is no undo in this editor; an
-   * admin who has typed half a post and then picks the wrong file would lose it
-   * silently. Clearing the box first is one extra action, and it makes the
-   * destructive step something they chose rather than something that happened.
-   */
-  async function handleImport(file: File) {
-    setError(null);
-    setNotice(null);
-    setWarnings([]);
-
-    if (!importMultiple && post.content_html.trim()) {
-      setError(
-        "This post already has an article in it. Clear the editor first, or start a new post — importing replaces everything in it.",
-      );
-      return;
-    }
-
-    setImporting(true);
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      // The typed title wins over the one in the document; the server decides.
-      form.append("title", post.title);
-      form.append("multiple", importMultiple ? "true" : "false");
-
-      const res = await fetch("/api/admin/blog/import", { method: "POST", body: form });
-      const json = await res.json();
-
-      if (!res.ok || !json.success) {
-        setError(json.error ?? "Could not read that file.");
-        return;
-      }
-
-      // Handle multiple articles
-      if (json.isMultiple) {
-        const blogs = json.articles as ImportedBlogPost[];
-        setImportedBlogs(blogs);
-        setShowBatchImportDialog(true);
-        setNotice(
-          `Extracted ${blogs.length} blog posts from ${json.fileName}. Review them and click "Create All Posts" to save.`,
-        );
-        return;
-      }
-
-      // Handle single article (original behavior)
-      const seo = json.seo;
-      const importedHtml = json.html || plainTextToHtml(json.text ?? "");
-
-      setPost((p) => ({
-        ...p,
-        title: json.title || p.title,
-        content_html: importedHtml,
-        format_source: json.formatSource ?? "manual",
-        ...(seo
-          ? {
-              meta_title: seo.metaTitle ?? p.meta_title,
-              meta_description: seo.metaDescription ?? p.meta_description,
-              excerpt: seo.excerpt || p.excerpt,
-              focus_keyword: seo.focusKeyword ?? p.focus_keyword,
-              tags: seo.tags?.length ? seo.tags : p.tags,
-              faq: SHOW_FAQ_EDITOR ? seo.faq ?? p.faq : p.faq,
-              seo_source: "gemini",
-            }
-          : {}),
-      }));
-
-      setWarnings(json.warnings ?? []);
-      setNotice(
-        `Imported ${json.fileName}${
-          json.wordsPreserved != null
-            ? ` — ${Math.round(json.wordsPreserved * 100)}% of the document's wording preserved`
-            : ""
-        }. Nothing is saved yet: read it through, then press Save draft.`,
-      );
-    } catch {
-      setError("Could not reach the server. Check your connection and try again.");
-    } finally {
-      setImporting(false);
-      // Reset the picker so choosing the SAME file again still fires onChange.
-      if (importInput.current) importInput.current.value = "";
-    }
-  }
-
-  /**
-   * Batch create all imported blog posts.
-   */
-  async function handleBatchCreate() {
-    if (importedBlogs.length === 0) return;
-
-    setBatchCreating(true);
-    setError(null);
-    const createdIds: string[] = [];
-
-    try {
-      for (const blog of importedBlogs) {
-        const payload = {
-          title: blog.title,
-          slug: undefined,
-          excerpt: "",
-          content_html: blog.html,
-          content_source: blog.text,
-          cover_image_url: null,
-          cover_image_alt: null,
-          author: EMPTY_POST.author,
-          tags: [],
-          meta_title: (blog.seo as Record<string, unknown>)?.metaTitle || null,
-          meta_description: (blog.seo as Record<string, unknown>)?.metaDescription || null,
-          focus_keyword: (blog.seo as Record<string, unknown>)?.focusKeyword || null,
-          faq: [],
-          noindex: false,
-          format_source: blog.formatSource,
-          seo_source: "gemini",
-        };
-
-        const res = await fetch("/api/admin/blog", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-
-        const json = await res.json();
-        if (!res.ok || !json.success) {
-          setError(`Failed to create "${blog.title}": ${json.error ?? "Unknown error"}`);
-          break;
-        }
-
-        createdIds.push(json.post.id);
-      }
-
-      if (createdIds.length > 0) {
-        setNotice(`Created ${createdIds.length} blog posts successfully.`);
-        setImportedBlogs([]);
-        setShowBatchImportDialog(false);
-        setImportMultiple(false);
-        // Redirect to the first created post
-        router.push(`/admin/blogs/${createdIds[0]}`);
-      }
-    } catch {
-      setError("Could not reach the server. Check your connection and try again.");
-    } finally {
-      setBatchCreating(false);
-    }
-  }
 
   /** Uploads a cover image to the public blob store and points the post at it. */
   async function handleCoverUpload(file: File) {
@@ -696,7 +522,53 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
   }
 
   const isPublished = post.status === "published";
-  const busy = saving || formatting || importing || coverUploading || batchCreating;
+  const busy = saving || formatting || coverUploading || generatingImage;
+
+  async function handleGenerateImage() {
+    setError(null);
+    setNotice(null);
+
+    if (!post.title.trim()) {
+      setError("Add a title before generating an image.");
+      return;
+    }
+
+    const body = editorHtmlToSourceText(post.content_html).trim();
+    if (!body || body.length < 200) {
+      setError("Write at least 200 characters of content before generating an image.");
+      return;
+    }
+
+    setGeneratingImage(true);
+    try {
+      const res = await fetch("/api/admin/blog/generate-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: post.title, body }),
+      });
+      const json = await res.json();
+
+      if (!res.ok || !json.success) {
+        setError(json.error ?? "Could not generate image.");
+        return;
+      }
+
+      if (json.imageUrl) {
+        setPost((p) => ({ ...p, cover_image_url: json.imageUrl }));
+        setNotice(
+          `Image generated and uploaded! ${json.message ?? ""} You can adjust it or upload a different one.`,
+        );
+      } else {
+        setNotice(
+          `Image prompt ready: "${json.prompt}"\n\n${json.message ?? "Use this prompt with DALL-E, Midjourney, or another AI image generator."}`,
+        );
+      }
+    } catch {
+      setError("Could not reach the server. Check your connection and try again.");
+    } finally {
+      setGeneratingImage(false);
+    }
+  }
 
   return (
     <div className="max-w-6xl mx-auto py-4 space-y-5 animate-in fade-in duration-300">
@@ -783,56 +655,16 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
           </Field>
 
           {/* ── The article ─────────────────────────────
-              One box. The two buttons that can fill or reshape it sit on top
-              of it, and both write into the same editor the admin then edits.
-              Neither saves anything. */}
+              One box. Format with AI reshapes whatever is in it, and writes
+              into the same editor the admin then edits. Neither saves anything.
+              Bulk document upload lives on the Blogs list's "Import blogs"
+              popup instead — a one-off post here is written by pasting text. */}
           <div>
             <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
               <label className="text-[12.5px] font-semibold text-slate-700">Article</label>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <label className="inline-flex items-center gap-2 text-[12px]">
-                  <input
-                    type="checkbox"
-                    checked={importMultiple}
-                    onChange={(e) => setImportMultiple(e.target.checked)}
-                    disabled={busy}
-                    className="h-4 w-4 accent-brand-primary"
-                  />
-                  <span className="text-slate-600">Import multiple blogs</span>
-                </label>
-              </div>
             </div>
 
             <div className="mb-3 flex flex-wrap items-center gap-2">
-                <input
-                  ref={importInput}
-                  type="file"
-                  accept={IMPORT_ACCEPT}
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) void handleImport(file);
-                  }}
-                />
-                <button
-                  onClick={() => importInput.current?.click()}
-                  disabled={busy}
-                  className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-[13px] font-medium text-slate-700 transition hover:border-slate-300 disabled:opacity-50"
-                >
-                  {importing ? (
-                    <>
-                      <Loader2 size={14} className="animate-spin" />
-                      Reading the document…
-                    </>
-                  ) : (
-                    <>
-                      <Upload size={14} />
-                      Upload document
-                    </>
-                  )}
-                </button>
-
                 <button
                   onClick={handleFormat}
                   disabled={busy}
@@ -871,19 +703,12 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
             />
 
             <p className="mt-1.5 text-[11px] leading-relaxed text-slate-400">
-              Type here, paste from Word, or upload the document it was written
-              in — Word (.docx), PDF, Markdown, plain text or HTML, up to 10 MB.
-              An upload is formatted and written up for search in one pass.
-              Format with AI re-marks-up whatever is in the box — it adds the
-              headings, paragraphs and lists without changing your words — and
-              then writes the search metadata from the result.
+              Type here, or paste from Word. Format with AI re-marks-up
+              whatever is in the box — it adds the headings, paragraphs and
+              lists without changing your words — and then writes the search
+              metadata from the result. To upload a document instead, use
+              &ldquo;Import blogs&rdquo; on the Blogs list.
             </p>
-
-            {importing && (
-              <p className="mt-1.5 text-[11px] leading-relaxed text-slate-400">
-                A long PDF can take up to a minute. Leave this tab open.
-              </p>
-            )}
           </div>
         </div>
 
@@ -967,7 +792,7 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
 
           <Field
             label="Cover image"
-            hint="Upload one, or paste a URL. A pasted URL must be PUBLIC — an image in the private blob store renders as a broken image on the client website."
+            hint="Upload one, paste a URL, or click 'Generate with AI'. A pasted URL must be PUBLIC — an image in the private blob store renders as a broken image on the client website."
           >
             <input
               value={post.cover_image_url}
@@ -987,7 +812,7 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
               }}
             />
 
-            <div className="mt-2 flex items-center gap-2">
+            <div className="mt-2 flex flex-wrap items-center gap-2">
               <button
                 onClick={() => coverInput.current?.click()}
                 disabled={busy}
@@ -1002,6 +827,25 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
                   <>
                     <ImagePlus size={13} />
                     {post.cover_image_url ? "Replace image" : "Upload image"}
+                  </>
+                )}
+              </button>
+
+              <button
+                onClick={handleGenerateImage}
+                disabled={busy || !post.title.trim()}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-700 transition hover:border-slate-300 disabled:opacity-50"
+                title="Generate cover image using AI (requires article title and content)"
+              >
+                {generatingImage ? (
+                  <>
+                    <Loader2 size={13} className="animate-spin" />
+                    Generating…
+                  </>
+                ) : (
+                  <>
+                    <Sparkles size={13} />
+                    Generate with AI
                   </>
                 )}
               </button>
@@ -1220,92 +1064,6 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
         </div>
       </div>
 
-      {/* ── Batch Import Dialog ──────────────────────────────────────────── */}
-      {showBatchImportDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-xl font-bold text-slate-900">
-                Imported {importedBlogs.length} Blog Posts
-              </h2>
-              <button
-                onClick={() => setShowBatchImportDialog(false)}
-                disabled={batchCreating}
-                className="text-slate-400 hover:text-slate-700"
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            <div className="mb-6 space-y-4">
-              {importedBlogs.map((blog, idx) => (
-                <div key={idx} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="mb-2 flex items-start justify-between gap-2">
-                    <div>
-                      <h3 className="font-semibold text-slate-900">{blog.title || `Article ${idx + 1}`}</h3>
-                      <p className="text-[12px] text-slate-500">
-                        {Math.round(blog.text.length / 100) * 100} characters
-                      </p>
-                    </div>
-                    <span className="rounded-full bg-blue-100 px-2 py-1 text-[11px] font-semibold text-blue-700">
-                      {idx + 1} of {importedBlogs.length}
-                    </span>
-                  </div>
-
-                  {blog.warnings.length > 0 && (
-                    <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2">
-                      <p className="text-[11px] font-semibold text-amber-900">Warnings:</p>
-                      <ul className="mt-1 space-y-1 pl-4 text-[11px] text-amber-800">
-                        {blog.warnings.map((w, i) => (
-                          <li key={i} className="list-disc">
-                            {w}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                  {blog.seo && (
-                    <div className="mt-2 text-[11px] text-slate-600">
-                      <p>
-                        <strong>Meta title:</strong> {(blog.seo as Record<string, unknown>).metaTitle as string}
-                      </p>
-                      <p>
-                        <strong>Meta description:</strong> {(blog.seo as Record<string, unknown>).metaDescription as string}
-                      </p>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              <button
-                onClick={handleBatchCreate}
-                disabled={batchCreating || importedBlogs.length === 0}
-                className="rounded-xl bg-brand-primary px-5 py-2.5 text-sm font-medium text-white transition hover:bg-brand-primaryHover disabled:opacity-50"
-              >
-                {batchCreating ? (
-                  <>
-                    <Loader2 size={14} className="mr-2 inline-block animate-spin" />
-                    Creating...
-                  </>
-                ) : (
-                  `Create All ${importedBlogs.length} Posts`
-                )}
-              </button>
-
-              <button
-                onClick={() => setShowBatchImportDialog(false)}
-                disabled={batchCreating}
-                className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-medium text-slate-700 transition hover:border-slate-300 disabled:opacity-50"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

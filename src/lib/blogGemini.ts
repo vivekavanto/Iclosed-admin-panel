@@ -26,13 +26,23 @@ export type GeminiRung = { id: string; timeoutMs: number };
  * 503. The blog's calls are a few thousand words of text in and text out, so
  * the budget is much smaller — but the fallback still matters.
  *
- * Reduced from 30s to 22s on first rung to speed up fallback to lite model if
- * the primary is slow. Metadata generation (SEO) is consistently faster than
- * markup (format), so budget is tighter there.
+ * Both rungs are flash-tier on purpose, not a flash+pro pair. On the free API
+ * tier, "pro" models (gemini-*-pro / *-pro-preview) share one small daily
+ * quota, so a flash rung falling back to a pro rung falls back to a model
+ * that is often ALREADY at zero for the day from unrelated pro-tier traffic —
+ * the fallback exists on paper but never actually has quota to catch anything.
+ * Flash-tier quotas are separate per model, so two flash rungs are two
+ * genuinely independent budgets. Re-verify both ids before changing this list:
+ *   curl -X POST "https://generativelanguage.googleapis.com/v1beta/models/<id>:generateContent?key=$GEMINI_API_KEY" \
+ *     -H "Content-Type: application/json" -d '{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}'
+ * A 404 means the model id was retired (this list's previous fallback,
+ * gemini-1.5-pro, was retired outright); a 429 with
+ * "generate_content_free_tier_requests" means that rung's daily quota, not
+ * this app's own rate limit, is exhausted for the day.
  */
 export const BLOG_MODEL_LADDER: readonly GeminiRung[] = [
-  { id: "gemini-3.5-flash", timeoutMs: 22_000 },
-  { id: "gemini-3.1-flash-lite", timeoutMs: 18_000 },
+  { id: "gemini-flash-latest", timeoutMs: 30_000 },
+  { id: "gemini-3.1-flash-lite", timeoutMs: 20_000 },
 ] as const;
 
 /**
@@ -43,7 +53,7 @@ export const BLOG_MODEL_LADDER: readonly GeminiRung[] = [
  * ten-page article.
  */
 export const BLOG_FILE_LADDER: readonly GeminiRung[] = [
-  { id: "gemini-3.5-flash", timeoutMs: 60_000 },
+  { id: "gemini-flash-latest", timeoutMs: 60_000 },
   { id: "gemini-3.1-flash-lite", timeoutMs: 40_000 },
 ] as const;
 
@@ -177,6 +187,7 @@ export async function callGeminiJson<T>(opts: {
   label: string;
   /** Zero unless a caller genuinely wants variation. */
   temperature?: number;
+  maxOutputTokens?: number;
   ladder?: readonly GeminiRung[];
 }): Promise<GeminiJsonOutcome<T>> {
   return runLadder({

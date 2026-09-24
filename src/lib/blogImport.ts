@@ -30,8 +30,9 @@ import { logger } from "./logger.ts";
 /** Matches the drawer's document cap; an article is text, not a scan bundle. */
 export const MAX_IMPORT_BYTES = 10 * 1024 * 1024; // 10 MB
 
-/** What blogFormat/blogSeo accept. Checked here so the error names the file. */
-const MAX_EXTRACTED_CHARS = 60_000;
+/** What blogFormat/blogSeo accept. Checked here so the error names the file.
+ * Increased to 300K to support batch imports of multiple blog articles. */
+const MAX_EXTRACTED_CHARS = 300_000;
 
 export type ImportKind = "text" | "markdown" | "html" | "docx" | "pdf";
 
@@ -518,16 +519,37 @@ export async function extractMultipleBlogArticles(file: File): Promise<MultipleE
       continue;
     }
 
-    // Extract title from markdown h1 if present
+    // Extract title from markdown headers or first meaningful line
     let title: string | null = null;
-    const firstLine = articleText.split("\n").find((l) => l.trim());
-    if (firstLine?.startsWith("# ")) {
-      title = firstLine.slice(2).trim();
+    const lines = articleText.split("\n");
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+
+      // Check for markdown headers (# or ##)
+      if (trimmed.startsWith("# ")) {
+        title = trimmed.slice(2).trim();
+        break;
+      } else if (trimmed.startsWith("## ")) {
+        title = trimmed.slice(3).trim();
+        break;
+      } else if (trimmed.startsWith("### ")) {
+        title = trimmed.slice(4).trim();
+        break;
+      } else if (!trimmed.startsWith("#")) {
+        // Use first non-heading line as fallback title if it's short enough
+        // and doesn't look like regular paragraph text
+        if (trimmed.length < 100 && !trimmed.match(/^(the|a|an|and|or|but|in|on|at)\s/i)) {
+          title = trimmed.length > 80 ? trimmed.slice(0, 77) + "..." : trimmed;
+          break;
+        }
+      }
     }
 
     results.push({
       text: articleText,
-      title,
+      title: title || null,
       preformattedHtml: null,
       kind: singleExtraction.data.kind,
       warnings: [],
