@@ -112,6 +112,8 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   // Defaults to 'asc' so the upcoming closings (the default filtered view)
   // surface soonest-first.
   const [closingSort, setClosingSort] = useState<'asc' | 'desc' | null>('asc');
+  // "Last updated" sort: most recently edited note first. Overrides closingSort.
+  const [noteSort, setNoteSort] = useState(false);
   // Which file row has its progress panel expanded (one at a time). The list
   // API only returns the Steps count, not the titles, so we lazy-fetch the
   // deal's tasks from /api/admin/tasks and its milestones from
@@ -366,8 +368,13 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
       if (!res.ok || !data?.success) {
         throw new Error(data?.error || 'Failed to save the note.');
       }
+      const stampedAt = next ? (data?.data?.admin_note_updated_at ?? new Date().toISOString()) : null;
       setDeals((prev) =>
-        prev.map((d) => (d.id === deal.id ? ({ ...d, adminNote: next || null } as Deal) : d)),
+        prev.map((d) =>
+          d.id === deal.id
+            ? ({ ...d, adminNote: next || null, adminNoteUpdatedAt: stampedAt } as Deal)
+            : d,
+        ),
       );
     } catch (err) {
       setNoteError(err instanceof Error ? err.message : 'Failed to save the note.');
@@ -420,6 +427,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           leadId: d.lead_id ?? null,
           // Internal, admin-only "where is this file at" note (Notes column).
           adminNote: d.admin_note ?? null,
+          adminNoteUpdatedAt: d.admin_note_updated_at ?? null,
         } as Deal & {
           authUserId: string | null;
           isCoPurchaser: boolean;
@@ -445,6 +453,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           referralAgentCompany: string | null;
           leadId: string | null;
           adminNote: string | null;
+          adminNoteUpdatedAt: string | null;
         }));
         setDeals(mapped);
       })
@@ -619,7 +628,21 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   // valid closing date always sink to the bottom (regardless of direction) so
   // the dated rows stay grouped and ordered. When no sort is active the
   // original API order is preserved.
-  const sortedDeals = closingSort
+  const noteUpdatedAt = (d: Deal) =>
+    (d as Deal & { adminNoteUpdatedAt?: string | null }).adminNoteUpdatedAt ?? null;
+  const sortedDeals = noteSort
+    // Most recently updated note first; files with no note timestamp sink.
+    ? [...filteredDeals].sort((a, b) => {
+        const da = Date.parse(noteUpdatedAt(a) ?? '');
+        const db = Date.parse(noteUpdatedAt(b) ?? '');
+        const aMissing = Number.isNaN(da);
+        const bMissing = Number.isNaN(db);
+        if (aMissing && bMissing) return 0;
+        if (aMissing) return 1;
+        if (bMissing) return -1;
+        return db - da;
+      })
+    : closingSort
     ? [...filteredDeals].sort((a, b) => {
         const da = parseLocalDate(a.closingDate)?.getTime() ?? NaN;
         const db = parseLocalDate(b.closingDate)?.getTime() ?? NaN;
@@ -647,8 +670,15 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   // Header click always activates a closing-date sort (cycling soonest ↔
   // latest). The "Recently created" button below clears it (closingSort=null),
   // which falls back to the newest-created ordering above.
-  const toggleClosingSort = () =>
+  const toggleClosingSort = () => {
+    setNoteSort(false);
     setClosingSort((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+  };
+  const sortMode: 'closing' | 'created' | 'note' = noteSort
+    ? 'note'
+    : closingSort
+    ? 'closing'
+    : 'created';
 
   const applyPreset = (preset: 'today' | 'week' | 'nextWeek' | 'month') => {
     const now = new Date();
@@ -903,9 +933,12 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           <div className="inline-flex items-center rounded-md border border-slate-200 overflow-hidden text-xs">
             <button
               type="button"
-              onClick={() => setClosingSort('asc')}
+              onClick={() => {
+                setNoteSort(false);
+                setClosingSort('asc');
+              }}
               className={`px-2.5 py-1 font-medium transition-colors ${
-                closingSort
+                sortMode === 'closing'
                   ? 'bg-brand-primary text-white'
                   : 'bg-white text-slate-600 hover:bg-slate-50'
               }`}
@@ -915,15 +948,30 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
             </button>
             <button
               type="button"
-              onClick={() => setClosingSort(null)}
+              onClick={() => {
+                setNoteSort(false);
+                setClosingSort(null);
+              }}
               className={`px-2.5 py-1 font-medium border-l border-slate-200 transition-colors ${
-                closingSort
-                  ? 'bg-white text-slate-600 hover:bg-slate-50'
-                  : 'bg-brand-primary text-white'
+                sortMode === 'created'
+                  ? 'bg-brand-primary text-white'
+                  : 'bg-white text-slate-600 hover:bg-slate-50'
               }`}
               title="Show the most recently created files first"
             >
               Recently created
+            </button>
+            <button
+              type="button"
+              onClick={() => setNoteSort(true)}
+              className={`px-2.5 py-1 font-medium border-l border-slate-200 transition-colors ${
+                sortMode === 'note'
+                  ? 'bg-brand-primary text-white'
+                  : 'bg-white text-slate-600 hover:bg-slate-50'
+              }`}
+              title="Show the most recently updated notes first"
+            >
+              Last updated
             </button>
           </div>
         </div>
@@ -1017,13 +1065,14 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
             <col style={{ width: '4%' }} />{/* Row number */}
             <col style={{ width: '6%' }} />{/* Account status */}
             <col style={{ width: '7%' }} />{/* File No. */}
-            <col style={{ width: '14%' }} />{/* Client Name */}
-            <col style={{ width: '16%' }} />{/* Address */}
+            <col style={{ width: '13%' }} />{/* Client Name */}
+            <col style={{ width: '13%' }} />{/* Address */}
             <col style={{ width: '8%' }} />{/* Closing date */}
-            <col style={{ width: '10%' }} />{/* Progress */}
+            <col style={{ width: '9%' }} />{/* Progress */}
             <col style={{ width: '6%' }} />{/* Lawyer */}
             <col style={{ width: '6%' }} />{/* Clerk */}
-            <col style={{ width: '16%' }} />{/* Notes */}
+            <col style={{ width: '14%' }} />{/* Notes */}
+            <col style={{ width: '7%' }} />{/* Last updated */}
             <col style={{ width: '7%' }} />{/* Actions */}
             {/* Hidden columns — Agent, Account created, Requisition date, File
                 name. Their cells are display:none, so these collapse to 0%. */}
@@ -1049,7 +1098,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                 >
                   Closing date
                   <span className="text-[10px] leading-none text-slate-400">
-                    {closingSort === 'asc' ? '▲' : closingSort === 'desc' ? '▼' : '↕'}
+                    {sortMode !== 'closing' ? '↕' : closingSort === 'asc' ? '▲' : '▼'}
                   </span>
                 </button>
               </th>
@@ -1062,6 +1111,19 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
               <th className="px-2 py-1.5 hidden">Account created</th>
               {/* Free-text status the admin keeps by hand — see the cell below. */}
               <th className="px-2 py-1.5">Notes</th>
+              <th className="px-2 py-1.5">
+                <button
+                  type="button"
+                  onClick={() => setNoteSort(true)}
+                  className="flex items-center gap-1 font-bold hover:text-brand-primary transition-colors"
+                  title="Most recently updated notes first"
+                >
+                  Last updated
+                  <span className="text-[10px] leading-none text-slate-400">
+                    {sortMode === 'note' ? '▼' : '↕'}
+                  </span>
+                </button>
+              </th>
               {/* Requisition date column hidden per request — kept (not deleted) to avoid breaking anything. */}
               <th className="px-2 py-1.5 hidden">Requisition date</th>
               {/* File name column hidden per request — kept (not deleted) to avoid breaking anything. */}
@@ -1366,6 +1428,16 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                         </button>
                       );
                     })()}
+                  </td>
+                  {/* Last updated — when the note was last added/edited. */}
+                  <td className="px-2 py-1.5 text-slate-600">
+                    {(deal as Deal & { adminNote?: string | null }).adminNote && noteUpdatedAt(deal)
+                      ? new Date(noteUpdatedAt(deal)!).toLocaleDateString('en-US', {
+                          month: 'short',
+                          day: 'numeric',
+                          year: 'numeric',
+                        })
+                      : <span className="text-slate-300">—</span>}
                   </td>
                   {/* Requisition date column hidden per request — kept (not deleted). */}
                   <td className="px-2 py-1.5 hidden">{formatDate(deal.requisitionDate)}</td>
