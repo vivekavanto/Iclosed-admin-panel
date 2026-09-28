@@ -470,6 +470,7 @@ const MIRROR_DEAL_COLUMNS = new Set([
   "outstanding_requisitions",
   "cc_emails",
   "admin_note",
+  "admin_note_updated_at",
 ]);
 
 // Cap the note at the API rather than the column type, so an existing longer
@@ -732,6 +733,10 @@ export async function PATCH(
       ? (body as any).expected_updated_at
       : null;
   updates.updated_at = new Date().toISOString();
+  // Stamp the note's own edit time (Last updated column); cleared with the note.
+  if ("admin_note" in updates) {
+    updates.admin_note_updated_at = updates.admin_note ? updates.updated_at : null;
+  }
 
   let updateQuery = supabase.from("deals").update(updates).eq("id", id);
   if (expectedUpdatedAt) {
