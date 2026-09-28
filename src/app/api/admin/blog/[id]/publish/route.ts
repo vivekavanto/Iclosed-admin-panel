@@ -76,7 +76,7 @@ export async function POST(req: Request, { params }: Ctx) {
 
   // Reaches every state transition: going live, and pulling a live post back
   // to draft both need the portal's cache dropped immediately.
-  await revalidatePortalBlog({ slug: result.row.slug });
+  const revalidated = await revalidatePortalBlog({ slug: result.row.slug });
 
-  return NextResponse.json({ success: true, post: result.row });
+  return NextResponse.json({ success: true, post: result.row, revalidated });
 }

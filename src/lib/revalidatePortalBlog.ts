@@ -18,17 +18,22 @@ import { logger } from "./logger";
  * /api/admin/* routes (its src/middleware.ts adminGate) — the key is already
  * tracked as a shared, rotated secret in docs/key-rotation.md.
  */
+/**
+ * Returns whether the portal actually dropped its cache. The caller uses this
+ * only to tell the admin what happened — never to decide whether the save
+ * itself succeeded, since the post row is already written by this point.
+ */
 export async function revalidatePortalBlog(opts: {
   slug?: string | null;
   previousSlug?: string | null;
-}): Promise<void> {
+}): Promise<boolean> {
   const base = (process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ?? "").replace(/\/+$/, "");
   const key = process.env.ADMIN_SERVICE_KEY;
   if (!base || !key) {
     logger.warn(
       "[revalidatePortalBlog] skipped — NEXT_PUBLIC_CUSTOMER_PORTAL_URL or ADMIN_SERVICE_KEY not configured",
     );
-    return;
+    return false;
   }
 
   try {
@@ -45,8 +50,11 @@ export async function revalidatePortalBlog(opts: {
     });
     if (!res.ok) {
       logger.warn(`[revalidatePortalBlog] portal responded ${res.status}`);
+      return false;
     }
+    return true;
   } catch (err) {
     logger.warn("[revalidatePortalBlog] could not reach the portal:", err);
+    return false;
   }
 }

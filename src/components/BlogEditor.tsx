@@ -276,8 +276,8 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
       setPost((p) => ({ ...p, cover_image_url: json.url }));
       setNotice(
         post.cover_image_alt.trim()
-          ? "Cover image uploaded."
-          : "Cover image uploaded. Add alt text describing it — screen readers and Google both read it.",
+          ? "Image uploaded — not saved yet. Click Save changes (or Publish) below to apply it to the post."
+          : "Image uploaded — not saved yet. Add alt text below, then click Save changes (or Publish) to apply it.",
       );
     } catch {
       setError("Could not reach the server. Check your connection and try again.");
@@ -478,7 +478,15 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
 
       const saved = json.post;
       setPost((p) => ({ ...p, id: saved.id, slug: saved.slug, status: saved.status }));
-      setNotice("Saved.");
+      // `revalidated` is only meaningful for an already-live post — a draft
+      // has nothing on the website to refresh, so json.revalidated is null.
+      setNotice(
+        json.revalidated === false
+          ? "Saved. The website will pick up the change within about 5 minutes."
+          : json.revalidated === true
+            ? "Saved — the website has the update now."
+            : "Saved.",
+      );
 
       // A new post lives at its own URL from here on, so a second Save does not
       // create a second row.
@@ -511,9 +519,12 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
         return;
       }
       setPost((p) => ({ ...p, status: json.post.status, slug: json.post.slug }));
+      const reachedPortal = json.revalidated === true;
       setNotice(
         publish
-          ? "Published. It appears on the client website within about five minutes."
+          ? reachedPortal
+            ? "Published — it's live on the website now."
+            : "Published. It will appear on the website within about five minutes."
           : "Pulled back to draft.",
       );
     } finally {
@@ -574,7 +585,7 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
     <div className="max-w-6xl mx-auto py-4 space-y-5 animate-in fade-in duration-300">
       {/* ── Action bar ───────────────────────────────── */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <button
             onClick={() => router.push("/admin/blogs")}
             className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
@@ -599,6 +610,13 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
               AI formatted — unreviewed
             </span>
           )}
+          <button
+            onClick={() => handlePublish(!isPublished)}
+            disabled={busy}
+            className="rounded-xl bg-brand-primary px-5 py-2 text-sm font-medium text-white transition hover:bg-brand-primaryHover disabled:opacity-50"
+          >
+            {isPublished ? "Unpublish" : "Publish"}
+          </button>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -607,14 +625,7 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
             disabled={busy}
             className="rounded-xl border border-slate-200 bg-white px-5 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-300 disabled:opacity-50"
           >
-            {saving ? "Saving…" : "Save draft"}
-          </button>
-          <button
-            onClick={() => handlePublish(!isPublished)}
-            disabled={busy}
-            className="rounded-xl bg-brand-primary px-5 py-2 text-sm font-medium text-white transition hover:bg-brand-primaryHover disabled:opacity-50"
-          >
-            {isPublished ? "Unpublish" : "Publish"}
+            {saving ? "Saving…" : "Save changes"}
           </button>
         </div>
       </div>

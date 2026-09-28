@@ -58,14 +58,15 @@ export async function PATCH(req: Request, { params }: Ctx) {
   // Editing an already-live post (a swapped cover image, a text fix, ...) has
   // to reach readers without waiting on the portal's 5-minute ISR timer. Both
   // slugs when it moved, or the old URL keeps serving the old copy from cache.
+  let revalidated: boolean | null = null;
   if (before.status !== "draft") {
-    await revalidatePortalBlog({
+    revalidated = await revalidatePortalBlog({
       slug: result.row.slug,
       previousSlug: result.row.slug !== before.slug ? before.slug : undefined,
     });
   }
 
-  return NextResponse.json({ success: true, post: result.row });
+  return NextResponse.json({ success: true, post: result.row, revalidated });
 }
 
 export async function DELETE(_req: Request, { params }: Ctx) {
