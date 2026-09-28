@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { isUuid } from "@/lib/isUuid";
 import { getActingAdmin } from "@/lib/getActingAdmin";
 import { getPostById, updatePost, deletePost } from "@/lib/blogPosts";
+import { revalidatePortalBlog } from "@/lib/revalidatePortalBlog";
 import { pickWritable } from "../route";
 
 /**
@@ -54,6 +55,16 @@ export async function PATCH(req: Request, { params }: Ctx) {
     return NextResponse.json({ success: false, error: result.error }, { status: 400 });
   }
 
+  // Editing an already-live post (a swapped cover image, a text fix, ...) has
+  // to reach readers without waiting on the portal's 5-minute ISR timer. Both
+  // slugs when it moved, or the old URL keeps serving the old copy from cache.
+  if (before.status !== "draft") {
+    await revalidatePortalBlog({
+      slug: result.row.slug,
+      previousSlug: result.row.slug !== before.slug ? before.slug : undefined,
+    });
+  }
+
   return NextResponse.json({ success: true, post: result.row });
 }
 
@@ -69,6 +80,10 @@ export async function DELETE(_req: Request, { params }: Ctx) {
   const result = await deletePost(id);
   if (!result.ok) {
     return NextResponse.json({ success: false, error: result.error }, { status: 400 });
+  }
+
+  if (before.status !== "draft") {
+    await revalidatePortalBlog({ slug: before.slug });
   }
 
   return NextResponse.json({ success: true });

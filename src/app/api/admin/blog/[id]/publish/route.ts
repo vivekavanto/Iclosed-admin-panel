@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { isUuid } from "@/lib/isUuid";
 import { getActingAdmin } from "@/lib/getActingAdmin";
 import { getPostById, updatePost } from "@/lib/blogPosts";
+import { revalidatePortalBlog } from "@/lib/revalidatePortalBlog";
 
 /**
  * POST /api/admin/blog/[id]/publish — take a post live, or pull it back to
@@ -10,10 +11,6 @@ import { getPostById, updatePost } from "@/lib/blogPosts";
  * The only transition into `published`. Keeping it on its own route means the
  * pre-flight checks below can never be skipped by a caller that only meant to
  * save a field.
- *
- * A published post appears on the portal within its own revalidate window
- * (about five minutes). This app cannot revalidate the portal's cache, and the
- * paths it would name do not exist here — see the note in src/lib/blogPosts.ts.
  */
 export const runtime = "nodejs";
 
@@ -76,6 +73,10 @@ export async function POST(req: Request, { params }: Ctx) {
   if (!result.ok) {
     return NextResponse.json({ success: false, error: result.error }, { status: 400 });
   }
+
+  // Reaches every state transition: going live, and pulling a live post back
+  // to draft both need the portal's cache dropped immediately.
+  await revalidatePortalBlog({ slug: result.row.slug });
 
   return NextResponse.json({ success: true, post: result.row });
 }

@@ -20,12 +20,13 @@ export { slugify };
  * file is load-bearing: without it every statement here fails with 42501
  * "permission denied for table blog_posts" and surfaces as a generic 500.
  *
- * NOTE on going live: publishing from this app does NOT revalidate the
- * portal's pages — separate deployment, separate cache. The portal's blog
- * pages carry `export const revalidate = 300`, so a change appears there
- * within about five minutes on its own. Nothing here needs to call
- * revalidatePath(): the paths it would name (/blogs, /blog) do not exist in
- * this app.
+ * NOTE on going live: the portal's blog pages carry
+ * `export const revalidate = 300`, a separate cache in a separate deployment.
+ * This app's own write routes (create/update/delete/publish) call
+ * revalidatePortalBlog() after a save that touches a live post, which asks
+ * the portal to drop that cache immediately instead of waiting out the
+ * 5-minute timer. That call is best-effort — if it fails or isn't configured,
+ * the portal's own timer is still the fallback.
  */
 
 export type BlogStatus = "draft" | "scheduled" | "published";
