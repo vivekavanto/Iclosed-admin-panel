@@ -15,7 +15,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import JSZip from "jszip";
 
-import { extractBlogArticle, importKindFor } from "../src/lib/blogImport.ts";
+import {
+  extractBlogArticle,
+  extractMultipleBlogArticles,
+  importKindFor,
+  MAX_ARTICLES_PER_UPLOAD,
+  MAX_BLOG_CHARS,
+} from "../src/lib/blogImport.ts";
 
 /** One <w:p>, with the properties Word would have written around it. */
 function para(text: string, opts: { style?: string; list?: boolean } = {}) {
@@ -194,4 +200,120 @@ test("an empty or oversized file is refused before any work is done", async () =
   const huge = await extractBlogArticle(textFile("x".repeat(70_000), "post.txt"));
   assert.equal(huge.ok, false);
   assert.match(huge.ok ? "" : huge.error, /the limit is 60,000/);
+});
+
+// ── Multi-article extraction ─────────────────────────────────────────────
+//
+// These force the deterministic fallback splitter by removing any Gemini key
+// from the environment: boundary detection then has nothing to call and
+// aiSeparateArticles() returns null immediately, so what's under test is the
+// same delimiter/heading logic that also backstops a real Gemini outage.
+
+async function withoutGeminiKey<T>(fn: () => Promise<T>): Promise<T> {
+  const saved = { key: process.env.GEMINI_API_KEY, google: process.env.GOOGLE_GEMINI_API_KEY };
+  delete process.env.GEMINI_API_KEY;
+  delete process.env.GOOGLE_GEMINI_API_KEY;
+  try {
+    return await fn();
+  } finally {
+    if (saved.key !== undefined) process.env.GEMINI_API_KEY = saved.key;
+    if (saved.google !== undefined) process.env.GOOGLE_GEMINI_API_KEY = saved.google;
+  }
+}
+
+async function extractMultiple(file: File) {
+  const outcome = await withoutGeminiKey(() => extractMultipleBlogArticles(file));
+  assert.ok(outcome.ok, `extraction failed: ${outcome.ok ? "" : outcome.error}`);
+  return outcome.data;
+}
+
+test("internal subheadings (Introduction, numbered sections, FAQ, Conclusion) stay ONE article", async () => {
+  const articles = await extractMultiple(
+    textFile(
+      [
+        "# Understanding Closing Costs",
+        "",
+        "Buying a home in Ontario comes with more than the purchase price.",
+        "",
+        "## Introduction",
+        "",
+        "This article walks through every cost a buyer should expect.",
+        "",
+        "## 1. Land Transfer Tax",
+        "",
+        "Ontario charges a provincial land transfer tax on every purchase.",
+        "",
+        "## Key Takeaways",
+        "",
+        "Budget for closing costs on top of your down payment.",
+        "",
+        "## FAQ",
+        "",
+        "Q: When is it due? A: On closing day.",
+        "",
+        "## Conclusion",
+        "",
+        "Plan ahead and speak with your lawyer early.",
+      ].join("\n"),
+      "closing-costs.md",
+    ),
+  );
+
+  assert.equal(articles.length, 1);
+  assert.ok(articles[0].text.includes("Land Transfer Tax"));
+  assert.ok(articles[0].text.includes("Conclusion"));
+});
+
+test("a container over 116,000 characters across 10 articles is accepted whole", async () => {
+  const sections = Array.from({ length: 10 }, (_, i) =>
+    `## Article ${i + 1}\n\n${"Ontario real estate closings involve several regulated steps. ".repeat(200)}`,
+  );
+  // Each section is ~13,000 characters; 10 of them comfortably clears 116,000.
+  const combined = sections.join("\n---\n");
+  assert.ok(combined.length > 116_000, `fixture is only ${combined.length} characters`);
+
+  const articles = await extractMultiple(textFile(combined, "ten-articles.txt"));
+
+  assert.equal(articles.length, 10);
+  for (const a of articles) {
+    assert.ok(a.text.length < MAX_BLOG_CHARS, "each individual article stays under the per-article cap");
+  }
+});
+
+test("an oversized individual article is flagged, never truncated or rejected", async () => {
+  const shortArticle = "## Short One\n\nThis one is well within the limit.";
+  const longArticle = `## Long One\n\n${"x".repeat(MAX_BLOG_CHARS + 5_000)}`;
+
+  const articles = await extractMultiple(
+    textFile(`${shortArticle}\n---\n${longArticle}`, "two-articles.txt"),
+  );
+
+  assert.equal(articles.length, 2);
+  const long = articles.find((a) => a.text.includes("Long One"))!;
+  // Nothing was cut: the "x" run survives at its full original length.
+  assert.equal(long.text.length, longArticle.length);
+  assert.ok(long.warnings.some((w) => /60,000/.test(w)));
+
+  const short = articles.find((a) => a.text.includes("Short One"))!;
+  assert.equal(short.warnings.length, 0);
+});
+
+test("deterministic fallback splits on explicit 'Blog N:' delimiters", async () => {
+  const articles = await extractMultiple(
+    textFile(
+      "Blog 1: Title Insurance\n\nWhat it covers.\n\nBlog 2: Land Transfer Tax\n\nHow it's calculated.",
+      "two-blogs.txt",
+    ),
+  );
+
+  assert.equal(articles.length, 2);
+  assert.ok(articles[0].text.startsWith("Blog 1: Title Insurance"));
+  assert.ok(articles[1].text.startsWith("Blog 2: Land Transfer Tax"));
+});
+
+test("splitting never returns more than MAX_ARTICLES_PER_UPLOAD articles", async () => {
+  const sections = Array.from({ length: 15 }, (_, i) => `## Article ${i + 1}\n\nBody text for article ${i + 1}.`);
+  const articles = await extractMultiple(textFile(sections.join("\n---\n"), "fifteen-articles.txt"));
+
+  assert.equal(articles.length, MAX_ARTICLES_PER_UPLOAD);
 });

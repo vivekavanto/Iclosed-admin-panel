@@ -2,6 +2,8 @@
 
 import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import Link from "next/link";
+import { upload } from "@vercel/blob/client";
+import { BLOB_ACCESS } from "@/lib/blobPrivacy";
 import {
   Plus,
   Search,
@@ -13,7 +15,7 @@ import {
   CheckCircle2,
   X,
 } from "lucide-react";
-import BlogBatchManager, { type ManagedBlog } from "./BlogBatchManager";
+import BlogBatchManager, { needsReview, type ManagedBlog } from "./BlogBatchManager";
 
 /**
  * The Blogs list — every post in `blog_posts`, whatever its status.
@@ -66,13 +68,20 @@ const Blogs: React.FC = () => {
   // Import popup: extract → review/format → create. Kept as one dialog rather
   // than a silent upload, because a document can hold up to 10 articles and the
   // admin needs to see (and steer) formatting before anything is saved.
-  const [importStage, setImportStage] = useState<"idle" | "extracting" | "review" | "creating">(
-    "idle",
-  );
+  //
+  // "error" is distinct from "idle": the modal is only rendered while
+  // importStage !== "idle", so an extraction failure that reset straight to
+  // "idle" would close the dialog in the same instant it set the error
+  // message — the popup would flash open and vanish with nothing shown. Going
+  // to "error" instead keeps it open so the admin actually sees why.
+  const [importStage, setImportStage] = useState<
+    "idle" | "extracting" | "review" | "creating" | "error"
+  >("idle");
   const [importFileName, setImportFileName] = useState("");
   const [importBlogs, setImportBlogs] = useState<ManagedBlog[]>([]);
   const [importError, setImportError] = useState<string | null>(null);
   const [importCreateMode, setImportCreateMode] = useState<"draft" | "publish" | null>(null);
+  const [importBatchId, setImportBatchId] = useState<string | null>(null);
 
   const loadPosts = useCallback(async () => {
     try {
@@ -185,20 +194,31 @@ const Blogs: React.FC = () => {
     setImportStage("extracting");
 
     try {
-      const form = new FormData();
-      form.append("file", file);
-      form.append("multiple", "true");
-      form.append("extractOnly", "true");
+      // Straight to Vercel Blob from the browser, not through this function —
+      // a serverless function's request body is capped around 4.5 MB, well
+      // under the 20 MB a multi-article document can legitimately need. The
+      // import route reads the bytes back from the blobUrl and deletes it
+      // once done; this upload is scratch, not a kept document.
+      const blob = await upload(`blog-imports/${Date.now()}-${file.name}`, file, {
+        access: BLOB_ACCESS,
+        handleUploadUrl: "/api/admin/blog/import/token",
+      });
 
       const res = await fetch("/api/admin/blog/import", {
         method: "POST",
-        body: form,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          blobUrl: blob.url,
+          fileName: file.name,
+          multiple: true,
+          extractOnly: true,
+        }),
       });
       const data = await res.json();
 
       if (!res.ok || !data.success) {
         setImportError(data.error ?? "Could not read blogs from that document.");
-        setImportStage("idle");
+        setImportStage("error");
         return;
       }
 
@@ -212,19 +232,25 @@ const Blogs: React.FC = () => {
         needsProofread: Boolean(a.needsProofread),
         seo: (a.seo as Record<string, unknown> | null) ?? undefined,
         warnings: (a.warnings as string[]) ?? [],
+        charCount: (a.charCount as number | undefined) ?? (a.text as string)?.length,
+        isDuplicate: Boolean(a.isDuplicate),
+        validationStatus: (a.validationStatus as ManagedBlog["validationStatus"]) ?? "ready",
       }));
 
       if (blogs.length === 0) {
         setImportError("No article text could be found in that document.");
-        setImportStage("idle");
+        setImportStage("error");
         return;
       }
 
       setImportBlogs(blogs);
+      setImportBatchId(crypto.randomUUID());
       setImportStage("review");
-    } catch {
-      setImportError("Could not reach the server.");
-      setImportStage("idle");
+    } catch (err) {
+      setImportError(
+        err instanceof Error && err.message ? err.message : "Could not upload or read that document.",
+      );
+      setImportStage("error");
     } finally {
       if (uploadInput.current) uploadInput.current.value = "";
     }
@@ -236,6 +262,7 @@ const Blogs: React.FC = () => {
     setImportError(null);
     setImportFileName("");
     setImportCreateMode(null);
+    setImportBatchId(null);
   };
 
   /**
@@ -268,6 +295,8 @@ const Blogs: React.FC = () => {
               content_html: blog.html,
               content_source: blog.text,
               excerpt: (seo.excerpt as string)?.trim() || fallbackExcerpt,
+              cover_image_url: blog.coverImageUrl || null,
+              cover_image_alt: blog.coverImageAlt || null,
               author: "iClosed Real Estate Law Desk",
               tags: (seo.tags as string[]) ?? [],
               meta_title: (seo.metaTitle as string) ?? null,
@@ -277,23 +306,37 @@ const Blogs: React.FC = () => {
               noindex: false,
               format_source: blog.formatSource,
               seo_source: blog.seo ? "gemini" : "manual",
+              import_batch_id: importBatchId,
             }),
           });
           const data = await res.json();
           if (!data?.success) {
             return { title: blog.title, ok: false as const, error: data?.error as string | undefined };
           }
-          return { title: blog.title, ok: true as const, id: data.post.id as string };
+          return {
+            title: blog.title,
+            ok: true as const,
+            id: data.post.id as string,
+            needsReview: needsReview(blog),
+          };
         }),
       );
 
       const createFailures = created.filter((r) => !r.ok);
-      const createdOk = created.filter((r) => r.ok) as Extract<(typeof created)[number], { ok: true }>[];
+      const createdOk = created.filter((r) => r.ok) as Extract<
+        (typeof created)[number],
+        { ok: true }
+      >[];
+      // Oversized or duplicate-flagged articles are saved above like everything
+      // else, but never auto-published — they stay drafts until a human clears
+      // the flag, per the "never truncate, never silently publish" rule.
+      const publishable = createdOk.filter((c) => !c.needsReview);
+      const keptForReview = createdOk.length - publishable.length;
 
       let publishFailures: { title: string; error?: string }[] = [];
-      if (publish && createdOk.length > 0) {
+      if (publish && publishable.length > 0) {
         const publishResults = await Promise.all(
-          createdOk.map(async (c) => {
+          publishable.map(async (c) => {
             const res = await fetch(`/api/admin/blog/${c.id}/publish`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -332,7 +375,8 @@ const Blogs: React.FC = () => {
       setImportCreateMode(null);
       setUploadSuccess(
         publish
-          ? `✓ Published ${created.length} blog${created.length !== 1 ? "s" : ""}`
+          ? `✓ Published ${publishable.length} blog${publishable.length !== 1 ? "s" : ""}` +
+              (keptForReview > 0 ? ` · ${keptForReview} kept as draft for review` : "")
           : `✓ Saved ${created.length} blog draft${created.length !== 1 ? "s" : ""}`,
       );
       setTimeout(() => setUploadSuccess(null), 3000);

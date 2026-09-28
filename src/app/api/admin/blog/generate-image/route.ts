@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getActingAdmin } from "@/lib/getActingAdmin";
 import { rateLimitOk } from "@/lib/rateLimit";
 import { generateImagePrompt } from "@/lib/blogImagePrompt";
+import { generateGeminiImage } from "@/lib/blogImageGen";
 import { put } from "@vercel/blob";
 
 export const runtime = "nodejs";
@@ -51,6 +52,22 @@ export async function POST(req: Request) {
     );
   }
 
+  // Fail fast, before spending a Gemini call: without this token the upload
+  // at the bottom of this route is guaranteed to fail (see the comment on the
+  // put() call below for why it can't fall back to the private store's
+  // token). Catching it here turns a generic "could not be uploaded" into a
+  // message that actually says what to fix.
+  if (!process.env.BLOB_PUBLIC_READ_WRITE_TOKEN) {
+    return NextResponse.json(
+      {
+        success: false,
+        error:
+          "BLOB_PUBLIC_READ_WRITE_TOKEN is not configured on the server, so a cover image cannot be uploaded. Add it to the environment (same token blog/cover/route.ts's manual upload needs) and restart the app.",
+      },
+      { status: 500 },
+    );
+  }
+
   // Step 1: Generate image prompt from article content
   const promptResult = await generateImagePrompt({ title, body });
   if (!promptResult.ok) {
@@ -62,102 +79,56 @@ export async function POST(req: Request) {
 
   const { prompt, description } = promptResult.data;
 
-  // Step 2: Generate image using Replicate API
-  // If REPLICATE_API_TOKEN is not set, return the prompt for user to generate manually
-  const replicateToken = process.env.REPLICATE_API_TOKEN;
-  if (!replicateToken) {
+  // Step 2: Render the image itself with the same Gemini account used for the
+  // prompt above — one provider for the whole blog pipeline, no separate
+  // Replicate/DALL-E token to provision or fall back to.
+  const imageResult = await generateGeminiImage(
+    `${prompt} 16:9 aspect ratio, professional blog cover image.`,
+  );
+
+  if (!imageResult.ok) {
     return NextResponse.json({
       success: true,
       imageUrl: null,
       prompt,
       description,
-      message:
-        "Image prompt generated. To auto-generate images, set REPLICATE_API_TOKEN environment variable. For now, you can use this prompt with DALL-E, Midjourney, or Replicate directly.",
+      message: `Image prompt generated, but the image itself could not be rendered: ${imageResult.error}`,
     });
   }
 
   try {
-    // Call Replicate API to generate image (using a fast model like Flux Schnell)
-    // Flux Schnell is much faster than other options and high quality
-    const imageRes = await fetch("https://api.replicate.com/v1/predictions", {
-      method: "POST",
-      headers: {
-        Authorization: `Token ${replicateToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        version: "e04e9146803e01eb96e91c2559caa7ad02819b8154b33f1bba40dc924507d91f", // Flux 1.0 Pro (faster)
-        input: {
-          prompt,
-          aspect_ratio: "16:9",
-          num_outputs: 1,
-        },
-      }),
-    });
-
-    if (!imageRes.ok) {
-      const errorText = await imageRes.text();
-      console.error(
-        `[blogGenerateImage] Replicate error: ${imageRes.status} ${errorText}`,
-      );
-      return NextResponse.json({
-        success: true,
-        imageUrl: null,
-        prompt,
-        description,
-        message:
-          "Image prompt generated, but image generation is currently unavailable. You can use the prompt with DALL-E or Midjourney.",
-      });
-    }
-
-    const prediction = (await imageRes.json()) as {
-      id?: string;
-      status?: string;
-      output?: string[];
-      error?: string;
-    };
-
-    // Replicate returns immediately with status "processing"
-    // For now, return the prompt and let the client poll or use it manually
-    // A production version would implement webhook polling or scheduled checks
-
-    if (prediction.output && prediction.output.length > 0) {
-      const imageUrl = prediction.output[0];
-
-      // Upload to Vercel Blob with auto-cleanup after 30 days
-      const blobResult = await put(`blog-cover-${Date.now()}.webp`, imageUrl, {
+    const ext = imageResult.data.mimeType.split("/")[1] || "png";
+    const blobResult = await put(
+      `blog-cover-${Date.now()}.${ext}`,
+      Buffer.from(imageResult.data.base64, "base64"),
+      {
+        // Always the public store, not blobToken()/BLOB_ACCESS from blobPrivacy
+        // (SEC-003): a blog cover image is rendered on the public site for
+        // anonymous visitors, so it must stay public regardless of the
+        // NEXT_PUBLIC_PRIVATE_BLOB flag that only governs PII documents. Same
+        // pattern as blog/cover/route.ts, the manual-upload counterpart.
         access: "public",
-        // Add metadata for cleanup purposes
+        token: process.env.BLOB_PUBLIC_READ_WRITE_TOKEN,
+        contentType: imageResult.data.mimeType,
         addRandomSuffix: true,
-      });
+      },
+    );
 
-      return NextResponse.json({
-        success: true,
-        imageUrl: blobResult.url,
-        prompt,
-        description,
-        message: "Image generated and uploaded successfully.",
-      });
-    } else {
-      return NextResponse.json({
-        success: true,
-        imageUrl: null,
-        prompt,
-        description,
-        message:
-          "Image is being generated. Please check back in a moment or use the prompt with another tool.",
-      });
-    }
+    return NextResponse.json({
+      success: true,
+      imageUrl: blobResult.url,
+      prompt,
+      description,
+      message: "Image generated and uploaded successfully.",
+    });
   } catch (err) {
-    console.error("[blogGenerateImage] Error:", err);
-    // Fail gracefully - return the prompt even if image generation fails
+    console.error("[blogGenerateImage] Blob upload error:", err);
     return NextResponse.json({
       success: true,
       imageUrl: null,
       prompt,
       description,
-      message:
-        "Image prompt generated, but image generation encountered an error. Use the prompt with DALL-E or Midjourney.",
+      message: "Image was generated, but could not be uploaded. Try again in a moment.",
     });
   }
 }

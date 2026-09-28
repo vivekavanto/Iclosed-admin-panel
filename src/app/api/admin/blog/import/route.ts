@@ -1,22 +1,54 @@
 import { NextResponse } from "next/server";
 import { getActingAdmin } from "@/lib/getActingAdmin";
 import { rateLimitOk } from "@/lib/rateLimit";
-import { createPost } from "@/lib/blogPosts";
+import { createPost, listTitlesAndSlugs, slugify } from "@/lib/blogPosts";
+import { recordAudit } from "@/lib/recordAudit";
 import {
   extractBlogArticle,
   extractMultipleBlogArticles,
   MAX_IMPORT_BYTES,
+  MAX_BLOG_CHARS,
   IMPORT_LABEL,
   MAX_ARTICLES_PER_UPLOAD,
 } from "@/lib/blogImport";
 import { formatBlogHtml } from "@/lib/blogFormat";
 import { generateBlogSeo } from "@/lib/blogSeo";
 import { logger } from "@/lib/logger";
+import { readBlobDocument, BlobDocumentError } from "@/lib/blobDocument";
+import { isBlobUrl, blobTokenForUrl } from "@/lib/blobPrivacy";
+import { del } from "@vercel/blob";
+
+/**
+ * Flags a detected article as a likely re-upload: same slug as an existing
+ * post, or the same title as another article already seen earlier in THIS
+ * batch (two sections of the same document that both look like standalone
+ * posts). Non-blocking — the admin decides whether it's really a duplicate.
+ */
+function findDuplicateTitle(
+  title: string,
+  existingSlugs: Set<string>,
+  seenInBatch: Set<string>,
+): boolean {
+  const slug = slugify(title || "untitled");
+  if (existingSlugs.has(slug)) return true;
+  if (seenInBatch.has(slug)) return true;
+  seenInBatch.add(slug);
+  return false;
+}
 
 /**
  * POST /api/admin/blog/import — upload a document, get back a whole draft post.
  *
- * multipart/form-data:
+ * application/json (the browser's normal path — see MultiBlogUpload in
+ * Blogs.tsx): { blobUrl, fileName, title?, multiple?, extractOnly?, createDrafts? }
+ *   blobUrl is a Vercel Blob URL the browser already uploaded to via
+ *   /api/admin/blog/import/token, so a document up to MAX_IMPORT_BYTES (20 MB)
+ *   never has to pass through this function's ~4.5 MB body limit. The blob is
+ *   read back with readBlobDocument() and deleted once its bytes are in memory
+ *   — it is scratch storage for the import, not a document this app keeps.
+ *
+ * multipart/form-data (legacy / any caller that has the bytes in hand and is
+ * comfortable with the ~4.5 MB platform ceiling):
  *   file   the article (see IMPORT_LABEL for the accepted formats)
  *   title  optional — whatever the admin has already typed into the editor
  *
@@ -77,25 +109,69 @@ export async function POST(req: Request) {
   let importMultiple = false;
   let createDrafts = false;
   let extractOnly = false;
-  try {
-    const form = await req.formData();
-    file = form.get("file") as File | null;
-    const t = form.get("title");
-    typedTitle = typeof t === "string" ? t.trim() : "";
-    const m = form.get("multiple");
-    importMultiple = m === "true" || m === "1";
-    const c = form.get("createDrafts");
-    createDrafts = c === "true" || c === "1";
-    const eo = form.get("extractOnly");
-    extractOnly = eo === "true" || eo === "1";
-  } catch {
-    return NextResponse.json(
-      {
-        success: false,
-        error: `Could not read the upload. The file must be ${Math.floor(MAX_IMPORT_BYTES / 1024 / 1024)} MB or smaller.`,
-      },
-      { status: 400 },
-    );
+
+  const contentType = req.headers.get("content-type") || "";
+
+  if (contentType.includes("application/json")) {
+    let body: Record<string, unknown>;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json({ success: false, error: "Invalid JSON body." }, { status: 400 });
+    }
+
+    const blobUrl = typeof body.blobUrl === "string" ? body.blobUrl : null;
+    if (!blobUrl || !isBlobUrl(blobUrl)) {
+      return NextResponse.json(
+        { success: false, error: "Missing or invalid upload — the document did not reach storage." },
+        { status: 400 },
+      );
+    }
+
+    const fileName = typeof body.fileName === "string" && body.fileName.trim() ? body.fileName.trim() : "upload";
+    typedTitle = typeof body.title === "string" ? body.title.trim() : "";
+    importMultiple = body.multiple === true;
+    createDrafts = body.createDrafts === true;
+    extractOnly = body.extractOnly === true;
+
+    try {
+      const { bytes, meta } = await readBlobDocument(blobUrl, MAX_IMPORT_BYTES);
+      file = new File([new Uint8Array(bytes)], fileName, { type: meta.contentType });
+    } catch (err) {
+      const status = err instanceof BlobDocumentError ? err.status : 400;
+      const message = err instanceof Error ? err.message : "Could not read the uploaded file.";
+      return NextResponse.json({ success: false, error: message }, { status });
+    } finally {
+      // Best-effort: this blob is scratch storage for the import, not a kept
+      // document. Its bytes are already in `file` at this point, so a failed
+      // delete just leaves one orphaned blob rather than breaking the import.
+      del(blobUrl, { token: blobTokenForUrl(blobUrl) }).catch((err) => {
+        logger.warn(
+          `[blogImport] could not delete import blob: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+    }
+  } else {
+    try {
+      const form = await req.formData();
+      file = form.get("file") as File | null;
+      const t = form.get("title");
+      typedTitle = typeof t === "string" ? t.trim() : "";
+      const m = form.get("multiple");
+      importMultiple = m === "true" || m === "1";
+      const c = form.get("createDrafts");
+      createDrafts = c === "true" || c === "1";
+      const eo = form.get("extractOnly");
+      extractOnly = eo === "true" || eo === "1";
+    } catch {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Could not read the upload. The file must be ${Math.floor(MAX_IMPORT_BYTES / 1024 / 1024)} MB or smaller.`,
+        },
+        { status: 400 },
+      );
+    }
   }
 
   if (!file) {
@@ -121,6 +197,9 @@ export async function POST(req: Request) {
     // keeps the total wait down — not doing it inline, one article at a time,
     // during the extraction request.
     if (extractOnly) {
+      const existingSlugs = new Set((await listTitlesAndSlugs()).map((p) => p.slug.toLowerCase()));
+      const seenInBatch = new Set<string>();
+
       logger.info(
         `[blogImport] ${articles[0]?.kind} ${file.name} — ${articles.length} articles extracted (extractOnly)`,
       );
@@ -129,18 +208,27 @@ export async function POST(req: Request) {
         isMultiple: true,
         articleCount: articles.length,
         maxArticles: MAX_ARTICLES_PER_UPLOAD,
+        maxBlogChars: MAX_BLOG_CHARS,
         fileName: file.name,
-        articles: articles.map((a) => ({
-          title: a.title || "",
-          text: a.text,
-          html: a.preformattedHtml ?? "",
-          formatSource: a.preformattedHtml ? "manual" : ("manual" as const),
-          formatModel: null,
-          wordsPreserved: null,
-          needsProofread: a.needsProofread,
-          seo: null,
-          warnings: [...a.warnings],
-        })),
+        articles: articles.map((a) => {
+          const title = a.title || "";
+          const charCount = a.text.length;
+          const isDuplicate = findDuplicateTitle(title, existingSlugs, seenInBatch);
+          return {
+            title,
+            text: a.text,
+            html: a.preformattedHtml ?? "",
+            formatSource: a.preformattedHtml ? "manual" : ("manual" as const),
+            formatModel: null,
+            wordsPreserved: null,
+            needsProofread: a.needsProofread,
+            seo: null,
+            warnings: [...a.warnings],
+            charCount,
+            isDuplicate,
+            validationStatus: charCount > MAX_BLOG_CHARS ? "warning" : "ready",
+          };
+        }),
       });
     }
 
@@ -203,6 +291,7 @@ export async function POST(req: Request) {
 
     // Auto-create drafts if requested from the listing page
     if (createDrafts) {
+      const batchId = crypto.randomUUID();
       const createdIds: string[] = [];
 
       for (const blog of results) {
@@ -225,6 +314,7 @@ export async function POST(req: Request) {
             noindex: false,
             format_source: blog.formatSource,
             seo_source: blog.seo ? "gemini" : "manual",
+            import_batch_id: batchId,
           },
           email ?? "import-batch",
         );
@@ -237,9 +327,19 @@ export async function POST(req: Request) {
         }
       }
 
+      await recordAudit({
+        action: "blog.import_batch_create",
+        actorEmail: email,
+        resourceType: "blog_post_batch",
+        resourceId: batchId,
+        metadata: { fileName: file.name, articleCount: articles.length, createdCount: createdIds.length },
+        req,
+      });
+
       return NextResponse.json({
         success: true,
         isMultiple: true,
+        batchId,
         articleCount: articles.length,
         maxArticles: MAX_ARTICLES_PER_UPLOAD,
         fileName: file.name,

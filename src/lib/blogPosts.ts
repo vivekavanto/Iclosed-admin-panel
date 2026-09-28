@@ -89,6 +89,20 @@ export async function listAllPosts(): Promise<BlogPostRow[]> {
   return (data ?? []) as unknown as BlogPostRow[];
 }
 
+/**
+ * Every post's title + slug, for the import preview's duplicate check. A
+ * dedicated narrow select rather than reusing listAllPosts(): the import route
+ * calls this on every upload and has no use for the other two dozen columns.
+ */
+export async function listTitlesAndSlugs(): Promise<{ id: string; title: string; slug: string }[]> {
+  const { data, error } = await supabaseAdmin.from("blog_posts").select("id, title, slug");
+  if (error) {
+    logger.error("[blogPosts] listTitlesAndSlugs failed:", error.message);
+    return [];
+  }
+  return (data ?? []) as { id: string; title: string; slug: string }[];
+}
+
 export async function getPostById(id: string): Promise<BlogPostRow | null> {
   const { data, error } = await supabaseAdmin
     .from("blog_posts")

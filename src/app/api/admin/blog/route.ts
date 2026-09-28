@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getActingAdmin } from "@/lib/getActingAdmin";
 import { listAllPosts, createPost, type BlogPostWrite } from "@/lib/blogPosts";
+import { recordAudit } from "@/lib/recordAudit";
 
 /**
  * GET  /api/admin/blog — every post, any status. The Blogs list.
@@ -29,7 +30,7 @@ const WRITABLE = [
   "cover_image_url", "cover_image_alt", "author", "tags",
   "meta_title", "meta_description", "canonical_url", "og_image_url",
   "focus_keyword", "faq", "noindex", "seo_source", "format_source",
-  "formatted_at", "format_model",
+  "formatted_at", "format_model", "import_batch_id",
 ] as const;
 
 export function pickWritable(input: Record<string, unknown>): BlogPostWrite {
@@ -58,6 +59,20 @@ export async function POST(req: Request) {
   const result = await createPost(fields, email ?? "unknown");
   if (!result.ok) {
     return NextResponse.json({ success: false, error: result.error }, { status: 400 });
+  }
+
+  // Only a multi-blog import sets import_batch_id — a batch is traceable end
+  // to end by querying audit_logs for this metadata key, without adding a row
+  // per single-post creation the rest of the time.
+  if (result.row.import_batch_id) {
+    await recordAudit({
+      action: "blog.import_create",
+      actorEmail: email,
+      resourceType: "blog_post",
+      resourceId: result.row.id,
+      metadata: { batchId: result.row.import_batch_id, title: result.row.title },
+      req,
+    });
   }
 
   return NextResponse.json({ success: true, post: result.row }, { status: 201 });

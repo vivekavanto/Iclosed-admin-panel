@@ -560,7 +560,7 @@ export default function BlogEditor({ initial }: { initial: EditorPost }) {
         );
       } else {
         setNotice(
-          `Image prompt ready: "${json.prompt}"\n\n${json.message ?? "Use this prompt with DALL-E, Midjourney, or another AI image generator."}`,
+          `Image prompt ready: "${json.prompt}"\n\n${json.message ?? "The image could not be rendered. Try again in a moment."}`,
         );
       }
     } catch {

@@ -1,6 +1,6 @@
 import JSZip from "jszip";
 import { sanitizeBlogHtml, blogHtmlToText } from "./sanitizeBlogHtml.ts";
-import { callGeminiText, BLOG_FILE_LADDER } from "./blogGemini.ts";
+import { callGeminiJson, callGeminiText, geminiApiKey, BLOG_FILE_LADDER, BLOG_MODEL_LADDER } from "./blogGemini.ts";
 import { logger } from "./logger.ts";
 
 /**
@@ -27,12 +27,19 @@ import { logger } from "./logger.ts";
  * that comes back flagged `needsProofread` — see transcribePdf() below.
  */
 
-/** Matches the drawer's document cap; an article is text, not a scan bundle. */
-export const MAX_IMPORT_BYTES = 10 * 1024 * 1024; // 10 MB
+/** The container file — a multi-article upload can be a genuinely large document. */
+export const MAX_IMPORT_BYTES = 20 * 1024 * 1024; // 20 MB
 
-/** What blogFormat/blogSeo accept. Checked here so the error names the file.
- * Increased to 300K to support batch imports of multiple blog articles. */
-const MAX_EXTRACTED_CHARS = 300_000;
+/**
+ * The per-post character ceiling. One blog post is one blog post whether it
+ * arrived as a single-file upload (extractBlogArticle — REJECTED past this,
+ * same as before batch import existed) or as one section of a multi-article
+ * document (extractMultipleBlogArticles — FLAGGED past this, never rejected
+ * or truncated, because a legal disclosure getting cut off is worse than a
+ * long draft). The multi-article path has NO cap on the combined length of
+ * all articles together — only on each one individually.
+ */
+export const MAX_BLOG_CHARS = 60_000;
 
 export type ImportKind = "text" | "markdown" | "html" | "docx" | "pdf";
 
@@ -388,56 +395,202 @@ function normaliseBlankLines(s: string): string {
 // ── Multiple article extraction ────────────────────────────────────────
 
 /**
- * Splits a document into multiple articles based on common separators.
- * Detects and splits on:
- * - Markdown horizontal rules (---)
- * - Multiple H1/H2 headers (##)
- * Returns up to MAX_ARTICLES_PER_UPLOAD articles.
+ * Headings that mark a SECTION of one article, never the start of a new one.
+ * Both the AI boundary detector's prompt and the deterministic fallback below
+ * are built around this same list, so an "AI offline" fallback degrades
+ * gracefully rather than suddenly shredding every FAQ into its own post.
  */
-function splitMultipleArticles(text: string): string[] {
-  let sections: string[] = [];
+const INTERNAL_SUBHEADING = /^(?:#{1,3}\s+)?(?:\d+\.\s+|introduction\b|key\s+takeaways\b|conclusion\b|faq\b|frequently\s+asked\s+questions\b|what\s+you\s+need\s+to\s+know\b|summary\b)/i;
 
-  // Try to detect horizontal rule separator (---)
-  if (text.includes("\n---\n")) {
-    sections = text.split("\n---\n").map((s) => normaliseBlankLines(s)).filter((s) => s.length > 0);
-  } else {
-    // Try to split on H1/H2 markdown headers
-    const lines = text.split("\n");
-    let currentSection = "";
-    let headerCount = 0;
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      if (/^#{1,2}\s+\S/.test(line)) {
-        if (currentSection.trim()) {
-          sections.push(currentSection);
-        }
-        currentSection = line;
-        headerCount++;
-      } else {
-        currentSection += (currentSection ? "\n" : "") + line;
-      }
-    }
-
-    if (currentSection.trim()) {
-      sections.push(currentSection);
-    }
-
-    // If we found multiple headers, use this split; otherwise treat as single article
-    if (headerCount <= 1) {
-      sections = [normaliseBlankLines(text)];
-    } else {
-      sections = sections.map((s) => normaliseBlankLines(s)).filter((s) => s.length > 0);
-    }
+/**
+ * Deterministic delimiter-based split, used when Gemini is unreachable, has no
+ * API key configured, or returned nothing this text's own words support.
+ *
+ * Order matters: an explicit "N articles" delimiter is unambiguous and tried
+ * first; a heading-based split is the last resort because headings are also
+ * how ONE article organizes its own sections.
+ */
+function splitMultipleArticlesFallback(text: string): string[] {
+  // 1. Explicit horizontal-rule delimiters.
+  if (/\n(?:---|===)\n/.test(text)) {
+    return text
+      .split(/\n(?:---|===)\n/)
+      .map((s) => normaliseBlankLines(s))
+      .filter((s) => s.length > 0)
+      .slice(0, MAX_ARTICLES_PER_UPLOAD);
   }
 
-  // Cap at MAX_ARTICLES_PER_UPLOAD
-  return sections.slice(0, MAX_ARTICLES_PER_UPLOAD);
+  // 2. "Blog 1:", "Article 2.", "Post 3:" style delimiters.
+  if (/(?:^|\n)(?:Blog|Article|Post)\s+\d+[:.]/i.test(text)) {
+    const parts = text.split(/(?=(?:^|\n)(?:Blog|Article|Post)\s+\d+[:.])/i)
+      .map((s) => normaliseBlankLines(s))
+      .filter((s) => s.length > 0);
+    if (parts.length > 1) return parts.slice(0, MAX_ARTICLES_PER_UPLOAD);
+  }
+
+  // 3. Top-level headers, excluding ones that are clearly an internal section
+  // of a single article (Introduction, numbered lists, FAQ, Conclusion, …).
+  const lines = text.split("\n");
+  const sections: string[] = [];
+  let current = "";
+  let headerCount = 0;
+
+  for (const line of lines) {
+    const isHeader = /^#{1,2}\s+\S/.test(line);
+    if (isHeader && !INTERNAL_SUBHEADING.test(line.trim())) {
+      if (current.trim()) sections.push(current);
+      current = line;
+      headerCount++;
+    } else {
+      current += (current ? "\n" : "") + line;
+    }
+  }
+  if (current.trim()) sections.push(current);
+
+  if (headerCount <= 1) {
+    return [normaliseBlankLines(text)];
+  }
+  return sections
+    .map((s) => normaliseBlankLines(s))
+    .filter((s) => s.length > 0)
+    .slice(0, MAX_ARTICLES_PER_UPLOAD);
+}
+
+type BoundaryMarker = { title: string; startSnippet: string; suggestedTags: string[] };
+
+const BOUNDARY_PROMPT = (text: string) => `You are an expert editorial assistant. Analyze the document below, which may contain ONE or MULTIPLE separate blog posts/articles.
+Your job is to identify each complete, standalone blog article and detect its boundaries.
+
+CRITICAL RULES:
+1. SUBHEADINGS VS. SEPARATE ARTICLES:
+   - Internal sections (e.g. "Introduction", "1. Land Transfer Tax", "Key Takeaways", "Conclusion", "FAQ") are INTERNAL SUBHEADINGS of ONE article, NOT separate articles! Do NOT split them.
+   - Only identify a NEW article when a completely new standalone blog post begins with its own distinct headline.
+2. PRESERVE THE AUTHOR'S WORDS: to identify a boundary, return the exact starting text snippet of each article — copied character for character from the document, 40 to 80 characters long. Never paraphrase the snippet.
+3. For each detected article, return:
+   - "title": clean title/headline of the article
+   - "startSnippet": the exact first 40 to 80 characters of where this article begins in the document
+   - "suggestedTags": 2 to 4 relevant tags
+4. Max articles to detect: ${MAX_ARTICLES_PER_UPLOAD}.
+5. If the document is really just one article, return an array with exactly one item, whose startSnippet is the document's own opening words.
+
+Return JSON of exactly this shape, and nothing else:
+[
+  { "title": "Article Title", "startSnippet": "First 40-80 verbatim characters...", "suggestedTags": ["Tag1", "Tag2"] }
+]
+
+--- DOCUMENT BEGINS ---
+${text}
+--- DOCUMENT ENDS ---`;
+
+function parseBoundaryJson(raw: string): BoundaryMarker[] {
+  const parsed = JSON.parse(raw) as unknown;
+  if (!Array.isArray(parsed)) throw new Error("Model did not return an array.");
+  return parsed
+    .map((item) => {
+      const o = (item ?? {}) as Record<string, unknown>;
+      return {
+        title: typeof o.title === "string" ? o.title.trim() : "",
+        startSnippet: typeof o.startSnippet === "string" ? o.startSnippet : "",
+        suggestedTags: Array.isArray(o.suggestedTags)
+          ? o.suggestedTags.filter((t): t is string => typeof t === "string").slice(0, 4)
+          : [],
+      };
+    })
+    .filter((m) => m.startSnippet.trim().length > 0);
+}
+
+/**
+ * Asks Gemini where each standalone article starts. Returns null (never
+ * throws) on any failure — missing key, every rung down, or an answer with no
+ * usable snippets — so the caller can fall back to the deterministic splitter
+ * without the whole import failing over an AI boundary call.
+ */
+async function aiSeparateArticles(text: string): Promise<BoundaryMarker[] | null> {
+  if (!geminiApiKey()) return null;
+  if (text.length < 200) return null;
+
+  const result = await callGeminiJson<BoundaryMarker[]>({
+    prompt: BOUNDARY_PROMPT(text),
+    parse: parseBoundaryJson,
+    label: "blogImportBoundaries",
+    ladder: BLOG_MODEL_LADDER,
+    maxOutputTokens: 4000,
+  });
+
+  if (!result.ok || result.data.length === 0) return null;
+  return result.data.slice(0, MAX_ARTICLES_PER_UPLOAD);
+}
+
+/**
+ * Locates each marker's snippet in the document, verbatim (`indexOf`, no
+ * fuzzy matching — a snippet that cannot be found exactly is dropped rather
+ * than guessed at, since a wrong guess would misplace a whole article's worth
+ * of text). Sorted by where they actually land, deduplicated, and the first
+ * match is pulled back to index 0 so nothing before it is silently dropped.
+ */
+function locateMarkers(
+  text: string,
+  markers: BoundaryMarker[],
+): { index: number; marker: BoundaryMarker }[] {
+  const found: { index: number; marker: BoundaryMarker }[] = [];
+  const usedIndexes = new Set<number>();
+
+  for (const marker of markers) {
+    const snippet = marker.startSnippet.trim();
+    if (!snippet) continue;
+    const idx = text.indexOf(snippet);
+    if (idx === -1 || usedIndexes.has(idx)) continue;
+    usedIndexes.add(idx);
+    found.push({ index: idx, marker });
+  }
+
+  found.sort((a, b) => a.index - b.index);
+  if (found.length > 0) found[0] = { ...found[0], index: 0 };
+  return found;
+}
+
+function sliceByMarkers(
+  text: string,
+  found: { index: number; marker: BoundaryMarker }[],
+): { text: string; title: string | null }[] {
+  const out: { text: string; title: string | null }[] = [];
+  for (let i = 0; i < found.length; i++) {
+    const start = found[i].index;
+    const end = i + 1 < found.length ? found[i + 1].index : text.length;
+    const chunk = normaliseBlankLines(text.slice(start, end));
+    if (chunk) out.push({ text: chunk, title: found[i].marker.title || null });
+  }
+  return out;
+}
+
+/** A title sniffed from an article's own opening lines, when nothing else supplied one. */
+function sniffTitle(articleText: string): string | null {
+  const lines = articleText.split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (trimmed.startsWith("# ")) return trimmed.slice(2).trim();
+    if (trimmed.startsWith("## ")) return trimmed.slice(3).trim();
+    if (trimmed.startsWith("### ")) return trimmed.slice(4).trim();
+    if (!trimmed.startsWith("#")) {
+      if (trimmed.length < 100 && !/^(the|a|an|and|or|but|in|on|at)\s/i.test(trimmed)) {
+        return trimmed.length > 80 ? `${trimmed.slice(0, 77)}...` : trimmed;
+      }
+    }
+    break;
+  }
+  return null;
 }
 
 // ── Entry point ────────────────────────────────────────────────────────
 
-export async function extractBlogArticle(file: File): Promise<ExtractOutcome> {
+/**
+ * File-level validation plus kind-based extraction, with NO total-character
+ * cap. Shared by both entry points below; each applies its own cap on top —
+ * the single-article path's MAX_EXTRACTED_CHARS, the multi-article path's
+ * per-article MAX_BLOG_CHARS (a warning, not a rejection).
+ */
+async function extractRaw(file: File): Promise<ExtractOutcome> {
   if (!file || typeof file.size !== "number") {
     return { ok: false, error: "No file provided." };
   }
@@ -473,14 +626,22 @@ export async function extractBlogArticle(file: File): Promise<ExtractOutcome> {
 
   if (!outcome.ok) return outcome;
 
-  const { text } = outcome.data;
-  if (text.trim().length === 0) {
+  if (outcome.data.text.trim().length === 0) {
     return { ok: false, error: `No article text could be read out of ${file.name}.` };
   }
-  if (text.length > MAX_EXTRACTED_CHARS) {
+
+  return outcome;
+}
+
+export async function extractBlogArticle(file: File): Promise<ExtractOutcome> {
+  const outcome = await extractRaw(file);
+  if (!outcome.ok) return outcome;
+
+  const { text } = outcome.data;
+  if (text.length > MAX_BLOG_CHARS) {
     return {
       ok: false,
-      error: `${file.name} came to ${text.length.toLocaleString()} characters; the limit is ${MAX_EXTRACTED_CHARS.toLocaleString()}. Split it into shorter posts.`,
+      error: `${file.name} came to ${text.length.toLocaleString()} characters; the limit is ${MAX_BLOG_CHARS.toLocaleString()}. Split it into shorter posts.`,
     };
   }
 
@@ -491,75 +652,68 @@ export async function extractBlogArticle(file: File): Promise<ExtractOutcome> {
 
 /**
  * Extracts multiple blog articles from a single file.
- * Splits on common delimiters (--- or ## headers) and extracts up to 10 articles.
+ *
+ * Boundary detection tries Gemini first (aiSeparateArticles — understands that
+ * "FAQ" or "1. Land Transfer Tax" are sections of one post, not new posts) and
+ * falls back to the deterministic delimiter/heading splitter when Gemini is
+ * unreachable, unconfigured, or its snippets don't verbatim-match the text.
+ *
+ * No total-container character cap: a document can legitimately hold up to
+ * MAX_ARTICLES_PER_UPLOAD articles whose combined length runs well past any
+ * single article's own limit. Each article gets its own MAX_BLOG_CHARS check
+ * below, which WARNS rather than truncates or rejects.
  */
 export async function extractMultipleBlogArticles(file: File): Promise<MultipleExtractOutcome> {
-  // First, extract the full document as usual
-  const singleExtraction = await extractBlogArticle(file);
-  if (!singleExtraction.ok) {
-    return singleExtraction;
+  // Preformatted HTML already carries its own structure; splitting it the same
+  // way as plain text would mean regexing markup, which is how a table gets
+  // shredded. Treat an HTML upload as exactly one article, as the single-file
+  // path already does.
+  if (importKindFor(file.name) === "html") {
+    const singleExtraction = await extractBlogArticle(file);
+    if (!singleExtraction.ok) return singleExtraction;
+    return { ok: true, data: [singleExtraction.data] };
   }
 
-  const { text } = singleExtraction.data;
-  const articles = splitMultipleArticles(text);
+  const extraction = await extractRaw(file);
+  if (!extraction.ok) return extraction;
 
-  if (articles.length === 0) {
+  const { text, kind, needsProofread, warnings: fileWarnings } = extraction.data;
+
+  let sections: { text: string; title: string | null }[] = [];
+
+  const aiMarkers = await aiSeparateArticles(text);
+  if (aiMarkers) {
+    const located = locateMarkers(text, aiMarkers);
+    if (located.length > 0) {
+      sections = sliceByMarkers(text, located);
+    }
+  }
+
+  if (sections.length === 0) {
+    sections = splitMultipleArticlesFallback(text).map((s) => ({ text: s, title: null }));
+  }
+
+  sections = sections.filter((s) => s.text.trim().length > 0).slice(0, MAX_ARTICLES_PER_UPLOAD);
+  if (sections.length === 0) {
     return { ok: false, error: "No article text found in the document." };
   }
 
-  const results: ExtractedArticle[] = [];
-  for (const articleText of articles) {
-    if (articleText.trim().length === 0) continue;
-
-    if (articleText.length > MAX_EXTRACTED_CHARS) {
-      // Log warning but continue with other articles
-      logger.warn(
-        `[blogImport] article skipped: ${articleText.length.toLocaleString()} chars exceeds limit`,
+  const results: ExtractedArticle[] = sections.map(({ text: articleText, title }) => {
+    const warnings = [...fileWarnings];
+    if (articleText.length > MAX_BLOG_CHARS) {
+      warnings.push(
+        `This article is ${articleText.length.toLocaleString()} characters, above the ${MAX_BLOG_CHARS.toLocaleString()}-character guideline. Nothing was cut — review it before publishing.`,
       );
-      continue;
     }
-
-    // Extract title from markdown headers or first meaningful line
-    let title: string | null = null;
-    const lines = articleText.split("\n");
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-
-      // Check for markdown headers (# or ##)
-      if (trimmed.startsWith("# ")) {
-        title = trimmed.slice(2).trim();
-        break;
-      } else if (trimmed.startsWith("## ")) {
-        title = trimmed.slice(3).trim();
-        break;
-      } else if (trimmed.startsWith("### ")) {
-        title = trimmed.slice(4).trim();
-        break;
-      } else if (!trimmed.startsWith("#")) {
-        // Use first non-heading line as fallback title if it's short enough
-        // and doesn't look like regular paragraph text
-        if (trimmed.length < 100 && !trimmed.match(/^(the|a|an|and|or|but|in|on|at)\s/i)) {
-          title = trimmed.length > 80 ? trimmed.slice(0, 77) + "..." : trimmed;
-          break;
-        }
-      }
-    }
-
-    results.push({
+    return {
       text: articleText,
-      title: title || null,
+      title: title ?? sniffTitle(articleText),
       preformattedHtml: null,
-      kind: singleExtraction.data.kind,
-      warnings: [],
-      needsProofread: singleExtraction.data.needsProofread,
-    });
-  }
-
-  if (results.length === 0) {
-    return { ok: false, error: "No valid articles could be extracted from the document." };
-  }
+      kind,
+      warnings,
+      needsProofread,
+    };
+  });
 
   return { ok: true, data: results };
 }

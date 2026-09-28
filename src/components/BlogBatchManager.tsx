@@ -18,7 +18,24 @@ export type ManagedBlog = {
   /** Set by the last formatting attempt, so a retry knows which half failed. */
   formatFailed?: boolean;
   seoFailed?: boolean;
+  /** From the import route: this article's own character count. */
+  charCount?: number;
+  /** Its title/slug matched an existing post, or another article in this batch. */
+  isDuplicate?: boolean;
+  /** "warning" = over the per-article character guideline. Never truncated. */
+  validationStatus?: "ready" | "warning";
+  /** Generated cover image, same field POST /api/admin/blog writes to cover_image_url. */
+  coverImageUrl?: string;
+  coverImageAlt?: string;
+  isGeneratingImage?: boolean;
+  /** Set by the last image attempt. Never blocks Save/Publish — a cover image is optional. */
+  imageFailed?: boolean;
 };
+
+/** An article that should be kept as a draft rather than auto-published. */
+export function needsReview(blog: ManagedBlog): boolean {
+  return blog.validationStatus === "warning" || Boolean(blog.isDuplicate);
+}
 
 interface BlogBatchManagerProps {
   blogs: ManagedBlog[];
@@ -37,6 +54,20 @@ function needsFormatting(blog: ManagedBlog): boolean {
 
 function needsSeo(blog: ManagedBlog): boolean {
   return !blog.seo;
+}
+
+/**
+ * Same 200-character floor BlogEditor's own "Generate image" button enforces
+ * client-side — below that there usually isn't enough content for a sensible
+ * prompt, so this is treated as "not applicable" rather than a failure: no
+ * warning, no retry offered, and it never blocks Save/Publish.
+ */
+function needsImage(blog: ManagedBlog): boolean {
+  // Not gated on imageFailed: an earlier failure doesn't set coverImageUrl
+  // either, so this stays true until an attempt actually succeeds — same
+  // shape as needsFormatting/needsSeo, and what lets "Format All" or the
+  // dedicated Retry button pick a failed image back up.
+  return blog.title.trim().length > 0 && blog.text.trim().length >= 200 && !blog.coverImageUrl;
 }
 
 /**
@@ -107,73 +138,131 @@ export default function BlogBatchManager({
     commit: (updater: (prev: ManagedBlog[]) => ManagedBlog[]) => void,
   ) => {
     const blog = current[index];
-    commit((prev) => prev.map((b, i) => (i === index ? { ...b, isFormatting: true } : b)));
+    const wantsImage = needsImage(blog);
+    commit((prev) =>
+      prev.map((b, i) =>
+        i === index ? { ...b, isFormatting: true, isGeneratingImage: wantsImage } : b,
+      ),
+    );
 
-    let html = blog.html;
-    let formatSource = blog.formatSource;
-    let formatModel = blog.formatModel;
-    let wordsPreserved = blog.wordsPreserved;
-    const notes = [...blog.warnings];
-    let formatFailed = false;
-    let seoFailed = false;
+    // Format+SEO and the cover image are independent of each other — the image
+    // prompt is built from the article's own title/text, not from the
+    // formatted HTML — so they run concurrently rather than one after another.
+    // That halves the wait per article instead of stacking three ladders.
+    const formatAndSeo = (async () => {
+      let html = blog.html;
+      let formatSource = blog.formatSource;
+      let formatModel = blog.formatModel;
+      let wordsPreserved = blog.wordsPreserved;
+      const notes = [...blog.warnings];
+      let formatFailed = false;
+      let seoFailed = false;
 
-    if (needsFormatting(blog)) {
-      try {
-        const json = await withRetry(async () => {
-          const res = await fetch("/api/admin/blog/format", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ body: blog.text, title: blog.title }),
+      if (needsFormatting(blog)) {
+        try {
+          const json = await withRetry(async () => {
+            const res = await fetch("/api/admin/blog/format", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ body: blog.text, title: blog.title }),
+            });
+            const body = await res.json();
+            if (!res.ok || !body.success) throw new Error(body.error ?? "Formatting failed");
+            return body;
           });
-          const body = await res.json();
-          if (!res.ok || !body.success) throw new Error(body.error ?? "Formatting failed");
-          return body;
-        });
-        html = json.html;
-        formatSource = "gemini";
-        formatModel = json.model;
-        wordsPreserved = json.wordsPreserved;
-        notes.push(...(json.warnings ?? []));
-      } catch (err) {
-        formatFailed = true;
-        notes.push(err instanceof Error ? err.message : "Formatting failed");
+          html = json.html;
+          formatSource = "gemini";
+          formatModel = json.model;
+          wordsPreserved = json.wordsPreserved;
+          notes.push(...(json.warnings ?? []));
+        } catch (err) {
+          formatFailed = true;
+          notes.push(err instanceof Error ? err.message : "Formatting failed");
+        }
       }
-    }
 
-    let seo: Record<string, unknown> | null = blog.seo ?? null;
-    if (needsSeo(blog)) {
-      try {
-        const seoJson = await withRetry(async () => {
-          const seoRes = await fetch("/api/admin/blog/seo", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ body: html || blog.text, title: blog.title }),
+      let seo: Record<string, unknown> | null = blog.seo ?? null;
+      if (needsSeo(blog)) {
+        try {
+          const seoJson = await withRetry(async () => {
+            const seoRes = await fetch("/api/admin/blog/seo", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ body: html || blog.text, title: blog.title }),
+            });
+            const body = await seoRes.json();
+            if (!seoRes.ok || !body.success) throw new Error(body.error ?? "Could not draft search metadata");
+            return body;
           });
-          const body = await seoRes.json();
-          if (!seoRes.ok || !body.success) throw new Error(body.error ?? "Could not draft search metadata");
-          return body;
-        });
-        seo = seoJson.seo;
-      } catch (err) {
-        seoFailed = true;
-        notes.push(err instanceof Error ? err.message : "Could not draft search metadata");
+          seo = seoJson.seo;
+        } catch (err) {
+          seoFailed = true;
+          notes.push(err instanceof Error ? err.message : "Could not draft search metadata");
+        }
       }
-    }
+
+      return { html, formatSource, formatModel, wordsPreserved, notes, seo, formatFailed, seoFailed };
+    })();
+
+    const image = wantsImage
+      ? (async () => {
+          try {
+            const json = await withRetry(async () => {
+              const res = await fetch("/api/admin/blog/generate-image", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ title: blog.title, body: blog.text }),
+              });
+              const body = await res.json();
+              if (!res.ok || !body.success) throw new Error(body.error ?? "Image generation failed");
+              return body;
+            });
+            // success:true with imageUrl:null is the route's "rendered but
+            // could not be uploaded" case — a real failure, just one that
+            // didn't throw, so it needs the same treatment as the catch below.
+            return json.imageUrl
+              ? { coverImageUrl: json.imageUrl as string, imageFailed: false, imageNote: null as string | null }
+              : {
+                  coverImageUrl: undefined,
+                  imageFailed: true,
+                  imageNote: (json.message as string | undefined) ?? "Cover image could not be generated.",
+                };
+          } catch (err) {
+            return {
+              coverImageUrl: undefined,
+              imageFailed: true,
+              imageNote: err instanceof Error ? err.message : "Cover image could not be generated.",
+            };
+          }
+        })()
+      : Promise.resolve({
+          coverImageUrl: blog.coverImageUrl,
+          imageFailed: blog.imageFailed,
+          imageNote: null as string | null,
+        });
+
+    const [formatSeoResult, imageResult] = await Promise.all([formatAndSeo, image]);
+    const warnings = imageResult.imageNote
+      ? [...formatSeoResult.notes, imageResult.imageNote]
+      : formatSeoResult.notes;
 
     commit((prev) =>
       prev.map((b, i) =>
         i === index
           ? {
               ...b,
-              html,
-              formatSource,
-              formatModel,
-              wordsPreserved,
-              warnings: notes,
-              seo,
+              html: formatSeoResult.html,
+              formatSource: formatSeoResult.formatSource,
+              formatModel: formatSeoResult.formatModel,
+              wordsPreserved: formatSeoResult.wordsPreserved,
+              warnings,
+              seo: formatSeoResult.seo,
               isFormatting: false,
-              formatFailed,
-              seoFailed,
+              formatFailed: formatSeoResult.formatFailed,
+              seoFailed: formatSeoResult.seoFailed,
+              coverImageUrl: imageResult.coverImageUrl,
+              isGeneratingImage: false,
+              imageFailed: imageResult.imageFailed,
             }
           : b,
       ),
@@ -213,7 +302,7 @@ export default function BlogBatchManager({
   const handleFormatAll = async () => {
     const targets = blogs
       .map((b, i) => ({ b, i }))
-      .filter(({ b }) => needsFormatting(b) || needsSeo(b))
+      .filter(({ b }) => needsFormatting(b) || needsSeo(b) || needsImage(b))
       .map(({ i }) => i);
     await runFormatBatch(targets);
   };
@@ -221,14 +310,15 @@ export default function BlogBatchManager({
   const handleRetryFailed = async () => {
     const targets = blogs
       .map((b, i) => ({ b, i }))
-      .filter(({ b }) => b.formatFailed || b.seoFailed)
+      .filter(({ b }) => b.formatFailed || b.seoFailed || b.imageFailed)
       .map(({ i }) => i);
     await runFormatBatch(targets);
   };
 
   const pendingCount = blogs.filter((b) => needsFormatting(b) || needsSeo(b)).length;
-  const failedCount = blogs.filter((b) => b.formatFailed || b.seoFailed).length;
+  const failedCount = blogs.filter((b) => b.formatFailed || b.seoFailed || b.imageFailed).length;
   const readyCount = blogs.length - pendingCount;
+  const reviewCount = blogs.filter(needsReview).length;
 
   return (
     <div className="space-y-3">
@@ -245,14 +335,14 @@ export default function BlogBatchManager({
           <p className="text-xs text-blue-700">
             {pendingCount === 0
               ? "Every blog is formatted with SEO metadata. Review below, then save or publish them all."
-              : `Click "Format All with AI" to structure and generate SEO metadata for all ${blogs.length} at once — ${FORMAT_CONCURRENCY} at a time, so metadata doesn't silently drop.`}
+              : `Click "Format All with AI" to structure, generate SEO metadata, and render a cover image for all ${blogs.length} at once — ${FORMAT_CONCURRENCY} at a time, so nothing silently drops.`}
           </p>
         </div>
 
         {!isFormattingAll && failedCount > 0 && (
           <div className="flex items-center justify-between gap-3 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2">
             <span className="text-xs font-medium text-amber-800">
-              {failedCount} blog{failedCount !== 1 ? "s" : ""} could not be formatted or given SEO metadata.
+              {failedCount} blog{failedCount !== 1 ? "s" : ""} had formatting, SEO, or the cover image fail.
             </span>
             <button
               onClick={handleRetryFailed}
@@ -297,20 +387,51 @@ export default function BlogBatchManager({
                 <div className="flex-shrink-0 w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-sm font-semibold text-slate-700">
                   {index + 1}
                 </div>
+                {(blog.coverImageUrl || blog.isGeneratingImage) && (
+                  <div className="flex-shrink-0 w-8 h-8 rounded-lg overflow-hidden border border-slate-200 bg-slate-100 flex items-center justify-center">
+                    {blog.coverImageUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={blog.coverImageUrl} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      <Loader2 size={13} className="animate-spin text-slate-400" />
+                    )}
+                  </div>
+                )}
                 <div className="flex-1 min-w-0">
                   <h3 className="font-semibold text-slate-900 truncate text-sm">
                     {blog.title || `Blog ${index + 1}`}
                   </h3>
-                  <p className="text-xs text-slate-500">
-                    {Math.round(blog.text.length / 100) * 100} characters
+                  <p className="text-xs text-slate-500 flex flex-wrap items-center gap-x-2">
+                    <span>{(blog.charCount ?? blog.text.length).toLocaleString()} characters</span>
+                    {blog.validationStatus === "warning" ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-700">
+                        Warning
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-green-700">
+                        Ready
+                      </span>
+                    )}
+                    {blog.isDuplicate && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-red-700">
+                        Possible duplicate
+                      </span>
+                    )}
                     {blog.isFormatting ? (
-                      <span className="ml-2 inline-flex items-center gap-1 text-slate-500">
+                      <span className="inline-flex items-center gap-1 text-slate-500">
                         <Loader2 size={11} className="animate-spin" /> Formatting…
                       </span>
                     ) : !needsFormatting(blog) && !needsSeo(blog) ? (
-                      <span className="ml-2 inline-flex items-center gap-1">
+                      <span className="inline-flex items-center gap-1">
                         ✓ <span className="text-green-600">Formatted</span>
                       </span>
+                    ) : null}
+                    {blog.isGeneratingImage ? (
+                      <span className="inline-flex items-center gap-1 text-slate-500">
+                        <Loader2 size={11} className="animate-spin" /> Generating image…
+                      </span>
+                    ) : blog.imageFailed ? (
+                      <span className="text-amber-600">Image failed</span>
                     ) : null}
                   </p>
                 </div>
@@ -327,6 +448,18 @@ export default function BlogBatchManager({
             {/* Expanded Content */}
             {expandedIndex === index && (
               <div className="border-t border-slate-200 px-4 py-3 space-y-3 bg-slate-50">
+                {blog.isDuplicate && (
+                  <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-800">
+                    This title or slug matches an existing post — or another article in this upload.
+                    It will still be saved as a draft for you to check, but will not be auto-published.
+                  </div>
+                )}
+                {blog.validationStatus === "warning" && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800">
+                    This article is longer than the 60,000-character guideline. Nothing was cut — it
+                    will be saved as a draft for manual review instead of being auto-published.
+                  </div>
+                )}
                 {/* Preview */}
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-2">
@@ -339,6 +472,32 @@ export default function BlogBatchManager({
                     </p>
                   </div>
                 </div>
+
+                {/* Cover Image */}
+                {(blog.coverImageUrl || blog.isGeneratingImage || blog.imageFailed) && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-2">
+                      Cover Image
+                    </label>
+                    {blog.coverImageUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={blog.coverImageUrl}
+                        alt=""
+                        className="w-full max-h-48 object-cover rounded-lg border border-slate-200"
+                      />
+                    ) : blog.isGeneratingImage ? (
+                      <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-500">
+                        <Loader2 size={13} className="animate-spin" /> Generating a cover image…
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-700">
+                        <AlertTriangle size={13} /> Could not generate a cover image. Retry, or add one
+                        manually after saving.
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Formatted HTML Preview (if formatted) */}
                 {blog.html.trim().length > 0 && (
@@ -429,6 +588,12 @@ export default function BlogBatchManager({
           disabled until every blog is ready. You can still save what&apos;s ready as drafts.
         </p>
       )}
+      {reviewCount > 0 && (
+        <p className="text-center text-xs text-amber-700">
+          {reviewCount} blog{reviewCount !== 1 ? "s" : ""} flagged (oversized or a possible duplicate) —
+          {reviewCount !== 1 ? " they" : " it"} will be saved as a draft for review instead of published.
+        </p>
+      )}
       <div className="flex flex-col sm:flex-row gap-2">
         <button
           onClick={() => onCreateAll(false)}
@@ -446,15 +611,29 @@ export default function BlogBatchManager({
         </button>
         <button
           onClick={() => onCreateAll(true)}
-          disabled={isCreating || isFormattingAll || pendingCount > 0 || blogs.some((b) => b.isFormatting)}
-          title={pendingCount > 0 ? "Format every blog first — publishing needs its SEO metadata." : undefined}
+          disabled={
+            isCreating ||
+            isFormattingAll ||
+            pendingCount > 0 ||
+            reviewCount === blogs.length ||
+            blogs.some((b) => b.isFormatting)
+          }
+          title={
+            pendingCount > 0
+              ? "Format every blog first — publishing needs its SEO metadata."
+              : reviewCount === blogs.length
+                ? "Every blog is flagged for review — save as drafts instead."
+                : undefined
+          }
           className="flex-1 rounded-xl bg-brand-primary px-5 py-3 text-sm font-medium text-white transition hover:bg-brand-primaryHover disabled:opacity-50"
         >
           {isCreating && creatingMode === "publish" ? (
             <>
               <Loader2 size={16} className="mr-2 inline-block animate-spin" />
-              Publishing {blogs.length} Blog{blogs.length !== 1 ? "s" : ""}…
+              Publishing {blogs.length - reviewCount} Blog{blogs.length - reviewCount !== 1 ? "s" : ""}…
             </>
+          ) : reviewCount > 0 ? (
+            `✓ Publish ${blogs.length - reviewCount} Ready (${reviewCount} kept as draft)`
           ) : (
             `✓ Publish All ${blogs.length} Blog${blogs.length !== 1 ? "s" : ""}`
           )}
