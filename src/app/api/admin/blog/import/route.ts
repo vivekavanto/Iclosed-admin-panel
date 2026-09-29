@@ -9,7 +9,6 @@ import {
   MAX_IMPORT_BYTES,
   MAX_BLOG_CHARS,
   IMPORT_LABEL,
-  MAX_ARTICLES_PER_UPLOAD,
 } from "@/lib/blogImport";
 import { formatBlogHtml } from "@/lib/blogFormat";
 import { generateBlogSeo } from "@/lib/blogSeo";
@@ -207,7 +206,6 @@ export async function POST(req: Request) {
         success: true,
         isMultiple: true,
         articleCount: articles.length,
-        maxArticles: MAX_ARTICLES_PER_UPLOAD,
         maxBlogChars: MAX_BLOG_CHARS,
         fileName: file.name,
         articles: articles.map((a) => {
@@ -341,7 +339,6 @@ export async function POST(req: Request) {
         isMultiple: true,
         batchId,
         articleCount: articles.length,
-        maxArticles: MAX_ARTICLES_PER_UPLOAD,
         fileName: file.name,
         articlesCreated: createdIds.length,
         articles: results,
@@ -353,7 +350,6 @@ export async function POST(req: Request) {
       success: true,
       isMultiple: true,
       articleCount: articles.length,
-      maxArticles: MAX_ARTICLES_PER_UPLOAD,
       fileName: file.name,
       articles: results,
     });

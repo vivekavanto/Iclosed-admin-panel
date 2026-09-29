@@ -68,8 +68,6 @@ export type MultipleExtractOutcome =
   | { ok: true; data: ExtractedArticle[] }
   | { ok: false; error: string };
 
-export const MAX_ARTICLES_PER_UPLOAD = 10;
-
 const KIND_BY_EXT: Record<string, ImportKind> = {
   txt: "text",
   text: "text",
@@ -416,8 +414,7 @@ function splitMultipleArticlesFallback(text: string): string[] {
     return text
       .split(/\n(?:---|===)\n/)
       .map((s) => normaliseBlankLines(s))
-      .filter((s) => s.length > 0)
-      .slice(0, MAX_ARTICLES_PER_UPLOAD);
+      .filter((s) => s.length > 0);
   }
 
   // 2. "Blog 1:", "Article 2.", "Post 3:" style delimiters.
@@ -425,7 +422,7 @@ function splitMultipleArticlesFallback(text: string): string[] {
     const parts = text.split(/(?=(?:^|\n)(?:Blog|Article|Post)\s+\d+[:.])/i)
       .map((s) => normaliseBlankLines(s))
       .filter((s) => s.length > 0);
-    if (parts.length > 1) return parts.slice(0, MAX_ARTICLES_PER_UPLOAD);
+    if (parts.length > 1) return parts;
   }
 
   // 3. Top-level headers, excluding ones that are clearly an internal section
@@ -452,8 +449,7 @@ function splitMultipleArticlesFallback(text: string): string[] {
   }
   return sections
     .map((s) => normaliseBlankLines(s))
-    .filter((s) => s.length > 0)
-    .slice(0, MAX_ARTICLES_PER_UPLOAD);
+    .filter((s) => s.length > 0);
 }
 
 type BoundaryMarker = { title: string; startSnippet: string; suggestedTags: string[] };
@@ -470,8 +466,7 @@ CRITICAL RULES:
    - "title": clean title/headline of the article
    - "startSnippet": the exact first 40 to 80 characters of where this article begins in the document
    - "suggestedTags": 2 to 4 relevant tags
-4. Max articles to detect: ${MAX_ARTICLES_PER_UPLOAD}.
-5. If the document is really just one article, return an array with exactly one item, whose startSnippet is the document's own opening words.
+4. If the document is really just one article, return an array with exactly one item, whose startSnippet is the document's own opening words.
 
 Return JSON of exactly this shape, and nothing else:
 [
@@ -514,11 +509,14 @@ async function aiSeparateArticles(text: string): Promise<BoundaryMarker[] | null
     parse: parseBoundaryJson,
     label: "blogImportBoundaries",
     ladder: BLOG_MODEL_LADDER,
-    maxOutputTokens: 4000,
+    // ~100 tokens per article marker. With no cap on articles per document,
+    // 4000 truncated the JSON past ~40 articles and silently dropped to the
+    // heading-based fallback splitter.
+    maxOutputTokens: 16000,
   });
 
   if (!result.ok || result.data.length === 0) return null;
-  return result.data.slice(0, MAX_ARTICLES_PER_UPLOAD);
+  return result.data;
 }
 
 /**
@@ -658,8 +656,8 @@ export async function extractBlogArticle(file: File): Promise<ExtractOutcome> {
  * falls back to the deterministic delimiter/heading splitter when Gemini is
  * unreachable, unconfigured, or its snippets don't verbatim-match the text.
  *
- * No total-container character cap: a document can legitimately hold up to
- * MAX_ARTICLES_PER_UPLOAD articles whose combined length runs well past any
+ * No cap on the number of articles or on the total length: a document can hold
+ * any number of articles whose combined length runs well past any
  * single article's own limit. Each article gets its own MAX_BLOG_CHARS check
  * below, which WARNS rather than truncates or rejects.
  */
@@ -693,7 +691,7 @@ export async function extractMultipleBlogArticles(file: File): Promise<MultipleE
     sections = splitMultipleArticlesFallback(text).map((s) => ({ text: s, title: null }));
   }
 
-  sections = sections.filter((s) => s.text.trim().length > 0).slice(0, MAX_ARTICLES_PER_UPLOAD);
+  sections = sections.filter((s) => s.text.trim().length > 0);
   if (sections.length === 0) {
     return { ok: false, error: "No article text found in the document." };
   }

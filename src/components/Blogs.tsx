@@ -14,8 +14,9 @@ import {
   Upload,
   CheckCircle2,
   X,
+  Send,
 } from "lucide-react";
-import BlogBatchManager, { needsReview, type ManagedBlog } from "./BlogBatchManager";
+import BlogImportProgress from "./BlogImportProgress";
 
 /**
  * The Blogs list — every post in `blog_posts`, whatever its status.
@@ -62,26 +63,23 @@ const Blogs: React.FC = () => {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkPublishing, setBulkPublishing] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
   const uploadInput = useRef<HTMLInputElement>(null);
 
-  // Import popup: extract → review/format → create. Kept as one dialog rather
-  // than a silent upload, because a document can hold up to 10 articles and the
-  // admin needs to see (and steer) formatting before anything is saved.
+  // Import: the browser only uploads the document and queues it. Splitting,
+  // formatting, SEO and cover images run on the server
+  // (src/lib/blogImportQueue.ts) straight into draft posts, and
+  // BlogImportProgress shows how far along it is — so the admin is never held
+  // on this page, and closing the tab loses nothing.
   //
-  // "error" is distinct from "idle": the modal is only rendered while
-  // importStage !== "idle", so an extraction failure that reset straight to
-  // "idle" would close the dialog in the same instant it set the error
-  // message — the popup would flash open and vanish with nothing shown. Going
-  // to "error" instead keeps it open so the admin actually sees why.
-  const [importStage, setImportStage] = useState<
-    "idle" | "extracting" | "review" | "creating" | "error"
-  >("idle");
-  const [importFileName, setImportFileName] = useState("");
-  const [importBlogs, setImportBlogs] = useState<ManagedBlog[]>([]);
+  // The dialog opens once a file is picked, to ask whether ready articles
+  // should go live automatically; it closes as soon as the upload is queued.
+  const [pendingImport, setPendingImport] = useState<File | null>(null);
+  const [publishWhenReady, setPublishWhenReady] = useState(false);
+  const [importUploading, setImportUploading] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
-  const [importCreateMode, setImportCreateMode] = useState<"draft" | "publish" | null>(null);
-  const [importBatchId, setImportBatchId] = useState<string | null>(null);
+  const [importRefreshKey, setImportRefreshKey] = useState(0);
 
   const loadPosts = useCallback(async () => {
     try {
@@ -188,202 +186,125 @@ const Blogs: React.FC = () => {
     }
   };
 
-  const handleImportFile = async (file: File) => {
+  /**
+   * Publishes every selected draft through the same route as a post's own
+   * Publish button, so each one still passes its pre-flight checks (content +
+   * excerpt). Already-live posts in the selection are skipped. Five at a time
+   * rather than all at once: each publish also pings the portal to drop its
+   * cache, and a large selection shouldn't hit it with a burst.
+   */
+  const handleBulkPublish = async () => {
+    const drafts = posts.filter((p) => selectedIds.has(p.id) && p.status !== "published");
+    if (drafts.length === 0) return;
+    if (
+      !confirm(
+        `Publish ${drafts.length} draft${drafts.length !== 1 ? "s" : ""}? They will go live on the client site immediately.`,
+      )
+    ) {
+      return;
+    }
+
+    setBulkPublishing(true);
+    try {
+      const results: { id: string; title: string; ok: boolean; error?: string; post?: PostRow }[] = [];
+      for (let i = 0; i < drafts.length; i += 5) {
+        const chunk = drafts.slice(i, i + 5);
+        results.push(
+          ...(await Promise.all(
+            chunk.map(async (p) => {
+              try {
+                const res = await fetch(`/api/admin/blog/${p.id}/publish`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ publish: true }),
+                });
+                const data = await res.json();
+                return {
+                  id: p.id,
+                  title: p.title,
+                  ok: Boolean(data?.success),
+                  error: data?.error as string | undefined,
+                  post: data?.post as PostRow | undefined,
+                };
+              } catch {
+                return { id: p.id, title: p.title, ok: false, error: "Could not reach the server." };
+              }
+            }),
+          )),
+        );
+      }
+
+      const published = new Map(results.filter((r) => r.ok && r.post).map((r) => [r.id, r.post!]));
+      const failures = results.filter((r) => !r.ok);
+
+      setPosts((prev) => prev.map((p) => (published.has(p.id) ? { ...p, ...published.get(p.id)! } : p)));
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        published.forEach((_, id) => next.delete(id));
+        return next;
+      });
+
+      if (published.size > 0) {
+        setUploadSuccess(`✓ Published ${published.size} blog${published.size !== 1 ? "s" : ""}`);
+        setTimeout(() => setUploadSuccess(null), 3000);
+      }
+      if (failures.length > 0) {
+        alert(
+          `Published ${published.size} of ${drafts.length}. ${failures.length} could not be published — they are still selected:\n\n` +
+            failures.map((f) => `• ${f.title}: ${f.error ?? "Unknown error"}`).join("\n"),
+        );
+      }
+    } finally {
+      setBulkPublishing(false);
+    }
+  };
+
+  const closeImportModal = () => {
+    setPendingImport(null);
     setImportError(null);
-    setImportFileName(file.name);
-    setImportStage("extracting");
+    setPublishWhenReady(false);
+    if (uploadInput.current) uploadInput.current.value = "";
+  };
+
+  const handleStartImport = async () => {
+    const file = pendingImport;
+    if (!file) return;
+    setImportError(null);
+    setImportUploading(true);
 
     try {
-      // Straight to Vercel Blob from the browser, not through this function —
-      // a serverless function's request body is capped around 4.5 MB, well
-      // under the 20 MB a multi-article document can legitimately need. The
-      // import route reads the bytes back from the blobUrl and deletes it
-      // once done; this upload is scratch, not a kept document.
+      // Straight to Vercel Blob from the browser, not through a function — a
+      // serverless request body is capped around 4.5 MB, well under the 20 MB
+      // a multi-article document can need. The queue worker reads it back and
+      // deletes it once the articles are out; it is scratch, not a kept file.
       const blob = await upload(`blog-imports/${Date.now()}-${file.name}`, file, {
         access: BLOB_ACCESS,
         handleUploadUrl: "/api/admin/blog/import/token",
       });
 
-      const res = await fetch("/api/admin/blog/import", {
+      const res = await fetch("/api/admin/blog/batches", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          blobUrl: blob.url,
-          fileName: file.name,
-          multiple: true,
-          extractOnly: true,
-        }),
+        body: JSON.stringify({ blobUrl: blob.url, fileName: file.name, publishWhenReady }),
       });
       const data = await res.json();
-
       if (!res.ok || !data.success) {
-        setImportError(data.error ?? "Could not read blogs from that document.");
-        setImportStage("error");
-        return;
-      }
-
-      const blogs: ManagedBlog[] = (data.articles ?? []).map((a: Record<string, unknown>) => ({
-        title: (a.title as string) || "",
-        text: (a.text as string) || "",
-        html: (a.html as string) || "",
-        formatSource: (a.formatSource as ManagedBlog["formatSource"]) || "manual",
-        formatModel: (a.formatModel as string | undefined) ?? undefined,
-        wordsPreserved: (a.wordsPreserved as number | undefined) ?? undefined,
-        needsProofread: Boolean(a.needsProofread),
-        seo: (a.seo as Record<string, unknown> | null) ?? undefined,
-        warnings: (a.warnings as string[]) ?? [],
-        charCount: (a.charCount as number | undefined) ?? (a.text as string)?.length,
-        isDuplicate: Boolean(a.isDuplicate),
-        validationStatus: (a.validationStatus as ManagedBlog["validationStatus"]) ?? "ready",
-      }));
-
-      if (blogs.length === 0) {
-        setImportError("No article text could be found in that document.");
-        setImportStage("error");
-        return;
-      }
-
-      setImportBlogs(blogs);
-      setImportBatchId(crypto.randomUUID());
-      setImportStage("review");
-    } catch (err) {
-      setImportError(
-        err instanceof Error && err.message ? err.message : "Could not upload or read that document.",
-      );
-      setImportStage("error");
-    } finally {
-      if (uploadInput.current) uploadInput.current.value = "";
-    }
-  };
-
-  const closeImportModal = () => {
-    setImportStage("idle");
-    setImportBlogs([]);
-    setImportError(null);
-    setImportFileName("");
-    setImportCreateMode(null);
-    setImportBatchId(null);
-  };
-
-  /**
-   * Creates every reviewed blog as a draft, then — when `publish` is true —
-   * publishes each one it just created.
-   *
-   * The create call always writes status "draft" (POST /api/admin/blog
-   * enforces that, see route.ts), so "publish" here is really two steps: save,
-   * then flip each new row live through the same pre-flight checks a single
-   * post's Publish button goes through (content + excerpt present). A blog
-   * whose SEO drafting failed still gets an excerpt — pulled from its own
-   * text — so a real Gemini outage never silently blocks publishing on a
-   * missing field the admin never sees.
-   */
-  const handleCreateAllImported = async (publish: boolean) => {
-    setImportStage("creating");
-    setImportCreateMode(publish ? "publish" : "draft");
-    setImportError(null);
-
-    try {
-      const created = await Promise.all(
-        importBlogs.map(async (blog) => {
-          const seo = (blog.seo as Record<string, unknown> | undefined) ?? {};
-          const fallbackExcerpt = blog.text.replace(/\s+/g, " ").trim().slice(0, 200);
-          const res = await fetch("/api/admin/blog", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              title: blog.title?.trim() || "Untitled",
-              content_html: blog.html,
-              content_source: blog.text,
-              excerpt: (seo.excerpt as string)?.trim() || fallbackExcerpt,
-              cover_image_url: blog.coverImageUrl || null,
-              cover_image_alt: blog.coverImageAlt || null,
-              author: "iClosed Real Estate Law Desk",
-              tags: (seo.tags as string[]) ?? [],
-              meta_title: (seo.metaTitle as string) ?? null,
-              meta_description: (seo.metaDescription as string) ?? null,
-              focus_keyword: (seo.focusKeyword as string) ?? null,
-              faq: (seo.faq as unknown[]) ?? [],
-              noindex: false,
-              format_source: blog.formatSource,
-              seo_source: blog.seo ? "gemini" : "manual",
-              import_batch_id: importBatchId,
-            }),
-          });
-          const data = await res.json();
-          if (!data?.success) {
-            return { title: blog.title, ok: false as const, error: data?.error as string | undefined };
-          }
-          return {
-            title: blog.title,
-            ok: true as const,
-            id: data.post.id as string,
-            needsReview: needsReview(blog),
-          };
-        }),
-      );
-
-      const createFailures = created.filter((r) => !r.ok);
-      const createdOk = created.filter((r) => r.ok) as Extract<
-        (typeof created)[number],
-        { ok: true }
-      >[];
-      // Oversized or duplicate-flagged articles are saved above like everything
-      // else, but never auto-published — they stay drafts until a human clears
-      // the flag, per the "never truncate, never silently publish" rule.
-      const publishable = createdOk.filter((c) => !c.needsReview);
-      const keptForReview = createdOk.length - publishable.length;
-
-      let publishFailures: { title: string; error?: string }[] = [];
-      if (publish && publishable.length > 0) {
-        const publishResults = await Promise.all(
-          publishable.map(async (c) => {
-            const res = await fetch(`/api/admin/blog/${c.id}/publish`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ publish: true }),
-            });
-            const data = await res.json();
-            return data?.success ? null : { title: c.title, error: data?.error as string | undefined };
-          }),
-        );
-        publishFailures = publishResults.filter(
-          (r): r is { title: string; error: string | undefined } => r !== null,
-        );
-      }
-
-      await loadPosts();
-
-      if (createFailures.length > 0 || publishFailures.length > 0) {
-        const parts: string[] = [];
-        if (createFailures.length > 0) {
-          parts.push(`${createFailures.length} could not be saved (${createFailures[0].error ?? "unknown error"})`);
-        }
-        if (publishFailures.length > 0) {
-          parts.push(
-            `${publishFailures.length} saved as drafts but could not publish (${publishFailures[0].error ?? "unknown error"})`,
-          );
-        }
-        setImportError(
-          `${created.length - createFailures.length - publishFailures.length} of ${created.length} blogs published successfully. ${parts.join("; ")}.`,
-        );
-        setImportStage("review");
-        setImportCreateMode(null);
+        setImportError(data.error ?? "Could not queue that document.");
         return;
       }
 
       closeImportModal();
-      setImportCreateMode(null);
+      setImportRefreshKey((k) => k + 1);
       setUploadSuccess(
-        publish
-          ? `✓ Published ${publishable.length} blog${publishable.length !== 1 ? "s" : ""}` +
-              (keptForReview > 0 ? ` · ${keptForReview} kept as draft for review` : "")
-          : `✓ Saved ${created.length} blog draft${created.length !== 1 ? "s" : ""}`,
+        `✓ "${file.name}" is processing in the background — you can keep working or leave this page.`,
       );
-      setTimeout(() => setUploadSuccess(null), 3000);
-    } catch {
-      setImportError("Could not reach the server while saving the posts.");
-      setImportStage("review");
-      setImportCreateMode(null);
+      setTimeout(() => setUploadSuccess(null), 5000);
+    } catch (err) {
+      setImportError(
+        err instanceof Error && err.message ? err.message : "Could not upload that document.",
+      );
+    } finally {
+      setImportUploading(false);
     }
   };
 
@@ -403,6 +324,7 @@ const Blogs: React.FC = () => {
   const publishedCount = posts.filter((p) => p.status === "published").length;
   const allFilteredSelected = filtered.length > 0 && filtered.every((p) => selectedIds.has(p.id));
   const someFilteredSelected = filtered.some((p) => selectedIds.has(p.id));
+  const selectedDraftCount = posts.filter((p) => selectedIds.has(p.id) && p.status !== "published").length;
   const selectAllRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -452,28 +374,19 @@ const Blogs: React.FC = () => {
             onChange={(e) => {
               const file = e.target.files?.[0];
               if (file) {
-                void handleImportFile(file);
+                setImportError(null);
+                setPendingImport(file);
               }
             }}
           />
 
           <button
             onClick={() => uploadInput.current?.click()}
-            disabled={importStage === "extracting"}
             className="inline-flex items-center gap-2 bg-slate-100 text-slate-700 px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-slate-200 transition-colors disabled:opacity-50"
             title="Upload document (PDF, Word, Markdown, etc.) with one or more blog articles"
           >
-            {importStage === "extracting" ? (
-              <>
-                <Loader2 size={15} className="animate-spin" />
-                Reading…
-              </>
-            ) : (
-              <>
-                <Upload size={15} />
-                Import blogs
-              </>
-            )}
+            <Upload size={15} />
+            Import blogs
           </button>
 
           <Link
@@ -485,6 +398,8 @@ const Blogs: React.FC = () => {
           </Link>
         </div>
       </div>
+
+      <BlogImportProgress refreshKey={importRefreshKey} onPostsChanged={loadPosts} />
 
       {/* Status filter + counts */}
       <div className="flex flex-wrap items-center gap-2">
@@ -529,14 +444,35 @@ const Blogs: React.FC = () => {
           <div className="flex items-center gap-2">
             <button
               onClick={() => setSelectedIds(new Set())}
-              disabled={bulkDeleting}
+              disabled={bulkDeleting || bulkPublishing}
               className="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-500 hover:bg-white transition-colors disabled:opacity-50"
             >
               Clear
             </button>
+            {/* Bulk publish lives on the Draft tab only — on All/Published a
+                select-all would mostly pick up posts that are already live. */}
+            {statusFilter === "draft" && (
+              <button
+                onClick={handleBulkPublish}
+                disabled={bulkDeleting || bulkPublishing || selectedDraftCount === 0}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-brand-primary hover:bg-brand-primaryHover transition-colors disabled:opacity-50"
+              >
+                {bulkPublishing ? (
+                  <>
+                    <Loader2 size={13} className="animate-spin" />
+                    Publishing…
+                  </>
+                ) : (
+                  <>
+                    <Send size={13} />
+                    Publish selected ({selectedDraftCount})
+                  </>
+                )}
+              </button>
+            )}
             <button
               onClick={handleBulkDelete}
-              disabled={bulkDeleting}
+              disabled={bulkDeleting || bulkPublishing}
               className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-red-600 hover:bg-red-700 transition-colors disabled:opacity-50"
             >
               {bulkDeleting ? (
@@ -649,18 +585,16 @@ const Blogs: React.FC = () => {
         {filtered.length} of {posts.length} posts
       </p>
 
-      {/* Import popup: extract → format → create */}
-      {importStage !== "idle" && (
+      {/* Import: pick options, upload, queue — the work itself runs in the background */}
+      {pendingImport && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-          <div className="w-full max-w-2xl max-h-[85vh] overflow-y-auto rounded-2xl bg-white shadow-xl">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 sticky top-0 bg-white">
-              <div>
+          <div className="w-full max-w-md rounded-2xl bg-white shadow-xl">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+              <div className="min-w-0">
                 <h2 className="text-base font-bold text-slate-900">Import blogs</h2>
-                {importFileName && (
-                  <p className="text-xs text-slate-400 mt-0.5 truncate max-w-md">{importFileName}</p>
-                )}
+                <p className="text-xs text-slate-400 mt-0.5 truncate">{pendingImport.name}</p>
               </div>
-              {importStage !== "extracting" && importStage !== "creating" && (
+              {!importUploading && (
                 <button
                   onClick={closeImportModal}
                   className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
@@ -671,31 +605,62 @@ const Blogs: React.FC = () => {
               )}
             </div>
 
-            <div className="p-5">
-              {importStage === "extracting" && (
-                <div className="flex flex-col items-center justify-center gap-3 py-16 text-slate-500">
-                  <Loader2 size={28} className="animate-spin text-brand-primary" />
-                  <p className="text-sm font-medium">Reading blogs from the document…</p>
-                  <p className="text-xs text-slate-400">This only reads the text — nothing is saved yet.</p>
-                </div>
-              )}
+            <div className="p-5 space-y-4">
+              <p className="text-sm text-slate-600">
+                Every article in the document is saved as a draft, then formatted, given SEO metadata
+                and a cover image on the server. This page stays usable — progress shows at the top of
+                the list, and the drafts appear in it as they are finished.
+              </p>
 
-              {importError && importStage !== "extracting" && (
-                <div className="flex items-start gap-2 px-4 py-3 mb-3 rounded-xl border border-red-200 bg-red-50 text-sm text-red-700">
+              <label className="flex items-start gap-2.5 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={publishWhenReady}
+                  onChange={(e) => setPublishWhenReady(e.target.checked)}
+                  disabled={importUploading}
+                  className="mt-0.5 rounded border-slate-300 text-brand-primary focus:ring-brand-primary"
+                />
+                <span>
+                  Publish automatically when ready
+                  <span className="block text-xs text-slate-400">
+                    Oversized articles and possible duplicates always stay drafts for review.
+                  </span>
+                </span>
+              </label>
+
+              {importError && (
+                <div className="flex items-start gap-2 px-4 py-3 rounded-xl border border-red-200 bg-red-50 text-sm text-red-700">
                   <AlertTriangle size={16} className="mt-0.5 shrink-0" />
                   <span>{importError}</span>
                 </div>
               )}
 
-              {(importStage === "review" || importStage === "creating") && (
-                <BlogBatchManager
-                  blogs={importBlogs}
-                  onBlogsChange={setImportBlogs}
-                  onCreateAll={handleCreateAllImported}
-                  isCreating={importStage === "creating"}
-                  creatingMode={importCreateMode}
-                />
-              )}
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={closeImportModal}
+                  disabled={importUploading}
+                  className="rounded-xl bg-slate-100 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-200 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => void handleStartImport()}
+                  disabled={importUploading}
+                  className="inline-flex items-center gap-2 rounded-xl bg-brand-primary px-4 py-2.5 text-sm font-medium text-white hover:bg-brand-primaryHover disabled:opacity-50"
+                >
+                  {importUploading ? (
+                    <>
+                      <Loader2 size={15} className="animate-spin" />
+                      Uploading…
+                    </>
+                  ) : (
+                    <>
+                      <Upload size={15} />
+                      Start import
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>
