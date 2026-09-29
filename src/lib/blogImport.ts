@@ -536,8 +536,13 @@ function locateMarkers(
   for (const marker of markers) {
     const snippet = marker.startSnippet.trim();
     if (!snippet) continue;
-    const idx = text.indexOf(snippet);
-    if (idx === -1 || usedIndexes.has(idx)) continue;
+    // A snippet can occur more than once — the same article pasted twice
+    // starts with the same words. Take the next occurrence not already
+    // claimed; stopping at the first would fold the repeat into the previous
+    // article's body instead of letting it be flagged as a duplicate.
+    let idx = text.indexOf(snippet);
+    while (idx !== -1 && usedIndexes.has(idx)) idx = text.indexOf(snippet, idx + 1);
+    if (idx === -1) continue;
     usedIndexes.add(idx);
     found.push({ index: idx, marker });
   }
@@ -556,9 +561,19 @@ function sliceByMarkers(
     const start = found[i].index;
     const end = i + 1 < found.length ? found[i + 1].index : text.length;
     const chunk = normaliseBlankLines(text.slice(start, end));
-    if (chunk) out.push({ text: chunk, title: found[i].marker.title || null });
+    // The author's own heading beats the model's "clean title": the model
+    // sometimes rewrites it, and the duplicate check (blogImportQueue.ts) keys
+    // on the title — a paraphrase would let a re-uploaded blog slip through.
+    if (chunk) out.push({ text: chunk, title: leadingHeading(chunk) ?? (found[i].marker.title || null) });
   }
   return out;
+}
+
+/** The article's opening line, when that line is a heading (`#`–`####`). */
+function leadingHeading(chunk: string): string | null {
+  const first = chunk.split("\n").find((l) => l.trim().length > 0)?.trim() ?? "";
+  const m = first.match(/^#{1,4}\s+(.+)$/);
+  return m ? m[1].trim() : null;
 }
 
 /** A title sniffed from an article's own opening lines, when nothing else supplied one. */
@@ -675,7 +690,7 @@ export async function extractMultipleBlogArticles(file: File): Promise<MultipleE
   const extraction = await extractRaw(file);
   if (!extraction.ok) return extraction;
 
-  const { text, kind, needsProofread, warnings: fileWarnings } = extraction.data;
+  const { text, kind, needsProofread, warnings: fileWarnings, title: documentTitle } = extraction.data;
 
   let sections: { text: string; title: string | null }[] = [];
 
@@ -692,6 +707,13 @@ export async function extractMultipleBlogArticles(file: File): Promise<MultipleE
   }
 
   sections = sections.filter((s) => s.text.trim().length > 0);
+
+  // Extraction lifts the document's first heading OUT of the text as its title,
+  // so the first article no longer opens with a heading of its own and would
+  // otherwise get the model's paraphrase — which the duplicate check keys on.
+  if (documentTitle && sections.length > 0 && !leadingHeading(sections[0].text)) {
+    sections[0] = { ...sections[0], title: documentTitle };
+  }
   if (sections.length === 0) {
     return { ok: false, error: "No article text found in the document." };
   }

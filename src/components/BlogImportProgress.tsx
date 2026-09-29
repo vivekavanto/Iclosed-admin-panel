@@ -2,15 +2,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import {
-  AlertTriangle,
-  CheckCircle2,
-  ChevronDown,
-  ChevronUp,
-  FileText,
-  Loader2,
-  X,
-} from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, FileText, Loader2, X } from "lucide-react";
 
 /**
  * Progress for background blog imports (src/lib/blogImportQueue.ts).
@@ -80,7 +72,10 @@ function statusLine(b: Batch): string {
     case "extracting":
       return "Reading the document and splitting it into articles…";
     case "processing":
-      return `Formatting, SEO and cover images — ${done} of ${b.items.length} articles ready${failed ? `, ${failed} failed` : ""}`;
+      return (
+        `Formatting, SEO and cover images — ${done} of ${b.items.length} articles ready` +
+        (failed ? `, ${failed} failed` : "")
+      );
     case "completed":
       return (
         `Done — ${done} of ${b.items.length} ready` +
@@ -99,12 +94,14 @@ function StepPill({ label, status, running }: { label: string; status: StepStatu
     status === "done"
       ? "bg-green-100 text-green-700"
       : status === "failed"
-        ? "bg-red-100 text-red-700"
-        : status === "skipped"
-          ? "bg-slate-100 text-slate-400"
-          : "bg-slate-100 text-slate-500";
+      ? "bg-red-100 text-red-700"
+      : status === "skipped"
+      ? "bg-slate-100 text-slate-400"
+      : "bg-slate-100 text-slate-500";
   return (
-    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${cls}`}>
+    <span
+      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${cls}`}
+    >
       {status === "pending" && running && <Loader2 size={10} className="animate-spin" />}
       {label}
     </span>
@@ -138,8 +135,14 @@ export default function BlogImportProgress({ refreshKey, onPostsChanged }: Props
       const next = (data.batches ?? []) as Batch[];
       setBatches(next);
 
+      // Changes when a draft is created (post_id set) or an article finishes.
       const signature = next
-        .map((b) => `${b.id}:${b.status}:${b.items.length}:${b.items.filter((i) => i.status !== "queued" && i.status !== "processing").length}`)
+        .map(
+          (b) =>
+            `${b.id}:${b.status}:${b.items.filter((i) => i.post_id).length}:${
+              b.items.filter((i) => i.status === "done" || i.status === "failed").length
+            }`
+        )
         .join("|");
       if (lastSignature.current && signature !== lastSignature.current) onPostsChangedRef.current();
       lastSignature.current = signature;
@@ -193,12 +196,12 @@ export default function BlogImportProgress({ refreshKey, onPostsChanged }: Props
           b.status === "failed"
             ? "bg-red-500"
             : b.status === "cancelled"
-              ? "bg-slate-400"
-              : b.status === "completed"
-                ? failedCount > 0
-                  ? "bg-amber-500"
-                  : "bg-green-500"
-                : "bg-brand-primary";
+            ? "bg-slate-400"
+            : b.status === "completed"
+            ? failedCount > 0
+              ? "bg-amber-500"
+              : "bg-green-500"
+            : "bg-brand-primary";
 
         return (
           <div key={b.id} className="rounded-xl border border-slate-200 bg-white overflow-hidden">
@@ -289,16 +292,20 @@ export default function BlogImportProgress({ refreshKey, onPostsChanged }: Props
                             {i.title}
                           </Link>
                         ) : (
-                          <span className="text-sm font-medium text-slate-800 truncate max-w-md">{i.title}</span>
+                          <span className="text-sm font-medium text-slate-800 truncate max-w-md">
+                            {i.title}
+                          </span>
                         )}
                         <StepPill label="Format" status={i.format_status} running={running} />
                         <StepPill label="SEO" status={i.seo_status} running={running} />
                         <StepPill label="Image" status={i.image_status} running={running} />
                         {i.status === "queued" && <span className="text-[11px] text-slate-400">queued</span>}
-                        {i.status === "cancelled" && <span className="text-[11px] text-slate-400">cancelled</span>}
+                        {i.status === "cancelled" && (
+                          <span className="text-[11px] text-slate-400">cancelled</span>
+                        )}
                         {i.needs_review && (
                           <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-700">
-                            {i.is_duplicate ? "Possible duplicate" : "Review"}
+                            {i.is_duplicate ? "Duplicate" : "Review"}
                           </span>
                         )}
                       </div>

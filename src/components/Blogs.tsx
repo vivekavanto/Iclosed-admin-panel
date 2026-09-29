@@ -17,6 +17,7 @@ import {
   Send,
 } from "lucide-react";
 import BlogImportProgress from "./BlogImportProgress";
+import { slugify } from "@/lib/blogSlug";
 
 /**
  * The Blogs list — every post in `blog_posts`, whatever its status.
@@ -36,6 +37,7 @@ type PostRow = {
   author: string;
   tags: string[];
   published_at: string | null;
+  created_at: string;
   updated_at: string;
   updated_by_email: string | null;
   format_source: string;
@@ -308,6 +310,30 @@ const Blogs: React.FC = () => {
     }
   };
 
+  /**
+   * Posts that repeat an OLDER post's title (compared as slugs, so case and
+   * punctuation don't matter), mapped to the title of the one they copy. The
+   * oldest post in a group is the original and is never flagged, so deleting
+   * the copies — or the original — clears the badge on its own. Imports save
+   * duplicates as drafts rather than dropping them; this is how the admin
+   * spots them.
+   */
+  const duplicateOf = useMemo(() => {
+    const byKey = new Map<string, PostRow[]>();
+    for (const p of posts) {
+      const key = slugify(p.title || "");
+      if (!key) continue;
+      byKey.set(key, [...(byKey.get(key) ?? []), p]);
+    }
+    const out = new Map<string, string>();
+    for (const group of byKey.values()) {
+      if (group.length < 2) continue;
+      const [original, ...copies] = [...group].sort((a, b) => a.created_at.localeCompare(b.created_at));
+      for (const c of copies) out.set(c.id, original.title);
+    }
+    return out;
+  }, [posts]);
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return posts.filter((p) => {
@@ -548,9 +574,20 @@ const Blogs: React.FC = () => {
                 </span>
 
                 <Link href={`/admin/blogs/${post.id}`} className="min-w-0 flex-1 group">
-                  <p className="truncate text-sm font-semibold text-slate-900 group-hover:text-brand-primary transition-colors">
-                    {post.title || "(untitled)"}
-                  </p>
+                  {/* Badge sits AFTER the title so every title starts at the same x. */}
+                  <div className="flex items-center gap-2 min-w-0">
+                    <p className="truncate text-sm font-semibold text-slate-900 group-hover:text-brand-primary transition-colors">
+                      {post.title || "(untitled)"}
+                    </p>
+                    {duplicateOf.has(post.id) && (
+                      <span
+                        title={`Same title as an older post: "${duplicateOf.get(post.id)}". Delete this one if it isn't needed.`}
+                        className="shrink-0 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border bg-red-100 text-red-700 border-red-200"
+                      >
+                        Duplicate
+                      </span>
+                    )}
+                  </div>
                   <p className="truncate text-xs text-slate-400 mt-0.5">
                     /blogs/{post.slug}
                     {post.status === "published" && post.published_at

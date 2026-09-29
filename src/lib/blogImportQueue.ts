@@ -1,7 +1,7 @@
 import { del } from "@vercel/blob";
 import supabaseAdmin from "./supabaseAdmin";
 import { logger } from "./logger";
-import { createPost, getPostById, listTitlesAndSlugs, slugify, updatePost } from "./blogPosts";
+import { createPost, deletePost, getPostById, listTitlesAndSlugs, slugify, updatePost } from "./blogPosts";
 import { extractMultipleBlogArticles, MAX_BLOG_CHARS, MAX_IMPORT_BYTES } from "./blogImport";
 import { formatBlogHtml } from "./blogFormat";
 import { generateBlogSeo } from "./blogSeo";
@@ -72,6 +72,8 @@ export type ImportItemRow = {
   is_duplicate: boolean;
   needs_review: boolean;
   status: "queued" | "processing" | "done" | "failed" | "cancelled";
+  duplicate_of_post_id: string | null;
+  duplicate_of_title: string | null;
   format_status: StepStatus;
   seo_status: StepStatus;
   image_status: StepStatus;
@@ -310,57 +312,50 @@ async function processExtractJob(batchId: string): Promise<number> {
   }
 
   const articles = extracted.data;
-  const existingSlugs = new Set((await listTitlesAndSlugs()).map((p) => p.slug.toLowerCase()));
-  const seenInBatch = new Set<string>();
-  const author = batch.created_by_email ?? "import-batch";
+  // slug → the blog it belongs to. Read BEFORE this batch creates any drafts,
+  // or every article would match itself.
+  const existing = new Map(
+    (await listTitlesAndSlugs()).map((p) => [p.slug.toLowerCase(), { id: p.id as string | null, title: p.title }]),
+  );
+  const seenInBatch = new Map<string, { id: string | null; title: string }>();
 
   const itemRows: Record<string, unknown>[] = [];
   for (let idx = 0; idx < articles.length; idx++) {
     const a = articles[idx];
     const title = a.title?.trim() || "Untitled";
-
-    // Checked BEFORE this batch's own drafts exist, or every article would match itself.
     const slug = slugify(title);
-    const isDuplicate = existingSlugs.has(slug) || seenInBatch.has(slug);
-    seenInBatch.add(slug);
     const charCount = a.text.length;
-
-    const created = await createPost(
-      {
-        title,
-        status: "draft",
-        content_html: a.preformattedHtml ?? plainTextToHtml(a.text),
-        content_source: a.text,
-        excerpt: fallbackExcerpt(a.text),
-        cover_image_url: null,
-        cover_image_alt: null,
-        author: DEFAULT_AUTHOR,
-        tags: [],
-        faq: [],
-        noindex: false,
-        format_source: "manual",
-        seo_source: "manual",
-        import_batch_id: batch.id,
-      },
-      author,
-    );
-
     const warnings = [...a.warnings];
     if (a.needsProofread) warnings.push("Transcribed from a PDF — proofread before publishing.");
 
-    itemRows.push({
+    const base = {
       batch_id: batch.id,
-      post_id: created.ok ? created.row.id : null,
       idx,
       title,
       char_count: charCount,
-      is_duplicate: isDuplicate,
-      needs_review: isDuplicate || charCount > MAX_BLOG_CHARS,
-      status: created.ok ? "queued" : "failed",
-      last_error: created.ok ? null : `Could not save the draft: ${created.error}`,
       format_status: a.preformattedHtml ? "skipped" : "pending",
       image_status: title !== "Untitled" && a.text.trim().length >= 200 ? "pending" : "skipped",
       warnings,
+    };
+
+    // A duplicate is still saved and processed like any other article — the
+    // Blogs list marks it with a red DUPLICATE badge and the admin deletes it
+    // if it isn't wanted. It is never auto-published.
+    const inBlog = existing.get(slug);
+    const match = inBlog ?? seenInBatch.get(slug);
+
+    const created = await createImportDraft(batch, { title, text: a.text, preformattedHtml: a.preformattedHtml });
+    if (!match) seenInBatch.set(slug, { id: created.ok ? created.row.id : null, title });
+
+    itemRows.push({
+      ...base,
+      post_id: created.ok ? created.row.id : null,
+      is_duplicate: Boolean(match),
+      needs_review: Boolean(match) || charCount > MAX_BLOG_CHARS,
+      duplicate_of_post_id: match?.id ?? null,
+      duplicate_of_title: match ? (inBlog ? match.title : `${match.title} (earlier in this document)`) : null,
+      status: created.ok ? "queued" : "failed",
+      last_error: created.ok ? null : `Could not save the draft: ${created.error}`,
       finished_at: created.ok ? null : new Date().toISOString(),
     });
   }
@@ -368,7 +363,12 @@ async function processExtractJob(batchId: string): Promise<number> {
   const { error: itemsError } = await supabaseAdmin.from("blog_import_items").insert(itemRows);
   if (itemsError) {
     logger.error("[blogImportQueue] inserting items failed:", itemsError.message);
-    await failBatch(batch, "The drafts were created, but their processing could not be queued.");
+    // Roll back the drafts this run just made. Left behind they are unformatted
+    // orphans nobody is tracking — and a re-upload would then flag every one
+    // of them as a duplicate of itself.
+    const orphanIds = itemRows.map((r) => r.post_id).filter((id): id is string => typeof id === "string");
+    for (const id of orphanIds) await deletePost(id);
+    await failBatch(batch, "Could not set up processing for this document, so nothing was saved. Try again.");
     return 0;
   }
 
@@ -385,6 +385,31 @@ async function processExtractJob(batchId: string): Promise<number> {
   // Every draft failed to save → nothing queued; close the batch now.
   await finishBatchIfDone(batch.id);
   return itemRows.filter((r) => r.status === "queued").length;
+}
+
+function createImportDraft(
+  batch: ImportBatchRow,
+  article: { title: string; text: string; preformattedHtml: string | null },
+) {
+  return createPost(
+    {
+      title: article.title,
+      status: "draft",
+      content_html: article.preformattedHtml ?? plainTextToHtml(article.text),
+      content_source: article.text,
+      excerpt: fallbackExcerpt(article.text),
+      cover_image_url: null,
+      cover_image_alt: null,
+      author: DEFAULT_AUTHOR,
+      tags: [],
+      faq: [],
+      noindex: false,
+      format_source: "manual",
+      seo_source: "manual",
+      import_batch_id: batch.id,
+    },
+    batch.created_by_email ?? "import-batch",
+  );
 }
 
 async function requeueBatch(id: string, error: string, attempts: number): Promise<void> {
@@ -638,9 +663,12 @@ export async function listVisibleBatches(): Promise<BatchWithItems[]> {
   const batches = (data ?? []) as ImportBatchRow[];
   if (batches.length === 0) return [];
 
+  // Only what the panel shows — it is polled every few seconds.
   const { data: itemData } = await supabaseAdmin
     .from("blog_import_items")
-    .select("*")
+    .select(
+      "id, batch_id, post_id, idx, title, char_count, is_duplicate, needs_review, status, format_status, seo_status, image_status, warnings, last_error, attempts",
+    )
     .in(
       "batch_id",
       batches.map((b) => b.id),
