@@ -269,6 +269,7 @@ export interface Database {
           // Internal "where is this file at" note, typed on the All Files list.
           // Admin-only: never rendered to the client or read by a template.
           admin_note: string | null;
+          admin_note_updated_at: string | null;
         };
         Insert: {
           id?: string;
@@ -298,6 +299,7 @@ export interface Database {
           partner_id?: string | null;
           cc_emails?: string[];
           admin_note?: string | null;
+          admin_note_updated_at?: string | null;
         };
         Update: {
           id?: string;
@@ -327,6 +329,7 @@ export interface Database {
           partner_id?: string | null;
           cc_emails?: string[];
           admin_note?: string | null;
+          admin_note_updated_at?: string | null;
         };
         Relationships: [
           {

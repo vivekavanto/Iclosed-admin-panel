@@ -757,6 +757,17 @@ const Leads: React.FC = () => {
     router.push(`/admin/leads?lead=${lead.id}`);
   };
 
+  // Convert straight from a list row: seed the same state openLead() would
+  // (minus the navigation) and pop the dialog over the list. File number stays
+  // blank so it auto-generates, exactly as it does from the detail page.
+  const openConvertFromList = (lead: LeadUser) => {
+    setSelectedLead(lead);
+    setConvertResult(null);
+    setConvertFileNumber("");
+    setConvertClosingDate(lead.closingDate ?? "");
+    setConvertModalOpen(true);
+  };
+
   const openLeadForEdit = (lead: LeadUser) => {
     setSelectedLead(lead);
     setConvertResult(null);
@@ -1420,6 +1431,167 @@ const Leads: React.FC = () => {
       a.click();
       a.remove();
     }
+  };
+
+  // ── Convert to Deal modal ─────────────────────────────────────────────────
+  // Rendered from BOTH views. The leads list has its own Convert button per
+  // row, which sets `selectedLead` WITHOUT switching to the detail view, so the
+  // same dialog (and the same handleConvertToDeal) serves both entry points.
+  const renderConvertModal = () => {
+    if (!convertModalOpen || !selectedLead) return null;
+    return createPortal(
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => !converting && setConvertModalOpen(false)}>
+            {(() => {
+              const familyLeadIds = getFamilyLeadIds(selectedLead);
+              const familyMembers = leads.filter((l) => familyLeadIds.includes(l.id));
+              const hasFamily = familyMembers.length > 1;
+
+              return (
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+              {/* Header */}
+              <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">Convert to Deal</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {hasFamily
+                      ? `Will create ${familyMembers.length} deals & send ${familyMembers.length} invite emails.`
+                      : "Creates deal, milestones, tasks & sends invite email."}
+                  </p>
+                </div>
+                <button onClick={() => !converting && setConvertModalOpen(false)} className="text-slate-400 hover:text-slate-600 text-xl font-bold">&times;</button>
+              </div>
+
+              {/* Lead summary */}
+              <div className="px-6 py-4 bg-slate-50 border-b border-slate-200">
+                {hasFamily ? (() => {
+                  const primaryFm = familyMembers.find((fm) => !fm.parentLeadId) ?? selectedLead;
+                  const lt = (selectedLead?.lead_type ?? "").toLowerCase().trim();
+                  const headerLabel =
+                    lt.includes("purchase") && lt.includes("sale")
+                      ? "Primary & Co-Clients"
+                      : lt === "sale"
+                      ? "Seller & Co-Sellers"
+                      : "Purchaser & Co-Purchasers";
+                  return (
+                  <>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">
+                      {headerLabel} ({familyMembers.length})
+                    </p>
+                    <div className="space-y-2">
+                      {[...familyMembers].sort((a, b) => (a.parentLeadId ? 1 : 0) - (b.parentLeadId ? 1 : 0)).map((fm) => {
+                        const isPrimary = !fm.parentLeadId;
+                        const role = isPrimary ? "Primary" : (getCoRole(fm, primaryFm) === "co-seller" ? "Co-Seller" : "Co-Purchaser");
+                        const badgeClass = isPrimary
+                          ? "bg-green-100 text-green-700 border-green-200"
+                          : role === "Co-Seller"
+                          ? "bg-amber-100 text-amber-700 border-amber-200"
+                          : "bg-blue-100 text-blue-700 border-blue-200";
+                        return (
+                          <div key={fm.id} className="flex items-center justify-between">
+                            <div>
+                              <p className="text-sm font-bold text-slate-800">{fm.firstName} {fm.lastName}</p>
+                              <p className="text-xs text-slate-500">{fm.email}</p>
+                            </div>
+                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase border ${badgeClass}`}>{role}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                  );
+                })() : (
+                  <>
+                    <p className="text-sm font-bold text-slate-800">{selectedLead.firstName} {selectedLead.lastName}</p>
+                    <p className="text-xs text-slate-500">{selectedLead.email}</p>
+                  </>
+                )}
+                {selectedLead.lead_type && (
+                  <p className="text-xs text-slate-400 mt-1.5">Type: {selectedLead.lead_type}</p>
+                )}
+              </div>
+
+              {/* Form */}
+              <div className="px-6 py-4 space-y-4">
+                {/* Inputs are hidden once the conversion succeeds — only the
+                    result message + Close remain. Kept on failure so the admin
+                    can fix the file number and retry. */}
+                {!convertResult?.success && (
+                  <>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">
+                        File Number <span className="text-slate-400 font-normal">(optional)</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={convertFileNumber}
+                        onChange={(e) => setConvertFileNumber(e.target.value)}
+                        placeholder="e.g. 26P-0059"
+                        disabled={converting}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
+                      />
+                      <p className="text-xs text-slate-400 mt-1.5">
+                        Leave blank to auto-generate. All parties in this file
+                        (co-purchasers/co-sellers) share this number. If it's already
+                        used by another file, conversion is blocked with an error.
+                      </p>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">
+                        Closing Date <span className="text-slate-400 font-normal">(optional)</span>
+                      </label>
+                      <input
+                        type="date"
+                        value={convertClosingDate}
+                        onChange={(e) => setConvertClosingDate(e.target.value)}
+                        disabled={converting}
+                        min={todayLocalStr}
+                        max="2100-12-31"
+                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
+                      />
+                    </div>
+                  </>
+                )}
+
+                {convertResult && (
+                  <div className={`flex items-start gap-2 px-3 py-2.5 rounded-lg border text-sm font-medium ${
+                    convertResult.success ? "bg-green-50 border-green-200 text-green-800" : "bg-red-50 border-red-200 text-red-700"
+                  }`}>
+                    {convertResult.success ? <CheckCircle2 size={16} className="flex-shrink-0 mt-0.5" /> : <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" />}
+                    <div className="space-y-1">
+                      <p>{convertResult.title}</p>
+                      {convertResult.details.map((detail, index) => (
+                        <p key={index} className="text-xs font-medium">
+                          {detail}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="flex justify-end gap-3 px-6 py-4 border-t border-slate-200">
+                <button
+                  onClick={() => setConvertModalOpen(false)}
+                  disabled={converting}
+                  className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors"
+                >
+                  {convertResult?.success ? "Close" : "Cancel"}
+                </button>
+                {!convertResult?.success && (
+                  <button
+                    onClick={handleConvertToDeal}
+                    disabled={converting}
+                    className="flex items-center gap-2 bg-brand-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-brand-primary/90 transition-colors disabled:opacity-50"
+                  >
+                    {converting ? <><Loader2 size={14} className="animate-spin" /> Converting...</> : <><Zap size={14} /> Convert</>}
+                  </button>
+                )}
+              </div>
+            </div>
+              ); })()}
+          </div>
+    , document.body);
   };
 
   // ── DETAIL VIEW ───────────────────────────────────────────────────────────
@@ -2628,160 +2800,7 @@ const Leads: React.FC = () => {
           </div>
         , document.body)}
 
-        {/* ── Convert to Deal Modal ── */}
-        {convertModalOpen && createPortal(
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => !converting && setConvertModalOpen(false)}>
-            {(() => {
-              const familyLeadIds = getFamilyLeadIds(selectedLead);
-              const familyMembers = leads.filter((l) => familyLeadIds.includes(l.id));
-              const hasFamily = familyMembers.length > 1;
-
-              return (
-            <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-              {/* Header */}
-              <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
-                <div>
-                  <h3 className="text-lg font-bold text-slate-900">Convert to Deal</h3>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    {hasFamily
-                      ? `Will create ${familyMembers.length} deals & send ${familyMembers.length} invite emails.`
-                      : "Creates deal, milestones, tasks & sends invite email."}
-                  </p>
-                </div>
-                <button onClick={() => !converting && setConvertModalOpen(false)} className="text-slate-400 hover:text-slate-600 text-xl font-bold">&times;</button>
-              </div>
-
-              {/* Lead summary */}
-              <div className="px-6 py-4 bg-slate-50 border-b border-slate-200">
-                {hasFamily ? (() => {
-                  const primaryFm = familyMembers.find((fm) => !fm.parentLeadId) ?? selectedLead;
-                  const lt = (selectedLead?.lead_type ?? "").toLowerCase().trim();
-                  const headerLabel =
-                    lt.includes("purchase") && lt.includes("sale")
-                      ? "Primary & Co-Clients"
-                      : lt === "sale"
-                      ? "Seller & Co-Sellers"
-                      : "Purchaser & Co-Purchasers";
-                  return (
-                  <>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">
-                      {headerLabel} ({familyMembers.length})
-                    </p>
-                    <div className="space-y-2">
-                      {[...familyMembers].sort((a, b) => (a.parentLeadId ? 1 : 0) - (b.parentLeadId ? 1 : 0)).map((fm) => {
-                        const isPrimary = !fm.parentLeadId;
-                        const role = isPrimary ? "Primary" : (getCoRole(fm, primaryFm) === "co-seller" ? "Co-Seller" : "Co-Purchaser");
-                        const badgeClass = isPrimary
-                          ? "bg-green-100 text-green-700 border-green-200"
-                          : role === "Co-Seller"
-                          ? "bg-amber-100 text-amber-700 border-amber-200"
-                          : "bg-blue-100 text-blue-700 border-blue-200";
-                        return (
-                          <div key={fm.id} className="flex items-center justify-between">
-                            <div>
-                              <p className="text-sm font-bold text-slate-800">{fm.firstName} {fm.lastName}</p>
-                              <p className="text-xs text-slate-500">{fm.email}</p>
-                            </div>
-                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase border ${badgeClass}`}>{role}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </>
-                  );
-                })() : (
-                  <>
-                    <p className="text-sm font-bold text-slate-800">{selectedLead.firstName} {selectedLead.lastName}</p>
-                    <p className="text-xs text-slate-500">{selectedLead.email}</p>
-                  </>
-                )}
-                {selectedLead.lead_type && (
-                  <p className="text-xs text-slate-400 mt-1.5">Type: {selectedLead.lead_type}</p>
-                )}
-              </div>
-
-              {/* Form */}
-              <div className="px-6 py-4 space-y-4">
-                {/* Inputs are hidden once the conversion succeeds — only the
-                    result message + Close remain. Kept on failure so the admin
-                    can fix the file number and retry. */}
-                {!convertResult?.success && (
-                  <>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">
-                        File Number <span className="text-slate-400 font-normal">(optional)</span>
-                      </label>
-                      <input
-                        type="text"
-                        value={convertFileNumber}
-                        onChange={(e) => setConvertFileNumber(e.target.value)}
-                        placeholder="e.g. 26P-0059"
-                        disabled={converting}
-                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
-                      />
-                      <p className="text-xs text-slate-400 mt-1.5">
-                        Leave blank to auto-generate. All parties in this file
-                        (co-purchasers/co-sellers) share this number. If it's already
-                        used by another file, conversion is blocked with an error.
-                      </p>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">
-                        Closing Date <span className="text-slate-400 font-normal">(optional)</span>
-                      </label>
-                      <input
-                        type="date"
-                        value={convertClosingDate}
-                        onChange={(e) => setConvertClosingDate(e.target.value)}
-                        disabled={converting}
-                        min={todayLocalStr}
-                        max="2100-12-31"
-                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:border-brand-primary"
-                      />
-                    </div>
-                  </>
-                )}
-
-                {convertResult && (
-                  <div className={`flex items-start gap-2 px-3 py-2.5 rounded-lg border text-sm font-medium ${
-                    convertResult.success ? "bg-green-50 border-green-200 text-green-800" : "bg-red-50 border-red-200 text-red-700"
-                  }`}>
-                    {convertResult.success ? <CheckCircle2 size={16} className="flex-shrink-0 mt-0.5" /> : <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" />}
-                    <div className="space-y-1">
-                      <p>{convertResult.title}</p>
-                      {convertResult.details.map((detail, index) => (
-                        <p key={index} className="text-xs font-medium">
-                          {detail}
-                        </p>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Footer */}
-              <div className="flex justify-end gap-3 px-6 py-4 border-t border-slate-200">
-                <button
-                  onClick={() => setConvertModalOpen(false)}
-                  disabled={converting}
-                  className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors"
-                >
-                  {convertResult?.success ? "Close" : "Cancel"}
-                </button>
-                {!convertResult?.success && (
-                  <button
-                    onClick={handleConvertToDeal}
-                    disabled={converting}
-                    className="flex items-center gap-2 bg-brand-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-brand-primary/90 transition-colors disabled:opacity-50"
-                  >
-                    {converting ? <><Loader2 size={14} className="animate-spin" /> Converting...</> : <><Zap size={14} /> Convert</>}
-                  </button>
-                )}
-              </div>
-            </div>
-              ); })()}
-          </div>
-        , document.body)}
+        {renderConvertModal()}
 
         {/* ── Send Email Template Picker Modal ── */}
         {emailModalOpen && createPortal(
@@ -3206,6 +3225,19 @@ const Leads: React.FC = () => {
                   </td>
                   <td className="px-4 py-3 text-center">
                     <div className="flex justify-center items-center gap-1">
+                      {/* Convert straight from the row. Hidden once the file is
+                          converted — the same one-way action the detail page
+                          replaces with an "Already Converted" pill. */}
+                      {lead.status !== "Converted" && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); openConvertFromList(lead); }}
+                          className="text-slate-400 hover:text-brand-primary transition-colors p-1"
+                          title="Convert to deal"
+                          aria-label={`Convert ${lead.firstName ?? ""} ${lead.lastName ?? ""} to a deal`}
+                        >
+                          <Zap size={14} />
+                        </button>
+                      )}
                       <button
                         onClick={(e) => { e.stopPropagation(); openLeadForEdit(lead); }}
                         className="text-slate-400 hover:text-brand-primary transition-colors p-1"
@@ -3232,6 +3264,8 @@ const Leads: React.FC = () => {
           </table>
         )}
       </div>
+
+      {renderConvertModal()}
 
       {/* Pagination footer */}
       <div className="pt-4 text-center">
