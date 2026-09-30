@@ -191,7 +191,10 @@ async function extractDocx(buffer: ArrayBuffer): Promise<ExtractOutcome> {
     // the body: the format prompt is told not to repeat the title as a heading,
     // so leaving it in would produce a duplicate on the page.
     if (level !== null && level <= 1 && !title) {
-      title = text;
+      // A Word "Title" often holds a soft line break ("iClosed — Condensed
+      // Blog Collection ⏎ 5 Blogs"); flattened, or the newline reaches the
+      // title column and the slug.
+      title = text.replace(/\s+/g, " ").trim();
       continue;
     }
 
@@ -409,9 +412,16 @@ function normaliseBlankLines(s: string): string {
  * "Continue the Series" is deliberately NOT here — it moved to
  * SEPARATOR_SERIES, where it now BEGINS a post instead of proving there is
  * only one. A phrase must never sit in both lists.
+ *
+ * A NUMBER is not on its own evidence of anything, which is why `1.` is only
+ * an optional prefix here rather than a match in its own right. Numbering is
+ * exactly how a collection numbers its POSTS — "1. Mortgage Statements",
+ * "2. How Property Tax Is Adjusted" — and treating the digit as proof of an
+ * internal section collapsed a real five-post document into one. It still
+ * catches "1. Introduction", because the words after the number decide.
  */
 const INTERNAL_SUBHEADING =
-  /^(?:#{1,6}\s+)?(?:\d+[.)]\s+|introduction\b|overview\b|background\b|key\s+takeaways?\b|takeaways?\b|conclusion\b|final\s+thoughts\b|(?:the\s+)?bottom\s+line\b|faqs?\b|frequently\s+asked\s+questions\b|common\s+questions\b|what\s+you\s+need\s+to\s+know\b|(?:in\s+)?summary\b|table\s+of\s+contents\b|next\s+steps\b|what.?s\s+next\b|read\s+more\b|related\s+(?:posts?|articles?|reading)\b|further\s+reading\b|references\b|sources\b|disclaimer\b|about\s+the\s+author\b|how\s+we\s+can\s+help\b|contact\s+us\b|get\s+in\s+touch\b)/i;
+  /^(?:#{1,6}\s+)?(?:\d{1,2}[.)]\s+)?(?:introduction\b|overview\b|background\b|key\s+takeaways?\b|takeaways?\b|conclusion\b|final\s+thoughts\b|(?:the\s+)?bottom\s+line\b|faqs?\b|frequently\s+asked\s+questions\b|common\s+questions\b|what\s+you\s+need\s+to\s+know\b|(?:in\s+)?summary\b|table\s+of\s+contents\b|next\s+steps\b|what.?s\s+next\b|read\s+more\b|related\s+(?:posts?|articles?|reading)\b|further\s+reading\b|references\b|sources?\b|source\s*(?:&|and)\s*editorial\s+note\b|editorial\s+note\b|author'?s?\s+note\b|about\s+this\s+(?:document|collection|series|guide)\b|disclaimer\b|about\s+the\s+author\b|how\s+we\s+can\s+help\b|contact\s+us\b|get\s+in\s+touch\b)/i;
 
 /**
  * An article is at least this long. Anything shorter that a splitter produced
@@ -460,17 +470,64 @@ const SEPARATOR_SERIES =
   /^\s*(?:<!--)?\s*[[({]?\s*[-*=~_«»]*\s*(?:#{1,6}\s*)?\**\s*(?:(?:start|starts|starting|begin|begins|beginning|continue|continues|continuing|continued|next|new)\s+(?:of\s+|with\s+|in\s+|to\s+)?(?:the\s+)?series|(?:in\s+)?this\s+series|series\s+(?:start|starts|begin|begins|continue|continues|continued|end|ends|break|divider|separator|split))\s*\d*\s*\**\s*[-*=~_«»]*\s*[\])}]?\s*(?:-->)?\s*(?:[:.\-–—!]\s*(.*?))?\s*$/i;
 
 /**
+ * The cross-link footer a series carries between its parts:
+ * "« Previous: What Happens on Closing Day? | Next: What Is a Final Report? »".
+ *
+ * It sits BETWEEN two posts, so it separates them — and it must never be
+ * mistaken for a title. It was: an import once produced a whole list of drafts
+ * each named "« Previous: … | Next: … »", because the line is the first thing
+ * in the chunk and something upstream took the first line as the headline.
+ */
+const SEPARATOR_NAV = /^\s*[«‹<]{0,2}\s*(?:previous|prev|next|back)\s*:\s*\S.*$/i;
+
+/**
+ * Navigation ANYWHERE in a string, not just at the start of a line.
+ *
+ * This is the one that matters in practice, because the real documents write
+ * the footer as "Continue the series: « Previous: … | Next: … »" — a series
+ * marker whose "title" is the navigation. Taking the words after that colon at
+ * face value is what produced a list of drafts all called
+ * "« Previous: … | Next: … »". A title that reads like navigation is refused,
+ * and the post's own heading on the next line is used instead.
+ */
+const NAV_LIKE = /(?:^|[«‹|·•—–\-\s])(?:previous|prev|next|back)\s*:/i;
+
+/** A separator's inline title, unless it is really navigation. */
+function inlineTitle(raw: string | undefined): string | null {
+  const title = (raw ?? "").trim().replace(/^[«‹<\s]+/, "").trim();
+  if (!title || NAV_LIKE.test(title)) return null;
+  return title;
+}
+
+/**
  * Whether a line is a worded separator, and the title the admin wrote on it.
- * The single place both separator families are recognised, so explicitSplit(),
+ * The single place every separator family is recognised, so explicitSplit(),
  * stripSeparatorLines() and titleFromSection() can never drift apart.
  */
 function separatorMatch(line: string): { title: string | null } | null {
   if (!line.trim()) return null;
+  // Navigation first: it carries a colon and words that would otherwise read
+  // as a title, and a title is the one thing it must never supply.
+  if (SEPARATOR_NAV.test(line)) return { title: null };
   const series = line.match(SEPARATOR_SERIES);
-  if (series) return { title: (series[1] ?? "").trim() || null };
+  if (series) return { title: inlineTitle(series[1]) };
   const word = line.match(SEPARATOR_WORD);
-  if (word) return { title: (word[1] ?? "").trim() || null };
+  if (word) return { title: inlineTitle(word[1]) };
   return null;
+}
+
+/**
+ * A heading as a post title: the ordinal a collection numbers its parts with
+ * is dropped, so "1. Mortgage Statements" is published as "Mortgage
+ * Statements" rather than carrying a position that means nothing on its own
+ * page — and slugged as /blogs/mortgage-statements, not /blogs/1-mortgage….
+ */
+function cleanTitle(raw: string): string | null {
+  const title = raw.replace(/^\s*\d{1,2}[.)]\s+/, "").replace(/\s+/g, " ").trim();
+  // Defence in depth: every route to a title lands here, so navigation cannot
+  // become one through the heading, sniff or Gemini paths either.
+  if (!title || NAV_LIKE.test(title)) return null;
+  return title;
 }
 
 /**
@@ -509,15 +566,52 @@ function mainHeadings(text: string): { level: number; headings: HeadingLine[] } 
   const all = headingLines(text);
   if (all.length === 0) return null;
   const level = Math.min(...all.map((h) => h.level));
-  const headings = all.filter((h) => h.level === level);
-  if (headings.some((h) => INTERNAL_SUBHEADING.test(h.text))) return null;
+
+  // Internal headings are REMOVED from the boundary list rather than
+  // disqualifying the level outright. A five-post collection that ends with
+  // "Source & Editorial Note" still splits into five; the note simply is not
+  // one of the five, and folds into the post above it. Disqualifying the whole
+  // level on one such heading collapsed the document to a single post.
+  const headings = all.filter((h) => h.level === level && !INTERNAL_SUBHEADING.test(h.text));
+  if (headings.length === 0) return null;
   return { level, headings };
 }
 
-/** Cuts the text at the given ascending offsets (0 is always the first cut). */
-function sliceAtOffsets(text: string, offsets: number[]): string[] {
-  const cuts = Array.from(new Set([0, ...offsets])).sort((a, b) => a - b);
+/**
+ * Cuts the text at the given ascending offsets. Offset 0 is added unless
+ * `includeStart` says otherwise — which is how front matter is dropped.
+ */
+function sliceAtOffsets(text: string, offsets: number[], includeStart = true): string[] {
+  const cuts = Array.from(new Set(includeStart ? [0, ...offsets] : offsets)).sort((a, b) => a - b);
   return cuts.map((start, i) => text.slice(start, i + 1 < cuts.length ? cuts[i + 1] : text.length));
+}
+
+/** A cover page's worth of text. Longer than this is somebody's article. */
+const FRONT_MATTER_CHARS = 400;
+
+/**
+ * Sections cut at HEADING boundaries, where the text before the first heading
+ * belongs to no post at all — it is the collection's own cover line ("Condensed
+ * from the uploaded … · September 2026"), and publishing it at the top of post
+ * one is wrong. Short front matter is dropped and reported; anything longer is
+ * kept, because at that length it is more likely to be writing than a label.
+ *
+ * Separator-based splits do NOT come through here: a separator sits BETWEEN
+ * posts, so the text above the first one is post one.
+ */
+function sectionsAtHeadings(text: string, offsets: number[]): { sections: RawSection[]; notes: string[] } {
+  const first = offsets[0] ?? 0;
+  const frontMatter = text.slice(0, first).trim();
+  const drop = first > 0 && frontMatter.length > 0 && frontMatter.length < FRONT_MATTER_CHARS;
+
+  return {
+    sections: finishSections(sliceAtOffsets(text, offsets, !drop)),
+    notes: drop
+      ? [
+          `A short line before the first article was left out of every post — it describes the document, not an article: “${frontMatter.replace(/\s+/g, " ").slice(0, 120)}”.`,
+        ]
+      : [],
+  };
 }
 
 /**
@@ -563,7 +657,7 @@ function titleFromSection(raw: string): RawSection {
   const heading = first.match(/^#{1,6}\s+(.+?)\s*$/);
   if (heading) {
     lines.splice(firstIdx, 1);
-    return { text: normaliseBlankLines(lines.join("\n")), title: heading[1].trim() || null };
+    return { text: normaliseBlankLines(lines.join("\n")), title: cleanTitle(heading[1]) };
   }
 
   const label = first.match(ARTICLE_LABEL);
@@ -571,7 +665,7 @@ function titleFromSection(raw: string): RawSection {
     const inline = (label[2] ?? "").trim();
     if (inline) {
       lines.splice(firstIdx, 1);
-      return { text: normaliseBlankLines(lines.join("\n")), title: inline };
+      return { text: normaliseBlankLines(lines.join("\n")), title: cleanTitle(inline) };
     }
     // "Blog 2" on its own line: the real title is the next non-blank line.
     const nextIdx = lines.findIndex((l, i) => i > firstIdx && l.trim().length > 0);
@@ -579,7 +673,7 @@ function titleFromSection(raw: string): RawSection {
     if (next && next.length <= 120) {
       lines.splice(nextIdx, 1);
       lines.splice(firstIdx, 1);
-      return { text: normaliseBlankLines(lines.join("\n")), title: next };
+      return { text: normaliseBlankLines(lines.join("\n")), title: cleanTitle(next) };
     }
     lines.splice(firstIdx, 1);
     return { text: normaliseBlankLines(lines.join("\n")), title: null };
@@ -698,13 +792,13 @@ function explicitSplit(text: string): { sections: RawSection[]; reason: string }
  * heading in the document is `##`, this returns null and the document stays a
  * single post.
  */
-function headingSplit(text: string): { sections: RawSection[]; reason: string } | null {
+function headingSplit(text: string): SplitOutcome | null {
   const main = mainHeadings(text);
   if (!main || main.level !== 1) return null;
 
-  const sections = finishSections(sliceAtOffsets(text, main.headings.map((h) => h.offset)));
+  const { sections, notes } = sectionsAtHeadings(text, main.headings.map((h) => h.offset));
   if (sections.length < 2) return null;
-  return { sections, reason: "top-level (#) headings" };
+  return { sections, reason: "top-level (#) headings", notes };
 }
 
 type BoundaryMarker = { title: string; startSnippet: string; suggestedTags: string[] };
@@ -839,7 +933,7 @@ function locateMarkers(text: string, markers: BoundaryMarker[]): number[] {
 function leadingHeading(chunk: string): string | null {
   const first = chunk.split("\n").find((l) => l.trim().length > 0)?.trim() ?? "";
   const m = first.match(/^#{1,6}\s+(.+)$/);
-  return m ? m[1].trim() : null;
+  return m ? cleanTitle(m[1]) : null;
 }
 
 /** A title sniffed from an article's own opening lines, when nothing else supplied one. */
@@ -849,7 +943,9 @@ function sniffTitle(articleText: string): string | null {
     const trimmed = line.trim();
     if (!trimmed) continue;
     const heading = trimmed.match(/^#{1,6}\s+(.+)$/);
-    if (heading) return heading[1].trim();
+    if (heading) return cleanTitle(heading[1]);
+    // Navigation is never a title — see SEPARATOR_NAV.
+    if (separatorMatch(trimmed)) break;
     if (trimmed.length < 100 && !/^(the|a|an|and|or|but|in|on|at)\s/i.test(trimmed)) {
       return trimmed.length > 80 ? `${trimmed.slice(0, 77)}...` : trimmed;
     }
@@ -868,7 +964,13 @@ function demoteTopHeadings(text: string): string {
   return text.replace(/^(\s*)#\s+(?=\S)/gm, "$1## ");
 }
 
-export type SplitOutcome = { sections: RawSection[]; reason: string };
+export type SplitOutcome = {
+  sections: RawSection[];
+  /** Which rule cut the document — logged on every import. */
+  reason: string;
+  /** Anything the split itself needs to tell the admin, e.g. dropped front matter. */
+  notes: string[];
+};
 
 /**
  * Where a document becomes one-or-more articles. Exported so the split can be
@@ -885,20 +987,20 @@ export type SplitOutcome = { sections: RawSection[]; reason: string };
  */
 export function splitBlogDocument(text: string, aiMarkers: BoundaryMarker[] | null): SplitOutcome {
   const explicit = explicitSplit(text);
-  if (explicit) return explicit;
+  if (explicit) return { ...explicit, notes: [] };
 
   if (aiMarkers) {
     const offsets = locateMarkers(text, aiMarkers);
     if (offsets.length > 1) {
-      const sections = finishSections(sliceAtOffsets(text, offsets));
-      if (sections.length > 1) return { sections, reason: "AI boundaries at main headings" };
+      const { sections, notes } = sectionsAtHeadings(text, offsets);
+      if (sections.length > 1) return { sections, reason: "AI boundaries at main headings", notes };
     }
   }
 
   const headings = headingSplit(text);
   if (headings) return headings;
 
-  return { sections: finishSections([text]), reason: "single article" };
+  return { sections: finishSections([text]), reason: "single article", notes: [] };
 }
 
 // ── Entry point ────────────────────────────────────────────────────────
@@ -1007,7 +1109,7 @@ export async function extractMultipleBlogArticles(file: File): Promise<MultipleE
   // Gemini is only consulted when the document carries no explicit separator;
   // asking it anyway would cost a call whose answer is thrown away.
   const aiMarkers = explicitSplit(text) ? null : await aiSeparateArticles(text);
-  const { sections, reason } = splitBlogDocument(text, aiMarkers);
+  const { sections, reason, notes } = splitBlogDocument(text, aiMarkers);
 
   if (sections.length === 0) {
     return { ok: false, error: "No article text found in the document." };
@@ -1025,9 +1127,11 @@ export async function extractMultipleBlogArticles(file: File): Promise<MultipleE
       (aiMarkers ? ` (Gemini proposed ${aiMarkers.length})` : ""),
   );
 
-  const results: ExtractedArticle[] = sections.map(({ text: sectionText, title }) => {
+  const results: ExtractedArticle[] = sections.map(({ text: sectionText, title }, i) => {
     const articleText = demoteTopHeadings(sectionText);
-    const warnings = [...fileWarnings];
+    // The split's own notes go on the first article only — they are about the
+    // document, and repeating them on every post would be noise.
+    const warnings = [...fileWarnings, ...(i === 0 ? notes : [])];
     if (articleText.length > MAX_BLOG_CHARS) {
       warnings.push(
         `This article is ${articleText.length.toLocaleString()} characters, above the ${MAX_BLOG_CHARS.toLocaleString()}-character guideline. Nothing was cut — review it before publishing.`,
