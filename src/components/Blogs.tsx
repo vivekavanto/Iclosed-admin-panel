@@ -649,6 +649,37 @@ const Blogs: React.FC = () => {
                 the list, and the drafts appear in it as they are finished.
               </p>
 
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
+                <p className="font-semibold text-slate-700">Where the document is split</p>
+                <p className="mt-1">
+                  One document is <strong>one blog</strong> unless it says otherwise. Sections,
+                  sub-headings and FAQs all stay inside the same post.
+                </p>
+                <p className="mt-1.5">
+                  To upload several blogs at once, put one of these on a line of its own between
+                  them:{" "}
+                  <code className="rounded bg-white px-1 py-0.5 font-mono">END OF BLOG</code>,{" "}
+                  <code className="rounded bg-white px-1 py-0.5 font-mono">START OF BLOG</code>,{" "}
+                  <code className="rounded bg-white px-1 py-0.5 font-mono">---</code>, or a{" "}
+                  <code className="rounded bg-white px-1 py-0.5 font-mono">Blog 1:</code> /{" "}
+                  <code className="rounded bg-white px-1 py-0.5 font-mono">Blog 2:</code> label. In
+                  Word, giving each article a <strong>Heading 1</strong> headline works too.
+                </p>
+                <p className="mt-1.5">
+                  For a series, these split it as well:{" "}
+                  <code className="rounded bg-white px-1 py-0.5 font-mono">Start of the series</code>,{" "}
+                  <code className="rounded bg-white px-1 py-0.5 font-mono">Continue the series</code>,{" "}
+                  <code className="rounded bg-white px-1 py-0.5 font-mono">Continue with series</code>,{" "}
+                  <code className="rounded bg-white px-1 py-0.5 font-mono">In this series</code>,{" "}
+                  <code className="rounded bg-white px-1 py-0.5 font-mono">Series break</code>. Add a
+                  title after a colon —{" "}
+                  <code className="rounded bg-white px-1 py-0.5 font-mono">
+                    Continue the series: Part Two
+                  </code>{" "}
+                  — and it becomes that post&rsquo;s title.
+                </p>
+              </div>
+
               <label className="flex items-start gap-2.5 text-sm text-slate-700 cursor-pointer">
                 <input
                   type="checkbox"

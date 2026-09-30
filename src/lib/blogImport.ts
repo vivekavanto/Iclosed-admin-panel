@@ -196,9 +196,13 @@ async function extractDocx(buffer: ArrayBuffer): Promise<ExtractOutcome> {
     }
 
     if (level !== null) {
-      // h1 is not an allowed tag in a body (the page renders the post title as
-      // the sole h1), so Heading 1s after the first are demoted to h2.
-      lines.push(`${"#".repeat(Math.min(Math.max(level, 2), 4))} ${text}`);
+      // The Word level is kept AS WRITTEN, `#` included. It used to be clamped
+      // to `##`, which threw away the one thing the splitter needs: a Heading 1
+      // (a standalone post's headline) and a Heading 2 (a section inside one
+      // post) arrived indistinguishable, so every section looked like a new
+      // blog. `#` never reaches the stored body — demoteTopHeadings() turns it
+      // into `##` once the article boundaries have been decided.
+      lines.push(`${"#".repeat(Math.min(level, 4))} ${text}`);
     } else if (/<w:numPr\b/.test(chunk)) {
       lines.push(`- ${text}`);
     } else {
@@ -287,8 +291,9 @@ RULES:
 - Prefix a section heading with "## " and a sub-heading with "### ", using the
   author's own heading words.
 - Prefix a bulleted or numbered list item with "- ".
-- If the PDF's first line is the article's title, put it on its own first line
-  prefixed with "# ".
+- Prefix an ARTICLE'S OWN HEADLINE with "# " — the first line if it is the
+  title, and the headline of any further standalone article the file contains.
+  Use "# " for nothing else: a section heading inside an article is "## ".
 - Output the transcription only. No preamble, no code fences, no JSON.`;
 
 /**
@@ -391,65 +396,315 @@ function normaliseBlankLines(s: string): string {
 }
 
 // ── Multiple article extraction ────────────────────────────────────────
-
 /**
  * Headings that mark a SECTION of one article, never the start of a new one.
- * Both the AI boundary detector's prompt and the deterministic fallback below
- * are built around this same list, so an "AI offline" fallback degrades
- * gracefully rather than suddenly shredding every FAQ into its own post.
+ *
+ * This list is load-bearing in a way it was not before: if the document's
+ * SHALLOWEST heading level contains one of these, that level is a section
+ * level, and the document is treated as ONE article no matter how many
+ * headings it has (see mainHeadings()). A document whose top-level headings
+ * include "FAQ" or "Conclusion" is an article with an FAQ, not a pile of
+ * articles one of which is called "FAQ".
+ *
+ * "Continue the Series" is deliberately NOT here — it moved to
+ * SEPARATOR_SERIES, where it now BEGINS a post instead of proving there is
+ * only one. A phrase must never sit in both lists.
  */
-const INTERNAL_SUBHEADING = /^(?:#{1,3}\s+)?(?:\d+\.\s+|introduction\b|key\s+takeaways\b|conclusion\b|faq\b|frequently\s+asked\s+questions\b|what\s+you\s+need\s+to\s+know\b|summary\b)/i;
+const INTERNAL_SUBHEADING =
+  /^(?:#{1,6}\s+)?(?:\d+[.)]\s+|introduction\b|overview\b|background\b|key\s+takeaways?\b|takeaways?\b|conclusion\b|final\s+thoughts\b|(?:the\s+)?bottom\s+line\b|faqs?\b|frequently\s+asked\s+questions\b|common\s+questions\b|what\s+you\s+need\s+to\s+know\b|(?:in\s+)?summary\b|table\s+of\s+contents\b|next\s+steps\b|what.?s\s+next\b|read\s+more\b|related\s+(?:posts?|articles?|reading)\b|further\s+reading\b|references\b|sources\b|disclaimer\b|about\s+the\s+author\b|how\s+we\s+can\s+help\b|contact\s+us\b|get\s+in\s+touch\b)/i;
 
 /**
- * Deterministic delimiter-based split, used when Gemini is unreachable, has no
- * API key configured, or returned nothing this text's own words support.
- *
- * Order matters: an explicit "N articles" delimiter is unambiguous and tried
- * first; a heading-based split is the last resort because headings are also
- * how ONE article organizes its own sections.
+ * An article is at least this long. Anything shorter that a splitter produced
+ * is folded back into its neighbour rather than published as a post of its own
+ * — a 200-character "article" is an FAQ answer or a pull quote that a boundary
+ * detector cut in the wrong place.
  */
-function splitMultipleArticlesFallback(text: string): string[] {
-  // 1. Explicit horizontal-rule delimiters.
-  if (/\n(?:---|===)\n/.test(text)) {
-    return text
-      .split(/\n(?:---|===)\n/)
-      .map((s) => normaliseBlankLines(s))
-      .filter((s) => s.length > 0);
+const MIN_ARTICLE_CHARS = 500;
+
+/**
+ * A line that is nothing but a horizontal rule: `---`, `***`, `___`, `===`,
+ * `* * *`. Only counts as a separator when a blank line precedes it, because
+ * `---` directly under a line of text is a Markdown setext H2 underline, not a
+ * rule — splitting there would cut an article at one of its own headings.
+ */
+const SEPARATOR_RULE = /^\s*(?:-{3,}|={3,}|\*{3,}|_{3,}|~{3,}|(?:[-*=~_]\s){2,}[-*=~_])\s*$/;
+
+/**
+ * A line the admin typed ON PURPOSE to end one blog and start the next:
+ * "END OF BLOG", "--- START BLOG ---", "[New Article]", "## Blog Break",
+ * "<!-- blog break -->". This is the documented, unambiguous way to control
+ * the split, so when one of these is present NOTHING else gets a vote — not
+ * the headings, not Gemini.
+ */
+const SEPARATOR_WORD =
+  /^\s*(?:<!--)?\s*[[({]?\s*[-*=~_«»]*\s*(?:#{1,6}\s*)?\**\s*(?:(?:start|starts|begin|begins|end|ends|new|next)\s+(?:of\s+)?(?:the\s+)?(?:blog|article|post)(?:\s+post)?|(?:blog|article|post)(?:\s+post)?\s+(?:start|starts|begin|begins|end|ends|break|divider|separator|split)|blog\s*break)\s*#?\s*\d*\s*\**\s*[-*=~_«»]*\s*[\])}]?\s*(?:-->)?\s*(?:[:.\-–—!]\s*(.*?))?\s*$/i;
+
+/**
+ * The same idea for a SERIES of posts: "Start of the series", "Continue the
+ * series", "Continue with series", "Next in the series", "In this series",
+ * "Series break". A firm publishing a three-part series marks the parts this
+ * way rather than typing "END OF BLOG", so these split a document exactly as
+ * SEPARATOR_WORD does — they are an ADDITION to it, nothing was removed.
+ *
+ * NOTE the reversal this represents: "Continue the Series" used to sit in
+ * INTERNAL_SUBHEADING, i.e. it was proof that a document was ONE post. It is
+ * now proof of the opposite. Nothing may appear in both lists.
+ *
+ * The whole line has to be the marker, which is what keeps this safe: a
+ * sentence opening "In this series, we look at…" does not match, because of
+ * the text that follows it. Anything after a `:` or a dash IS taken as the
+ * next post's title — "Continue the series: Title Insurance" both cuts the
+ * document and names the post that follows.
+ */
+const SEPARATOR_SERIES =
+  /^\s*(?:<!--)?\s*[[({]?\s*[-*=~_«»]*\s*(?:#{1,6}\s*)?\**\s*(?:(?:start|starts|starting|begin|begins|beginning|continue|continues|continuing|continued|next|new)\s+(?:of\s+|with\s+|in\s+|to\s+)?(?:the\s+)?series|(?:in\s+)?this\s+series|series\s+(?:start|starts|begin|begins|continue|continues|continued|end|ends|break|divider|separator|split))\s*\d*\s*\**\s*[-*=~_«»]*\s*[\])}]?\s*(?:-->)?\s*(?:[:.\-–—!]\s*(.*?))?\s*$/i;
+
+/**
+ * Whether a line is a worded separator, and the title the admin wrote on it.
+ * The single place both separator families are recognised, so explicitSplit(),
+ * stripSeparatorLines() and titleFromSection() can never drift apart.
+ */
+function separatorMatch(line: string): { title: string | null } | null {
+  if (!line.trim()) return null;
+  const series = line.match(SEPARATOR_SERIES);
+  if (series) return { title: (series[1] ?? "").trim() || null };
+  const word = line.match(SEPARATOR_WORD);
+  if (word) return { title: (word[1] ?? "").trim() || null };
+  return null;
+}
+
+/**
+ * A numbered article label — "Blog 1: Closing Costs", "Article 2.", "Post #3".
+ * The text after the number, when there is any, is that article's title.
+ */
+const ARTICLE_LABEL =
+  /^\s*(?:#{1,6}\s+)?\**\s*(?:blog|article|post)(?:\s+post)?\s*#?\s*(\d+)\s*\**\s*(?:[:.)\-–—]\s*(.+?))?\s*\**\s*$/i;
+
+type RawSection = { text: string; title: string | null };
+type HeadingLine = { level: number; text: string; offset: number; lineLength: number };
+
+/** Every Markdown heading in the text, with the character offset of its line. */
+function headingLines(text: string): HeadingLine[] {
+  const out: HeadingLine[] = [];
+  let offset = 0;
+  for (const line of text.split("\n")) {
+    const m = line.match(/^\s*(#{1,6})\s+(.+?)\s*$/);
+    if (m) out.push({ level: m[1].length, text: m[2], offset, lineLength: line.length });
+    offset += line.length + 1;
+  }
+  return out;
+}
+
+/**
+ * The document's MAIN heading level and the headings sitting at it — the only
+ * level an article boundary is ever allowed to land on.
+ *
+ * Returns null when no split may happen on headings at all: either the
+ * document has no headings, or its shallowest level is a section level
+ * (INTERNAL_SUBHEADING). "Main heading, not subheading" is exactly this: a
+ * `###` inside an article can never be a boundary while an `##` exists above
+ * it, because the shallowest level wins and everything deeper is interior.
+ */
+function mainHeadings(text: string): { level: number; headings: HeadingLine[] } | null {
+  const all = headingLines(text);
+  if (all.length === 0) return null;
+  const level = Math.min(...all.map((h) => h.level));
+  const headings = all.filter((h) => h.level === level);
+  if (headings.some((h) => INTERNAL_SUBHEADING.test(h.text))) return null;
+  return { level, headings };
+}
+
+/** Cuts the text at the given ascending offsets (0 is always the first cut). */
+function sliceAtOffsets(text: string, offsets: number[]): string[] {
+  const cuts = Array.from(new Set([0, ...offsets])).sort((a, b) => a - b);
+  return cuts.map((start, i) => text.slice(start, i + 1 < cuts.length ? cuts[i + 1] : text.length));
+}
+
+/**
+ * Drops leftover separator lines so they never reach the published body. A
+ * rule is only dropped where explicitSplit() would have treated it as one —
+ * after a blank line — so a setext heading keeps its underline.
+ */
+function stripSeparatorLines(s: string): string {
+  const lines = s.split("\n");
+  return lines
+    .filter((line, i) => {
+      if (!line.trim()) return true;
+      if (separatorMatch(line)) return false;
+      const prevBlank = i === 0 || lines[i - 1].trim().length === 0;
+      return !(prevBlank && SEPARATOR_RULE.test(line));
+    })
+    .join("\n");
+}
+
+/**
+ * Takes the section's own opening heading (or "Blog 2: …" label) as its title
+ * and REMOVES that line from the body — the page renders the title above the
+ * article, and the format prompt is told not to repeat it, so leaving it in
+ * produced either a duplicate heading or a words-dropped warning.
+ */
+function titleFromSection(raw: string): RawSection {
+  const lines = raw.split("\n");
+  const firstIdx = lines.findIndex((l) => l.trim().length > 0);
+  if (firstIdx === -1) return { text: "", title: null };
+
+  const first = lines[firstIdx].trim();
+
+  // A section begins AT its separator line, so that line is here. Drop it, and
+  // keep the title the admin wrote on it ("Continue the series: Part Two"). If
+  // there was none, the post's own heading on the next line supplies it.
+  const separator = separatorMatch(first);
+  if (separator) {
+    lines.splice(firstIdx, 1);
+    const rest = normaliseBlankLines(lines.join("\n"));
+    return separator.title ? { text: rest, title: separator.title } : titleFromSection(rest);
   }
 
-  // 2. "Blog 1:", "Article 2.", "Post 3:" style delimiters.
-  if (/(?:^|\n)(?:Blog|Article|Post)\s+\d+[:.]/i.test(text)) {
-    const parts = text.split(/(?=(?:^|\n)(?:Blog|Article|Post)\s+\d+[:.])/i)
-      .map((s) => normaliseBlankLines(s))
-      .filter((s) => s.length > 0);
-    if (parts.length > 1) return parts;
+  const heading = first.match(/^#{1,6}\s+(.+?)\s*$/);
+  if (heading) {
+    lines.splice(firstIdx, 1);
+    return { text: normaliseBlankLines(lines.join("\n")), title: heading[1].trim() || null };
   }
 
-  // 3. Top-level headers, excluding ones that are clearly an internal section
-  // of a single article (Introduction, numbered lists, FAQ, Conclusion, …).
-  const lines = text.split("\n");
-  const sections: string[] = [];
-  let current = "";
-  let headerCount = 0;
-
-  for (const line of lines) {
-    const isHeader = /^#{1,2}\s+\S/.test(line);
-    if (isHeader && !INTERNAL_SUBHEADING.test(line.trim())) {
-      if (current.trim()) sections.push(current);
-      current = line;
-      headerCount++;
-    } else {
-      current += (current ? "\n" : "") + line;
+  const label = first.match(ARTICLE_LABEL);
+  if (label) {
+    const inline = (label[2] ?? "").trim();
+    if (inline) {
+      lines.splice(firstIdx, 1);
+      return { text: normaliseBlankLines(lines.join("\n")), title: inline };
     }
+    // "Blog 2" on its own line: the real title is the next non-blank line.
+    const nextIdx = lines.findIndex((l, i) => i > firstIdx && l.trim().length > 0);
+    const next = nextIdx === -1 ? "" : lines[nextIdx].trim().replace(/^#{1,6}\s+/, "");
+    if (next && next.length <= 120) {
+      lines.splice(nextIdx, 1);
+      lines.splice(firstIdx, 1);
+      return { text: normaliseBlankLines(lines.join("\n")), title: next };
+    }
+    lines.splice(firstIdx, 1);
+    return { text: normaliseBlankLines(lines.join("\n")), title: null };
   }
-  if (current.trim()) sections.push(current);
 
-  if (headerCount <= 1) {
-    return [normaliseBlankLines(text)];
+  return { text: normaliseBlankLines(raw), title: null };
+}
+
+/**
+ * Folds any section below MIN_ARTICLE_CHARS into its neighbour. Whatever cut
+ * it out — Gemini or a heading rule — cut in the wrong place, and re-joining
+ * is the only move that cannot lose the author's words.
+ */
+function mergeRunts(sections: RawSection[]): RawSection[] {
+  if (sections.length <= 1) return sections;
+
+  const out: RawSection[] = [];
+  for (const section of sections) {
+    const prev = out[out.length - 1];
+    if (prev && section.text.length < MIN_ARTICLE_CHARS) {
+      prev.text = normaliseBlankLines(
+        `${prev.text}\n\n${section.title ? `## ${section.title}\n\n` : ""}${section.text}`,
+      );
+      continue;
+    }
+    out.push({ ...section });
   }
-  return sections
-    .map((s) => normaliseBlankLines(s))
-    .filter((s) => s.length > 0);
+
+  // A short FIRST section has no previous to fold into; fold it forwards.
+  while (out.length > 1 && out[0].text.length < MIN_ARTICLE_CHARS) {
+    const [first, second] = out;
+    out.splice(0, 2, {
+      title: first.title ?? second.title,
+      text: normaliseBlankLines(
+        `${first.text}\n\n${second.title ? `## ${second.title}\n\n` : ""}${second.text}`,
+      ),
+    });
+  }
+  return out;
+}
+
+/**
+ * Order matters here: titleFromSection() runs FIRST, because a section begins
+ * at its own separator line and that line may carry the post's title
+ * ("Continue the series: Part Two"). Stripping separators first would throw
+ * the title away. Whatever separators are left inside the body are removed
+ * afterwards.
+ */
+function finishSections(chunks: string[]): RawSection[] {
+  return mergeRunts(
+    chunks
+      .map((c) => {
+        const section = titleFromSection(normaliseBlankLines(c));
+        return { ...section, text: normaliseBlankLines(stripSeparatorLines(section.text)) };
+      })
+      .filter((s) => s.text.trim().length > 0),
+  );
+}
+
+/**
+ * The split the admin asked for in the document itself. Returns null when the
+ * document carries no explicit instruction.
+ *
+ * Precedence, most explicit first: numbered labels (they carry titles too),
+ * then worded markers, then horizontal rules.
+ */
+function explicitSplit(text: string): { sections: RawSection[]; reason: string } | null {
+  const lines = text.split("\n");
+  const labelAt: number[] = [];
+  const wordAt: number[] = [];
+  const ruleAt: number[] = [];
+  let offset = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const prevBlank = i === 0 || lines[i - 1].trim().length === 0;
+    if (line.trim()) {
+      if (ARTICLE_LABEL.test(line)) labelAt.push(offset);
+      else if (separatorMatch(line)) wordAt.push(offset);
+      // A rule directly under text is a setext heading underline, not a rule.
+      else if (prevBlank && SEPARATOR_RULE.test(line)) ruleAt.push(offset);
+    }
+    offset += line.length + 1;
+  }
+
+  let offsets: number[];
+  let reason: string;
+  if (labelAt.length >= 2) {
+    offsets = labelAt;
+    reason = 'numbered "Blog N:" labels';
+  } else if (wordAt.length >= 1) {
+    // A marker ends the block before it and starts the one after it; cutting at
+    // the marker line and dropping the line itself handles both "END OF BLOG"
+    // and "START BLOG" without having to know which the admin typed.
+    offsets = wordAt;
+    reason = "start/end blog markers";
+  } else if (ruleAt.length >= 1) {
+    offsets = ruleAt;
+    reason = "horizontal-rule separators";
+  } else {
+    return null;
+  }
+
+  const sections = finishSections(sliceAtOffsets(text, offsets));
+  if (sections.length < 2) return null;
+  return { sections, reason };
+}
+
+/**
+ * Heading-based split — the last resort, and deliberately the narrowest.
+ *
+ * Only `#` (a Word "Heading 1" / Markdown h1 / a PDF's "# ") counts. That is
+ * the author's MAIN heading: the level a standalone post's headline sits at.
+ * `##` and below are how one article organises itself, and splitting there is
+ * precisely the bug this guard exists to prevent — so when the shallowest
+ * heading in the document is `##`, this returns null and the document stays a
+ * single post.
+ */
+function headingSplit(text: string): { sections: RawSection[]; reason: string } | null {
+  const main = mainHeadings(text);
+  if (!main || main.level !== 1) return null;
+
+  const sections = finishSections(sliceAtOffsets(text, main.headings.map((h) => h.offset)));
+  if (sections.length < 2) return null;
+  return { sections, reason: "top-level (#) headings" };
 }
 
 type BoundaryMarker = { title: string; startSnippet: string; suggestedTags: string[] };
@@ -458,15 +713,17 @@ const BOUNDARY_PROMPT = (text: string) => `You are an expert editorial assistant
 Your job is to identify each complete, standalone blog article and detect its boundaries.
 
 CRITICAL RULES:
-1. SUBHEADINGS VS. SEPARATE ARTICLES:
-   - Internal sections (e.g. "Introduction", "1. Land Transfer Tax", "Key Takeaways", "Conclusion", "FAQ") are INTERNAL SUBHEADINGS of ONE article, NOT separate articles! Do NOT split them.
-   - Only identify a NEW article when a completely new standalone blog post begins with its own distinct headline.
-2. PRESERVE THE AUTHOR'S WORDS: to identify a boundary, return the exact starting text snippet of each article — copied character for character from the document, 40 to 80 characters long. Never paraphrase the snippet.
-3. For each detected article, return:
+1. ONE ARTICLE IS THE DEFAULT. Most documents contain exactly one article. Report more than one ONLY when the document plainly contains several unrelated, standalone posts, each with its own headline, its own beginning and its own end.
+2. SUBHEADINGS ARE NOT ARTICLES:
+   - Internal sections such as "Introduction", "1. Land Transfer Tax", "Key Takeaways", "Conclusion", "Final Thoughts", "FAQ", "Frequently Asked Questions", "Continue the Series", "Related Reading" are INTERNAL SUBHEADINGS of ONE article. NEVER split at them.
+   - A heading that carries on the same subject as the text above it is a subheading, not a new article.
+   - Only the document's MAIN (shallowest) heading level can begin an article. Headings nested under a bigger heading are subheadings.
+3. PRESERVE THE AUTHOR'S WORDS: to identify a boundary, return the exact starting text snippet of each article — copied character for character from the document, 40 to 80 characters long, starting at that article's own heading line. Never paraphrase the snippet.
+4. For each detected article, return:
    - "title": clean title/headline of the article
-   - "startSnippet": the exact first 40 to 80 characters of where this article begins in the document
+   - "startSnippet": the exact first 40 to 80 verbatim characters of where this article begins
    - "suggestedTags": 2 to 4 relevant tags
-4. If the document is really just one article, return an array with exactly one item, whose startSnippet is the document's own opening words.
+5. If the document is really just one article, return an array with exactly one item, whose startSnippet is the document's own opening words.
 
 Return JSON of exactly this shape, and nothing else:
 [
@@ -520,59 +777,68 @@ async function aiSeparateArticles(text: string): Promise<BoundaryMarker[] | null
 }
 
 /**
- * Locates each marker's snippet in the document, verbatim (`indexOf`, no
- * fuzzy matching — a snippet that cannot be found exactly is dropped rather
- * than guessed at, since a wrong guess would misplace a whole article's worth
- * of text). Sorted by where they actually land, deduplicated, and the first
- * match is pulled back to index 0 so nothing before it is silently dropped.
+ * Where a marker's snippet actually is in the document — verbatim `indexOf`,
+ * no fuzzy matching, because a wrong guess misplaces a whole article's worth
+ * of text — SNAPPED back to the main heading it belongs to, then CHECKED
+ * against the document's own structure.
+ *
+ * A marker survives only if it lands on the document's main heading level (or
+ * at offset 0). Everything else is discarded, and that is what stops the model
+ * turning "### FAQ" or a mid-article subheading into a blog post of its own.
+ * When the document has no headings at all there is nothing to check against,
+ * so a boundary is accepted anywhere and MIN_ARTICLE_CHARS is left to catch
+ * the over-eager cuts.
  */
-function locateMarkers(
-  text: string,
-  markers: BoundaryMarker[],
-): { index: number; marker: BoundaryMarker }[] {
-  const found: { index: number; marker: BoundaryMarker }[] = [];
-  const usedIndexes = new Set<number>();
+function locateMarkers(text: string, markers: BoundaryMarker[]): number[] {
+  const topLevel = mainHeadings(text);
+  // Only `#` begins an article. A document whose shallowest heading is `##` is
+  // a single article with sections, and Gemini does not get to overrule that —
+  // this is the guard the "one blog, many sections" bug kept getting past.
+  const main = topLevel && topLevel.level === 1 ? topLevel : null;
+  const hasHeadings = headingLines(text).length > 0;
+  const headingAt = new Set(main ? main.headings.map((h) => h.offset) : []);
+
+  const found: number[] = [];
+  const used = new Set<number>();
 
   for (const marker of markers) {
     const snippet = marker.startSnippet.trim();
     if (!snippet) continue;
-    // A snippet can occur more than once — the same article pasted twice
-    // starts with the same words. Take the next occurrence not already
-    // claimed; stopping at the first would fold the repeat into the previous
-    // article's body instead of letting it be flagged as a duplicate.
+    // The same opening words can occur twice (an article pasted twice); take
+    // the next unclaimed occurrence so the repeat is flagged as a duplicate
+    // rather than folded into the previous article's body.
     let idx = text.indexOf(snippet);
-    while (idx !== -1 && usedIndexes.has(idx)) idx = text.indexOf(snippet, idx + 1);
+    while (idx !== -1 && used.has(idx)) idx = text.indexOf(snippet, idx + 1);
     if (idx === -1) continue;
-    usedIndexes.add(idx);
-    found.push({ index: idx, marker });
+    used.add(idx);
+
+    // Snap to the start of the marker's own line, then back over a heading the
+    // snippet began just after.
+    let lineStart = idx === 0 ? 0 : text.lastIndexOf("\n", idx - 1) + 1;
+    if (main && !headingAt.has(lineStart)) {
+      const owner = main.headings
+        .filter((h) => h.offset <= lineStart && lineStart - (h.offset + h.lineLength) <= 2)
+        .pop();
+      if (owner) lineStart = owner.offset;
+    }
+
+    if (lineStart !== 0) {
+      // Main level is a section level (or there is no usable main level at all
+      // while headings exist) → the document is one article; drop the cut.
+      if (!main && hasHeadings) continue;
+      if (main && !headingAt.has(lineStart)) continue; // a subheading or mid-article cut
+    }
+
+    found.push(lineStart);
   }
 
-  found.sort((a, b) => a.index - b.index);
-  if (found.length > 0) found[0] = { ...found[0], index: 0 };
-  return found;
+  return Array.from(new Set(found)).sort((a, b) => a - b);
 }
 
-function sliceByMarkers(
-  text: string,
-  found: { index: number; marker: BoundaryMarker }[],
-): { text: string; title: string | null }[] {
-  const out: { text: string; title: string | null }[] = [];
-  for (let i = 0; i < found.length; i++) {
-    const start = found[i].index;
-    const end = i + 1 < found.length ? found[i + 1].index : text.length;
-    const chunk = normaliseBlankLines(text.slice(start, end));
-    // The author's own heading beats the model's "clean title": the model
-    // sometimes rewrites it, and the duplicate check (blogImportQueue.ts) keys
-    // on the title — a paraphrase would let a re-uploaded blog slip through.
-    if (chunk) out.push({ text: chunk, title: leadingHeading(chunk) ?? (found[i].marker.title || null) });
-  }
-  return out;
-}
-
-/** The article's opening line, when that line is a heading (`#`–`####`). */
+/** The article's opening line, when that line is a heading (`#`–`######`). */
 function leadingHeading(chunk: string): string | null {
   const first = chunk.split("\n").find((l) => l.trim().length > 0)?.trim() ?? "";
-  const m = first.match(/^#{1,4}\s+(.+)$/);
+  const m = first.match(/^#{1,6}\s+(.+)$/);
   return m ? m[1].trim() : null;
 }
 
@@ -582,17 +848,57 @@ function sniffTitle(articleText: string): string | null {
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    if (trimmed.startsWith("# ")) return trimmed.slice(2).trim();
-    if (trimmed.startsWith("## ")) return trimmed.slice(3).trim();
-    if (trimmed.startsWith("### ")) return trimmed.slice(4).trim();
-    if (!trimmed.startsWith("#")) {
-      if (trimmed.length < 100 && !/^(the|a|an|and|or|but|in|on|at)\s/i.test(trimmed)) {
-        return trimmed.length > 80 ? `${trimmed.slice(0, 77)}...` : trimmed;
-      }
+    const heading = trimmed.match(/^#{1,6}\s+(.+)$/);
+    if (heading) return heading[1].trim();
+    if (trimmed.length < 100 && !/^(the|a|an|and|or|but|in|on|at)\s/i.test(trimmed)) {
+      return trimmed.length > 80 ? `${trimmed.slice(0, 77)}...` : trimmed;
     }
     break;
   }
   return null;
+}
+
+/**
+ * `#` never reaches the stored article body: the page owns the only h1, the
+ * sanitizer's allowlist has no h1 in it, and a formatter that emitted one
+ * would have that text dropped entirely. The marker exists so the splitter can
+ * tell a main heading from a subheading; once the cut is made it is demoted.
+ */
+function demoteTopHeadings(text: string): string {
+  return text.replace(/^(\s*)#\s+(?=\S)/gm, "$1## ");
+}
+
+export type SplitOutcome = { sections: RawSection[]; reason: string };
+
+/**
+ * Where a document becomes one-or-more articles. Exported so the split can be
+ * exercised on its own, without a file or a Gemini key.
+ *
+ * Precedence — the most explicit signal wins, and every tier is allowed to
+ * answer "one article", which is always the safe answer:
+ *   1. What the admin wrote in the document: "Blog 2:", "END OF BLOG", `---`.
+ *      Authoritative; Gemini is not consulted at all.
+ *   2. Gemini's boundaries, but only where they land on the document's MAIN
+ *      heading level (locateMarkers).
+ *   3. `#` main headings on our own, for when Gemini is off or unhelpful.
+ *   4. One article.
+ */
+export function splitBlogDocument(text: string, aiMarkers: BoundaryMarker[] | null): SplitOutcome {
+  const explicit = explicitSplit(text);
+  if (explicit) return explicit;
+
+  if (aiMarkers) {
+    const offsets = locateMarkers(text, aiMarkers);
+    if (offsets.length > 1) {
+      const sections = finishSections(sliceAtOffsets(text, offsets));
+      if (sections.length > 1) return { sections, reason: "AI boundaries at main headings" };
+    }
+  }
+
+  const headings = headingSplit(text);
+  if (headings) return headings;
+
+  return { sections: finishSections([text]), reason: "single article" };
 }
 
 // ── Entry point ────────────────────────────────────────────────────────
@@ -660,21 +966,27 @@ export async function extractBlogArticle(file: File): Promise<ExtractOutcome> {
 
   // A title taken from the document is only a suggestion; the route decides
   // whether to apply it, because the admin may already have typed one.
-  return outcome;
+  // `#` is demoted here for the same reason the multi-article path demotes it:
+  // nothing below this point splits anything, and h1 is not an allowed tag in
+  // an article body.
+  return { ok: true, data: { ...outcome.data, text: demoteTopHeadings(text) } };
 }
 
 /**
- * Extracts multiple blog articles from a single file.
+ * Extracts one or more blog articles from a single uploaded file.
  *
- * Boundary detection tries Gemini first (aiSeparateArticles — understands that
- * "FAQ" or "1. Land Transfer Tax" are sections of one post, not new posts) and
- * falls back to the deterministic delimiter/heading splitter when Gemini is
- * unreachable, unconfigured, or its snippets don't verbatim-match the text.
+ * ONE ARTICLE IS THE DEFAULT. A document only becomes several posts when
+ * something in it actually says so — see splitBlogDocument() for the
+ * precedence. The splitter that used to run here cut at every `#`/`##` line
+ * that was not on a small denylist, which shredded a single well-structured
+ * article into one post per section; boundaries are now confined to the
+ * document's own MAIN heading level, or to an explicit separator the admin
+ * typed.
  *
  * No cap on the number of articles or on the total length: a document can hold
- * any number of articles whose combined length runs well past any
- * single article's own limit. Each article gets its own MAX_BLOG_CHARS check
- * below, which WARNS rather than truncates or rejects.
+ * any number of articles whose combined length runs well past any single
+ * article's own limit. Each article gets its own MAX_BLOG_CHARS check below,
+ * which WARNS rather than truncates or rejects.
  */
 export async function extractMultipleBlogArticles(file: File): Promise<MultipleExtractOutcome> {
   // Preformatted HTML already carries its own structure; splitting it the same
@@ -692,33 +1004,29 @@ export async function extractMultipleBlogArticles(file: File): Promise<MultipleE
 
   const { text, kind, needsProofread, warnings: fileWarnings, title: documentTitle } = extraction.data;
 
-  let sections: { text: string; title: string | null }[] = [];
+  // Gemini is only consulted when the document carries no explicit separator;
+  // asking it anyway would cost a call whose answer is thrown away.
+  const aiMarkers = explicitSplit(text) ? null : await aiSeparateArticles(text);
+  const { sections, reason } = splitBlogDocument(text, aiMarkers);
 
-  const aiMarkers = await aiSeparateArticles(text);
-  if (aiMarkers) {
-    const located = locateMarkers(text, aiMarkers);
-    if (located.length > 0) {
-      sections = sliceByMarkers(text, located);
-    }
-  }
-
-  if (sections.length === 0) {
-    sections = splitMultipleArticlesFallback(text).map((s) => ({ text: s, title: null }));
-  }
-
-  sections = sections.filter((s) => s.text.trim().length > 0);
-
-  // Extraction lifts the document's first heading OUT of the text as its title,
-  // so the first article no longer opens with a heading of its own and would
-  // otherwise get the model's paraphrase — which the duplicate check keys on.
-  if (documentTitle && sections.length > 0 && !leadingHeading(sections[0].text)) {
-    sections[0] = { ...sections[0], title: documentTitle };
-  }
   if (sections.length === 0) {
     return { ok: false, error: "No article text found in the document." };
   }
 
-  const results: ExtractedArticle[] = sections.map(({ text: articleText, title }) => {
+  // Extraction lifts the document's first heading OUT of the text as its title,
+  // so the first article no longer opens with a heading of its own and would
+  // otherwise get the model's paraphrase — which the duplicate check keys on.
+  if (documentTitle && sections[0] && !sections[0].title) {
+    sections[0] = { ...sections[0], title: documentTitle };
+  }
+
+  logger.info(
+    `[blogImport] ${file.name} → ${sections.length} article(s), split on: ${reason}` +
+      (aiMarkers ? ` (Gemini proposed ${aiMarkers.length})` : ""),
+  );
+
+  const results: ExtractedArticle[] = sections.map(({ text: sectionText, title }) => {
+    const articleText = demoteTopHeadings(sectionText);
     const warnings = [...fileWarnings];
     if (articleText.length > MAX_BLOG_CHARS) {
       warnings.push(
@@ -727,7 +1035,7 @@ export async function extractMultipleBlogArticles(file: File): Promise<MultipleE
     }
     return {
       text: articleText,
-      title: title ?? sniffTitle(articleText),
+      title: title ?? leadingHeading(articleText) ?? sniffTitle(articleText),
       preformattedHtml: null,
       kind,
       warnings,
