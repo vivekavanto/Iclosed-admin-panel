@@ -21,6 +21,7 @@
     "@types/sanitize-html": "^2.16.1",
     "@vercel/blob": "^2.4.0",
     "daisyui": "^3.0.0",
+    "googleapis": "^166.0.0",
     "heic-to": "^1.5.2",
     "jspdf": "^4.2.1",
     "jszip": "^3.10.1",

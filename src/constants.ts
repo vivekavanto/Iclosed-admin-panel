@@ -257,6 +257,7 @@ export const NAV_ITEMS = [
   { label: 'Blogs', id: 'blogs', icon: 'Newspaper' },
   { label: 'Partners', id: 'partners', icon: 'Handshake' },
   { label: 'Staff', id: 'staff', icon: 'UserCog' },
+  { label: 'Signing Appointments', id: 'signing-appointments', icon: 'ClipboardCheck' },
   {
     label: 'Settings',
     id: 'settings',
@@ -264,6 +265,9 @@ export const NAV_ITEMS = [
     children: [
       { label: 'Default Tasks', id: 'default-tasks' },
       { label: 'Closing Costs', id: 'closing-cost-settings' },
+      { label: 'Signing Lawyers', id: 'signing-lawyers-settings' },
+      { label: 'Signing Settings', id: 'signing-general-settings' },
+      { label: 'Signing Appointments List', id: 'signing-appointments-list' },
       { label: 'Account Settings', id: 'account-settings' },
     ]
   },

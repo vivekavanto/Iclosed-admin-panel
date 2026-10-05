@@ -63,6 +63,12 @@ const ROUTE_MAP: Record<string, string> = {
   "default-tasks": "/admin/settings/default-tasks",
   "closing-cost-settings": "/admin/settings/closing-costs",
   "account-settings": "/admin/account-settings",
+  // Signing appointments: the overview links on to the lawyer/hours list, the
+  // general settings page, and the appointments list.
+  "signing-appointments": "/admin/settings/signing",
+  "signing-lawyers-settings": "/admin/settings/signing/lawyers",
+  "signing-general-settings": "/admin/settings/signing/general",
+  "signing-appointments-list": "/admin/settings/signing/appointments",
 };
 
 const iconMap: Record<string, React.ReactNode> = {
