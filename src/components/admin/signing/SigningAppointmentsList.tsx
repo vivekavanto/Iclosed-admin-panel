@@ -37,7 +37,7 @@ function formatDateTime(iso: string): string {
 export default function SigningAppointmentsList() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState<"confirmed" | "cancelled" | "all">("confirmed");
+  const [statusFilter, setStatusFilter] = useState<"confirmed" | "cancelled" | "all">("all");
   const [cancellingId, setCancellingId] = useState<string | null>(null);
 
   async function load(status: "confirmed" | "cancelled" | "all") {
@@ -73,78 +73,92 @@ export default function SigningAppointmentsList() {
     }
   }
 
+  const TABS = [
+    { id: "all", label: "All" },
+    { id: "confirmed", label: "Confirmed" },
+    { id: "cancelled", label: "Cancelled" },
+  ] as const;
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold flex items-center gap-2">
-          <CalendarClock className="w-5 h-5 text-base-content/60" /> Appointments
+        <h2 className="text-lg font-semibold flex items-center gap-2 text-slate-900">
+          <CalendarClock className="w-5 h-5 text-slate-400" /> Appointments
         </h2>
-        <div className="join">
-          {(["confirmed", "cancelled", "all"] as const).map((s) => (
+        <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl w-fit">
+          {TABS.map((t) => (
             <button
-              key={s}
-              className={`btn btn-sm join-item ${statusFilter === s ? "btn-active" : ""}`}
-              onClick={() => setStatusFilter(s)}
+              key={t.id}
+              onClick={() => setStatusFilter(t.id)}
+              className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-all ${
+                statusFilter === t.id
+                  ? "bg-white text-slate-900 shadow-sm"
+                  : "text-slate-500 hover:text-slate-700"
+              }`}
             >
-              {s[0].toUpperCase() + s.slice(1)}
+              {t.label}
             </button>
           ))}
         </div>
       </div>
 
       {loading ? (
-        <p className="flex items-center gap-2 text-sm text-base-content/60">
+        <p className="flex items-center gap-2 text-sm text-slate-500 py-6">
           <Loader2 className="w-4 h-4 animate-spin" /> Loading…
         </p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="table table-sm">
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-x-auto">
+          <table className="w-full min-w-[900px] text-left text-sm">
             <thead>
-              <tr>
-                <th>When</th>
-                <th>Lawyer</th>
-                <th>Client</th>
-                <th>Property</th>
-                <th>Type</th>
-                <th>Status</th>
-                <th />
+              <tr className="border-b border-slate-200">
+                <th className="px-4 py-3 font-semibold text-slate-500">When</th>
+                <th className="px-4 py-3 font-semibold text-slate-500">Lawyer</th>
+                <th className="px-4 py-3 font-semibold text-slate-500">Client</th>
+                <th className="px-4 py-3 font-semibold text-slate-500">Property</th>
+                <th className="px-4 py-3 font-semibold text-slate-500">Type</th>
+                <th className="px-4 py-3 font-semibold text-slate-500">Status</th>
+                <th className="px-4 py-3" />
               </tr>
             </thead>
             <tbody>
               {appointments.map((a) => (
-                <tr key={a.id}>
-                  <td className="whitespace-nowrap">{formatDateTime(a.start_at)}</td>
-                  <td className="font-mono">{a.lawyer?.initials ?? "—"}</td>
-                  <td>
-                    <div>{a.client_name}</div>
-                    <div className="text-xs text-base-content/60">{a.client_email}</div>
+                <tr key={a.id} className="border-b border-slate-100 last:border-0">
+                  <td className="px-4 py-3 whitespace-nowrap text-slate-900">{formatDateTime(a.start_at)}</td>
+                  <td className="px-4 py-3 font-mono text-slate-700">{a.lawyer?.initials ?? "—"}</td>
+                  <td className="px-4 py-3">
+                    <div className="text-slate-900 font-medium">{a.client_name}</div>
+                    <div className="text-xs text-slate-500">{a.client_email}</div>
                     {a.client_phone && (
-                      <div className="text-xs text-base-content/60">{a.client_phone}</div>
+                      <div className="text-xs text-slate-500">{a.client_phone}</div>
                     )}
                   </td>
-                  <td>
-                    <div>{a.property_address || "—"}</div>
+                  <td className="px-4 py-3">
+                    <div className="text-slate-900">{a.property_address || "—"}</div>
                     {a.file_number && (
-                      <div className="text-xs text-base-content/60">File: {a.file_number}</div>
+                      <div className="text-xs text-slate-500">File: {a.file_number}</div>
                     )}
                   </td>
-                  <td>
-                    <div>{APPT_TYPE_LABEL[a.appointment_type] ?? a.appointment_type}</div>
+                  <td className="px-4 py-3">
+                    <div className="text-slate-900">{APPT_TYPE_LABEL[a.appointment_type] ?? a.appointment_type}</div>
                     {a.deal_type && (
-                      <div className="text-xs text-base-content/60">{DEAL_TYPE_LABEL[a.deal_type]}</div>
+                      <div className="text-xs text-slate-500">{DEAL_TYPE_LABEL[a.deal_type]}</div>
                     )}
                   </td>
-                  <td>
+                  <td className="px-4 py-3">
                     <span
-                      className={`badge badge-sm ${a.status === "confirmed" ? "badge-success" : "badge-ghost"}`}
+                      className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                        a.status === "confirmed"
+                          ? "bg-green-100 text-green-700 border-green-200"
+                          : "bg-slate-100 text-slate-500 border-slate-200"
+                      }`}
                     >
                       {a.status === "confirmed" ? "Confirmed" : "Cancelled"}
                     </span>
                   </td>
-                  <td>
+                  <td className="px-4 py-3">
                     {a.status === "confirmed" && (
                       <button
-                        className="btn btn-xs btn-ghost text-error"
+                        className="inline-flex items-center gap-1 text-xs font-semibold text-red-600 hover:text-red-700 disabled:opacity-50"
                         disabled={cancellingId === a.id}
                         onClick={() => cancel(a)}
                       >
@@ -156,7 +170,7 @@ export default function SigningAppointmentsList() {
               ))}
               {appointments.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="text-center text-base-content/50 py-6">
+                  <td colSpan={7} className="text-center text-slate-400 py-6">
                     No appointments yet.
                   </td>
                 </tr>

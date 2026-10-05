@@ -63,9 +63,9 @@ const ROUTE_MAP: Record<string, string> = {
   "default-tasks": "/admin/settings/default-tasks",
   "closing-cost-settings": "/admin/settings/closing-costs",
   "account-settings": "/admin/account-settings",
-  // Signing appointments: the overview links on to the lawyer/hours list, the
-  // general settings page, and the appointments list.
-  "signing-appointments": "/admin/settings/signing",
+  // Signing appointments: goes straight to the appointments list (lawyers/hours
+  // and general settings live under Settings, where their own links already are).
+  "signing-appointments": "/admin/settings/signing/appointments",
   "signing-lawyers-settings": "/admin/settings/signing/lawyers",
   "signing-general-settings": "/admin/settings/signing/general",
   "signing-appointments-list": "/admin/settings/signing/appointments",
@@ -182,7 +182,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed =
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 px-2 py-4 space-y-1 overflow-y-auto">
+        <nav className="flex-1 min-h-0 px-2 py-4 space-y-1 overflow-y-auto">
           {NAV_ITEMS.map((item) => {
             const active =
               isActive(item.id) ||
