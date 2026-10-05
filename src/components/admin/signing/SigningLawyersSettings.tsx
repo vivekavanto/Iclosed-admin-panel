@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { Plus, Pencil, Trash2, Save, X, Scale, Clock } from "lucide-react";
+import { Plus, Pencil, Trash2, Save, X, Scale, Clock, SlidersHorizontal } from "lucide-react";
+import SigningGeneralSettings from "./SigningGeneralSettings";
 
 interface Lawyer {
   id: string;
@@ -28,7 +29,14 @@ function emptyLawyer(): Partial<Lawyer> {
 const inputClasses =
   "w-full px-4 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:border-brand-primary focus:ring-1 focus:ring-brand-primary bg-white";
 
-export default function SigningLawyersSettings() {
+type Tab = "lawyers" | "settings";
+
+interface SigningLawyersSettingsProps {
+  initialTab?: Tab;
+}
+
+export default function SigningLawyersSettings({ initialTab = "lawyers" }: SigningLawyersSettingsProps) {
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [lawyers, setLawyers] = useState<Lawyer[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Partial<Lawyer> | null>(null);
@@ -107,22 +115,49 @@ export default function SigningLawyersSettings() {
             <Scale className="text-brand-primary" size={32} />
           </div>
           <div>
-            <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">Signing Lawyers</h1>
+            <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">Signing</h1>
             <p className="text-sm text-slate-500 mt-1">
-              Manage the lawyers who can be booked for signing appointments.
+              {tab === "lawyers"
+                ? "Manage the lawyers who can be booked for signing appointments."
+                : "Booking defaults, office location and notices for signing appointments."}
             </p>
           </div>
         </div>
+        {tab === "lawyers" && (
+          <button
+            onClick={() => setEditing(emptyLawyer())}
+            className="bg-brand-primary text-white px-4 py-2.5 rounded-xl flex items-center gap-2 font-bold text-sm shadow-lg shadow-brand-primary/20 hover:bg-brand-primaryHover transition-all active:scale-95 whitespace-nowrap"
+          >
+            <Plus size={18} />
+            Add Lawyer
+          </button>
+        )}
+      </div>
+
+      {/* Tabs */}
+      <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl w-fit">
         <button
-          onClick={() => setEditing(emptyLawyer())}
-          className="bg-brand-primary text-white px-4 py-2.5 rounded-xl flex items-center gap-2 font-bold text-sm shadow-lg shadow-brand-primary/20 hover:bg-brand-primaryHover transition-all active:scale-95 whitespace-nowrap"
+          onClick={() => setTab("lawyers")}
+          className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-semibold transition-all ${
+            tab === "lawyers" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
+          }`}
         >
-          <Plus size={18} />
-          Add Lawyer
+          <Scale size={14} /> Lawyers
+        </button>
+        <button
+          onClick={() => setTab("settings")}
+          className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-semibold transition-all ${
+            tab === "settings" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
+          }`}
+        >
+          <SlidersHorizontal size={14} /> General Settings
         </button>
       </div>
 
+      {tab === "settings" && <SigningGeneralSettings />}
+
       {/* List */}
+      {tab === "lawyers" && (
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-x-auto">
         {loading ? (
           <div className="flex items-center justify-center py-20">
@@ -196,6 +231,7 @@ export default function SigningLawyersSettings() {
           </table>
         )}
       </div>
+      )}
 
       {editing && (
         <div

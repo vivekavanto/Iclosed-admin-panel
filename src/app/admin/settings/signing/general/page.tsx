@@ -1,5 +1,5 @@
-import SigningGeneralSettings from "@/components/admin/signing/SigningGeneralSettings";
+import SigningLawyersSettings from "@/components/admin/signing/SigningLawyersSettings";
 
 export default function SigningGeneralSettingsPage() {
-  return <SigningGeneralSettings />;
+  return <SigningLawyersSettings initialTab="settings" />;
 }

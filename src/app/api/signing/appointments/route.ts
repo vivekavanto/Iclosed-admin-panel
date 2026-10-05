@@ -3,7 +3,7 @@ import supabaseAdmin from "@/lib/supabaseAdmin";
 import { logger } from "@/lib/logger";
 import { getLawyerByInitials, getSettings } from "@/lib/signingConfig";
 import { isSlotStillAvailable } from "@/lib/signingAvailability";
-import { createCalendarEvent } from "@/lib/googleCalendar";
+import { createCalendarEvent, deleteCalendarEvent } from "@/lib/googleCalendar";
 import { generateManageToken, buildManageUrl } from "@/lib/signingAppointmentToken";
 import {
   buildEventTitle,
@@ -161,6 +161,25 @@ export async function POST(req: Request) {
     .single();
 
   if (insertError) {
+    // 23505 = unique_violation on signing_appointments_lawyer_slot_unique
+    // (migrations/2026-10-05-signing-appointments-unique-slot.sql): another
+    // request won the race for this exact lawyer/slot between our
+    // isSlotStillAvailable re-check and this insert. The calendar event we
+    // just created is now an orphaned duplicate — remove it rather than
+    // leaving two events on the lawyer's calendar for one booked slot.
+    if (insertError.code === "23505") {
+      await deleteCalendarEvent(lawyer.email, lawyer.calendar_id, eventId).catch((err) =>
+        logger.error("[SigningAppointments POST] cleanup of duplicate calendar event failed:", err, {
+          eventId,
+          lawyerId: lawyer.id,
+        }),
+      );
+      return NextResponse.json(
+        { success: false, error: "That time was just booked by someone else. Please pick another slot." },
+        { status: 409 },
+      );
+    }
+
     // The calendar event already exists at this point; log loudly so staff can
     // reconcile by hand rather than silently losing the booking.
     logger.error(
