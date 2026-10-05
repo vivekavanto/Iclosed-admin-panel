@@ -83,6 +83,10 @@ export default function SigningLawyersSettings() {
       }
       setEditing(null);
       await load();
+      // A brand-new lawyer has no working hours yet — chain straight into
+      // that modal instead of leaving them non-bookable until someone
+      // remembers to click "Hours" separately afterward.
+      if (isNew) setHoursFor(json.data as Lawyer);
     } finally {
       setSavingId(null);
     }
