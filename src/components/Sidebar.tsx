@@ -135,6 +135,13 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed =
     const route = ROUTE_MAP[itemId];
     if (!route) return false;
     if (route === "/") return pathname === "/";
+    // "Signing Appointments" is its own top-level nav item even though its
+    // page lives under /admin/settings/signing/appointments — without this
+    // guard that prefix also matches the "settings" route below, lighting up
+    // both pills at once.
+    if (itemId === "settings" && pathname.startsWith(ROUTE_MAP["signing-appointments"])) {
+      return false;
+    }
     return pathname === route || pathname.startsWith(route + "/");
   };
 
@@ -143,7 +150,9 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed =
   const [openMenus, setOpenMenus] = useState<Set<string>>(() => {
     const initial = new Set<string>();
     if (pathname.startsWith("/admin/templates")) initial.add("templates");
-    if (pathname.startsWith("/admin/settings")) initial.add("settings");
+    if (pathname.startsWith("/admin/settings") && !pathname.startsWith(ROUTE_MAP["signing-appointments"])) {
+      initial.add("settings");
+    }
     if (pathname.startsWith("/admin/account-settings")) initial.add("settings");
     return initial;
   });

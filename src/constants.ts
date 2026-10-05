@@ -267,7 +267,6 @@ export const NAV_ITEMS = [
       { label: 'Closing Costs', id: 'closing-cost-settings' },
       { label: 'Signing Lawyers', id: 'signing-lawyers-settings' },
       { label: 'Signing Settings', id: 'signing-general-settings' },
-      { label: 'Signing Appointments List', id: 'signing-appointments-list' },
       { label: 'Account Settings', id: 'account-settings' },
     ]
   },

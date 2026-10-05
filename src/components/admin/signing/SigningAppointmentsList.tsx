@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { CalendarClock, Loader2, X } from "lucide-react";
+import { CalendarClock, X } from "lucide-react";
 
 interface Appointment {
   id: string;
@@ -80,11 +80,18 @@ export default function SigningAppointmentsList() {
   ] as const;
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold flex items-center gap-2 text-slate-900">
-          <CalendarClock className="w-5 h-5 text-slate-400" /> Appointments
-        </h2>
+    <div className="space-y-6 animate-in fade-in duration-300">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4">
+        <div className="flex items-start gap-4">
+          <div className="bg-brand-primary/10 p-2.5 rounded-lg">
+            <CalendarClock className="text-brand-primary" size={32} />
+          </div>
+          <div>
+            <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">Appointments</h1>
+            <p className="text-sm text-slate-500 mt-1">Signing appointments booked across all lawyers.</p>
+          </div>
+        </div>
         <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl w-fit">
           {TABS.map((t) => (
             <button
@@ -103,59 +110,59 @@ export default function SigningAppointmentsList() {
       </div>
 
       {loading ? (
-        <p className="flex items-center gap-2 text-sm text-slate-500 py-6">
-          <Loader2 className="w-4 h-4 animate-spin" /> Loading…
-        </p>
+        <div className="flex items-center justify-center py-20">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-primary"></div>
+        </div>
       ) : (
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-x-auto">
           <table className="w-full min-w-[900px] text-left text-sm">
-            <thead>
-              <tr className="border-b border-slate-200">
-                <th className="px-4 py-3 font-semibold text-slate-500">When</th>
-                <th className="px-4 py-3 font-semibold text-slate-500">Lawyer</th>
-                <th className="px-4 py-3 font-semibold text-slate-500">Client</th>
-                <th className="px-4 py-3 font-semibold text-slate-500">Property</th>
-                <th className="px-4 py-3 font-semibold text-slate-500">Type</th>
-                <th className="px-4 py-3 font-semibold text-slate-500">Status</th>
-                <th className="px-4 py-3" />
+            <thead className="bg-slate-50/30 border-b border-slate-100">
+              <tr className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">
+                <th className="px-6 py-5">When</th>
+                <th className="px-4 py-5">Lawyer</th>
+                <th className="px-4 py-5">Client</th>
+                <th className="px-4 py-5">Property</th>
+                <th className="px-4 py-5">Type</th>
+                <th className="px-4 py-5">Status</th>
+                <th className="px-4 py-5 text-center w-28">Actions</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-slate-50">
               {appointments.map((a) => (
-                <tr key={a.id} className="border-b border-slate-100 last:border-0">
-                  <td className="px-4 py-3 whitespace-nowrap text-slate-900">{formatDateTime(a.start_at)}</td>
-                  <td className="px-4 py-3 font-mono text-slate-700">{a.lawyer?.initials ?? "—"}</td>
-                  <td className="px-4 py-3">
-                    <div className="text-slate-900 font-medium">{a.client_name}</div>
+                <tr key={a.id} className="hover:bg-slate-50/50 transition-colors group">
+                  <td className="px-6 py-4 whitespace-nowrap text-slate-900">{formatDateTime(a.start_at)}</td>
+                  <td className="px-4 py-4 font-mono text-slate-700">{a.lawyer?.initials ?? "—"}</td>
+                  <td className="px-4 py-4">
+                    <div className="text-slate-900 font-semibold">{a.client_name}</div>
                     <div className="text-xs text-slate-500">{a.client_email}</div>
                     {a.client_phone && (
                       <div className="text-xs text-slate-500">{a.client_phone}</div>
                     )}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-4">
                     <div className="text-slate-900">{a.property_address || "—"}</div>
                     {a.file_number && (
                       <div className="text-xs text-slate-500">File: {a.file_number}</div>
                     )}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-4">
                     <div className="text-slate-900">{APPT_TYPE_LABEL[a.appointment_type] ?? a.appointment_type}</div>
                     {a.deal_type && (
                       <div className="text-xs text-slate-500">{DEAL_TYPE_LABEL[a.deal_type]}</div>
                     )}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-4">
                     <span
-                      className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                      className={`px-2.5 py-1 rounded-full text-xs font-bold ${
                         a.status === "confirmed"
-                          ? "bg-green-100 text-green-700 border-green-200"
-                          : "bg-slate-100 text-slate-500 border-slate-200"
+                          ? "bg-green-50 text-green-700"
+                          : "bg-slate-100 text-slate-500"
                       }`}
                     >
                       {a.status === "confirmed" ? "Confirmed" : "Cancelled"}
                     </span>
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-4 text-center">
                     {a.status === "confirmed" && (
                       <button
                         className="inline-flex items-center gap-1 text-xs font-semibold text-red-600 hover:text-red-700 disabled:opacity-50"
@@ -170,7 +177,7 @@ export default function SigningAppointmentsList() {
               ))}
               {appointments.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="text-center text-slate-400 py-6">
+                  <td colSpan={7} className="px-12 py-20 text-center text-slate-400">
                     No appointments yet.
                   </td>
                 </tr>
