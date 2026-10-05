@@ -7,7 +7,6 @@ import Link from "next/link";
 import { useAuth } from "@/lib/AuthProvider";
 
 type Step = "email" | "password" | "done";
-
 export default function AccountSettingsPage() {
   const { user } = useAuth();
 
