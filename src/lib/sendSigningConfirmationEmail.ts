@@ -17,6 +17,7 @@ import supabaseAdmin from "./supabaseAdmin";
 import {
   renderTemplateSafe,
   decodeTemplateBraces,
+  escapeHtml,
   type TemplateValue,
 } from "./renderEmailTemplate";
 import { maskEmail } from "./maskEmail";
@@ -65,6 +66,54 @@ function formatDateTime(startAt: Date): { date: string; time: string } {
   return { date, time };
 }
 
+/** Builds the `{{ meet_section }}` raw HTML fragment: a Meet link line for
+ *  virtual appointments only, empty otherwise (the renderer has no if/else). */
+function buildMeetSection(appointmentType: "virtual" | "in_person", meetLink: string | null): string {
+  if (appointmentType !== "virtual" || !meetLink) return "";
+  const safeUrl = escapeHtml(meetLink);
+  return `<br />Google Meet: <a href="${safeUrl}">${safeUrl}</a>`;
+}
+
+/** Finds the newest ACTIVE template matching `namePattern`. Mirrors the
+ *  strict is_active handling in sendWelcomeEmail: an admin-disabled template
+ *  is a real off-switch, not a fallback trigger. */
+async function findActiveTemplate(
+  namePattern: string,
+): Promise<{ template: any; skipReason?: string }> {
+  const { data: matching } = await supabaseAdmin
+    .from("email_templates")
+    .select("*")
+    .ilike("name", namePattern)
+    .order("created_at", { ascending: false });
+
+  const template = (matching ?? []).find((t: any) => t.is_active);
+  if (!template) {
+    const skipReason =
+      matching && matching.length > 0
+        ? `Template matching "${namePattern}" is inactive`
+        : `No template configured matching "${namePattern}"`;
+    return { template: null, skipReason };
+  }
+  return { template };
+}
+
+/** Renders a template's subject + body against the shared placeholder set. */
+function renderTemplate(
+  template: any,
+  values: Record<string, TemplateValue>,
+): { subject: string; body: string } {
+  const resolve = (name: string): TemplateValue | null => {
+    const key = name.toLowerCase().replace(/^\.+/, "");
+    return Object.prototype.hasOwnProperty.call(values, key) ? values[key] : null;
+  };
+
+  const rawBody = decodeTemplateBraces(template.body);
+  const body = renderTemplateSafe(rawBody, resolve);
+  const rawSubject = template.subject?.trim() || template.name;
+  const subject = renderTemplateSafe(rawSubject, resolve, { escape: false });
+  return { subject, body };
+}
+
 /**
  * Sends the "your signing appointment is booked" email to the client.
  * Best-effort: a missing/inactive template or a send failure is reported but
@@ -79,27 +128,12 @@ export async function sendSigningConfirmationEmail(
     return { success: false, error: "Email service not configured (missing RESEND_API_KEY)" };
   }
 
-  // Pick template — same strict is_active handling as sendWelcomeEmail: an
-  // admin-disabled template is a real off-switch, not a fallback trigger.
-  const { data: matching } = await supabaseAdmin
-    .from("email_templates")
-    .select("*")
-    .ilike("name", "%signing appointment confirmation%")
-    .order("created_at", { ascending: false });
-
-  const template = (matching ?? []).find((t: any) => t.is_active);
-  if (!template) {
-    const skipReason =
-      matching && matching.length > 0
-        ? "Signing confirmation template is inactive"
-        : "No signing confirmation template configured";
-    logger.info(`[Signing Confirmation] Skipped — ${skipReason}. lawyer=${lawyer.initials}`);
-    return { success: true, skipped: true, skipReason };
-  }
-
   const { date, time } = formatDateTime(startAt);
-  const values: Record<string, TemplateValue> = {
+  const meetSection = buildMeetSection(booking.appointmentType, meetLink);
+  const baseValues: Record<string, TemplateValue> = {
     "client_name": { value: booking.clientName },
+    "client_email": { value: booking.clientEmail },
+    "client_phone": { value: booking.clientPhone || "-" },
     "lawyer_name": { value: lawyer.full_name },
     "appointment_date": { value: date },
     "appointment_time": { value: time },
@@ -109,37 +143,120 @@ export async function sendSigningConfirmationEmail(
     "deal_type": { value: booking.dealType ? DEAL_TYPE_LABEL[booking.dealType] : "-" },
     "appointment_type": { value: APPT_TYPE_LABEL[booking.appointmentType] },
     "file_number": { value: booking.fileNumber || "-" },
-    // System-generated URLs, not user input — safe to render unescaped.
+    // System-generated URLs/markup, not user input — safe to render unescaped.
     "meet_link": { value: meetLink ?? "", raw: true },
+    "meet_section": { value: meetSection, raw: true },
     "manage_url": { value: manageUrl, raw: true },
   };
-  const resolve = (name: string): TemplateValue | null => {
-    const key = name.toLowerCase().replace(/^\.+/, "");
-    return Object.prototype.hasOwnProperty.call(values, key) ? values[key] : null;
-  };
 
-  const rawBody = decodeTemplateBraces(template.body);
-  const emailBody = renderTemplateSafe(rawBody, resolve);
-  const rawSubject = template.subject?.trim() || template.name;
-  const subject = renderTemplateSafe(rawSubject, resolve, { escape: false });
+  // Client email — the function's returned result, same behaviour as before.
+  const { template: clientTemplate, skipReason: clientSkipReason } = await findActiveTemplate(
+    "%signing appointment confirmation%",
+  );
+  if (!clientTemplate) {
+    logger.info(`[Signing Confirmation] Skipped — ${clientSkipReason}. lawyer=${lawyer.initials}`);
+    return { success: true, skipped: true, skipReason: clientSkipReason };
+  }
 
+  const { subject, body } = renderTemplate(clientTemplate, baseValues);
   const clientEmail = normalizeRecipientEmail(booking.clientEmail);
   const sendResult = await sendEmail(
     {
       to: [clientEmail],
       subject,
-      html: brandEmailHtml(emailBody, "navawilson"),
+      html: brandEmailHtml(body, "navawilson"),
     },
     { firm: "navawilson", label: "signing-confirmation" },
   );
 
-  if (!sendResult.ok) {
-    logger.error(`[Signing Confirmation] send failed: ${sendResult.error}`);
-    return { success: false, error: `Email send failed: ${sendResult.error}` };
+  const result: SigningConfirmationResult = !sendResult.ok
+    ? (() => {
+        logger.error(`[Signing Confirmation] send failed: ${sendResult.error}`);
+        return { success: false, error: `Email send failed: ${sendResult.error}` };
+      })()
+    : (() => {
+        logger.info(
+          `[Signing Confirmation] Sent to ${maskEmail(clientEmail)} for lawyer=${lawyer.initials}, id=${sendResult.id}`,
+        );
+        return { success: true, emailId: sendResult.id };
+      })();
+
+  // Lawyer notification — best-effort, never lets a failure here affect the
+  // client result or stop the guest emails below.
+  try {
+    const { template: lawyerTemplate, skipReason } = await findActiveTemplate(
+      "%signing appointment lawyer notification%",
+    );
+    if (!lawyerTemplate) {
+      logger.info(`[Signing Lawyer Notification] Skipped — ${skipReason}. lawyer=${lawyer.initials}`);
+    } else {
+      const rendered = renderTemplate(lawyerTemplate, baseValues);
+      const lawyerEmail = normalizeRecipientEmail(lawyer.email);
+      const lawyerSendResult = await sendEmail(
+        {
+          to: [lawyerEmail],
+          subject: rendered.subject,
+          html: brandEmailHtml(rendered.body, "navawilson"),
+        },
+        { firm: "navawilson", label: "signing-lawyer-notification" },
+      );
+      if (!lawyerSendResult.ok) {
+        logger.error(`[Signing Lawyer Notification] send failed: ${lawyerSendResult.error}`);
+      } else {
+        logger.info(
+          `[Signing Lawyer Notification] Sent to ${maskEmail(lawyerEmail)}, id=${lawyerSendResult.id}`,
+        );
+      }
+    }
+  } catch (err) {
+    logger.error("[Signing Lawyer Notification] unexpected error:", err);
   }
 
-  logger.info(
-    `[Signing Confirmation] Sent to ${maskEmail(clientEmail)} for lawyer=${lawyer.initials}, id=${sendResult.id}`,
-  );
-  return { success: true, emailId: sendResult.id };
+  // Guest confirmations — one email per guest so addresses stay private from
+  // each other. De-duplicated, lowercased, and never the client or lawyer.
+  try {
+    const clientEmailLower = booking.clientEmail.trim().toLowerCase();
+    const lawyerEmailLower = lawyer.email.trim().toLowerCase();
+    const guestEmails = Array.from(
+      new Set((booking.extraGuests || []).map((g) => g.trim().toLowerCase())),
+    ).filter((g) => g && g !== clientEmailLower && g !== lawyerEmailLower);
+
+    if (guestEmails.length > 0) {
+      const { template: guestTemplate, skipReason } = await findActiveTemplate(
+        "%signing appointment guest confirmation%",
+      );
+      if (!guestTemplate) {
+        logger.info(`[Signing Guest Confirmation] Skipped — ${skipReason}. lawyer=${lawyer.initials}`);
+      } else {
+        const rendered = renderTemplate(guestTemplate, baseValues);
+        const html = brandEmailHtml(rendered.body, "navawilson");
+        for (const guestEmail of guestEmails) {
+          try {
+            const normalized = normalizeRecipientEmail(guestEmail);
+            const guestSendResult = await sendEmail(
+              {
+                to: [normalized],
+                subject: rendered.subject,
+                html,
+              },
+              { firm: "navawilson", label: "signing-guest-confirmation" },
+            );
+            if (!guestSendResult.ok) {
+              logger.error(`[Signing Guest Confirmation] send failed: ${guestSendResult.error}`);
+            } else {
+              logger.info(
+                `[Signing Guest Confirmation] Sent to ${maskEmail(normalized)}, id=${guestSendResult.id}`,
+              );
+            }
+          } catch (err) {
+            logger.error("[Signing Guest Confirmation] unexpected error sending to one guest:", err);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    logger.error("[Signing Guest Confirmation] unexpected error:", err);
+  }
+
+  return result;
 }
