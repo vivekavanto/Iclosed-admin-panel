@@ -265,7 +265,7 @@ export const NAV_ITEMS = [
     children: [
       { label: 'Default Tasks', id: 'default-tasks' },
       { label: 'Closing Costs', id: 'closing-cost-settings' },
-      { label: 'Signing', id: 'signing-lawyers-settings' },
+      { label: 'Lawyers & Settings', id: 'signing-lawyers-settings' },
       { label: 'Account Settings', id: 'account-settings' },
     ]
   },
