@@ -109,7 +109,13 @@ export async function POST(req: Request) {
   const summary = buildEventTitle(lawyer, booking);
   const description = buildEventDescription(booking, settings);
   const location = buildLocation(booking, settings);
-  const attendees = buildAttendeeList(booking, settings);
+  const allAttendees = buildAttendeeList(booking, settings);
+  // Clerk/reception go on the event silently (no Google email); the rest get
+  // Google's invite. See createCalendarEvent.
+  const silentAttendees = [settings.clerk_email, settings.reception_email]
+    .map((e) => e.toLowerCase())
+    .filter((e) => allAttendees.includes(e) && e !== booking.clientEmail.toLowerCase());
+  const attendees = allAttendees.filter((e) => !silentAttendees.includes(e));
 
   let eventId: string;
   let meetLink: string | null = null;
@@ -123,6 +129,7 @@ export async function POST(req: Request) {
       end: endAt,
       location,
       attendees,
+      silentAttendees,
       needsMeet: booking.appointmentType === "virtual",
     });
     eventId = event.eventId;

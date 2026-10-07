@@ -12,9 +12,13 @@
 // its own busy/free state must not affect a lawyer's availability
 // (requirement #6).
 //
-// sendUpdates is always 'none': Google's native attendee emails are
-// suppressed everywhere in this feature so only our own branded Resend
-// templates (sendSigningConfirmationEmail.ts etc.) reach anyone.
+// sendUpdates is 'all' on CREATE only, so Google's native invite email goes to
+// the client and guests alongside our own branded templates
+// (sendSigningConfirmationEmail.ts etc.). Clerk and reception are added in a
+// second, silent step (sendUpdates 'none'), so they are on the event without a
+// Google email. The lawyer owns the event, so Google never emails them; they
+// rely on our lawyer notification. Update and cancel stay 'none': only our own
+// emails announce those.
 
 import { google, calendar_v3 } from "googleapis";
 import { logger } from "./logger";
@@ -85,6 +89,11 @@ export interface CreateEventInput {
   location?: string;
   /** Email addresses to add as attendees (lawyer is implicit as the calendar owner). */
   attendees: string[];
+  /**
+   * Internal attendees (clerk, reception) added AFTER create with
+   * sendUpdates 'none', so they are on the event but Google never emails them.
+   */
+  silentAttendees?: string[];
   /** When true, request a Google Meet link via conferenceData. */
   needsMeet: boolean;
 }
@@ -102,7 +111,7 @@ export async function createCalendarEvent(
 
   const { data } = await calendar.events.insert({
     calendarId: input.calendarId,
-    sendUpdates: "none",
+    sendUpdates: "all",
     conferenceDataVersion: input.needsMeet ? 1 : 0,
     requestBody: {
       summary: input.summary,
@@ -127,6 +136,24 @@ export async function createCalendarEvent(
 
   if (!data.id) {
     throw new Error("Google Calendar did not return an event id.");
+  }
+
+  const silent = (input.silentAttendees ?? []).filter((e) => e && !input.attendees.includes(e));
+  if (silent.length > 0) {
+    // Best-effort: the event and its invites already exist, so a failure here
+    // only means clerk/reception are missing from it; it must not fail the booking.
+    try {
+      await calendar.events.patch({
+        calendarId: input.calendarId,
+        eventId: data.id,
+        sendUpdates: "none",
+        requestBody: {
+          attendees: [...input.attendees, ...silent].map((email) => ({ email })),
+        },
+      });
+    } catch (err) {
+      logger.error("[googleCalendar] adding silent attendees failed:", err, { eventId: data.id });
+    }
   }
 
   return { eventId: data.id, meetLink, htmlLink: data.htmlLink ?? null };
