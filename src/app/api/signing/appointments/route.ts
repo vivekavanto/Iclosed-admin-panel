@@ -12,17 +12,14 @@ import {
   buildAttendeeList,
   type SigningBookingInput,
 } from "@/lib/signingEventContent";
-import { sendSigningConfirmationEmail } from "@/lib/sendSigningConfirmationEmail";
 
 // POST /api/signing/appointments
 //
 // Public route (outside /api/admin). Creates one signing appointment:
 // re-validates the requested slot server-side (never trusts the client's view
 // of availability), creates the Google Calendar event on the lawyer's own
-// calendar, then inserts the row. Sends the client confirmation email
-// (sendSigningConfirmationEmail.ts) as a best-effort last step — a failed
-// send does not fail the booking, since the calendar event and DB row are
-// already committed by that point.
+// calendar, then inserts the row. No iClosed
+// email is sent; Google Calendar's invitation is the only notification.
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -51,6 +48,7 @@ export async function POST(req: Request) {
   const closingDate = body.closingDate ? String(body.closingDate).trim() : null;
   const dealTypeRaw = String(body.dealType ?? "").trim().toLowerCase();
   const appointmentTypeRaw = String(body.appointmentType ?? "").trim().toLowerCase();
+  const sideRaw = String(body.side ?? "").trim().toLowerCase();
   const fileNumber = body.fileNumber ? String(body.fileNumber).trim() : null;
   const extraGuests = parseGuestList(body.extraGuests);
 
@@ -66,8 +64,8 @@ export async function POST(req: Request) {
   if (appointmentTypeRaw !== "virtual" && appointmentTypeRaw !== "in_person") {
     return NextResponse.json({ success: false, error: "appointmentType must be virtual or in_person" }, { status: 400 });
   }
-  if (dealTypeRaw && dealTypeRaw !== "purchase" && dealTypeRaw !== "sale") {
-    return NextResponse.json({ success: false, error: "dealType must be purchase or sale" }, { status: 400 });
+  if (dealTypeRaw && dealTypeRaw !== "purchase" && dealTypeRaw !== "sale" && dealTypeRaw !== "refinance") {
+    return NextResponse.json({ success: false, error: "dealType must be purchase, sale or refinance" }, { status: 400 });
   }
 
   const startAt = new Date(startAtRaw);
@@ -99,7 +97,7 @@ export async function POST(req: Request) {
     clientPhone,
     propertyAddress,
     closingDate,
-    dealType: (dealTypeRaw as "purchase" | "sale") || null,
+    dealType: (dealTypeRaw as "purchase" | "sale" | "refinance") || null,
     appointmentType: appointmentTypeRaw as "virtual" | "in_person",
     fileNumber,
     extraGuests,
@@ -153,6 +151,7 @@ export async function POST(req: Request) {
       end_at: endAt.toISOString(),
       appointment_type: booking.appointmentType,
       deal_type: booking.dealType,
+      side: sideRaw === "purchase" || sideRaw === "sale" ? sideRaw : null,
       client_name: clientName,
       client_email: clientEmail,
       client_phone: clientPhone,
@@ -202,19 +201,9 @@ export async function POST(req: Request) {
 
   const manageUrl = buildManageUrl(manageToken);
 
-  // Best-effort: the booking is already committed (calendar + DB), so a
-  // confirmation-email failure is logged inside sendSigningConfirmationEmail
-  // and must not turn this into an error response.
-  await sendSigningConfirmationEmail({
-    lawyer,
-    settings,
-    booking,
-    startAt,
-    endAt,
-    location,
-    meetLink,
-    manageUrl,
-  });
+  // No iClosed email goes to the booker, guests or lawyer: Google Calendar's
+  // own invitation (sendUpdates 'all' on create) is the only notification.
+  // sendSigningConfirmationEmail is intentionally not called here.
 
   return NextResponse.json({
     success: true,

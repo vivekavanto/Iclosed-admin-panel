@@ -39,7 +39,7 @@ export interface SigningAppointmentRow {
   start_at: string;
   end_at: string;
   appointment_type: "virtual" | "in_person";
-  deal_type: "purchase" | "sale" | null;
+  deal_type: "purchase" | "sale" | "refinance" | null;
   client_name: string;
   client_email: string;
   client_phone: string | null;

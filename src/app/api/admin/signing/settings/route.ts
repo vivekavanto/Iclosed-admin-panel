@@ -18,6 +18,7 @@ const EDITABLE_FIELDS = [
   "clerk_email",
   "reception_email",
   "disclaimer_text",
+  "default_signing_with",
 ] as const;
 
 export async function GET() {
@@ -42,11 +43,22 @@ export async function PUT(req: Request) {
   for (const numField of ["default_duration_minutes", "buffer_minutes", "slot_increment_minutes"] as const) {
     if (updates[numField] !== undefined) {
       const n = Number(updates[numField]);
-      if (!Number.isInteger(n) || n <= 0) {
-        return NextResponse.json({ success: false, error: `${numField} must be a positive integer` }, { status: 400 });
+      // Buffer may be 0 (no turnaround gap); duration and increment may not.
+      const min = numField === "buffer_minutes" ? 0 : 1;
+      if (!Number.isInteger(n) || n < min) {
+        return NextResponse.json(
+          { success: false, error: `${numField} must be ${min === 0 ? "zero or a positive" : "a positive"} integer` },
+          { status: 400 },
+        );
       }
       updates[numField] = n;
     }
+  }
+
+  // A blank default clears it (stored as NULL), never as "".
+  if (updates.default_signing_with !== undefined) {
+    const v = String(updates.default_signing_with ?? "").trim();
+    updates.default_signing_with = v || null;
   }
 
   if (Object.keys(updates).length === 0) {

@@ -32,7 +32,23 @@ function formatSlot(iso: string): string {
   });
 }
 
-export default function SigningBookingPage({ lawyerInitials }: { lawyerInitials: string }) {
+export interface SigningPrefill {
+  clientName?: string;
+  clientEmail?: string;
+  clientPhone?: string;
+  propertyAddress?: string;
+  closingDate?: string;
+  dealType?: string;
+  fileNumber?: string;
+}
+
+export default function SigningBookingPage({
+  lawyerInitials,
+  prefill,
+}: {
+  lawyerInitials: string;
+  prefill?: SigningPrefill;
+}) {
   const [date, setDate] = useState(todayLocalIso());
   const [availability, setAvailability] = useState<AvailabilityData | null>(null);
   const [notFound, setNotFound] = useState(false);
@@ -43,14 +59,14 @@ export default function SigningBookingPage({ lawyerInitials }: { lawyerInitials:
   const loadingSlots = availability?.date !== date && !notFound;
 
   const [form, setForm] = useState({
-    clientName: "",
-    clientEmail: "",
-    clientPhone: "",
-    propertyAddress: "",
-    closingDate: "",
-    dealType: "",
+    clientName: prefill?.clientName ?? "",
+    clientEmail: prefill?.clientEmail ?? "",
+    clientPhone: prefill?.clientPhone ?? "",
+    propertyAddress: prefill?.propertyAddress ?? "",
+    closingDate: prefill?.closingDate ?? "",
+    dealType: prefill?.dealType ?? "",
     appointmentType: "in_person",
-    fileNumber: "",
+    fileNumber: prefill?.fileNumber ?? "",
     extraGuestsText: "",
   });
   const [submitting, setSubmitting] = useState(false);
@@ -264,6 +280,7 @@ export default function SigningBookingPage({ lawyerInitials }: { lawyerInitials:
                 </option>
                 <option value="purchase">Purchase</option>
                 <option value="sale">Sale</option>
+                <option value="refinance">Refinance</option>
               </select>
             </label>
           </div>

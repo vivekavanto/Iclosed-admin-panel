@@ -9,7 +9,7 @@ interface Appointment {
   start_at: string;
   end_at: string;
   appointment_type: "virtual" | "in_person";
-  deal_type: "purchase" | "sale" | null;
+  deal_type: "purchase" | "sale" | "refinance" | null;
   client_name: string;
   client_email: string;
   client_phone: string | null;
@@ -20,7 +20,7 @@ interface Appointment {
   lawyer: { id: string; initials: string; full_name: string } | null;
 }
 
-const DEAL_TYPE_LABEL: Record<string, string> = { purchase: "Purchase", sale: "Sale" };
+const DEAL_TYPE_LABEL: Record<string, string> = { purchase: "Purchase", sale: "Sale", refinance: "Refinance" };
 const APPT_TYPE_LABEL: Record<string, string> = { virtual: "Virtual", in_person: "In Person" };
 
 function formatDateTime(iso: string): string {

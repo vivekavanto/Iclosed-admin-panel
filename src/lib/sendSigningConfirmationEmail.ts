@@ -28,7 +28,7 @@ import { OFFICE_TIMEZONE } from "./signingTimezone";
 import type { SigningLawyer, SigningSettings } from "./signingConfig";
 import type { SigningBookingInput } from "./signingEventContent";
 
-const DEAL_TYPE_LABEL: Record<string, string> = { purchase: "Purchase", sale: "Sale" };
+const DEAL_TYPE_LABEL: Record<string, string> = { purchase: "Purchase", sale: "Sale", refinance: "Refinance" };
 const APPT_TYPE_LABEL: Record<string, string> = { virtual: "Virtual", in_person: "In Person" };
 
 export interface SigningConfirmationInput {

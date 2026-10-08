@@ -432,6 +432,10 @@ const EDITABLE_DEAL_COLUMNS = new Set([
   // Files list. Never shown to the client and not readable from any email
   // template. File-level, so it mirrors across the family below.
   "admin_note",
+  // Whose signing calendar the client sees (signing_lawyers.initials). Admin
+  // only, never shown to the client. NULL = use signing_settings default.
+  // File-level, so it mirrors across the family below.
+  "signing_with",
 ]);
 
 const ALLOWED_TYPES = new Set([
@@ -471,6 +475,7 @@ const MIRROR_DEAL_COLUMNS = new Set([
   "cc_emails",
   "admin_note",
   "admin_note_updated_at",
+  "signing_with",
 ]);
 
 // Cap the note at the API rather than the column type, so an existing longer
@@ -523,6 +528,12 @@ export async function PATCH(
         { success: false, error: `Invalid status: ${value}` },
         { status: 400 },
       );
+    }
+    // signing_with: blank means "use the default calendar" and is stored as NULL.
+    if (key === "signing_with") {
+      const v = typeof value === "string" ? value.trim() : "";
+      updates[key] = v || null;
+      continue;
     }
     // admin_note: a blank note clears the column rather than storing "" — the
     // list renders null and "" identically, and null keeps the "no note yet"

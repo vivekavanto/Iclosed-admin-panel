@@ -11,6 +11,13 @@ interface Settings {
   clerk_email: string;
   reception_email: string;
   disclaimer_text: string;
+  default_signing_with: string | null;
+}
+
+interface CalendarOption {
+  initials: string;
+  full_name: string;
+  is_active: boolean;
 }
 
 const inputClasses =
@@ -21,12 +28,18 @@ export default function SigningGeneralSettings() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [calendars, setCalendars] = useState<CalendarOption[]>([]);
 
   useEffect(() => {
     (async () => {
-      const res = await fetch("/api/admin/signing/settings");
+      const [res, calRes] = await Promise.all([
+        fetch("/api/admin/signing/settings"),
+        fetch("/api/admin/signing/lawyers"),
+      ]);
       const json = await res.json();
       if (json.success) setSettings(json.data);
+      const calJson = await calRes.json().catch(() => null);
+      if (calJson?.success) setCalendars(calJson.data);
       setLoading(false);
     })();
   }, []);
@@ -66,6 +79,30 @@ export default function SigningGeneralSettings() {
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 space-y-5 max-w-2xl">
+      <div>
+        <label className="block text-xs font-semibold text-slate-500 mb-1.5">
+          Signing with (default for all files)
+        </label>
+        <select
+          className={inputClasses}
+          value={settings.default_signing_with ?? ""}
+          onChange={(e) => setSettings({ ...settings, default_signing_with: e.target.value || null })}
+        >
+          <option value="">Not set</option>
+          {calendars
+            .filter((c) => c.is_active || c.initials === settings.default_signing_with)
+            .map((c) => (
+              <option key={c.initials} value={c.initials}>
+                {c.full_name} ({c.initials})
+              </option>
+            ))}
+        </select>
+        <p className="mt-1 text-xs text-slate-400">
+          Whose calendar clients see when booking their signing appointment. Can be changed per file
+          under &quot;Signing with&quot;. Never shown to clients.
+        </p>
+      </div>
+
       <div className="grid grid-cols-3 gap-4">
         <div>
           <label className="block text-xs font-semibold text-slate-500 mb-1.5">Duration (min)</label>

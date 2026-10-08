@@ -11,14 +11,14 @@ export interface SigningBookingInput {
   clientPhone: string | null;
   propertyAddress: string | null;
   closingDate: string | null; // YYYY-MM-DD
-  dealType: "purchase" | "sale" | null;
+  dealType: "purchase" | "sale" | "refinance" | null;
   appointmentType: "virtual" | "in_person";
   fileNumber: string | null;
   extraGuests: string[];
   extraCohosts: string[];
 }
 
-const DEAL_TYPE_LABEL: Record<string, string> = { purchase: "Purchase", sale: "Sale" };
+const DEAL_TYPE_LABEL: Record<string, string> = { purchase: "Purchase", sale: "Sale", refinance: "Refinance" };
 const APPT_TYPE_LABEL: Record<string, string> = { virtual: "Virtual", in_person: "In Person" };
 
 /** "AT: 123 Main Street Signing Appointment [Virtual] [Purchase]" */
@@ -36,12 +36,7 @@ export function buildEventDescription(
 ): string {
   const lines = [
     `Name: ${booking.clientName}`,
-    `Email: ${booking.clientEmail}`,
     `Phone: ${booking.clientPhone || "-"}`,
-    `Property address: ${booking.propertyAddress || "-"}`,
-    `Closing date: ${booking.closingDate || "-"}`,
-    `Deal type: ${booking.dealType ? DEAL_TYPE_LABEL[booking.dealType] : "-"}`,
-    `Appointment type: ${APPT_TYPE_LABEL[booking.appointmentType]}`,
   ];
   if (booking.fileNumber) lines.push(`File number: ${booking.fileNumber}`);
   lines.push("", settings.disclaimer_text);

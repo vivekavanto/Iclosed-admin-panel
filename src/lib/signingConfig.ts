@@ -34,6 +34,9 @@ export interface SigningSettings {
   clerk_email: string;
   reception_email: string;
   disclaimer_text: string;
+  // Initials of the signing_lawyers calendar clients see unless a file
+  // overrides it with deals.signing_with. NULL = not chosen yet.
+  default_signing_with: string | null;
 }
 
 export async function listLawyers(opts?: { activeOnly?: boolean }): Promise<SigningLawyer[]> {
@@ -88,12 +91,16 @@ export async function getLawyerHours(lawyerId: string): Promise<SigningLawyerHou
 }
 
 const DEFAULT_SETTINGS: Omit<SigningSettings, "id"> = {
-  default_duration_minutes: 30,
-  buffer_minutes: 15,
-  slot_increment_minutes: 15,
+  // 45-min appointments on a 30-min grid: booking 10:00 occupies 10:00-10:45,
+  // so 10:30 is taken and the next open start is 11:00. The grid gap already
+  // covers turnaround, hence no buffer.
+  default_duration_minutes: 45,
+  buffer_minutes: 0,
+  slot_increment_minutes: 30,
   office_address: "10 Milner Business Court Scarborough, ON M1B 3C6",
   clerk_email: "Marcela@navawilson.law",
   reception_email: "reception@navawilson.law",
+  default_signing_with: null,
   disclaimer_text:
     "Please schedule your signing appointment 1-3 business days before your closing date. Note: Appointments are subject to our office receiving the required mortgage instructions (for purchases) and payout statement (for sales). If the required documents are not received in time, your appointment may need to be rescheduled.",
 };

@@ -18,6 +18,8 @@ type DealRow = {
   status?: string | null;
   lawyer_name?: string | null;
   clerk_name?: string | null;
+  // Admin-only: initials of the signing calendar clients see. Empty = default.
+  signing_with?: string | null;
   property_address?: string | null;
   closing_date?: string | null;
   // Sale-side closing date, only meaningful on a Purchase & Sale file — that
@@ -83,6 +85,37 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
   // deal detail page.
   const [form, setForm] = useState<DealRow>({ id: dealId });
 
+  // Bookable signing calendars + the global default, for the admin-only
+  // "Signing with" dropdown.
+  const [signingCalendars, setSigningCalendars] = useState<
+    { initials: string; full_name: string; is_active: boolean }[]
+  >([]);
+  const [signingDefault, setSigningDefault] = useState<string | null>(null);
+  const signingDefaultLabel =
+    signingCalendars.find((c) => c.initials === signingDefault)?.full_name ?? "";
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [calRes, setRes] = await Promise.all([
+          fetch("/api/admin/signing/lawyers"),
+          fetch("/api/admin/signing/settings"),
+        ]);
+        const cal = await calRes.json().catch(() => null);
+        const st = await setRes.json().catch(() => null);
+        if (cancelled) return;
+        if (cal?.success) setSigningCalendars(cal.data);
+        if (st?.success) setSigningDefault(st.data?.default_signing_with ?? null);
+      } catch {
+        // Non-fatal: the dropdown just shows "Default" with no calendars.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // The client name loaded from the server, so a save only hits the leads
   // endpoint when the admin actually changed it.
   const initialNameRef = useRef<{ first: string; last: string }>({ first: "", last: "" });
@@ -118,6 +151,7 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
             }),
             lawyer_name: deal.lawyer_name ?? "",
             clerk_name: deal.clerk_name ?? "",
+            signing_with: deal.signing_with ?? "",
             property_address: deal.property_address ?? "",
             closing_date: toDateInputValue(deal.closing_date),
             selling_closing_date: toDateInputValue(deal.selling_closing_date),
@@ -178,6 +212,7 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
         status: form.status ?? "Active",
         lawyer_name: form.lawyer_name ?? "",
         clerk_name: form.clerk_name ?? "",
+        signing_with: form.signing_with ?? "",
         property_address: form.property_address ?? "",
         closing_date: form.closing_date ?? "",
         selling_closing_date: form.selling_closing_date ?? "",
@@ -392,6 +427,29 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
                   onChange={(e) => updateField("clerk_name", e.target.value)}
                   className={inputClass}
                 />
+              </Field>
+              <Field label="Signing with">
+                <select
+                  value={form.signing_with ?? ""}
+                  onChange={(e) => updateField("signing_with", e.target.value)}
+                  className={inputClass}
+                >
+                  <option value="">
+                    {signingDefaultLabel
+                      ? `Default (${signingDefaultLabel})`
+                      : "Default (not set)"}
+                  </option>
+                  {signingCalendars
+                    .filter((c) => c.is_active || c.initials === form.signing_with)
+                    .map((c) => (
+                      <option key={c.initials} value={c.initials}>
+                        {c.full_name}
+                      </option>
+                    ))}
+                </select>
+                <p className="mt-1 text-xs text-slate-400">
+                  Whose calendar the client books with. Hidden from the client.
+                </p>
               </Field>
               <Field label="Property address" className="md:col-span-2">
                 <input
