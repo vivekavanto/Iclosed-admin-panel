@@ -81,7 +81,12 @@ export async function interpolate(
   text: string,
   lead: any,
   fileNumber: string | null = null,
-  opts: { escape?: boolean; facts?: DealFactValues } = {},
+  opts: {
+    escape?: boolean;
+    facts?: DealFactValues;
+    /** Extra placeholder values, keyed lowercase (e.g. agent_first_name). */
+    extra?: Record<string, string>;
+  } = {},
 ): Promise<string> {
   // escape=true for HTML bodies (default); callers pass escape:false for the
   // plain-text subject line so escaped entities don't show literally.
@@ -177,6 +182,7 @@ export async function interpolate(
     "stage_status": "",
     "side_suffix": sideSuffix,
     "property_role_row": propertyRoleRow,
+    ...(opts.extra ?? {}),
   };
 
   const resolve = (name: string): TemplateValue | null => {

@@ -60,20 +60,24 @@ export type AgentSignupEmailOpts = {
  * flips is_deleted, so we filter it explicitly). Returns null when this row
  * carries no agent — the caller decides where to look next.
  */
-async function resolveAgentEmailForRow(row: any): Promise<string | null> {
+type ResolvedAgent = { email: string; name: string };
+
+async function resolveAgentForRow(row: any): Promise<ResolvedAgent | null> {
   if (row?.partner_id) {
     const { data: partner } = await supabaseAdmin
       .from("partners")
-      .select("agent_email")
+      .select("agent_email, agent_name")
       .eq("id", row.partner_id)
       .eq("is_deleted", false)
       .maybeSingle();
     const email = partner?.agent_email?.trim();
-    if (email) return email;
+    if (email) return { email, name: (partner?.agent_name ?? "").trim() };
   }
 
   const freeText = (row?.referral_agent_email ?? "").trim();
-  return freeText || null;
+  return freeText
+    ? { email: freeText, name: (row?.referral_agent_name ?? "").trim() }
+    : null;
 }
 
 /**
@@ -84,17 +88,17 @@ async function resolveAgentEmailForRow(row: any): Promise<string | null> {
  * its agent on deals.partner_id while the lead row has none. Looking only at
  * the lead was silently dropping those notifications.
  */
-async function resolveAgentEmailFromDeals(leadId: string): Promise<string | null> {
+async function resolveAgentFromDeals(leadId: string): Promise<ResolvedAgent | null> {
   const { data: deals } = await supabaseAdmin
     .from("deals")
-    .select("partner_id, referral_agent_email")
+    .select("partner_id, referral_agent_email, referral_agent_name")
     .eq("lead_id", leadId)
     .eq("is_deleted", false)
     .order("created_at", { ascending: false });
 
   for (const deal of deals ?? []) {
-    const email = await resolveAgentEmailForRow(deal);
-    if (email) return email;
+    const agent = await resolveAgentForRow(deal);
+    if (agent) return agent;
   }
   return null;
 }
@@ -114,14 +118,14 @@ async function resolveAgentEmailFromDeals(leadId: string): Promise<string | null
  * Returns null when nothing in that chain has an agent on file — a normal,
  * non-error case (direct sign-ups have no referrer).
  */
-async function resolveAgentEmail(lead: any): Promise<string | null> {
+async function resolveAgent(lead: any): Promise<ResolvedAgent | null> {
   // The lead's own agent link wins.
-  const own = await resolveAgentEmailForRow(lead);
+  const own = await resolveAgentForRow(lead);
   if (own) return own;
 
   // Then the agent linked to this lead's deal.
   if (lead?.id) {
-    const fromDeal = await resolveAgentEmailFromDeals(lead.id);
+    const fromDeal = await resolveAgentFromDeals(lead.id);
     if (fromDeal) return fromDeal;
   }
 
@@ -129,13 +133,13 @@ async function resolveAgentEmail(lead: any): Promise<string | null> {
   if (lead?.parent_lead_id) {
     const { data: parent } = await supabaseAdmin
       .from("leads")
-      .select("id, partner_id, referral_agent_email")
+      .select("id, partner_id, referral_agent_email, referral_agent_name")
       .eq("id", lead.parent_lead_id)
       .maybeSingle();
     if (parent) {
-      const fromParent = await resolveAgentEmailForRow(parent);
+      const fromParent = await resolveAgentForRow(parent);
       if (fromParent) return fromParent;
-      return resolveAgentEmailFromDeals(parent.id);
+      return resolveAgentFromDeals(parent.id);
     }
   }
 
@@ -205,7 +209,7 @@ export async function sendAgentSignupEmail(
     // this notification is now stuck forever. It used to log at info alongside
     // the ordinary "no agent on file" case, which is why a whole class of
     // missing agent emails left no trace. Warn so it shows up.
-    const pendingAgent = await resolveAgentEmail(lead);
+    const pendingAgent = (await resolveAgent(lead))?.email;
     const log = pendingAgent ? logger.warn : logger.info;
     log(
       `[Agent Signup Email] Skipped — client has not activated yet (no non-Inactive deal). ` +
@@ -224,8 +228,8 @@ export async function sendAgentSignupEmail(
     activatedDeal.file_number ?? (leadDeals ?? [])[0]?.file_number ?? null;
 
   // 4. Resolve the agent recipient — no agent means nothing to send.
-  const agentEmail = await resolveAgentEmail(lead);
-  if (!agentEmail) {
+  const agent = await resolveAgent(lead);
+  if (!agent) {
     logger.info(
       `[Agent Signup Email] Skipped — lead has no referral agent on file. lead=${leadId} source=${opts.source ?? "unknown"}`,
     );
@@ -235,6 +239,8 @@ export async function sendAgentSignupEmail(
       skipReason: "No referral agent linked to this lead",
     };
   }
+
+  const agentEmail = agent.email;
 
   // 5. Pick template — strict is_active handling mirrors sendWelcomeEmail: an
   // inactive matching template is a real off-switch, not a fall-through.
@@ -304,7 +310,15 @@ export async function sendAgentSignupEmail(
   const rawBody = decodeTemplateBraces(template.body)
     .replace(/ /g, " ");
 
-  const htmlBody = await interpolate(rawBody, lead, fileNumber);
+  const agentName = agent.name;
+  const agentValues = {
+    agent_first_name: agentName.split(/\s+/)[0] ?? "",
+    agent_name: agentName,
+  };
+
+  const htmlBody = await interpolate(rawBody, lead, fileNumber, {
+    extra: agentValues,
+  });
 
   const rawSubject =
     template.subject && template.subject.trim() !== ""
@@ -313,6 +327,7 @@ export async function sendAgentSignupEmail(
   // Subject is plain text — don't HTML-escape (single-pass still applies).
   const subject = await interpolate(rawSubject, lead, fileNumber, {
     escape: false,
+    extra: agentValues,
   });
 
   // 7. Send — the agent hears from the firm acting on their client's file.
