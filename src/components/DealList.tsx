@@ -230,7 +230,11 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           ? `${name} linked to file ${deal.fileNumber || ''}`.trim() + '.'
           : `Agent removed from file ${deal.fileNumber || ''}`.trim() + '.',
       ];
-      if (data.notify?.eligible) {
+      if (data.agentNotified) {
+        parts.push('The signup email was sent to the agent.');
+      } else if (data.agentNotifyError) {
+        parts.push(`The signup email could not be sent: ${data.agentNotifyError}`);
+      } else if (data.notify?.eligible) {
         parts.push('They have not had the signup email — send it from the lead’s Partner Details.');
       }
       if (Array.isArray(data.warnings)) parts.push(...data.warnings);

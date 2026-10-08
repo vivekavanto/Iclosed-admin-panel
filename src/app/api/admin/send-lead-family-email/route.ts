@@ -3,6 +3,7 @@ import { sendEmail } from "@/lib/email/emailTransport";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { sendWelcomeEmail } from "@/lib/sendWelcomeEmail";
 import { sendAuthEmailViaResend } from "@/lib/sendAuthEmail";
+import { sendAgentSignupEmail } from "@/lib/sendAgentSignupEmail";
 import { formatLeadTypeLabel, buildLeadAddressPartsForEmail } from "@/lib/leadEmailAddress";
 import { guardServiceRequest } from "@/lib/verifyServiceSignature";
 import { generateRetainerPdf } from "@/lib/generateRetainerPdf";
@@ -45,6 +46,12 @@ type RecipientResult = {
 //   underscores, or leading dot.
 const AUTH_URL_PLACEHOLDER_RE =
   /\{\{\s*\.?\s*(confirmation|activation|activate|action|invite|invitation|reset|recovery|password|verification|verify|button)[_\s\.]*(url|link)\s*\}\}/i;
+
+// Detects if a template is the agent signup template, which should be sent to
+// the referral agent instead of to the client.
+function isAgentSignupTemplate(name: string | null | undefined): boolean {
+  return (name ?? "").toLowerCase().includes("signup") && (name ?? "").toLowerCase().includes("agent");
+}
 
 // Manual send needs to mirror the auto-flow that fires when a client signs the
 // retainer in the customer portal (iclosed_web). The portal generates a PDF,
@@ -632,6 +639,8 @@ export async function POST(req: NextRequest) {
     //    today's single-recipient flow and produces deterministic per-recipient
     //    logs.
     const results: RecipientResult[] = [];
+    const agentSignupMode = !authType && isAgentSignupTemplate(templateName);
+    const agentsEmailed = new Set<string>();
     for (const r of recipients) {
       const name = `${r.first_name ?? ""} ${r.last_name ?? ""}`.trim() || "(no name)";
 
@@ -690,6 +699,33 @@ export async function POST(req: NextRequest) {
           skip_reason: res.skipReason,
           error: res.error,
           link_type: effectiveType,
+        });
+        continue;
+      }
+
+      if (agentSignupMode) {
+        // ── Agent signup template: addressed to the referral agent, not the
+        // client. One send per agent — co-clients resolve to the same agent.
+        const res = await sendAgentSignupEmail(r.id, {
+          templateId: template_id,
+          source: "manual",
+          bypassIdempotency: true,
+        });
+        const agentKey = (res.agentEmail ?? "").toLowerCase();
+        if (agentKey && agentsEmailed.has(agentKey)) continue;
+        if (agentKey && res.success && !res.skipped) agentsEmailed.add(agentKey);
+
+        results.push({
+          lead_id: r.id,
+          name,
+          email: res.agentEmail ?? r.email ?? "",
+          role: r.role,
+          success: res.success && !res.error,
+          template_used: res.templateUsed ?? templateName ?? undefined,
+          email_id: res.emailId,
+          skipped: res.skipped,
+          skip_reason: res.skipReason,
+          error: res.error,
         });
         continue;
       }

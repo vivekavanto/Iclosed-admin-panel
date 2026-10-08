@@ -24,6 +24,7 @@
 import supabaseAdmin from "./supabaseAdmin";
 import { isUuid } from "./isUuid";
 import { logger } from "./logger";
+import { sendAgentSignupEmail } from "./sendAgentSignupEmail";
 
 /** The partner shape both the Leads and All Files UIs render. */
 export const PARTNER_COLUMNS =
@@ -123,6 +124,48 @@ export async function getNotifyState(
   }
 
   return { eligible: true, reason: null };
+}
+
+/**
+ * After an agent is linked: if the client has ALREADY activated, the automatic
+ * trigger (portal set-password / login -> activate-deal) has come and gone, so
+ * nothing would ever email this agent. Send it now. If the client has not
+ * activated yet, do nothing — the automatic trigger will cover it.
+ *
+ * Never throws: linking the agent is already committed, and a mail problem is
+ * reported back (and logged) rather than failing the link.
+ */
+export async function notifyAgentAfterLink(
+  leadId: string,
+  partner: PartnerRow | null,
+): Promise<{
+  notify: { eligible: boolean; reason: string | null };
+  agentNotified: boolean;
+  agentNotifyError: string | null;
+}> {
+  const notify = await getNotifyState(leadId, partner);
+  if (!notify.eligible) {
+    return { notify, agentNotified: false, agentNotifyError: null };
+  }
+  try {
+    const res = await sendAgentSignupEmail(leadId, { source: "manual" });
+    if (!res.success) {
+      logger.error(`[referral agent] auto-notify failed: ${res.error}`);
+      return { notify, agentNotified: false, agentNotifyError: res.error ?? "Send failed" };
+    }
+    if (res.skipped || res.alreadySent) {
+      return { notify, agentNotified: false, agentNotifyError: null };
+    }
+    return {
+      notify: { eligible: false, reason: "The agent has already been notified." },
+      agentNotified: true,
+      agentNotifyError: null,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error(`[referral agent] auto-notify threw: ${message}`);
+    return { notify, agentNotified: false, agentNotifyError: message };
+  }
 }
 
 export type LinkReferralAgentResult =

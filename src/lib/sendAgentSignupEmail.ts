@@ -8,6 +8,7 @@ import { normalizeRecipientEmail } from "./emailIdentity";
 import { getLeadFirmKey } from "./leadFirm";
 import { brandEmailHtml } from "./emailBrand";
 import { standingAgentCcList } from "./agentCc";
+import { resolveAgent, agentTemplateValues } from "./resolveAgent";
 
 export type AgentSignupEmailResult = {
   success: boolean;
@@ -44,107 +45,6 @@ export type AgentSignupEmailOpts = {
    */
   bypassIdempotency?: boolean;
 };
-
-/**
- * Resolves the agent email from a SINGLE lead OR deal row's own fields (both
- * tables carry the same pair of referral columns).
- *
- * Two ways a row can carry an agent:
- *  1. A partner's referral code was applied → partner_id points at the partners
- *     master; partners.agent_email is the agent's address.
- *  2. No code, an off-system agent was named → the free-text
- *     referral_agent_email.
- *
- * The linked partner wins; the free-text field is the fallback. Soft-deleted
- * partners are ignored (the FK is ON DELETE SET NULL, but a soft delete only
- * flips is_deleted, so we filter it explicitly). Returns null when this row
- * carries no agent — the caller decides where to look next.
- */
-type ResolvedAgent = { email: string; name: string };
-
-async function resolveAgentForRow(row: any): Promise<ResolvedAgent | null> {
-  if (row?.partner_id) {
-    const { data: partner } = await supabaseAdmin
-      .from("partners")
-      .select("agent_email, agent_name")
-      .eq("id", row.partner_id)
-      .eq("is_deleted", false)
-      .maybeSingle();
-    const email = partner?.agent_email?.trim();
-    if (email) return { email, name: (partner?.agent_name ?? "").trim() };
-  }
-
-  const freeText = (row?.referral_agent_email ?? "").trim();
-  return freeText
-    ? { email: freeText, name: (row?.referral_agent_name ?? "").trim() }
-    : null;
-}
-
-/**
- * Resolves the agent from a lead's DEALS rather than the lead row.
- *
- * convertLead() copies the referral onto the deal, and an admin linking an
- * agent to an existing file edits the DEAL — so a file can legitimately carry
- * its agent on deals.partner_id while the lead row has none. Looking only at
- * the lead was silently dropping those notifications.
- */
-async function resolveAgentFromDeals(leadId: string): Promise<ResolvedAgent | null> {
-  const { data: deals } = await supabaseAdmin
-    .from("deals")
-    .select("partner_id, referral_agent_email, referral_agent_name")
-    .eq("lead_id", leadId)
-    .eq("is_deleted", false)
-    .order("created_at", { ascending: false });
-
-  for (const deal of deals ?? []) {
-    const agent = await resolveAgentForRow(deal);
-    if (agent) return agent;
-  }
-  return null;
-}
-
-/**
- * Resolves the email of the client's referral agent/broker for the notification.
- *
- * Looks, in order: the lead's own referral → the lead's deal(s) → the parent
- * lead's referral → the parent lead's deal(s).
- *
- * Co-purchasers / co-sellers are stored as SEPARATE lead rows (parent_lead_id
- * set) and do NOT carry the referral link — it lives only on the primary lead
- * (verified: 0 of the co-leads on file have their own partner_id). So when a
- * co-client signs up we fall back to the parent, so the referring agent is
- * still notified for every person on the file, not just the primary.
- *
- * Returns null when nothing in that chain has an agent on file — a normal,
- * non-error case (direct sign-ups have no referrer).
- */
-async function resolveAgent(lead: any): Promise<ResolvedAgent | null> {
-  // The lead's own agent link wins.
-  const own = await resolveAgentForRow(lead);
-  if (own) return own;
-
-  // Then the agent linked to this lead's deal.
-  if (lead?.id) {
-    const fromDeal = await resolveAgentFromDeals(lead.id);
-    if (fromDeal) return fromDeal;
-  }
-
-  // Co-lead fallback: inherit the primary lead's agent (lead row, then deal).
-  if (lead?.parent_lead_id) {
-    const { data: parent } = await supabaseAdmin
-      .from("leads")
-      .select("id, partner_id, referral_agent_email, referral_agent_name")
-      .eq("id", lead.parent_lead_id)
-      .maybeSingle();
-    if (parent) {
-      const fromParent = await resolveAgentForRow(parent);
-      if (fromParent) return fromParent;
-      return resolveAgentFromDeals(parent.id);
-    }
-  }
-
-  return null;
-}
 
 /**
  * Notifies the client's referral agent/broker that their client just signed up
@@ -311,9 +211,18 @@ export async function sendAgentSignupEmail(
     .replace(/ /g, " ");
 
   const agentName = agent.name;
+  const agentFirst = agentName.split(/\s+/)[0] ?? "";
+  const agentLast = agentName.split(/\s+/).slice(1).join(" ");
+  // The agent is who this email is written to, so user.* is the agent (as in
+  // agent-only milestone mail); the client stays reachable via client.*.
   const agentValues = {
-    agent_first_name: agentName.split(/\s+/)[0] ?? "",
+    agent_first_name: agentFirst,
     agent_name: agentName,
+    "user.first_name": agentFirst,
+    "user.last_name": agentLast,
+    "user.full_name": agentName,
+    "user.get_full_name": agentName,
+    "user.email": agentEmail,
   };
 
   const htmlBody = await interpolate(rawBody, lead, fileNumber, {

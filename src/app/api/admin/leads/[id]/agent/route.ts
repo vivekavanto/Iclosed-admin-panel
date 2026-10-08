@@ -5,8 +5,8 @@ import { getActingAdmin } from "@/lib/getActingAdmin";
 import { sendAgentSignupEmail } from "@/lib/sendAgentSignupEmail";
 import { logger } from "@/lib/logger";
 import {
-  getNotifyState,
   linkReferralAgent,
+  notifyAgentAfterLink,
   parsePartnerId,
 } from "@/lib/referralAgent";
 
@@ -78,9 +78,15 @@ export async function PUT(
       req,
     });
 
-    const notify = parsed.partnerId
-      ? await getNotifyState(id, result.partner)
-      : { eligible: false, reason: null };
+    // A client who already activated will never trigger the automatic email, so
+    // send it now; an inactive client is left to the activation trigger.
+    const { notify, agentNotified, agentNotifyError } = parsed.partnerId
+      ? await notifyAgentAfterLink(id, result.partner)
+      : {
+          notify: { eligible: false, reason: null as string | null },
+          agentNotified: false,
+          agentNotifyError: null as string | null,
+        };
 
     return NextResponse.json({
       success: true,
@@ -88,6 +94,8 @@ export async function PUT(
       leadsUpdated: result.leadsUpdated,
       dealsUpdated: result.dealsUpdated,
       notify,
+      agentNotified,
+      agentNotifyError,
       warnings: result.warnings,
     });
   } catch (err) {

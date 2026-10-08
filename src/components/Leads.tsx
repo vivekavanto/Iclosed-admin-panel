@@ -546,6 +546,8 @@ const Leads: React.FC = () => {
               referralAgentName: null,
               referralAgentCompany: null,
               referralAgentEmail: null,
+              // The server emails an already-activated client's agent on link.
+              ...(data.agentNotified ? { agentSignupEmailSent: true } : {}),
             }
           : l;
       setLeads((prev) => prev.map(applyAgent));
@@ -561,6 +563,11 @@ const Leads: React.FC = () => {
         parts.push(
           `Updated ${data.leadsUpdated} client record${data.leadsUpdated === 1 ? "" : "s"} and ${data.dealsUpdated} file${data.dealsUpdated === 1 ? "" : "s"}.`,
         );
+      }
+      if (data.agentNotified) {
+        parts.push("The signup email was sent to the agent.");
+      } else if (data.agentNotifyError) {
+        parts.push(`The signup email could not be sent: ${data.agentNotifyError}`);
       }
       if (Array.isArray(data.warnings)) parts.push(...data.warnings);
 
