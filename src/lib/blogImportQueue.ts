@@ -10,6 +10,7 @@ import { readBlobDocument } from "./blobDocument";
 import { blobTokenForUrl } from "./blobPrivacy";
 import { computeServiceSignature } from "./verifyServiceSignature";
 import { revalidatePortalBlog } from "./revalidatePortalBlog";
+import { planBackdatedDates } from "./blogImportDates";
 
 /**
  * Background queue for multi-article blog imports.
@@ -55,6 +56,8 @@ export type ImportBatchRow = {
   blob_url: string | null;
   status: "queued" | "extracting" | "processing" | "completed" | "failed" | "cancelled";
   publish_when_ready: boolean;
+  /** Backdate the document's blogs, N per date (null = off). See blogImportDates.ts. */
+  blogs_per_date: number | null;
   total: number;
   published: number;
   error: string | null;
@@ -90,6 +93,7 @@ export async function enqueueImportBatch(input: {
   blobUrl: string;
   fileName: string;
   publishWhenReady: boolean;
+  blogsPerDate?: number | null;
   adminEmail: string | null;
 }): Promise<{ ok: true; batchId: string } | { ok: false; error: string }> {
   const { data, error } = await supabaseAdmin
@@ -98,6 +102,7 @@ export async function enqueueImportBatch(input: {
       file_name: input.fileName,
       blob_url: input.blobUrl,
       publish_when_ready: input.publishWhenReady,
+      blogs_per_date: input.blogsPerDate ?? null,
       created_by_email: input.adminEmail,
     })
     .select("id")
@@ -319,6 +324,12 @@ async function processExtractJob(batchId: string): Promise<number> {
   );
   const seenInBatch = new Map<string, { id: string | null; title: string }>();
 
+  // Backdated dates for the whole document, continuing from the latest blog date
+  // on the site. Planned BEFORE this batch creates any drafts, for the same reason.
+  const plannedDates = batch.blogs_per_date
+    ? planBackdatedDates(articles.length, batch.blogs_per_date, await latestBlogDate())
+    : null;
+
   const itemRows: Record<string, unknown>[] = [];
   for (let idx = 0; idx < articles.length; idx++) {
     const a = articles[idx];
@@ -344,7 +355,14 @@ async function processExtractJob(batchId: string): Promise<number> {
     const inBlog = existing.get(slug);
     const match = inBlog ?? seenInBatch.get(slug);
 
-    const created = await createImportDraft(batch, { title, text: a.text, preformattedHtml: a.preformattedHtml });
+    // Backdated publish date: set on the draft now so an auto-publish and a
+    // later manual publish both keep it (both only fill an empty published_at).
+    const publishedAt = plannedDates ? plannedDates[idx] : null;
+    const created = await createImportDraft(
+      batch,
+      { title, text: a.text, preformattedHtml: a.preformattedHtml },
+      publishedAt,
+    );
     if (!match) seenInBatch.set(slug, { id: created.ok ? created.row.id : null, title });
 
     itemRows.push({
@@ -387,14 +405,33 @@ async function processExtractJob(batchId: string): Promise<number> {
   return itemRows.filter((r) => r.status === "queued").length;
 }
 
+/** The latest published_at of any blog on the site (any status), or null when none has a date. */
+async function latestBlogDate(): Promise<Date | null> {
+  const { data, error } = await supabaseAdmin
+    .from("blog_posts")
+    .select("published_at")
+    .not("published_at", "is", null)
+    .order("published_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    logger.warn("[blogImportQueue] could not read the latest blog date:", error.message);
+    return null;
+  }
+  const raw = (data as { published_at: string | null } | null)?.published_at;
+  return raw ? new Date(raw) : null;
+}
+
 function createImportDraft(
   batch: ImportBatchRow,
   article: { title: string; text: string; preformattedHtml: string | null },
+  publishedAt: string | null = null,
 ) {
   return createPost(
     {
       title: article.title,
       status: "draft",
+      ...(publishedAt ? { published_at: publishedAt } : {}),
       content_html: article.preformattedHtml ?? plainTextToHtml(article.text),
       content_source: article.text,
       excerpt: fallbackExcerpt(article.text),

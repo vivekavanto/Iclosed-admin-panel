@@ -35,6 +35,26 @@ function privateKey(): string {
   return raw.replace(/\\n/g, "\n");
 }
 
+/**
+ * An instant as Toronto wall-clock time with NO offset ("2026-10-09T10:30:00").
+ * Sent with timeZone OFFICE_TIMEZONE so Google stores the event in Eastern time;
+ * a UTC string ("…Z") made Google label the invite body "UTC" instead.
+ */
+export function officeLocalDateTime(date: Date): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: OFFICE_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "00";
+  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}:${get("second")}`;
+}
+
 /** An authorized Calendar client impersonating one lawyer's own calendar. */
 export function getCalendarClientForLawyer(lawyerEmail: string): calendar_v3.Calendar {
   const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
@@ -119,8 +139,8 @@ export async function createCalendarEvent(
       summary: input.summary,
       description: input.description,
       location: input.location,
-      start: { dateTime: input.start.toISOString(), timeZone: OFFICE_TIMEZONE },
-      end: { dateTime: input.end.toISOString(), timeZone: OFFICE_TIMEZONE },
+      start: { dateTime: officeLocalDateTime(input.start), timeZone: OFFICE_TIMEZONE },
+      end: { dateTime: officeLocalDateTime(input.end), timeZone: OFFICE_TIMEZONE },
       attendees: input.attendees.map((email) => ({ email })),
       conferenceData: input.needsMeet
         ? {
@@ -184,10 +204,10 @@ export async function updateCalendarEvent(input: UpdateEventInput): Promise<void
       ...(input.description !== undefined ? { description: input.description } : {}),
       ...(input.location !== undefined ? { location: input.location } : {}),
       ...(input.start
-        ? { start: { dateTime: input.start.toISOString(), timeZone: OFFICE_TIMEZONE } }
+        ? { start: { dateTime: officeLocalDateTime(input.start), timeZone: OFFICE_TIMEZONE } }
         : {}),
       ...(input.end
-        ? { end: { dateTime: input.end.toISOString(), timeZone: OFFICE_TIMEZONE } }
+        ? { end: { dateTime: officeLocalDateTime(input.end), timeZone: OFFICE_TIMEZONE } }
         : {}),
       ...(input.attendees ? { attendees: input.attendees.map((email) => ({ email })) } : {}),
     },

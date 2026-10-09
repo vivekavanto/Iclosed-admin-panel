@@ -11,6 +11,7 @@ import {
   listVisibleBatches,
   runOneJob,
 } from "@/lib/blogImportQueue";
+import { isValidBlogsPerDate } from "@/lib/blogImportDates";
 
 /**
  * Background multi-blog import (see src/lib/blogImportQueue.ts).
@@ -56,10 +57,24 @@ export async function POST(req: Request) {
   const fileName =
     typeof body.fileName === "string" && body.fileName.trim() ? body.fileName.trim().slice(0, 255) : "upload";
 
+  // Optional: spread the document's blogs over past dates, N per date.
+  let blogsPerDate: number | null = null;
+  if (body.blogsPerDate !== undefined && body.blogsPerDate !== null && body.blogsPerDate !== "") {
+    const n = Number(body.blogsPerDate);
+    if (!isValidBlogsPerDate(n)) {
+      return NextResponse.json(
+        { success: false, error: "Blogs per date must be a whole number from 1 to 100." },
+        { status: 400 },
+      );
+    }
+    blogsPerDate = n;
+  }
+
   const queued = await enqueueImportBatch({
     blobUrl,
     fileName,
     publishWhenReady: body.publishWhenReady === true,
+    blogsPerDate,
     adminEmail: email,
   });
   if (!queued.ok) {
@@ -71,7 +86,7 @@ export async function POST(req: Request) {
     actorEmail: email,
     resourceType: "blog_post_batch",
     resourceId: queued.batchId,
-    metadata: { fileName, publishWhenReady: body.publishWhenReady === true },
+    metadata: { fileName, publishWhenReady: body.publishWhenReady === true, blogsPerDate },
     req,
   });
 

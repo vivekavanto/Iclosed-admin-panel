@@ -79,6 +79,8 @@ const Blogs: React.FC = () => {
   // should go live automatically; it closes as soon as the upload is queued.
   const [pendingImport, setPendingImport] = useState<File | null>(null);
   const [publishWhenReady, setPublishWhenReady] = useState(false);
+  // Backdate the document's blogs, N per date; blank = off.
+  const [blogsPerDate, setBlogsPerDate] = useState("");
   const [importUploading, setImportUploading] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [importRefreshKey, setImportRefreshKey] = useState(0);
@@ -265,6 +267,7 @@ const Blogs: React.FC = () => {
     setPendingImport(null);
     setImportError(null);
     setPublishWhenReady(false);
+    setBlogsPerDate("");
     if (uploadInput.current) uploadInput.current.value = "";
   };
 
@@ -287,7 +290,7 @@ const Blogs: React.FC = () => {
       const res = await fetch("/api/admin/blog/batches", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ blobUrl: blob.url, fileName: file.name, publishWhenReady }),
+        body: JSON.stringify({ blobUrl: blob.url, fileName: file.name, publishWhenReady, blogsPerDate: blogsPerDate.trim() || undefined }),
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
@@ -688,6 +691,28 @@ const Blogs: React.FC = () => {
                   </span>
                 </span>
               </label>
+
+              <div className="text-sm text-slate-700">
+                <label className="flex items-center gap-2.5">
+                  <span>Blogs per date</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    step={1}
+                    value={blogsPerDate}
+                    onChange={(e) => setBlogsPerDate(e.target.value)}
+                    disabled={importUploading}
+                    placeholder="Off"
+                    className="w-20 rounded border border-slate-300 px-2 py-1 text-sm"
+                  />
+                </label>
+                <span className="block text-xs text-slate-400 mt-1">
+                  Optional. Dates the blogs this many per date, continuing from the latest blog date on the site and
+                  never going past today. If there are more blogs than days, they are shared equally across the days.
+                  Leave blank to date each blog when it is published.
+                </span>
+              </div>
 
               {importError && (
                 <div className="flex items-start gap-2 px-4 py-3 rounded-xl border border-red-200 bg-red-50 text-sm text-red-700">

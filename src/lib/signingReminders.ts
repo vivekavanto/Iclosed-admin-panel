@@ -31,25 +31,32 @@ import {
   buildMeetSection,
 } from "./sendSigningConfirmationEmail";
 
-// Mirrors ACCEPTABLE_ID_TYPES in UploadIdentificationDrawer.tsx and
-// ACCEPTABLE_IDS in api/admin/identify-document/route.ts. If the ID task's list
-// changes, change it here too.
+// The client-facing list from the portal's ID task (AcceptableDocumentsSection in
+// iclosed_dev_web/src/components/dashboard/UploadIdentificationDrawer.tsx), with
+// the same wording. If that list changes, change it here too.
 export const ACCEPTED_ID_TYPES = [
   "Canadian Passport",
-  "Driver's License",
+  "Canadian Driver's License",
   "Canadian Citizenship Card",
-  "Permanent Resident Card",
-  "NEXUS Card",
-  "SIN Card (plastic only)",
+  "Canadian Permanent Resident Card",
+  "US or Canadian NEXUS Card",
+  "Canadian SIN Card (plastic only)",
   "Foreign Passport",
-  "Government-issued Photo ID Card",
+  "Canadian Government-issued Photo ID Card",
+  "Credit Card (with signature)",
+  "Birth Certificate",
 ];
+
+const NOT_ACCEPTED_NOTE = "Health cards and Citizenship Certificates are not acceptable.";
 
 const APPT_TYPE_LABEL: Record<string, string> = { virtual: "Virtual", in_person: "In Person" };
 
 function acceptedIdsHtml(): string {
   const items = ACCEPTED_ID_TYPES.map((t) => `<li>${escapeHtml(t)}</li>`).join("");
-  return `<ul style="margin:8px 0 8px 20px;padding:0;">${items}</ul>`;
+  return (
+    `<ul style="margin:8px 0 8px 20px;padding:0;">${items}</ul>` +
+    `<p style="margin:0 0 8px 0;font-size:13px;color:#475569;">${escapeHtml(NOT_ACCEPTED_NOTE)}</p>`
+  );
 }
 
 /** [start, end) of tomorrow's calendar day in the office timezone, as UTC instants. */
