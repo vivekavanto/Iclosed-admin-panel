@@ -9,6 +9,7 @@ import { brandEmailHtml } from "./emailBrand";
 import type { FirmKey } from "./firms";
 import { buildAgentCcList, buildAgentRecipients } from "./agentCc";
 import { loadDealTemplateFacts } from "./dealTemplateFacts";
+import { loadSigningFacts } from "./signingAppointmentFacts";
 import {
     resolveLeadRecipientSide,
     resolveMilestoneSide,
@@ -429,6 +430,9 @@ export async function sendCombinedMilestoneEmail(opts: {
         // email raw "{{ … }}" text. Loaded per recipient because the family a
         // co-person belongs to is resolved from their own lead row.
         const facts = await loadDealTemplateFacts(lead);
+        // Signing date / time / type for the "signing booked" email. Merged into
+        // `facts` so body and subject both resolve them; other senders unchanged.
+        Object.assign(facts, await loadSigningFacts(deal?.id, milestoneSide));
 
         const placeholders: Record<string, string> = {
             // File-level facts first — every explicit key below overrides them,

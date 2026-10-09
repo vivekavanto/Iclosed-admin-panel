@@ -50,7 +50,7 @@ export type SigningConfirmationResult = {
   error?: string;
 };
 
-function formatDateTime(startAt: Date): { date: string; time: string } {
+export function formatDateTime(startAt: Date): { date: string; time: string } {
   const date = startAt.toLocaleDateString("en-US", {
     timeZone: OFFICE_TIMEZONE,
     weekday: "long",
@@ -68,7 +68,7 @@ function formatDateTime(startAt: Date): { date: string; time: string } {
 
 /** Builds the `{{ meet_section }}` raw HTML fragment: a Meet link line for
  *  virtual appointments only, empty otherwise (the renderer has no if/else). */
-function buildMeetSection(appointmentType: "virtual" | "in_person", meetLink: string | null): string {
+export function buildMeetSection(appointmentType: "virtual" | "in_person", meetLink: string | null): string {
   if (appointmentType !== "virtual" || !meetLink) return "";
   const safeUrl = escapeHtml(meetLink);
   return `<br />Google Meet: <a href="${safeUrl}">${safeUrl}</a>`;
@@ -77,7 +77,7 @@ function buildMeetSection(appointmentType: "virtual" | "in_person", meetLink: st
 /** Finds the newest ACTIVE template matching `namePattern`. Mirrors the
  *  strict is_active handling in sendWelcomeEmail: an admin-disabled template
  *  is a real off-switch, not a fallback trigger. */
-async function findActiveTemplate(
+export async function findActiveTemplate(
   namePattern: string,
 ): Promise<{ template: any; skipReason?: string }> {
   const { data: matching } = await supabaseAdmin
@@ -98,7 +98,7 @@ async function findActiveTemplate(
 }
 
 /** Renders a template's subject + body against the shared placeholder set. */
-function renderTemplate(
+export function renderTemplate(
   template: any,
   values: Record<string, TemplateValue>,
 ): { subject: string; body: string } {

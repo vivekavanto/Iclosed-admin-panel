@@ -17,11 +17,13 @@
 // (sendSigningConfirmationEmail.ts etc.). Clerk and reception are added in a
 // second, silent step (sendUpdates 'none'), so they are on the event without a
 // Google email. The lawyer owns the event, so Google never emails them; they
-// rely on our lawyer notification. Update and cancel stay 'none': only our own
-// emails announce those.
+// rely on our lawyer notification. Update stays 'none'. Delete is 'none' by
+// default, but admin cancel opts in (notifyAttendees) so Google emails the
+// client and guests; clerk/reception are dropped first so they stay silent.
 
 import { google, calendar_v3 } from "googleapis";
 import { logger } from "./logger";
+import { OFFICE_TIMEZONE } from "./signingTimezone";
 
 const SCOPES = ["https://www.googleapis.com/auth/calendar"];
 
@@ -117,8 +119,8 @@ export async function createCalendarEvent(
       summary: input.summary,
       description: input.description,
       location: input.location,
-      start: { dateTime: input.start.toISOString() },
-      end: { dateTime: input.end.toISOString() },
+      start: { dateTime: input.start.toISOString(), timeZone: OFFICE_TIMEZONE },
+      end: { dateTime: input.end.toISOString(), timeZone: OFFICE_TIMEZONE },
       attendees: input.attendees.map((email) => ({ email })),
       conferenceData: input.needsMeet
         ? {
@@ -181,24 +183,64 @@ export async function updateCalendarEvent(input: UpdateEventInput): Promise<void
       ...(input.summary !== undefined ? { summary: input.summary } : {}),
       ...(input.description !== undefined ? { description: input.description } : {}),
       ...(input.location !== undefined ? { location: input.location } : {}),
-      ...(input.start ? { start: { dateTime: input.start.toISOString() } } : {}),
-      ...(input.end ? { end: { dateTime: input.end.toISOString() } } : {}),
+      ...(input.start
+        ? { start: { dateTime: input.start.toISOString(), timeZone: OFFICE_TIMEZONE } }
+        : {}),
+      ...(input.end
+        ? { end: { dateTime: input.end.toISOString(), timeZone: OFFICE_TIMEZONE } }
+        : {}),
       ...(input.attendees ? { attendees: input.attendees.map((email) => ({ email })) } : {}),
     },
   });
+}
+
+export interface DeleteEventOptions {
+  /**
+   * When true, Google emails its native cancellation to the event's attendees.
+   * Default false (silent): booking rollbacks must not announce anything.
+   */
+  notifyAttendees?: boolean;
+  /**
+   * Internal attendees (clerk, reception) to drop from the event first, with
+   * sendUpdates 'none', so the cancellation email skips them — mirroring how
+   * they were added silently at booking.
+   */
+  silentAttendees?: string[];
 }
 
 export async function deleteCalendarEvent(
   lawyerEmail: string,
   calendarId: string,
   eventId: string,
+  options: DeleteEventOptions = {},
 ): Promise<void> {
   const calendar = getCalendarClientForLawyer(lawyerEmail);
   try {
+    const silent = (options.silentAttendees ?? []).map((e) => e.toLowerCase());
+    if (options.notifyAttendees && silent.length > 0) {
+      // Best-effort: if this fails the cancellation still goes out, internal
+      // staff just receive Google's email too.
+      try {
+        const { data } = await calendar.events.get({ calendarId, eventId });
+        const remaining = (data.attendees ?? []).filter(
+          (a) => !a.email || !silent.includes(a.email.toLowerCase()),
+        );
+        if (remaining.length !== (data.attendees ?? []).length) {
+          await calendar.events.patch({
+            calendarId,
+            eventId,
+            sendUpdates: "none",
+            requestBody: { attendees: remaining },
+          });
+        }
+      } catch (err) {
+        logger.warn("[googleCalendar] delete: could not drop silent attendees", { eventId, err });
+      }
+    }
     await calendar.events.delete({
       calendarId,
       eventId,
-      sendUpdates: "none",
+      sendUpdates: options.notifyAttendees ? "all" : "none",
     });
   } catch (err: unknown) {
     // Already gone (e.g. a lawyer deleted it by hand) — cancellation should

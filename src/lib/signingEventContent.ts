@@ -23,7 +23,10 @@ const APPT_TYPE_LABEL: Record<string, string> = { virtual: "Virtual", in_person:
 
 /** "AT: 123 Main Street Signing Appointment [Virtual] [Purchase]" */
 export function buildEventTitle(lawyer: SigningLawyer, booking: SigningBookingInput): string {
-  const address = booking.propertyAddress?.trim() || "Property TBD";
+  const address =
+    booking.propertyAddress
+      ?.replace(/[,\s]*\b[A-Za-z]\d[A-Za-z][ -]?\d[A-Za-z]\d\b\s*$/, "")
+      .trim() || "Property TBD";
   const apptLabel = APPT_TYPE_LABEL[booking.appointmentType] ?? booking.appointmentType;
   const dealLabel = booking.dealType ? DEAL_TYPE_LABEL[booking.dealType] : null;
   const dealPart = dealLabel ? ` [${dealLabel}]` : "";

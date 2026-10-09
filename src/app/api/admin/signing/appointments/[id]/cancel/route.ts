@@ -5,6 +5,7 @@ import { isUuid } from "@/lib/isUuid";
 import { recordAudit } from "@/lib/recordAudit";
 import { getActingAdmin } from "@/lib/getActingAdmin";
 import { deleteCalendarEvent } from "@/lib/googleCalendar";
+import { getSettings } from "@/lib/signingConfig";
 
 // POST /api/admin/signing/appointments/[id]/cancel — staff-initiated
 // cancellation. Removes the Google Calendar event (best-effort — a lawyer who
@@ -33,7 +34,20 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   if (appt.google_event_id && appt.lawyer?.email) {
     try {
-      await deleteCalendarEvent(appt.lawyer.email, appt.lawyer.calendar_id ?? "primary", appt.google_event_id);
+      // Google emails its cancellation to the client and guests; clerk and
+      // reception stay silent, as they were at booking.
+      const settings = await getSettings();
+      const clientEmail = String(appt.client_email ?? "").toLowerCase();
+      const silentAttendees = [settings.clerk_email, settings.reception_email]
+        .filter(Boolean)
+        .map((e) => e.toLowerCase())
+        .filter((e) => e !== clientEmail);
+      await deleteCalendarEvent(
+        appt.lawyer.email,
+        appt.lawyer.calendar_id ?? "primary",
+        appt.google_event_id,
+        { notifyAttendees: true, silentAttendees },
+      );
     } catch (err) {
       logger.error("[SigningAppointments cancel] calendar delete failed:", err);
       // Still cancel our side — staff can clean up the calendar by hand rather
