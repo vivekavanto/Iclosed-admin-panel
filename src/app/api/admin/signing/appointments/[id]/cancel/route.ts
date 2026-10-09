@@ -6,6 +6,7 @@ import { recordAudit } from "@/lib/recordAudit";
 import { getActingAdmin } from "@/lib/getActingAdmin";
 import { deleteCalendarEvent } from "@/lib/googleCalendar";
 import { getSettings } from "@/lib/signingConfig";
+import { reopenSigningTask } from "@/lib/reopenSigningTask";
 
 // POST /api/admin/signing/appointments/[id]/cancel — staff-initiated
 // cancellation. Removes the Google Calendar event (best-effort — a lawyer who
@@ -66,6 +67,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     logger.error("[SigningAppointments cancel] update failed:", updateError.message);
     return NextResponse.json({ success: false, error: updateError.message }, { status: 500 });
   }
+
+  await reopenSigningTask(updated);
 
   const actor = await getActingAdmin();
   await recordAudit({
