@@ -80,7 +80,7 @@ export async function POST(req: Request) {
 
   // The close-the-race re-check: recompute availability right now and refuse
   // anything the client's page is stale about.
-  const stillAvailable = await isSlotStillAvailable(lawyer, startAt.toISOString());
+  const stillAvailable = await isSlotStillAvailable(lawyer, startAt.toISOString(), closingDate);
   if (!stillAvailable) {
     return NextResponse.json(
       { success: false, error: "That time is no longer available. Please pick another slot." },

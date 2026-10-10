@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getLawyerByInitials, getSettings } from "@/lib/signingConfig";
 import { getAvailableSlots } from "@/lib/signingAvailability";
+import { latestSigningDate, normalizeClosingDate } from "@/lib/signingCutoff";
 import { todayInTimeZone, OFFICE_TIMEZONE } from "@/lib/signingTimezone";
 
 // GET /api/signing/lawyers/[initials]/availability?date=YYYY-MM-DD
@@ -28,7 +29,15 @@ export async function GET(
     return NextResponse.json({ success: false, error: "date must be YYYY-MM-DD" }, { status: 400 });
   }
 
-  const [result, settings] = await Promise.all([getAvailableSlots(lawyer, date), getSettings()]);
+  // Optional: the file's closing date. Slots after (closing - N business days)
+  // come back empty; latestBookableDate lets the portal grey those days out.
+  const closingDate = normalizeClosingDate(url.searchParams.get("closingDate"));
+
+  const [result, settings] = await Promise.all([
+    getAvailableSlots(lawyer, date, closingDate),
+    getSettings(),
+  ]);
+  const minBusinessDays = settings.min_business_days_before_closing;
 
   return NextResponse.json({
     success: true,
@@ -40,6 +49,8 @@ export async function GET(
       slotIncrementMinutes: result.slotIncrementMinutes,
       officeAddress: settings.office_address,
       disclaimer: settings.disclaimer_text,
+      minBusinessDaysBeforeClosing: minBusinessDays,
+      latestBookableDate: await latestSigningDate(closingDate, minBusinessDays),
       slots: result.slots,
     },
   });

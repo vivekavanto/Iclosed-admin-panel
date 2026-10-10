@@ -19,6 +19,7 @@ const EDITABLE_FIELDS = [
   "reception_email",
   "disclaimer_text",
   "default_signing_with",
+  "min_business_days_before_closing",
 ] as const;
 
 export async function GET() {
@@ -53,6 +54,17 @@ export async function PUT(req: Request) {
       }
       updates[numField] = n;
     }
+  }
+
+  if (updates.min_business_days_before_closing !== undefined) {
+    const n = Number(updates.min_business_days_before_closing);
+    if (!Number.isInteger(n) || n < 0 || n > 30) {
+      return NextResponse.json(
+        { success: false, error: "min_business_days_before_closing must be a whole number from 0 to 30" },
+        { status: 400 },
+      );
+    }
+    updates.min_business_days_before_closing = n;
   }
 
   // A blank default clears it (stored as NULL), never as "".

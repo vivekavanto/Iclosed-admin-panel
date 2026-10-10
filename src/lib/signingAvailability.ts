@@ -15,6 +15,7 @@ import supabaseAdmin from "./supabaseAdmin";
 import { logger } from "./logger";
 import { getFreeBusy } from "./googleCalendar";
 import { getLawyerHours, getSettings, type SigningLawyer } from "./signingConfig";
+import { latestSigningDate } from "./signingCutoff";
 import {
   OFFICE_TIMEZONE,
   dayOfWeekInTimeZone,
@@ -74,11 +75,18 @@ export interface AvailabilityResult {
 export async function getAvailableSlots(
   lawyer: SigningLawyer,
   dateOnly: string,
+  closingDate?: string | null,
 ): Promise<AvailabilityResult> {
   const settings = await getSettings();
   const duration = settings.default_duration_minutes;
   const buffer = settings.buffer_minutes;
   const increment = settings.slot_increment_minutes;
+
+  // Too close to closing: nothing is bookable (admin-configured business days).
+  const latest = await latestSigningDate(closingDate, settings.min_business_days_before_closing);
+  if (latest !== null && dateOnly > latest) {
+    return { lawyer, date: dateOnly, durationMinutes: duration, bufferMinutes: buffer, slotIncrementMinutes: increment, slots: [] };
+  }
 
   const parsedDate = parseDateOnly(dateOnly);
   const dow = dayOfWeekInTimeZone(dateOnly, OFFICE_TIMEZONE);
@@ -173,10 +181,11 @@ export async function getAvailableSlots(
 export async function isSlotStillAvailable(
   lawyer: SigningLawyer,
   startAtIso: string,
+  closingDate?: string | null,
 ): Promise<boolean> {
   const start = new Date(startAtIso);
   if (isNaN(start.getTime())) return false;
   const dateOnly = new Intl.DateTimeFormat("en-CA", { timeZone: OFFICE_TIMEZONE }).format(start);
-  const result = await getAvailableSlots(lawyer, dateOnly);
+  const result = await getAvailableSlots(lawyer, dateOnly, closingDate);
   return result.slots.includes(start.toISOString());
 }

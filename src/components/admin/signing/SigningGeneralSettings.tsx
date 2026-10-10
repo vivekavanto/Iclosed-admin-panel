@@ -12,6 +12,7 @@ interface Settings {
   reception_email: string;
   disclaimer_text: string;
   default_signing_with: string | null;
+  min_business_days_before_closing: number;
 }
 
 interface CalendarOption {
@@ -134,6 +135,26 @@ export default function SigningGeneralSettings() {
             onChange={(e) => setSettings({ ...settings, slot_increment_minutes: Number(e.target.value) })}
           />
         </div>
+      </div>
+
+      <div>
+        <label className="block text-xs font-semibold text-slate-500 mb-1.5">
+          Book at least (business days) before closing
+        </label>
+        <input
+          type="number"
+          min={0}
+          max={30}
+          className={inputClasses}
+          value={settings.min_business_days_before_closing ?? 3}
+          onChange={(e) =>
+            setSettings({ ...settings, min_business_days_before_closing: Number(e.target.value) })
+          }
+        />
+        <p className="mt-1 text-xs text-slate-400">
+          Clients can&apos;t book a signing later than this many weekdays before their closing date.
+          Set 0 to turn the restriction off. Files with no closing date yet are not restricted.
+        </p>
       </div>
 
       <div>

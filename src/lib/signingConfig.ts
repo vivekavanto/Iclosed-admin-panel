@@ -37,6 +37,9 @@ export interface SigningSettings {
   // Initials of the signing_lawyers calendar clients see unless a file
   // overrides it with deals.signing_with. NULL = not chosen yet.
   default_signing_with: string | null;
+  // A signing must be booked at least this many business days before closing.
+  // 0 = no restriction.
+  min_business_days_before_closing: number;
 }
 
 export async function listLawyers(opts?: { activeOnly?: boolean }): Promise<SigningLawyer[]> {
@@ -101,6 +104,7 @@ const DEFAULT_SETTINGS: Omit<SigningSettings, "id"> = {
   clerk_email: "Marcela@navawilson.law",
   reception_email: "reception@navawilson.law",
   default_signing_with: null,
+  min_business_days_before_closing: 3,
   disclaimer_text:
     "Please schedule your signing appointment 1-3 business days before your closing date. Note: Appointments are subject to our office receiving the required mortgage instructions (for purchases) and payout statement (for sales). If the required documents are not received in time, your appointment may need to be rescheduled.",
 };
