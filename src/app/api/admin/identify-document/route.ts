@@ -15,14 +15,18 @@ const ACCEPTABLE_IDS = [
   "SIN Card (plastic only)",
   "Foreign Passport",
   "Government-issued Photo ID Card",
+  "Credit Card (with signature)",
+  "Birth Certificate",
 ];
 
 const REJECTED_ID_KEYWORDS = [
   "health card", "ohip", "ramq", "msp", "bc services card", "medical card",
   "insurance card", "library card", "student", "school id", "employee",
-  "work id", "membership", "loyalty", "credit card", "debit card", "bank card",
+  "work id", "membership", "loyalty", "debit card", "bank card",
   "transit", "metro", "presto", "social insurance number slip", "sin paper",
-  "birth certificate", "marriage certificate",
+  "marriage certificate",
+  // Only the plastic Citizenship CARD is acceptable, never the paper certificate.
+  "citizenship certificate", "certificate of citizenship",
 ];
 
 const ACCEPTABLE_IDS_NORMALIZED = new Set(ACCEPTABLE_IDS.map((s) => s.toLowerCase()));
@@ -44,7 +48,7 @@ const SUPPORTED_MIME_TYPES = new Set([
 function buildPrompt() {
   return `You are a STRICT document classifier helping verify a Canadian real-estate client's identification under Law Society of Ontario By-Law 7.1.
 
-Your job is to decide whether the uploaded image/PDF contains ACCEPTABLE government-issued identification. Be conservative — when in doubt, REJECT.
+Your job is to decide whether the uploaded image/PDF contains ACCEPTABLE identification. Most acceptable documents are government-issued; two are not — a signed credit card is accepted as supporting ID, and a birth certificate is accepted even though it carries no photo. Everything else: be conservative — when in doubt, REJECT.
 
 ============================================================
 ACCEPTABLE document types (these are the ONLY valid types):
@@ -54,10 +58,12 @@ ${ACCEPTABLE_IDS.map((d) => `   - ${d}`).join("\n")}
 ============================================================
 EXPLICITLY REJECTED documents — these must NEVER be classified as identification, even if they look official, are government-issued, or contain a photo. If the upload is one of these (or only contains these), set "contains_identification": false and return an empty "documents" array:
    - Health Cards of any kind (Ontario OHIP / red-and-white or photo, Quebec RAMQ, BC Services Card, Alberta AHCIP, any provincial/territorial health insurance card, any private medical/insurance card)
-   - Birth certificates, marriage certificates, death certificates
+   - Canadian Citizenship CERTIFICATES — the paper or commemorative document, including the large decorative "Certificate of Canadian Citizenship". ONLY the plastic wallet-sized Canadian Citizenship CARD is acceptable.
+   - Marriage certificates, death certificates, divorce certificates (a BIRTH certificate IS acceptable — see the edge-case policy below)
    - Paper SIN slips or SIN confirmation letters (only the plastic SIN card is acceptable, and even then it must clearly be the plastic card)
    - Library cards, student IDs, school IDs, employee/work IDs, gym/membership cards, loyalty cards
-   - Credit cards, debit cards, bank cards
+   - Debit cards, bank cards, prepaid/gift cards (a CREDIT card IS acceptable — see the edge-case policy below)
+   - Credit card statements, bank statements, or any printout/screenshot showing a card number — only the physical card itself counts
    - Transit cards (Presto, OPUS, Compass, etc.)
    - Vehicle ownership / vehicle registration / vehicle insurance pink slips
    - Utility bills, bank statements, tax documents, letters
@@ -67,7 +73,7 @@ EXPLICITLY REJECTED documents — these must NEVER be classified as identificati
 
 For EACH distinct identification document you find in the image/PDF, do the following:
 
-1. Verify it is a real, physical, government-issued identification document that matches EXACTLY one of the ACCEPTABLE types above.
+1. Verify it is a real, physical document that matches EXACTLY one of the ACCEPTABLE types above.
 2. Use the EXACT label from the ACCEPTABLE list as "document_type".
 3. Determine which side(s) are visible: "front", "back", "front-and-back", or "unknown".
 4. Decide required side rule: "single-sided", "front-and-back", or "unknown".
@@ -82,6 +88,9 @@ Edge-case policy:
 - A passport back is sometimes a plain cover or a near-blank page — still classify it as the passport's "back", not as an unidentifiable document.
 - Cards (Driver's License, PR Card, etc.) are "front-and-back" required.
 - Driver's license backs (with PDF417 barcode, magstripe) are VALID identification.
+- CREDIT CARD: a physical credit card (Visa / Mastercard / Amex etc.) IS acceptable. Use the exact label "Credit Card (with signature)". It requires BOTH sides: side_requirement="front-and-back". The front carries the card number, cardholder name and brand logo; the back must show the SIGNATURE STRIP WITH A HANDWRITTEN SIGNATURE. If the back is visible but the signature strip is blank/unsigned, set "is_complete": false and say in "reason" that the back of the credit card must be signed. Debit cards, bank cards and prepaid/gift cards remain REJECTED, as do statements or photos of a card number on paper.
+- BIRTH CERTIFICATE: a government-issued birth certificate (Canadian provincial/territorial or foreign) IS acceptable. Use the exact label "Birth Certificate". It has no photograph and that is expected — do NOT reject it for lacking a photo. side_requirement="front-and-back"; the reverse is often blank or carries a registration number / security printing, and that is a valid back. Birth certificates usually have no expiry date — return null.
+- CITIZENSHIP: only the plastic wallet-sized card maps to "Canadian Citizenship Card". A Citizenship CERTIFICATE (letter-sized paper document or the large commemorative certificate, often titled "Certificate of Canadian Citizenship") is REJECTED — set "contains_identification": false and state in "reason" that Citizenship Certificates are not acceptable and that the Citizenship Card is required instead.
 - Users may scan multiple distinct IDs onto one file — return one entry per ID.
 - Health cards must always be rejected with contains_identification=false.
 

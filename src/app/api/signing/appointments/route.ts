@@ -3,6 +3,8 @@ import supabaseAdmin from "@/lib/supabaseAdmin";
 import { logger } from "@/lib/logger";
 import { getLawyerByInitials, getSettings } from "@/lib/signingConfig";
 import { isSlotStillAvailable } from "@/lib/signingAvailability";
+import { latestSigningDate } from "@/lib/signingCutoff";
+import { todayInTimeZone } from "@/lib/signingTimezone";
 import { createCalendarEvent, deleteCalendarEvent } from "@/lib/googleCalendar";
 import { generateManageToken, buildManageUrl } from "@/lib/signingAppointmentToken";
 import {
@@ -76,6 +78,21 @@ export async function POST(req: Request) {
   const lawyer = await getLawyerByInitials(lawyerInitials);
   if (!lawyer) {
     return NextResponse.json({ success: false, error: "Lawyer not found" }, { status: 404 });
+  }
+
+  // Closing date too close: the booking cutoff (closing minus N business days) is
+  // already behind us, so no signing day could ever satisfy it. Say so, instead of
+  // the misleading "no longer available".
+  const minDays = (await getSettings()).min_business_days_before_closing;
+  const cutoff = await latestSigningDate(closingDate, minDays);
+  if (cutoff !== null && cutoff < todayInTimeZone()) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: `Your closing date is too close. Signings must be booked at least ${minDays} business days before closing, so please choose a closing date at least ${minDays} business days from today.`,
+      },
+      { status: 409 },
+    );
   }
 
   // The close-the-race re-check: recompute availability right now and refuse

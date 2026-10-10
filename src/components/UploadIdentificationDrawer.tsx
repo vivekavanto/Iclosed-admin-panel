@@ -173,6 +173,8 @@ const ACCEPTABLE_ID_TYPES = [
   "SIN Card (plastic only)",
   "Foreign Passport",
   "Government-issued Photo ID Card",
+  "Credit Card (with signature)",
+  "Birth Certificate",
 ];
 
 // Every acceptable ID needs both sides — passports included: the photo/bio-data
@@ -588,6 +590,8 @@ function AcceptableDocumentsSection() {
     "SIN Card (plastic only)",
     "Foreign Passport",
     "Government-issued Photo ID Card",
+    "Credit Card (with signature)",
+    "Birth Certificate",
   ];
 
   return (
