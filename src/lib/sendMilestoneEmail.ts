@@ -6,6 +6,7 @@ import { formatLeadTypeLabel, buildLeadAddressForEmail } from "./leadEmailAddres
 import { normalizeRecipientEmail } from "./emailIdentity";
 import { getDealFirmKey } from "./leadFirm";
 import { brandEmailHtml } from "./emailBrand";
+import { isPendingFileNumber } from "./fileNumber";
 import type { FirmKey } from "./firms";
 import { buildAgentCcList, buildAgentRecipients } from "./agentCc";
 import { loadDealTemplateFacts } from "./dealTemplateFacts";
@@ -316,7 +317,8 @@ export async function sendCombinedMilestoneEmail(opts: {
         const leadAddress =
             (await buildLeadAddressForEmail(lead)) || deal.property_address || "";
         const leadType = formatLeadTypeLabel(lead?.lead_type ?? deal.type);
-        const fileNumber = opts.fileNumberOverride ?? deal.file_number ?? "";
+        const rawFileNumber = opts.fileNumberOverride ?? deal.file_number ?? "";
+        const fileNumber = isPendingFileNumber(rawFileNumber) ? "Pending" : rawFileNumber;
 
         const firstName = joinNames(recipients.map((r) => r.firstName));
         // Surnames dedupe — a married couple is "Smith", not "Smith and Smith".

@@ -6,6 +6,7 @@ import { recalcMilestonesForFamily } from "./recalcMilestones";
 import { sendWelcomeEmail } from "./sendWelcomeEmail";
 import type { PendingMilestoneEmail } from "./sendMilestoneEmail";
 import { prefillPersonalInfoFromPriorDeal } from "./prefillPersonalInfo";
+import { pendingFileNumber } from "./fileNumber";
 import {
   sendRetainerLinkEmail,
   retainerSidesForLeadType,
@@ -177,55 +178,10 @@ export async function convertSingleLead(
       clientId = newClient.id;
     }
 
-    // ── Generate file number ─────────────────────────────────────────────────
-    const ltLower = (lead.lead_type ?? "").toLowerCase();
-    const isCombinedPS = ltLower.includes("purchase") && ltLower.includes("sale");
-    const leadTypePrefix = isCombinedPS
-      ? "PS"
-      : (lead.lead_type?.charAt(0)?.toUpperCase() ?? "X");
-    const year = new Date().getFullYear().toString().slice(-2);
-    const prefix = `${year}${leadTypePrefix}-`;
-
-    // Co-clients always inherit the primary's file number, overriding the
-    // per-deal counter. Falls through to generation only if the primary deal
-    // wasn't found (shouldn't happen — see root-first ordering at convert-lead).
-    let generatedFileNumber = isCoClient && primaryFileNumber
-      ? primaryFileNumber
-      : opts.file_number;
-    if (!generatedFileNumber) {
-      const { data: allDeals } = await supabaseAdmin
-        .from("deals")
-        .select("file_number")
-        .like("file_number", `${prefix}%`);
-
-      let maxNum = 0;
-      if (allDeals) {
-        for (const d of allDeals) {
-          const suffix = d.file_number.replace(prefix, "");
-          if (!/^\d+$/.test(suffix)) continue;
-          const numPart = parseInt(suffix, 10);
-          if (!isNaN(numPart) && numPart > maxNum) maxNum = numPart;
-        }
-      }
-
-      for (let attempt = 1; attempt <= 10; attempt++) {
-        const candidate = `${prefix}${String(maxNum + attempt).padStart(4, "0")}`;
-        const { data: exists } = await supabaseAdmin
-          .from("deals")
-          .select("id")
-          .eq("file_number", candidate)
-          .maybeSingle();
-
-        if (!exists) {
-          generatedFileNumber = candidate;
-          break;
-        }
-      }
-
-      if (!generatedFileNumber) {
-        generatedFileNumber = `${prefix}${String(maxNum + 100).padStart(4, "0")}`;
-      }
-    }
+    // ── File number ──────────────────────────────────────────────────────────
+    // Co-clients inherit the primary's number; otherwise pending until the Tickler sync.
+    const generatedFileNumber =
+      (isCoClient && primaryFileNumber) || opts.file_number || pendingFileNumber(leadId);
 
     // Manual override (primary only) must be unique among PRIMARY files —
     // co-clients legitimately share a primary's number, so we only conflict

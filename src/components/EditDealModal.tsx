@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { X, Loader2, ExternalLink } from "lucide-react";
 import Link from "next/link";
 import { computeDealDisplayStatus } from "@/lib/dealDisplayStatus";
+import { displayFileNumber, isPendingFileNumber } from "@/lib/fileNumber";
 
 type DealRow = {
   id: string;
@@ -13,6 +14,7 @@ type DealRow = {
   lead_first_name?: string | null;
   lead_last_name?: string | null;
   file_number?: string | null;
+  selling_file_number?: string | null;
   file_name?: string | null;
   type?: string | null;
   status?: string | null;
@@ -122,6 +124,7 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
   // GAP-001: the deal's updated_at when we loaded it, sent back on save so the
   // API can reject the write if someone else changed the deal in between.
   const loadedUpdatedAtRef = useRef<string | null>(null);
+  const [loadedFileNumber, setLoadedFileNumber] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -133,12 +136,14 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
         if (cancelled) return;
         if (deal && !deal.error) {
           loadedUpdatedAtRef.current = deal.updated_at ?? null;
+          setLoadedFileNumber(deal.file_number ?? null);
           setForm({
             id: deal.id,
             lead_id: deal.lead_id ?? null,
             lead_first_name: deal.lead_first_name ?? "",
             lead_last_name: deal.lead_last_name ?? "",
-            file_number: deal.file_number ?? "",
+            file_number: isPendingFileNumber(deal.file_number) ? "" : (deal.file_number ?? ""),
+            selling_file_number: deal.selling_file_number ?? "",
             file_name: deal.file_name ?? "",
             type: deal.type ?? "",
             // Show the same derived status as the deal list: "Active" once the
@@ -206,7 +211,8 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
     setSaving(true);
     try {
       const payload = {
-        file_number: form.file_number ?? "",
+        file_number: form.file_number?.trim() || loadedFileNumber || "",
+        ...(isPurchaseAndSale ? { selling_file_number: form.selling_file_number ?? "" } : {}),
         file_name: form.file_name ?? "",
         type: form.type ?? "",
         status: form.status ?? "Active",
@@ -318,7 +324,7 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
           <div className="min-w-0">
             <h2 className="text-base font-bold text-gray-900">Edit deal</h2>
             <p className="text-xs text-gray-400 mt-1">
-              {form.file_number ? `File ${form.file_number}` : "Loading…"}
+              {loading ? "Loading…" : form.file_number ? `File ${form.file_number}` : displayFileNumber(loadedFileNumber)}
             </p>
           </div>
           <button
@@ -344,14 +350,26 @@ const EditDealModal: React.FC<EditDealModalProps> = ({ dealId, onClose, onSaved 
               per-deal — edit those from each linked deal's detail page.
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              <Field label="File number" required>
+              <Field label={isPurchaseAndSale ? "Purchase file number" : "File number"} required>
                 <input
                   type="text"
                   value={form.file_number ?? ""}
+                  placeholder="File number pending"
                   onChange={(e) => updateField("file_number", e.target.value)}
                   className={inputClass}
                 />
               </Field>
+              {isPurchaseAndSale && (
+                <Field label="Sale file number">
+                  <input
+                    type="text"
+                    value={form.selling_file_number ?? ""}
+                    placeholder="File number pending"
+                    onChange={(e) => updateField("selling_file_number", e.target.value)}
+                    className={inputClass}
+                  />
+                </Field>
+              )}
               <Field label="File name">
                 <input
                   type="text"

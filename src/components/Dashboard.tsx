@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import Link from "next/link";
 import { MOCK_DEALS } from "../constants";
 import { useAuth } from "@/lib/AuthProvider";
+import { displayFileNumber } from "@/lib/fileNumber";
 import { DealType, DealStatus } from "../types";
 import {
   ChevronLeft,
@@ -68,7 +69,7 @@ const Dashboard: React.FC = () => {
         </div>
         <div className="min-w-0">
           <p className="text-xs text-slate-500 font-mono mb-0.5">
-            {deal.fileNumber}
+            {displayFileNumber(deal.fileNumber)}
           </p>
           <h4 className="text-sm font-bold text-slate-800 truncate pr-4 group-hover:text-brand-primary transition-colors">
             {deal.propertyAddress}

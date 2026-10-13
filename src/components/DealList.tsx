@@ -21,6 +21,8 @@ import {
 } from '@/lib/isNonCitizenFlagged';
 import { formatLocalDate, parseLocalDate } from '@/lib/formatDate';
 import { computeDealDisplayStatus } from '@/lib/dealDisplayStatus';
+import { displayFileNumber } from '@/lib/fileNumber';
+import SyncFileNumbersButton from '@/components/admin/SyncFileNumbersButton';
 
 interface DealListProps {
   onSelectDeal?: (dealId: string) => void;
@@ -978,6 +980,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
               Last updated
             </button>
           </div>
+          <SyncFileNumbersButton onSynced={fetchDeals} />
         </div>
         {/* "Hide test account" toggle — hides files on the firm's test domain
             (@navawilson.law) or with "TEST" in the name. Independent of the
@@ -1184,7 +1187,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       );
                     })()}
                   </td>
-                  <td className="px-2 py-1.5 font-medium">{deal.fileNumber}</td>
+                  <td className="px-2 py-1.5 font-medium">{displayFileNumber(deal.fileNumber)}</td>
                   <td className="px-2 py-1.5">
                     {/* min-w-0 + truncate lets a long name ellipsize instead of
                         spilling past this fixed-width column, while the badges
@@ -1634,7 +1637,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       {currentPartnerId ? 'Change Referral Agent' : 'Add Referral Agent'}
                     </h3>
                     <p className="text-xs text-slate-500 mt-0.5 truncate">
-                      File {agentDeal.fileNumber || '—'}
+                      File {displayFileNumber(agentDeal.fileNumber) || '—'}
                       {referralOf(agentDeal).leadName
                         ? ` · ${referralOf(agentDeal).leadName}`
                         : ''}
