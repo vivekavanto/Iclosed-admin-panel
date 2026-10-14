@@ -12,6 +12,7 @@ import { getLeadFirmKey } from "@/lib/leadFirm";
 import { brandEmailHtml } from "@/lib/emailBrand";
 import type { FirmKey } from "@/lib/firms";
 import { buildAgentCcList } from "@/lib/agentCc";
+import { collectMilestoneRecipients, sendCombinedMilestoneEmail } from "@/lib/sendMilestoneEmail";
 
 /**
  * POST /api/admin/send-lead-family-email
@@ -603,11 +604,12 @@ export async function POST(req: NextRequest) {
       subject: string | null;
       body: string;
       shared_with_agent: boolean | null;
+      agent_only: boolean | null;
     } | null = null;
     if (template_id) {
       const { data: tmpl } = await supabaseAdmin
         .from("email_templates")
-        .select("name, subject, body, shared_with_agent")
+        .select("name, subject, body, shared_with_agent, agent_only")
         .eq("id", template_id)
         .maybeSingle();
       templateName = tmpl?.name ?? null;
@@ -618,6 +620,7 @@ export async function POST(req: NextRequest) {
           subject: tmpl.subject ?? null,
           body: tmpl.body,
           shared_with_agent: tmpl.shared_with_agent ?? null,
+          agent_only: tmpl.agent_only ?? null,
         };
       }
     }
@@ -641,7 +644,58 @@ export async function POST(req: NextRequest) {
     const results: RecipientResult[] = [];
     const agentSignupMode = !authType && isAgentSignupTemplate(templateName);
     const agentsEmailed = new Set<string>();
+    // An agent_only template (e.g. "Signing appointment scheduled (agent)") is
+    // written TO the referral agent, with the client named inside it. Sending it
+    // through the per-client path below mailed the client with raw {{ }} tags, so
+    // it goes through the same combined sender the automatic milestone emails use:
+    // one email for the whole selection, addressed to the agent, placeholders
+    // (agent name, signing date/time/type) filled.
+    if (!authType && templateRow?.agent_only) {
+      const first = recipients[0];
+      const firstName = `${first.first_name ?? ""} ${first.last_name ?? ""}`.trim() || "(no name)";
+      const { data: dealRows } = await supabaseAdmin
+        .from("deals")
+        .select("id")
+        .in("lead_id", recipients.map((x) => x.id))
+        .eq("is_deleted", false);
+      const { recipients: dealRecipients } = await collectMilestoneRecipients(
+        (dealRows ?? []).map((d: { id: string }) => d.id),
+        null,
+      );
+      if (dealRecipients.length === 0) {
+        results.push({
+          lead_id: first.id, name: firstName, email: first.email ?? "", role: first.role,
+          success: false, template_used: templateName ?? undefined,
+          error: "No deal found for the selected client(s), so there is no agent to email.",
+        });
+      } else {
+        const res = await sendCombinedMilestoneEmail({
+          recipients: dealRecipients,
+          milestone: { title: templateName },
+          template: templateRow,
+          firm: await getLeadFirmKey(first.id),
+          milestoneSide: null,
+        });
+        results.push({
+          lead_id: first.id,
+          name: firstName,
+          email: res.recipients.join(", "),
+          role: first.role,
+          success: res.success && !res.error,
+          template_used: templateName ?? undefined,
+          skipped: !!res.skipped,
+          skip_reason:
+            res.skipped === "no_agent"
+              ? "This file has no referral agent, so nothing was sent."
+              : res.skipped
+                ? "Nobody to email"
+                : undefined,
+          error: res.error,
+        });
+      }
+    }
     for (const r of recipients) {
+      if (!authType && templateRow?.agent_only) break;
       const name = `${r.first_name ?? ""} ${r.last_name ?? ""}`.trim() || "(no name)";
 
       if (authType) {

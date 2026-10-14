@@ -1098,11 +1098,11 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
             <col style={{ width: '12%' }} />{/* Client Name */}
             <col style={{ width: '11%' }} />{/* Address */}
             <col style={{ width: '8%' }} />{/* Closing date */}
-            <col style={{ width: '7%' }} />{/* Signing */}
             <col style={{ width: '9%' }} />{/* Progress */}
             <col style={{ width: '6%' }} />{/* Lawyer */}
             <col style={{ width: '6%' }} />{/* Clerk */}
             <col style={{ width: '12%' }} />{/* Notes */}
+            <col style={{ width: '7%' }} />{/* Signing */}
             <col style={{ width: '6%' }} />{/* Last updated */}
             <col style={{ width: '6%' }} />{/* Actions */}
             {/* Hidden columns — Agent, Account created, Requisition date, File
@@ -1133,7 +1133,6 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                   </span>
                 </button>
               </th>
-              <th className="px-2 py-1.5">Signing</th>
               <th className="px-2 py-1.5">Progress</th>
               <th className="px-2 py-1.5">Lawyer</th>
               <th className="px-2 py-1.5">Clerk</th>
@@ -1143,6 +1142,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
               <th className="px-2 py-1.5 hidden">Account created</th>
               {/* Free-text status the admin keeps by hand — see the cell below. */}
               <th className="px-2 py-1.5">Notes</th>
+              <th className="px-2 py-1.5">Signing</th>
               <th className="px-2 py-1.5">
                 <button
                   type="button"
@@ -1299,50 +1299,6 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                     )}
                   </td>
                   <td className="px-2 py-1.5">{formatDate(deal.closingDate)}</td>
-                  {/* Signing — when the client is booked in to sign. */}
-                  <td className="px-2 py-1.5 align-middle">
-                    {(() => {
-                      const shown = signingToShow((deal as any).signingAppointments);
-                      if (shown.length === 0) return <span className="text-slate-300">—</span>;
-                      return (
-                        <div className="flex flex-col gap-1">
-                          {shown.map(({ appt, past }) => {
-                            const start = new Date(appt.start_at);
-                            const date = start.toLocaleDateString('en-US', {
-                              timeZone: OFFICE_TIMEZONE,
-                              month: 'short',
-                              day: 'numeric',
-                              year: 'numeric',
-                            });
-                            const time = start.toLocaleTimeString('en-US', {
-                              timeZone: OFFICE_TIMEZONE,
-                              hour: 'numeric',
-                              minute: '2-digit',
-                            });
-                            const type = appt.appointment_type
-                              ? SIGNING_TYPE_LABEL[appt.appointment_type] ?? appt.appointment_type
-                              : '';
-                            const side =
-                              shown.length > 1 && appt.side
-                                ? `${appt.side === 'sale' ? 'Sale' : 'Purchase'} · `
-                                : '';
-                            return (
-                              <div
-                                key={appt.id}
-                                className={`leading-tight ${past ? 'text-slate-400' : 'text-slate-700'}`}
-                                title={`${side}${date} at ${time}${type ? ` (${type})` : ''}${past ? ' — already passed' : ''}`}
-                              >
-                                <div>{date}</div>
-                                <div className="text-[10px] text-slate-500">
-                                  {side}{time}{type ? ` · ${type}` : ''}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      );
-                    })()}
-                  </td>
                   <td className="px-2 py-1.5">
                     <button
                       type="button"
@@ -1502,6 +1458,50 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                           ) : null}
                           <span className="whitespace-normal break-words">{note || 'Add note'}</span>
                         </button>
+                      );
+                    })()}
+                  </td>
+                  {/* Signing — when the client is booked in to sign. */}
+                  <td className="px-2 py-1.5 align-middle">
+                    {(() => {
+                      const shown = signingToShow((deal as any).signingAppointments);
+                      if (shown.length === 0) return <span className="text-slate-300">—</span>;
+                      return (
+                        <div className="flex flex-col gap-1">
+                          {shown.map(({ appt, past }) => {
+                            const start = new Date(appt.start_at);
+                            const date = start.toLocaleDateString('en-US', {
+                              timeZone: OFFICE_TIMEZONE,
+                              month: 'short',
+                              day: 'numeric',
+                              year: 'numeric',
+                            });
+                            const time = start.toLocaleTimeString('en-US', {
+                              timeZone: OFFICE_TIMEZONE,
+                              hour: 'numeric',
+                              minute: '2-digit',
+                            });
+                            const type = appt.appointment_type
+                              ? SIGNING_TYPE_LABEL[appt.appointment_type] ?? appt.appointment_type
+                              : '';
+                            const side =
+                              shown.length > 1 && appt.side
+                                ? `${appt.side === 'sale' ? 'Sale' : 'Purchase'} · `
+                                : '';
+                            return (
+                              <div
+                                key={appt.id}
+                                className={`leading-tight ${past ? 'text-slate-400' : 'text-slate-700'}`}
+                                title={`${side}${date} at ${time}${type ? ` (${type})` : ''}${past ? ' — already passed' : ''}`}
+                              >
+                                <div>{date}</div>
+                                <div className="text-[10px] text-slate-500">
+                                  {side}{time}{type ? ` · ${type}` : ''}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
                       );
                     })()}
                   </td>
