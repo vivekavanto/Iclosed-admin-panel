@@ -7,6 +7,7 @@ import { getActingAdmin } from "@/lib/getActingAdmin";
 import { deleteCalendarEvent } from "@/lib/googleCalendar";
 import { getSettings } from "@/lib/signingConfig";
 import { reopenSigningTask } from "@/lib/reopenSigningTask";
+import { cleanCancellationNote, sendSigningCancellationEmail } from "@/lib/sendSigningCancellationEmail";
 
 // POST /api/admin/signing/appointments/[id]/cancel — staff-initiated
 // cancellation. Removes the Google Calendar event (best-effort — a lawyer who
@@ -22,7 +23,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   const { data: appt, error: fetchError } = await supabaseAdmin
     .from("signing_appointments")
-    .select("*, lawyer:signing_lawyers(email, calendar_id)")
+    .select("*, lawyer:signing_lawyers(email, calendar_id, full_name)")
     .eq("id", id)
     .maybeSingle();
 
@@ -32,6 +33,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (appt.status === "cancelled") {
     return NextResponse.json({ success: true, data: appt });
   }
+
+  // Optional reason from the admin dialog; the body is optional too, so a
+  // request with none behaves exactly as before.
+  const body = await req.json().catch(() => ({}));
+  const note = cleanCancellationNote((body as Record<string, unknown>)?.note);
 
   if (appt.google_event_id && appt.lawyer?.email) {
     try {
@@ -69,6 +75,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }
 
   await reopenSigningTask(updated);
+
+  if (note) {
+    await sendSigningCancellationEmail({
+      clientName: updated.client_name,
+      clientEmail: updated.client_email,
+      lawyerName: appt.lawyer?.full_name ?? "",
+      startAt: new Date(updated.start_at),
+      propertyAddress: updated.property_address ?? null,
+      note,
+    });
+  }
 
   const actor = await getActingAdmin();
   await recordAudit({

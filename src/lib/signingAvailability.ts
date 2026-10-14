@@ -15,7 +15,7 @@ import supabaseAdmin from "./supabaseAdmin";
 import { logger } from "./logger";
 import { getFreeBusy } from "./googleCalendar";
 import { getLawyerHours, getSettings, type SigningLawyer } from "./signingConfig";
-import { latestSigningDate } from "./signingCutoff";
+import { earliestSigningDate, latestSigningDate } from "./signingCutoff";
 import {
   OFFICE_TIMEZONE,
   dayOfWeekInTimeZone,
@@ -83,8 +83,12 @@ export async function getAvailableSlots(
   const increment = settings.slot_increment_minutes;
 
   // Too close to closing: nothing is bookable (admin-configured business days).
-  const latest = await latestSigningDate(closingDate, settings.min_business_days_before_closing);
-  if (latest !== null && dateOnly > latest) {
+  // Too early is refused the same way: the window is [earliest, latest].
+  const [latest, earliest] = await Promise.all([
+    latestSigningDate(closingDate, settings.min_business_days_before_closing),
+    earliestSigningDate(closingDate, settings.max_business_days_before_closing),
+  ]);
+  if ((latest !== null && dateOnly > latest) || (earliest !== null && dateOnly < earliest)) {
     return { lawyer, date: dateOnly, durationMinutes: duration, bufferMinutes: buffer, slotIncrementMinutes: increment, slots: [] };
   }
 

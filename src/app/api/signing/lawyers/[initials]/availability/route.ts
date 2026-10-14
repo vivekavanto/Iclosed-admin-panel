@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getLawyerByInitials, getSettings } from "@/lib/signingConfig";
 import { getAvailableSlots } from "@/lib/signingAvailability";
-import { latestSigningDate, normalizeClosingDate } from "@/lib/signingCutoff";
+import { earliestSigningDate, latestSigningDate, normalizeClosingDate } from "@/lib/signingCutoff";
 import { todayInTimeZone, OFFICE_TIMEZONE } from "@/lib/signingTimezone";
 
 // GET /api/signing/lawyers/[initials]/availability?date=YYYY-MM-DD
@@ -51,6 +51,8 @@ export async function GET(
       disclaimer: settings.disclaimer_text,
       minBusinessDaysBeforeClosing: minBusinessDays,
       latestBookableDate: await latestSigningDate(closingDate, minBusinessDays),
+      maxBusinessDaysBeforeClosing: settings.max_business_days_before_closing,
+      earliestBookableDate: await earliestSigningDate(closingDate, settings.max_business_days_before_closing),
       slots: result.slots,
     },
   });
