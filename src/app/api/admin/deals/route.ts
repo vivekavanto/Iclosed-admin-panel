@@ -152,12 +152,15 @@ export async function GET() {
     side: string | null;
   };
   const signingByDeal = new Map<string, SigningAppt[]>();
-  const dealIdsForSigning = deals.map((d: any) => d.id).filter(Boolean);
-  if (dealIdsForSigning.length > 0) {
+  if (deals.length > 0) {
+    // Every linked booking, not `.in("deal_id", <every deal id>)`: that list
+    // grows with the file count and pushes the GET URL past the gateway limit,
+    // which fails the lookup and blanks the whole column. Bookings for deals not
+    // on this page are simply never read out of the map.
     const { data: appts, error: apptsErr } = await supabase
       .from("signing_appointments")
       .select("id, deal_id, start_at, appointment_type, side")
-      .in("deal_id", dealIdsForSigning)
+      .not("deal_id", "is", null)
       .eq("status", "confirmed")
       .order("start_at", { ascending: true });
     if (apptsErr) {
