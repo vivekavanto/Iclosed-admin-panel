@@ -76,11 +76,16 @@ const SELECT_COLS = `
   created_by_email, updated_by_email, import_batch_id
 `;
 
-/** Admin list — every status, most recently touched first. */
+/**
+ * Admin list — every status. Undated drafts first (newly imported, awaiting
+ * publish), then by published date, newest first, so the list follows the same
+ * order the portal shows. `updated_at` only breaks ties.
+ */
 export async function listAllPosts(): Promise<BlogPostRow[]> {
   const { data, error } = await supabaseAdmin
     .from("blog_posts")
     .select(SELECT_COLS)
+    .order("published_at", { ascending: false, nullsFirst: true })
     .order("updated_at", { ascending: false });
 
   if (error) {
