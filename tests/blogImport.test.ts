@@ -19,7 +19,6 @@ import {
   extractBlogArticle,
   extractMultipleBlogArticles,
   importKindFor,
-  MAX_ARTICLES_PER_UPLOAD,
   MAX_BLOG_CHARS,
 } from "../src/lib/blogImport.ts";
 
@@ -280,40 +279,50 @@ test("a container over 116,000 characters across 10 articles is accepted whole",
   }
 });
 
-test("an oversized individual article is flagged, never truncated or rejected", async () => {
-  const shortArticle = "## Short One\n\nThis one is well within the limit.";
-  const longArticle = `## Long One\n\n${"x".repeat(MAX_BLOG_CHARS + 5_000)}`;
+// The splitter folds any section under MIN_ARTICLE_CHARS (500) into its
+// neighbour, so fixtures that must stay separate articles need a realistic body.
+const FILLER = "This sentence stands in for the body of a real article. ".repeat(12);
 
+test("an oversized individual article is flagged, never truncated or rejected", async () => {
+  const shortArticle = `## Short One\n\nThis one is well within the limit. ${FILLER}`;
+  const xRun = "x".repeat(MAX_BLOG_CHARS + 5_000);
+  const longArticle = `## Long One\n\n${xRun}`;
+
+  // A `---` is a separator only on its own paragraph; directly under text it is
+  // a heading underline. The split also lifts each heading out into the title.
   const articles = await extractMultiple(
-    textFile(`${shortArticle}\n---\n${longArticle}`, "two-articles.txt"),
+    textFile(`${shortArticle}\n\n---\n\n${longArticle}`, "two-articles.txt"),
   );
 
   assert.equal(articles.length, 2);
-  const long = articles.find((a) => a.text.includes("Long One"))!;
+  const long = articles.find((a) => a.title === "Long One")!;
   // Nothing was cut: the "x" run survives at its full original length.
   assert.equal(long.text.length, longArticle.length);
   assert.ok(long.warnings.some((w) => /60,000/.test(w)));
 
-  const short = articles.find((a) => a.text.includes("Short One"))!;
+  const short = articles.find((a) => a.title === "Short One")!;
   assert.equal(short.warnings.length, 0);
 });
 
 test("deterministic fallback splits on explicit 'Blog N:' delimiters", async () => {
   const articles = await extractMultiple(
     textFile(
-      "Blog 1: Title Insurance\n\nWhat it covers.\n\nBlog 2: Land Transfer Tax\n\nHow it's calculated.",
+      `Blog 1: Title Insurance\n\nWhat it covers. ${FILLER}\n\nBlog 2: Land Transfer Tax\n\nHow it's calculated. ${FILLER}`,
       "two-blogs.txt",
     ),
   );
 
   assert.equal(articles.length, 2);
-  assert.ok(articles[0].text.startsWith("Blog 1: Title Insurance"));
-  assert.ok(articles[1].text.startsWith("Blog 2: Land Transfer Tax"));
+  // The "Blog N:" label is lifted out of the body into the article's title.
+  assert.equal(articles[0].title, "Title Insurance");
+  assert.equal(articles[1].title, "Land Transfer Tax");
+  assert.ok(articles[0].text.startsWith("What it covers."));
+  assert.ok(articles[1].text.startsWith("How it's calculated."));
 });
 
-test("splitting never returns more than MAX_ARTICLES_PER_UPLOAD articles", async () => {
-  const sections = Array.from({ length: 15 }, (_, i) => `## Article ${i + 1}\n\nBody text for article ${i + 1}.`);
+test("splitting keeps every article — there is no per-upload cap", async () => {
+  const sections = Array.from({ length: 15 }, (_, i) => `## Article ${i + 1}\n\nBody text for article ${i + 1}. ${FILLER}`);
   const articles = await extractMultiple(textFile(sections.join("\n---\n"), "fifteen-articles.txt"));
 
-  assert.equal(articles.length, MAX_ARTICLES_PER_UPLOAD);
+  assert.equal(articles.length, 15);
 });
