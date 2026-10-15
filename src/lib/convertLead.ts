@@ -181,7 +181,7 @@ export async function convertSingleLead(
     // ── File number ──────────────────────────────────────────────────────────
     // Co-clients inherit the primary's number; otherwise pending until the Tickler sync.
     const generatedFileNumber =
-      (isCoClient && primaryFileNumber) || opts.file_number || pendingFileNumber(leadId);
+      (isCoClient && primaryFileNumber) || opts.file_number || pendingFileNumber();
 
     // Manual override (primary only) must be unique among PRIMARY files —
     // co-clients legitimately share a primary's number, so we only conflict

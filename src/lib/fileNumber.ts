@@ -8,8 +8,8 @@ export const FILE_NUMBER_HINT = "File number must look like 26AB-1234";
 // Unique placeholder until the Tickler assigns the real number.
 export const PENDING_FILE_NUMBER_PREFIX = "PENDING-";
 
-export function pendingFileNumber(leadId: string): string {
-  return `${PENDING_FILE_NUMBER_PREFIX}${leadId.replace(/-/g, "").slice(0, 8).toUpperCase()}`;
+export function pendingFileNumber(): string {
+  return `${PENDING_FILE_NUMBER_PREFIX}${crypto.randomUUID().replace(/-/g, "").slice(0, 10).toUpperCase()}`;
 }
 
 export function isPendingFileNumber(value: string | null | undefined): boolean {
