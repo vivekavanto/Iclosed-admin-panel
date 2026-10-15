@@ -1101,8 +1101,8 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
             <col style={{ width: '9%' }} />{/* Progress */}
             <col style={{ width: '6%' }} />{/* Lawyer */}
             <col style={{ width: '6%' }} />{/* Clerk */}
-            <col style={{ width: '12%' }} />{/* Notes */}
-            <col style={{ width: '7%' }} />{/* Signing */}
+            <col style={{ width: '9%' }} />{/* Notes */}
+            <col style={{ width: '10%' }} />{/* Signing */}
             <col style={{ width: '6%' }} />{/* Last updated */}
             <col style={{ width: '6%' }} />{/* Actions */}
             {/* Hidden columns — Agent, Account created, Requisition date, File
@@ -1467,7 +1467,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       const shown = signingToShow((deal as any).signingAppointments);
                       if (shown.length === 0) return <span className="text-slate-300">—</span>;
                       return (
-                        <div className="flex flex-col gap-1">
+                        <div className="flex flex-col gap-0.5 min-w-0">
                           {shown.map(({ appt, past }) => {
                             const start = new Date(appt.start_at);
                             const date = start.toLocaleDateString('en-US', {
@@ -1491,11 +1491,11 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                             return (
                               <div
                                 key={appt.id}
-                                className={`leading-tight ${past ? 'text-slate-400' : 'text-slate-700'}`}
+                                className={`leading-tight min-w-0 ${past ? 'text-slate-400' : 'text-slate-700'}`}
                                 title={`${side}${date} at ${time}${type ? ` (${type})` : ''}${past ? ' — already passed' : ''}`}
                               >
-                                <div>{date}</div>
-                                <div className="text-[10px] text-slate-500">
+                                <div className="text-[11px] font-medium truncate">{date}</div>
+                                <div className="text-[9px] text-slate-500 truncate">
                                   {side}{time}{type ? ` · ${type}` : ''}
                                 </div>
                               </div>

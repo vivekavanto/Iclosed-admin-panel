@@ -125,5 +125,10 @@ export async function getSettings(): Promise<SigningSettings> {
     return { id: "", ...DEFAULT_SETTINGS };
   }
   if (!data) return { id: "", ...DEFAULT_SETTINGS };
-  return data as SigningSettings;
+  // Merge onto the defaults rather than returning the row as-is: a column
+  // added by a migration that hasn't been applied to this database yet (see
+  // CLAUDE.md — migrations are never auto-run) is simply absent from the row,
+  // which must fail CLOSED to the safe default rather than silently reading as
+  // "no restriction" (min/max business days <= 0 turns the cutoff rule off).
+  return { ...DEFAULT_SETTINGS, ...(data as Partial<SigningSettings>), id: (data as { id: string }).id } as SigningSettings;
 }
