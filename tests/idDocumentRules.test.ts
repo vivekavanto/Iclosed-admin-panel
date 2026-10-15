@@ -18,6 +18,7 @@ import {
 
 const DL = "Driver's License";
 const PASSPORT = "Canadian Passport";
+const BIRTH_CERT = "Birth Certificate";
 
 function blockerFor(docs: DetectedIdDoc[]) {
   return idSubmissionBlocker(analyseIdSides(docs));
@@ -168,6 +169,28 @@ test("a missing side is reported ahead of a missing second ID", () => {
 
 test("nothing uploaded still needs a second ID", () => {
   assert.equal(blockerFor([])?.kind, "needs-second-type");
+});
+
+// ───────────────────────────── single-sided types ─────────────────────────────
+
+test("a birth certificate is complete with only its front photographed", () => {
+  const [cert] = analyseIdSides([{ type: BIRTH_CERT, side: "front" }]);
+  assert.equal(cert.complete, true);
+});
+
+test("a birth certificate is complete even if only its back was photographed", () => {
+  const [cert] = analyseIdSides([{ type: BIRTH_CERT, side: "back" }]);
+  assert.equal(cert.complete, true);
+});
+
+test("a birth certificate plus one other complete ID may be submitted", () => {
+  assert.equal(
+    blockerFor([
+      { type: BIRTH_CERT, side: "front" },
+      { type: PASSPORT, side: "front-and-back" },
+    ]),
+    null,
+  );
 });
 
 test("every incomplete ID is reported, not just the first", () => {

@@ -833,17 +833,36 @@ export async function DELETE(
     return NextResponse.json({ error: "Invalid deal id" }, { status: 400 });
   }
 
-  // Soft delete: flag the deal as is_deleted so it disappears from the admin
-  // lists and every customer access gate, but the row (and all its tasks,
-  // milestones, responses, signatures) stay intact. Reversible with
-  // `UPDATE deals SET is_deleted=false`.
+  // Soft delete the whole file: every family deal and lead.
+  const { data: deal } = await supabase
+    .from("deals")
+    .select("lead_id, leads(id, parent_lead_id)")
+    .eq("id", id)
+    .maybeSingle();
+  const familyDealIds = await getFamilyDealIds(id);
+
   const { error } = await supabase
     .from("deals")
     .update({ is_deleted: true })
-    .eq("id", id);
+    .in("id", Array.from(new Set([id, ...familyDealIds])));
 
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
+
+  // No .or() on writes; it fails on prod.
+  const lead = (deal as any)?.leads as { id: string; parent_lead_id: string | null } | null;
+  const rootLeadId = lead?.parent_lead_id ?? lead?.id ?? deal?.lead_id ?? null;
+  if (rootLeadId) {
+    for (const column of ["id", "parent_lead_id"] as const) {
+      const { error: leadError } = await supabase
+        .from("leads")
+        .update({ is_deleted: true })
+        .eq(column, rootLeadId);
+      if (leadError) {
+        return NextResponse.json({ success: false, error: leadError.message }, { status: 500 });
+      }
+    }
   }
 
   // SEC-006 / CMP-004: record who deleted which deal.

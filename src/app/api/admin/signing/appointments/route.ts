@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { logger } from "@/lib/logger";
+import { syncCancelledFromCalendar } from "@/lib/signingCalendarSync";
 
 // GET /api/admin/signing/appointments — list booked signing appointments,
 // newest first, joined with the lawyer's initials/name for display. Gated to
@@ -13,6 +14,12 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const status = searchParams.get("status");
   const lawyerId = searchParams.get("lawyerId");
+
+  // Pick up anything cancelled straight from Google Calendar so the list is
+  // never stale. Throttled, and a failure here must not break the list.
+  await syncCancelledFromCalendar({ throttle: true }).catch((err) =>
+    logger.error("[SigningAppointments GET] calendar sync failed:", err),
+  );
 
   let query = supabaseAdmin
     .from("signing_appointments")

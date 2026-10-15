@@ -139,6 +139,41 @@ export async function GET() {
     familyDealsByRootLead.set(rootLeadId, arr);
   }
 
+  // ── Signing appointments ─────────────────────────────────────────────────
+  // One query for every confirmed booking, grouped by deal_id. Bookings hang off
+  // whichever family member's deal the client booked from, so a primary row
+  // collects them across the whole family (below). Non-blocking: a failed lookup
+  // leaves the Signing column blank rather than breaking the list.
+  type SigningAppt = {
+    id: string;
+    deal_id: string | null;
+    start_at: string;
+    appointment_type: string | null;
+    side: string | null;
+  };
+  const signingByDeal = new Map<string, SigningAppt[]>();
+  if (deals.length > 0) {
+    // Every linked booking, not `.in("deal_id", <every deal id>)`: that list
+    // grows with the file count and pushes the GET URL past the gateway limit,
+    // which fails the lookup and blanks the whole column. Bookings for deals not
+    // on this page are simply never read out of the map.
+    const { data: appts, error: apptsErr } = await supabase
+      .from("signing_appointments")
+      .select("id, deal_id, start_at, appointment_type, side")
+      .not("deal_id", "is", null)
+      .eq("status", "confirmed")
+      .order("start_at", { ascending: true });
+    if (apptsErr) {
+      logger.error("[admin/deals] signing appointment lookup failed (non-blocking):", apptsErr);
+    }
+    for (const a of (appts ?? []) as SigningAppt[]) {
+      if (!a.deal_id) continue;
+      const arr = signingByDeal.get(a.deal_id) ?? [];
+      arr.push(a);
+      signingByDeal.set(a.deal_id, arr);
+    }
+  }
+
   // Exclude soft-deleted tasks so the Steps count matches the deal-detail
   // page, the customer portal, and the pending-tasks panel — all of which
   // filter is_deleted=false. Without this, a soft-deleted (never-completed)
@@ -185,6 +220,18 @@ export async function GET() {
 
     const hasCoPurchasers = lead ? primaryLeadIds.has(lead.id) : false;
 
+    // The file's confirmed signings, soonest first. A primary row spans the
+    // family (like the Steps count); a co-client row is hidden from the list.
+    const signingAppointments = familyDeals
+      .flatMap((d: any) => signingByDeal.get(d.id) ?? [])
+      .sort((a, b) => a.start_at.localeCompare(b.start_at))
+      .map((a) => ({
+        id: a.id,
+        start_at: a.start_at,
+        appointment_type: a.appointment_type,
+        side: a.side,
+      }));
+
     const { tasks: _tasks, leads: _leads, ...rest } = deal;
     const sellingPropertyAddress = lead
       ? [
@@ -230,6 +277,7 @@ export async function GET() {
       ...rest,
       totalTasks,
       completedTasks,
+      signing_appointments: signingAppointments,
       // The linked partner, or null. `referral_agent_*` stay on `rest` as the
       // free-text intake fallback the UI reads behind this.
       referral_partner: deal.partner_id

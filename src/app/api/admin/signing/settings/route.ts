@@ -20,6 +20,7 @@ const EDITABLE_FIELDS = [
   "disclaimer_text",
   "default_signing_with",
   "min_business_days_before_closing",
+  "max_business_days_before_closing",
 ] as const;
 
 export async function GET() {
@@ -65,6 +66,33 @@ export async function PUT(req: Request) {
       );
     }
     updates.min_business_days_before_closing = n;
+  }
+
+  if (updates.max_business_days_before_closing !== undefined) {
+    const n = Number(updates.max_business_days_before_closing);
+    if (!Number.isInteger(n) || n < 0 || n > 30) {
+      return NextResponse.json(
+        { success: false, error: "max_business_days_before_closing must be a whole number from 0 to 30" },
+        { status: 400 },
+      );
+    }
+    updates.max_business_days_before_closing = n;
+  }
+
+  // The window is [closing - max, closing - min]; max below min would be empty.
+  if (
+    updates.min_business_days_before_closing !== undefined ||
+    updates.max_business_days_before_closing !== undefined
+  ) {
+    const current = await getSettings();
+    const min = Number(updates.min_business_days_before_closing ?? current.min_business_days_before_closing);
+    const max = Number(updates.max_business_days_before_closing ?? current.max_business_days_before_closing);
+    if (max > 0 && max < min) {
+      return NextResponse.json(
+        { success: false, error: "\"No earlier than\" days must be at least the \"Book at least\" days (or 0 for no limit)" },
+        { status: 400 },
+      );
+    }
   }
 
   // A blank default clears it (stored as NULL), never as "".

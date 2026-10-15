@@ -6,6 +6,7 @@ import { isSlotStillAvailable } from "@/lib/signingAvailability";
 import { latestSigningDate } from "@/lib/signingCutoff";
 import { todayInTimeZone } from "@/lib/signingTimezone";
 import { createCalendarEvent, deleteCalendarEvent } from "@/lib/googleCalendar";
+import { linkAppointmentToDeal } from "@/lib/linkAppointmentToDeal";
 import { generateManageToken, buildManageUrl } from "@/lib/signingAppointmentToken";
 import {
   buildEventTitle,
@@ -215,6 +216,12 @@ export async function POST(req: Request) {
       { status: 500 },
     );
   }
+
+  // Best effort: a booking with a valid file number + matching email is linked to
+  // its deal so the All Files Signing column can show it.
+  await linkAppointmentToDeal(saved.id, fileNumber, clientEmail).catch((err) =>
+    logger.error("[SigningAppointments POST] deal link failed:", err),
+  );
 
   const manageUrl = buildManageUrl(manageToken);
 

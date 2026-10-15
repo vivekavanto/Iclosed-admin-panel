@@ -543,7 +543,7 @@ export async function convertSingleLead(
       const parentLeadId = lead.parent_lead_id;
       const currentLeadId = lead.id;
 
-      let linkedLeadIds: string[] = [];
+      const linkedLeadIds: string[] = [];
 
       if (parentLeadId) {
         linkedLeadIds.push(parentLeadId);

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { Plus, Pencil, Trash2, Save, X, Scale, Clock, SlidersHorizontal } from "lucide-react";
+import { Plus, Pencil, Trash2, Save, X, Scale, Clock, SlidersHorizontal, Link2, Check } from "lucide-react";
 import SigningGeneralSettings from "./SigningGeneralSettings";
 
 interface Lawyer {
@@ -29,6 +29,12 @@ function emptyLawyer(): Partial<Lawyer> {
 const inputClasses =
   "w-full px-4 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:border-brand-primary focus:ring-1 focus:ring-brand-primary bg-white";
 
+// A lawyer's personal booking link on the customer portal. Booking is by
+// invitation only: this link is the only way a client reaches that lawyer's
+// calendar (the portal's bare /book-appointment page no longer lists lawyers).
+const PORTAL_BASE = (process.env.NEXT_PUBLIC_CUSTOMER_PORTAL_URL ?? "https://www.iclosed.ca").replace(/\/+$/, "");
+const bookingLink = (initials: string) => `${PORTAL_BASE}/book-appointment/${encodeURIComponent(initials)}`;
+
 type Tab = "lawyers" | "settings";
 
 interface SigningLawyersSettingsProps {
@@ -42,6 +48,18 @@ export default function SigningLawyersSettings({ initialTab = "lawyers" }: Signi
   const [editing, setEditing] = useState<Partial<Lawyer> | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [hoursFor, setHoursFor] = useState<Lawyer | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  async function copyLink(lawyer: Lawyer) {
+    try {
+      await navigator.clipboard.writeText(bookingLink(lawyer.initials));
+      setCopiedId(lawyer.id);
+      setTimeout(() => setCopiedId((id) => (id === lawyer.id ? null : id)), 2000);
+    } catch {
+      // Clipboard blocked (insecure context / permissions): show the link so it can be copied by hand.
+      window.prompt("Copy this booking link:", bookingLink(lawyer.initials));
+    }
+  }
 
   // Not called synchronously as the first thing in an effect (that pattern is
   // flagged by react-hooks/set-state-in-effect) — the mount load below fetches
@@ -164,13 +182,14 @@ export default function SigningLawyersSettings({ initialTab = "lawyers" }: Signi
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-primary"></div>
           </div>
         ) : (
-          <table className="w-full min-w-[720px] text-left text-sm">
+          <table className="w-full min-w-[960px] text-left text-sm">
             <thead className="bg-slate-50/30 border-b border-slate-100">
               <tr className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">
                 <th className="px-6 py-5">Initials</th>
                 <th className="px-4 py-5">Name</th>
                 <th className="px-4 py-5">Email</th>
                 <th className="px-4 py-5">Calendar</th>
+                <th className="px-4 py-5">Booking link</th>
                 <th className="px-4 py-5">Status</th>
                 <th className="px-4 py-5 text-center w-40">Actions</th>
               </tr>
@@ -182,6 +201,25 @@ export default function SigningLawyersSettings({ initialTab = "lawyers" }: Signi
                   <td className="px-4 py-4 font-semibold text-slate-800">{l.full_name}</td>
                   <td className="px-4 py-4 text-slate-500">{l.email}</td>
                   <td className="px-4 py-4 text-slate-500">{l.calendar_id}</td>
+                  <td className="px-4 py-4">
+                    {l.is_active ? (
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-xs text-slate-500 truncate max-w-[220px]" title={bookingLink(l.initials)}>
+                          {bookingLink(l.initials).replace(/^https?:\/\//, "")}
+                        </span>
+                        <button
+                          onClick={() => copyLink(l)}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold text-slate-500 hover:text-brand-primary hover:bg-brand-primary/10 transition-colors"
+                          title="Copy booking link"
+                        >
+                          {copiedId === l.id ? <Check size={14} /> : <Link2 size={14} />}
+                          {copiedId === l.id ? "Copied" : "Copy"}
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="text-slate-300" title="Inactive lawyers cannot be booked">—</span>
+                    )}
+                  </td>
                   <td className="px-4 py-4">
                     <span
                       className={`px-2.5 py-1 rounded-full text-xs font-bold ${
@@ -222,7 +260,7 @@ export default function SigningLawyersSettings({ initialTab = "lawyers" }: Signi
               ))}
               {lawyers.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-12 py-20 text-center text-slate-400">
+                  <td colSpan={7} className="px-12 py-20 text-center text-slate-400">
                     No lawyers configured yet.
                   </td>
                 </tr>

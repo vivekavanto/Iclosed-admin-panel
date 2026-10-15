@@ -56,12 +56,11 @@ async function loadClosedDates(fromIso: string, toIso: string): Promise<Set<stri
 }
 
 /**
- * The last office-local date a signing may be booked on: `closingDate` stepped
- * back `businessDays` business days (weekends and office-wide closures skipped).
- * Returns null (no restriction) when there is no usable closing date or the
- * rule is off (businessDays <= 0).
+ * `closingDate` stepped back `businessDays` business days (weekends and
+ * office-wide closures skipped). Returns null (no restriction) when there is no
+ * usable closing date or the rule is off (businessDays <= 0).
  */
-export async function latestSigningDate(
+async function stepBackBusinessDays(
   closingDate: string | null | undefined,
   businessDays: number,
 ): Promise<string | null> {
@@ -81,4 +80,26 @@ export async function latestSigningDate(
     if (dow !== 0 && dow !== 6 && !closed.has(cursor)) remaining -= 1;
   }
   return cursor;
+}
+
+/**
+ * The last office-local date a signing may be booked on: closing minus the
+ * "book at least N business days before" setting. null = no restriction.
+ */
+export function latestSigningDate(
+  closingDate: string | null | undefined,
+  minBusinessDays: number,
+): Promise<string | null> {
+  return stepBackBusinessDays(closingDate, minBusinessDays);
+}
+
+/**
+ * The first office-local date a signing may be booked on: closing minus the
+ * "book no earlier than N business days before" setting. null = no restriction.
+ */
+export function earliestSigningDate(
+  closingDate: string | null | undefined,
+  maxBusinessDays: number,
+): Promise<string | null> {
+  return stepBackBusinessDays(closingDate, maxBusinessDays);
 }

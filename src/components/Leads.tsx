@@ -118,6 +118,7 @@ interface LeadUser {
   subService?: string;
   apsSigned?: boolean;
   referralSource?: string;
+  intakeSource?: string;
   sellingAddressStreet?: string;
   sellingAddressUnit?: string;
   sellingAddressCity?: string;
@@ -681,6 +682,7 @@ const Leads: React.FC = () => {
     subService: l.sub_service,
     apsSigned: l.aps_signed,
     referralSource: l.referral_source,
+    intakeSource: l.intake_source ?? undefined,
     referralPartner: l.referral_partner ?? null,
     referralAgentName: l.referral_agent_name ?? null,
     referralAgentCompany: l.referral_agent_company ?? null,
@@ -810,6 +812,21 @@ const Leads: React.FC = () => {
       }
     } catch {
       alert("Error deleting lead.");
+    }
+  };
+
+  // Opened before the fetch so the popup blocker treats it as part of the click.
+  const openStaffIntake = async () => {
+    const tab = window.open("", "_blank");
+    try {
+      const res = await fetch("/api/admin/staff-intake-link", { cache: "no-store" });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error ?? "Unknown error");
+      if (tab) tab.location.href = data.url;
+      else window.location.href = data.url;
+    } catch (err) {
+      tab?.close();
+      alert("Couldn't open the intake: " + (err instanceof Error ? err.message : "Unknown error"));
     }
   };
 
@@ -3087,6 +3104,13 @@ const Leads: React.FC = () => {
               className="pl-12 pr-6 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-medium outline-none focus:border-brand-primary transition-all w-full md:w-64"
             />
           </div>
+          <button
+            onClick={openStaffIntake}
+            className="flex items-center gap-2 px-6 py-2.5 bg-brand-primary text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-brand-primaryHover transition-all shadow-lg active:scale-95 whitespace-nowrap"
+            title="Fill in an intake for an internally referred client. They get the retainer to sign, not a quote."
+          >
+            <Plus size={16} /> New intake
+          </button>
           {/* <button
             onClick={() => setIsAddModalOpen(true)}
             className="flex items-center gap-2 px-6 py-2.5 bg-brand-primary text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-brand-primaryHover transition-all shadow-lg active:scale-95 whitespace-nowrap"
@@ -3150,6 +3174,9 @@ const Leads: React.FC = () => {
                       <span className="font-medium">{lead.firstName} {lead.lastName}</span>
                       {lead.status !== "Converted" && lead.created_at && (Date.now() - new Date(lead.created_at).getTime()) < 24 * 60 * 60 * 1000 && (
                         <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold bg-green-100 text-green-700 border border-green-200">New</span>
+                      )}
+                      {lead.intakeSource === "staff" && (
+                        <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-100 text-blue-700 border border-blue-200" title="Intake filled in by staff">Internal</span>
                       )}
                     </div>
                   </td>

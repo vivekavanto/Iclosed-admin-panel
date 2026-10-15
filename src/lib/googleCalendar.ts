@@ -214,6 +214,30 @@ export async function updateCalendarEvent(input: UpdateEventInput): Promise<void
   });
 }
 
+/**
+ * Whether a booked event still stands on the lawyer's calendar. A deleted event
+ * comes back either as a 404/410 or as status "cancelled", depending on how
+ * recently it was removed. Any other failure (network, auth, quota) is "unknown"
+ * so a Google outage can never be mistaken for a cancellation.
+ */
+export async function getCalendarEventState(
+  lawyerEmail: string,
+  calendarId: string,
+  eventId: string,
+): Promise<"active" | "cancelled" | "unknown"> {
+  try {
+    const calendar = getCalendarClientForLawyer(lawyerEmail);
+    const { data } = await calendar.events.get({ calendarId, eventId });
+    return data.status === "cancelled" ? "cancelled" : "active";
+  } catch (err: unknown) {
+    const status = (err as { code?: number; response?: { status?: number } })?.code
+      ?? (err as { response?: { status?: number } })?.response?.status;
+    if (status === 404 || status === 410) return "cancelled";
+    logger.warn("[googleCalendar] event state check failed", { eventId, err });
+    return "unknown";
+  }
+}
+
 export interface DeleteEventOptions {
   /**
    * When true, Google emails its native cancellation to the event's attendees.

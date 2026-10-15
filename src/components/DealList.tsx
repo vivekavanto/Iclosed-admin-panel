@@ -22,9 +22,33 @@ import {
 import { formatLocalDate, parseLocalDate } from '@/lib/formatDate';
 import { computeDealDisplayStatus } from '@/lib/dealDisplayStatus';
 import { displayFileNumber } from '@/lib/fileNumber';
+import { OFFICE_TIMEZONE } from '@/lib/signingTimezone';
 
 interface DealListProps {
   onSelectDeal?: (dealId: string) => void;
+}
+
+// A confirmed signing booking, as /api/admin/deals attaches it to each file.
+interface SigningAppointmentSummary {
+  id: string;
+  start_at: string;
+  appointment_type: string | null;
+  side: string | null;
+}
+
+const SIGNING_TYPE_LABEL: Record<string, string> = { virtual: 'Virtual', in_person: 'In person' };
+
+// What the Signing column shows: every upcoming booking, soonest first, or —
+// once they have all passed — just the latest one, flagged as past.
+function signingToShow(
+  appts: SigningAppointmentSummary[] | undefined,
+): { appt: SigningAppointmentSummary; past: boolean }[] {
+  const list = appts ?? [];
+  const now = Date.now();
+  const upcoming = list.filter((a) => new Date(a.start_at).getTime() >= now);
+  if (upcoming.length > 0) return upcoming.map((appt) => ({ appt, past: false }));
+  const latest = list[list.length - 1];
+  return latest ? [{ appt: latest, past: true }] : [];
 }
 
 // A row from the `partners` master — the referral agent/broker on a file.
@@ -433,7 +457,9 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           // Internal, admin-only "where is this file at" note (Notes column).
           adminNote: d.admin_note ?? null,
           adminNoteUpdatedAt: d.admin_note_updated_at ?? null,
+          signingAppointments: Array.isArray(d.signing_appointments) ? d.signing_appointments : [],
         } as Deal & {
+          signingAppointments: SigningAppointmentSummary[];
           authUserId: string | null;
           isCoPurchaser: boolean;
           hasCoPurchasers: boolean;
@@ -1070,15 +1096,16 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
             <col style={{ width: '4%' }} />{/* Row number */}
             <col style={{ width: '6%' }} />{/* Account status */}
             <col style={{ width: '7%' }} />{/* File No. */}
-            <col style={{ width: '13%' }} />{/* Client Name */}
-            <col style={{ width: '13%' }} />{/* Address */}
+            <col style={{ width: '12%' }} />{/* Client Name */}
+            <col style={{ width: '11%' }} />{/* Address */}
             <col style={{ width: '8%' }} />{/* Closing date */}
             <col style={{ width: '9%' }} />{/* Progress */}
             <col style={{ width: '6%' }} />{/* Lawyer */}
             <col style={{ width: '6%' }} />{/* Clerk */}
-            <col style={{ width: '14%' }} />{/* Notes */}
-            <col style={{ width: '7%' }} />{/* Last updated */}
-            <col style={{ width: '7%' }} />{/* Actions */}
+            <col style={{ width: '9%' }} />{/* Notes */}
+            <col style={{ width: '10%' }} />{/* Signing */}
+            <col style={{ width: '6%' }} />{/* Last updated */}
+            <col style={{ width: '6%' }} />{/* Actions */}
             {/* Hidden columns — Agent, Account created, Requisition date, File
                 name. Their cells are display:none, so these collapse to 0%. */}
             <col style={{ width: '0%' }} />
@@ -1116,6 +1143,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
               <th className="px-2 py-1.5 hidden">Account created</th>
               {/* Free-text status the admin keeps by hand — see the cell below. */}
               <th className="px-2 py-1.5">Notes</th>
+              <th className="px-2 py-1.5">Signing</th>
               <th className="px-2 py-1.5">
                 <button
                   type="button"
@@ -1434,6 +1462,50 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       );
                     })()}
                   </td>
+                  {/* Signing — when the client is booked in to sign. */}
+                  <td className="px-2 py-1.5 align-middle">
+                    {(() => {
+                      const shown = signingToShow((deal as any).signingAppointments);
+                      if (shown.length === 0) return <span className="text-slate-300">—</span>;
+                      return (
+                        <div className="flex flex-col gap-0.5 min-w-0">
+                          {shown.map(({ appt, past }) => {
+                            const start = new Date(appt.start_at);
+                            const date = start.toLocaleDateString('en-US', {
+                              timeZone: OFFICE_TIMEZONE,
+                              month: 'short',
+                              day: 'numeric',
+                              year: 'numeric',
+                            });
+                            const time = start.toLocaleTimeString('en-US', {
+                              timeZone: OFFICE_TIMEZONE,
+                              hour: 'numeric',
+                              minute: '2-digit',
+                            });
+                            const type = appt.appointment_type
+                              ? SIGNING_TYPE_LABEL[appt.appointment_type] ?? appt.appointment_type
+                              : '';
+                            const side =
+                              shown.length > 1 && appt.side
+                                ? `${appt.side === 'sale' ? 'Sale' : 'Purchase'} · `
+                                : '';
+                            return (
+                              <div
+                                key={appt.id}
+                                className={`leading-tight min-w-0 ${past ? 'text-slate-400' : 'text-slate-700'}`}
+                                title={`${side}${date} at ${time}${type ? ` (${type})` : ''}${past ? ' — already passed' : ''}`}
+                              >
+                                <div className="text-[11px] font-medium truncate">{date}</div>
+                                <div className="text-[9px] text-slate-500 truncate">
+                                  {side}{time}{type ? ` · ${type}` : ''}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
+                  </td>
                   {/* Last updated — when the note was last added/edited. */}
                   <td className="px-2 py-1.5 text-slate-600">
                     {(deal as Deal & { adminNote?: string | null }).adminNote && noteUpdatedAt(deal)
@@ -1492,7 +1564,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                 </tr>
                 {expandedDealId === deal.id && (
                   <tr className="bg-brand-light/10 border-b border-slate-100">
-                    <td colSpan={15} className="px-2 py-1.5">
+                    <td colSpan={16} className="px-2 py-1.5">
                       {(() => {
                         const entry = pendingTasks[deal.id];
                         if (!entry || entry.loading) {
@@ -1587,7 +1659,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                 </React.Fragment>
               );
             }) : (
-              <tr><td colSpan={15} className="px-6 py-12 text-center text-slate-500"><p>No files found.</p></td></tr>
+              <tr><td colSpan={16} className="px-6 py-12 text-center text-slate-500"><p>No files found.</p></td></tr>
             )}
           </tbody>
         </table>

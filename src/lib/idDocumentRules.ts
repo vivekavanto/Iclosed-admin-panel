@@ -16,6 +16,17 @@
 /** Which side(s) of a document one uploaded file shows. */
 export type IdSide = "front" | "back" | "front-and-back" | "unknown";
 
+/**
+ * ID types that are a single physical page with no second side worth asking
+ * for — a birth certificate's reverse is typically blank. Any one established
+ * side (front, back, or a scan that happens to show both) completes these.
+ */
+const SINGLE_SIDED_TYPES = new Set(["birth certificate"]);
+
+function isSingleSided(type: string): boolean {
+  return SINGLE_SIDED_TYPES.has(type.trim().toLowerCase());
+}
+
 /** One detected document, from a freshly analysed file or a saved draft row. */
 export interface DetectedIdDoc {
   /** The acceptable-ID label, e.g. "Driver's License" or "Canadian Passport". */
@@ -85,8 +96,11 @@ export function analyseIdSides(docs: DetectedIdDoc[]): IdTypeAnalysis[] {
       hasBack,
       hasBothSides,
       // A single image holding both sides is complete on its own; otherwise the
-      // front and the second side must each have turned up somewhere.
-      complete: hasBothSides || (hasFront && hasBack),
+      // front and the second side must each have turned up somewhere. Single-
+      // sided types (e.g. Birth Certificate) are complete with any one side.
+      complete: isSingleSided(type)
+        ? hasFront || hasBack || hasBothSides
+        : hasBothSides || (hasFront && hasBack),
     };
   });
 }
