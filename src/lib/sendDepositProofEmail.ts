@@ -46,6 +46,7 @@ import { formatCurrency } from "./formatCurrency";
 // test.ts pins them.
 import { depositProofRecipients } from "./clerkRecipients";
 import { readBlobDocument } from "./blobDocument";
+import { isPendingFileNumber } from "./fileNumber";
 import { PROOF_OF_DEPOSIT_DOC_TYPE, isDepositTask } from "./depositTask";
 import {
   formatLeadTypeLabel,
@@ -265,7 +266,7 @@ export async function sendDepositProofEmail(taskId: string): Promise<DepositProo
       property_address: propertyAddress,
       property_street: propertyStreet,
       closing_date: formatClosingDate(deal?.closing_date),
-      file_number: deal?.file_number ?? "",
+      file_number: isPendingFileNumber(deal?.file_number) ? "Pending" : (deal?.file_number ?? ""),
       lead_type: leadTypeLabel,
       attached_count: String(attachments.length),
       deal_url: `${adminBaseUrl()}/admin/deals/${primaryDealId}`,

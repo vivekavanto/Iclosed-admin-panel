@@ -21,6 +21,7 @@ import supabaseAdmin from "./supabaseAdmin";
 import { buildLeadAddressPartsForEmail } from "./leadEmailAddress";
 import { CLIENT_SIGNUP_TYPE } from "./notificationTypes";
 import { logger } from "./logger";
+import { isPendingFileNumber } from "./fileNumber";
 
 export type NotifyClientSignupResult = {
   notified: boolean;
@@ -75,7 +76,7 @@ export async function notifyClientSignup(
     const { error } = await supabaseAdmin.from("notifications").insert({
       type: CLIENT_SIGNUP_TYPE,
       title,
-      body: deal.file_number ? `File ${deal.file_number} is now active.` : null,
+      body: deal.file_number && !isPendingFileNumber(deal.file_number) ? `File ${deal.file_number} is now active.` : null,
       deal_id: deal.id,
       lead_id: leadId,
       file_number: deal.file_number ?? null,

@@ -25,6 +25,8 @@
 // only the matched `{{ … }}` tokens are replaced — so existing template markup
 // and entities pass through unchanged.
 
+import { isPendingFileNumber } from "./fileNumber";
+
 export type TemplateValue = {
   /** The resolved value to substitute. */
   value: string;
@@ -82,8 +84,12 @@ export function renderTemplateSafe(
   const escape = opts.escape !== false;
   // [^{}] so a token can't span an intervening brace; trims surrounding space.
   return text.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (match, rawName: string) => {
-    const resolved = resolve(rawName.trim());
+    const name = rawName.trim();
+    let resolved = resolve(name);
     if (!resolved) return match; // unknown placeholder → leave as-is
+    if (name.endsWith("file_number") && isPendingFileNumber(resolved.value)) {
+      resolved = { value: "Pending" };
+    }
     return escape && !resolved.raw ? escapeHtml(resolved.value) : resolved.value;
   });
 }

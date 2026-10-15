@@ -397,6 +397,7 @@ export async function GET(
 // Keeps the endpoint safe from arbitrary writes (audit/created_at/etc.).
 const EDITABLE_DEAL_COLUMNS = new Set([
   "file_number",
+  "selling_file_number",
   "file_name",
   "type",
   "status",
@@ -460,6 +461,7 @@ const ALLOWED_STATUSES = new Set([
 //   - property_address: same reason — purchase address vs selling address
 const MIRROR_DEAL_COLUMNS = new Set([
   "file_number",
+  "selling_file_number",
   "file_name",
   "status",
   "lawyer_name",
@@ -706,8 +708,11 @@ export async function PATCH(
   }
 
   // file_number has a UNIQUE index — surface a friendly error for duplicates.
+  let previousFileNumber: string | null = null;
   if (typeof updates.file_number === "string") {
-    const trimmed = updates.file_number.trim();
+    const { data: prev } = await supabase.from("deals").select("file_number").eq("id", id).maybeSingle();
+    previousFileNumber = prev?.file_number ?? null;
+    const trimmed = updates.file_number.trim().toUpperCase();
     if (!trimmed) {
       return NextResponse.json(
         { success: false, error: "File number cannot be empty" },
@@ -719,18 +724,21 @@ export async function PATCH(
     // legacy value so editing other fields on an older deal isn't blocked — only
     // a new/changed file number must match.
     if (!FILE_NUMBER_REGEX.test(trimmed)) {
-      const { data: cur } = await supabase
-        .from("deals")
-        .select("file_number")
-        .eq("id", id)
-        .maybeSingle();
-      if (cur?.file_number !== trimmed) {
+      if (previousFileNumber !== trimmed) {
         return NextResponse.json(
           { success: false, error: FILE_NUMBER_HINT },
           { status: 400 },
         );
       }
     }
+  }
+
+  if ("selling_file_number" in updates) {
+    const selling = String(updates.selling_file_number ?? "").trim().toUpperCase();
+    if (selling && !FILE_NUMBER_REGEX.test(selling)) {
+      return NextResponse.json({ success: false, error: FILE_NUMBER_HINT }, { status: 400 });
+    }
+    updates.selling_file_number = selling || null;
   }
 
   // GAP-001: optimistic concurrency. The client may send `expected_updated_at`
@@ -802,6 +810,15 @@ export async function PATCH(
     }
   } catch (mirrorErr) {
     console.error("[admin/deals PATCH] mirror to family failed (non-blocking):", mirrorErr);
+  }
+
+  // Signing appointments store a copy of the file number.
+  if (previousFileNumber && data?.file_number && previousFileNumber !== data.file_number) {
+    const { error: apptError } = await supabase
+      .from("signing_appointments")
+      .update({ file_number: data.file_number })
+      .eq("file_number", previousFileNumber);
+    if (apptError) console.error("[admin/deals PATCH] signing appointment file number update failed:", apptError.message);
   }
 
   return NextResponse.json({ success: true, data, mirrored: mirroredCount });

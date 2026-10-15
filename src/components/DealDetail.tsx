@@ -38,6 +38,7 @@ import {
   NON_CITIZEN_FLAG_TOOLTIP,
 } from "@/lib/isNonCitizenFlagged";
 import { formatLocalDate, formatLocalDateTime } from "@/lib/formatDate";
+import { displayFileNumber } from "@/lib/fileNumber";
 // The per-task download button still renders in the browser. The whole-file
 // package ("Download All") moved to /api/admin/deals/[id]/package so it shares
 // one builder with "Email to Clerk" — see handleDownloadDealZip.
@@ -4051,7 +4052,7 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                 {deal.type}
               </span>
               <span className="text-xs font-medium text-slate-400 ml-1">
-                {deal.fileNumber}
+                {displayFileNumber(deal.fileNumber)}
               </span>
             </div>
 
