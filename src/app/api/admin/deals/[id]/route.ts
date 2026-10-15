@@ -397,7 +397,6 @@ export async function GET(
 // Keeps the endpoint safe from arbitrary writes (audit/created_at/etc.).
 const EDITABLE_DEAL_COLUMNS = new Set([
   "file_number",
-  // Sale-side Tickler number on a Purchase & Sale file.
   "selling_file_number",
   "file_name",
   "type",
@@ -813,7 +812,7 @@ export async function PATCH(
     console.error("[admin/deals PATCH] mirror to family failed (non-blocking):", mirrorErr);
   }
 
-  // Signing appointments keep their own copy of the file number.
+  // Signing appointments store a copy of the file number.
   if (previousFileNumber && data?.file_number && previousFileNumber !== data.file_number) {
     const { error: apptError } = await supabase
       .from("signing_appointments")

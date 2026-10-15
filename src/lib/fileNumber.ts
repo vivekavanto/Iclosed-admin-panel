@@ -5,7 +5,7 @@ export const FILE_NUMBER_REGEX = /^[0-9]{2}[A-Z]{1,3}-[0-9]{3,5}$/;
 
 export const FILE_NUMBER_HINT = "File number must look like 26AB-1234";
 
-// Unique placeholder until the Tickler assigns the real number.
+// Placeholder until the Tickler assigns the real number.
 export const PENDING_FILE_NUMBER_PREFIX = "PENDING-";
 
 export function pendingFileNumber(): string {

@@ -179,7 +179,7 @@ export async function convertSingleLead(
     }
 
     // ── File number ──────────────────────────────────────────────────────────
-    // Co-clients inherit the primary's number; otherwise pending until the Tickler sync.
+    // Co-clients inherit the primary's number.
     const generatedFileNumber =
       (isCoClient && primaryFileNumber) || opts.file_number || pendingFileNumber();
 
