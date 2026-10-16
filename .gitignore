@@ -46,3 +46,6 @@ next-env.d.ts
 # the migrations already tracked stay tracked until `git rm --cached` removes
 # them, and there is no applied-migration ledger anywhere else.
 
+
+# Never commit packaged env/secret bundles
+*.env.zip
