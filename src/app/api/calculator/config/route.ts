@@ -32,6 +32,7 @@ export async function GET(req: Request) {
     );
   }
 
+  
   const [{ row: config, isDefault, firmKey }, firms, statementTypes] =
     await Promise.all([readActiveConfig(), readFirms(), readStatementTypes()]);
 
