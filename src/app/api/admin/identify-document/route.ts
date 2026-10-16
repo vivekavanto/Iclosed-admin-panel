@@ -82,6 +82,7 @@ For EACH distinct identification document you find in the image/PDF, do the foll
 Edge-case policy:
 - EVERY acceptable ID is "front-and-back" required — never return "single-sided" — EXCEPT a Birth Certificate, which is single-sided (see below).
 - Passports need BOTH sides: the photo/bio-data page is the "front", the SIGNATURE page is the "back". A passport is only "is_complete": true when both are visible.
+- EXCEPTION — SIGNED PASSPORT: the bearer's signature can sit on ANY page, including the photo/bio-data page itself (many countries print it there). If a handwritten signature is visible anywhere on the passport in the upload, set "signature_present": true and treat the passport as complete: "side": "front-and-back", "is_complete": true. Do NOT ask for a separate signature page then. A faint printed line or security printing is not a signature.
 - ⚠️ A passport is very often photographed OPEN, as a two-page spread. If ONE image shows the signature page AND the photo/bio-data page side by side, that is BOTH sides — return "side": "front-and-back" and "is_complete": true. Do NOT return "front" just because the bio-data page is the more prominent half. This is the single most common passport mistake: look at the WHOLE image, both halves, before deciding.
 - How to recognise the signature page: it carries the words "Signature of bearer" / "Signature du titulaire" (or the equivalent in the issuing country's language), usually above a handwritten signature and a line of small print about the passport being invalid unless signed. A visible handwritten signature on the page facing the bio-data page means the signature page IS present.
 - Only return "front" for a passport when the signature page is genuinely absent from the image — i.e. you can see the bio-data page alone, with no facing page or with a facing page that is blank/unrelated.
@@ -104,6 +105,7 @@ Respond with ONLY a valid JSON object (no markdown):
       "side": "front" | "back" | "front-and-back" | "unknown",
       "side_requirement": "single-sided" | "front-and-back" | "unknown",
       "is_complete": boolean,
+      "signature_present": boolean | null,
       "confidence": "high" | "medium" | "low",
       "expiry_date": string | null
     }
@@ -200,11 +202,16 @@ function parseGeminiJson(text: string): IdentificationResult {
       .filter((d) => typeof d?.document_type === "string" && d.document_type.trim().length > 0)
       .map((d) => {
         const expiry = parseExpiryDate(d.expiry_date);
+        // A signed passport is accepted wherever the signature sits (some print
+        // it on the bio-data page), so the signature satisfies the second side.
+        const signedPassport =
+          /passport/i.test(d.document_type) &&
+          (d as { signature_present?: unknown }).signature_present === true;
         return {
           document_type: d.document_type.trim(),
-          side: parseSide(d.side),
+          side: signedPassport ? ("front-and-back" as Side) : parseSide(d.side),
           side_requirement: parseSideRequirement(d.side_requirement),
-          is_complete: Boolean(d.is_complete),
+          is_complete: signedPassport ? true : Boolean(d.is_complete),
           confidence: parseConfidence(d.confidence),
           expiry_date: expiry.date,
           expiry_status: expiry.status,
