@@ -240,10 +240,14 @@ export function renderPackageSummaryHtml(pkg: {
   propertyInfo: number;
   taskPdfs: number;
   separate: number;
+  estimate?: boolean;
   /** Generated pages that did not fit — named, never dropped quietly. */
   omitted?: string[];
 }): string {
   const items: string[] = [];
+  if (pkg.estimate) {
+    items.push(`<strong>Closing Cost Estimate</strong> — the statement of account prepared for this file`);
+  }
   if (pkg.identification > 0) {
     items.push(
       `<strong>Identification</strong> — ${pkg.identification} ID document` +

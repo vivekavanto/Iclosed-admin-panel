@@ -4,11 +4,8 @@ import { isUuid } from "@/lib/isUuid";
 import { logger } from "@/lib/logger";
 import { rateLimitOk } from "@/lib/rateLimit";
 import { blobTokenForUrl, isBlobUrl, isPrivateBlobUrl } from "@/lib/blobPrivacy";
-import { readActiveConfig, readStatementType } from "@/lib/closingCostConfig";
-import { configFromSnapshot } from "@/lib/closingCostConfigSnapshot";
-import { snapshotToStatement } from "@/lib/closingEstimate";
-import { closingCostPdfFileName, generateClosingCostPdf } from "@/lib/closingCostPdf";
-import { formatLocalDate } from "@/lib/formatDate";
+import { closingCostPdfFileName } from "@/lib/closingCostPdf";
+import { renderEstimatePdf, type EstimatePdfRow } from "@/lib/closingEstimatePdf";
 
 // GET /api/admin/deals/[id]/closing-estimate/pdf[?estimate_id=…&draft=1]
 //
@@ -24,28 +21,6 @@ import { formatLocalDate } from "@/lib/formatDate";
 // feature deliberately does not write to.
 
 const supabase = supabaseAdmin;
-
-/** The subset of `deal_closing_estimates` this route renders from. */
-interface EstimateRow {
-  id: string;
-  status: string | null;
-  file_no_display: string | null;
-  line_items: unknown;
-  pdf_url: string | null;
-  issued_at: string | null;
-  updated_at: string | null;
-  // Added by 2026-08-03 / 2026-08-04. Optional because a row read before those
-  // migrations simply will not carry them, and a historic estimate must stay
-  // printable either way.
-  firm_key?: string | null;
-  statement_type?: string | null;
-  purchasers?: string | null;
-  property_address?: string | null;
-  closing_date?: string | null;
-  // Added by 2026-08-08. Null on any row written before it.
-  config_snapshot?: unknown;
-  config_version?: string | null;
-}
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -72,7 +47,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   }
 
   // ── Resolve which estimate row to render ──
-  let row: EstimateRow | null = null;
+  let row: EstimatePdfRow | null = null;
 
   if (estimateId) {
     const { data } = await supabase
@@ -157,60 +132,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   }
 
   // ── Regenerate from the frozen snapshot ──
-  const statement = snapshotToStatement(row.line_items);
-  if (!statement) {
-    return NextResponse.json(
-      { success: false, error: "This estimate has no saved figures to render." },
-      { status: 409 },
-    );
-  }
-
-  const { data: deal } = await supabase
-    .from("deals")
-    .select("file_number, property_address")
-    .eq("id", id)
-    .maybeSingle();
-
-  // The letterhead and the wording come from the estimate's own FROZEN
-  // snapshot, so a re-download reproduces the document the client received —
-  // not today's version of it. That is the promise Settings → Closing costs
-  // makes on screen ("changing these affects new estimates only"), and reading
-  // the live config here is precisely how it used to be broken.
-  //
-  // Only a row written before the snapshot column existed falls back to the
-  // live config, which is what such a row has always rendered from anyway.
-  const frozen = configFromSnapshot(row.config_snapshot);
-  let config: Record<string, unknown>;
-  let statementType: Awaited<ReturnType<typeof readStatementType>>;
-
-  if (frozen) {
-    config = frozen.config;
-    statementType = frozen.statementType;
-  } else {
-    config = (await readActiveConfig(row.firm_key as string | null)).row;
-    // An estimate saved before statement types existed has no stored flavour;
-    // fall back to the workflow status, which reproduces the old watermark rule.
-    statementType = await readStatementType(
-      (row.statement_type as string | null) ?? (isDraft ? "draft" : "final"),
-    );
-  }
-
   try {
-    const preparedSource: string =
-      (row.issued_at as string | null) ?? (row.updated_at as string | null) ?? "";
-    const pdfBytes = await generateClosingCostPdf({
-      statement,
-      config,
-      statementType,
-      fileNo: row.file_no_display ?? deal?.file_number ?? null,
-      propertyAddress:
-        (row.property_address as string | null) ?? deal?.property_address ?? null,
-      clientName: (row.purchasers as string | null) ?? null,
-      closingDate: (row.closing_date as string | null) ?? null,
-      preparedOn: formatLocalDate(preparedSource) || preparedSource.slice(0, 10),
-      draft: isDraft,
-      configVersion: row.config_version ?? null,
-    });
+    const pdfBytes = await renderEstimatePdf(id, row);
+    if (!pdfBytes) {
+      return NextResponse.json(
+        { success: false, error: "This estimate has no saved figures to render." },
+        { status: 409 },
+      );
+    }
 
     return new NextResponse(pdfBytes as unknown as BodyInit, {
       status: 200,

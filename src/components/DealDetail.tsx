@@ -3804,8 +3804,9 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
         merged.length > 0
           ? ` — ${merged.join(", ")} combined into ${merged.length} PDF${merged.length === 1 ? "" : "s"}`
           : "";
+      const estimateNote = data.estimate ? ", including the closing cost estimate" : "";
       showToast(
-        `Sent ${data.attached} attachment${data.attached === 1 ? "" : "s"} to ${data.recipients.join(", ")}${mergedNote}${linkedNote}`,
+        `Sent ${data.attached} attachment${data.attached === 1 ? "" : "s"}${estimateNote} to ${data.recipients.join(", ")}${mergedNote}${linkedNote}`,
       );
     } catch (err: any) {
       showToast(err?.message ?? "Failed to email the documents", "error");

@@ -17,6 +17,7 @@ import {
   parseEstimatePayload,
   writeEstimateRow,
 } from "@/lib/closingEstimate";
+import { loadTaskMortgage } from "@/lib/taskMortgage";
 
 // The purchase closing-cost estimate for one deal.
 //
@@ -75,6 +76,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     { row: config, isDefault, firmKey: defaultFirmKey },
     firms,
     statementTypes,
+    taskMortgage,
   ] = await Promise.all([
     supabase
       .from("deal_closing_estimates")
@@ -94,6 +96,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     readActiveConfig(),
     readFirms(),
     readStatementTypes(),
+    loadTaskMortgage(id),
   ]);
 
   // ── Prefill hints ──
@@ -175,6 +178,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       // intake figure. NULL when neither has one, so the field opens BLANK
       // rather than pre-filled with a 0 nobody typed.
       deposit_paid: deal.deposit_amount ?? leadDeposit ?? null,
+      // Mortgage task answer; 0 = cash deal.
+      mortgage_amount: taskMortgage,
       is_toronto: torontoHint,
       // The intake question is "have you owned before?" — "No (first time)" is
       // the only answer that suggests first-time-buyer status.
