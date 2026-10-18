@@ -281,7 +281,7 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
         overrides[field.key] = String(n);
       }
 
-      const mortgageText = seed ? amountText(seed.mortgage_amount) : "";
+      const mortgageText = amountText(seed ? seed.mortgage_amount : prefill.mortgage_amount);
 
       // A saved estimate's own answer wins. NULL means it was saved before the
       // checkboxes existed (or by a caller that doesn't set them), so fall back
@@ -318,7 +318,9 @@ const ClosingCostCalculator: React.FC<{ dealId: string }> = ({ dealId }) => {
           : Boolean(prefill.is_first_time_buyer),
         // A saved estimate with no mortgage IS a cash deal — derive rather than
         // store, so the two can never disagree.
-        isCashDeal: Boolean(seed) && (parseAmountInput(mortgageText) ?? 0) === 0,
+        isCashDeal:
+          (Boolean(seed) || prefill.mortgage_amount === 0) &&
+          (parseAmountInput(mortgageText) ?? 0) === 0,
         titlePremiumOverride: seed ? amountText(seed.title_premium_override) : "",
         provincialLttOverride: seed ? amountText(seed.provincial_ltt_override) : "",
         municipalLttOverride: seed ? amountText(seed.municipal_ltt_override) : "",

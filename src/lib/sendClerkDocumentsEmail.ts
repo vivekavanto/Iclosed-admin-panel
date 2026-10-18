@@ -93,6 +93,7 @@ import {
   withEmailDocumentLinks,
 } from "./familyDocuments";
 import { buildDealPackage } from "./dealPackage";
+import { estimatePdfAttachment } from "./closingEstimatePdf";
 import {
   dedupeAttachmentNames,
   packageEntryAttachments,
@@ -144,6 +145,7 @@ export type ClerkEmailResult = {
    * weeks later there is a record of what this email did and did not carry.
    */
   uncovered: string[];
+  estimate: boolean;
   error?: string;
 };
 
@@ -300,6 +302,7 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
     personalInfo: 0,
     propertyInfo: 0,
     uncovered: [],
+    estimate: false,
   };
 
   const { data: deal } = await supabaseAdmin
@@ -362,6 +365,9 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
   const pkg = await buildDealPackage(dealId, { mergeDocuments: false });
   if (!pkg) return { ...empty, error: "Deal not found" };
 
+  const estimatePdf = await estimatePdfAttachment(dealId, dealIds);
+  const estimateBytes = estimatePdf?.content.byteLength ?? 0;
+
   // Spend the attachment budget on the generated entries first — they are small
   // and no other copy of them exists — then leave the rest to the documents
   // below, which can be linked when they're too large as a generated PDF cannot.
@@ -375,7 +381,7 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
     omitted: omittedEntries,
   } = packageEntryAttachments(pkg.entries, {
     fileNumber,
-    budgetBytes: ATTACHMENT_BUDGET_BYTES,
+    budgetBytes: ATTACHMENT_BUDGET_BYTES - estimateBytes,
   });
   if (omittedEntries.length) {
     // error, not warn: a generated page has no blob to link in its place, so
@@ -394,7 +400,7 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
   const collected = await collectFamilyDocuments(dealIds, familyLeadIds, adminBaseUrl(), {
     fileNumber,
     excludeUrls: consumedByEmail,
-    budgetBytes: Math.max(0, ATTACHMENT_BUDGET_BYTES - packageBytes),
+    budgetBytes: Math.max(0, ATTACHMENT_BUDGET_BYTES - estimateBytes - packageBytes),
   });
   // Whatever spilled past the budget goes out as a tokenised link the clerk can
   // open from their inbox. Without this the overflow list points at
@@ -410,7 +416,11 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
   // One name per attachment, across BOTH halves. A task's own PDF and a PDF
   // uploaded against that same task by that same person are named identically by
   // rules that never saw each other — see dedupeAttachmentNames.
-  const attachments = dedupeAttachmentNames([...packageAttachments, ...docs.attachments]);
+  const attachments = dedupeAttachmentNames([
+    ...(estimatePdf ? [estimatePdf] : []),
+    ...packageAttachments,
+    ...docs.attachments,
+  ]);
   if (attachments.length === 0 && docs.linked.length === 0) {
     return { ...empty, error: "There are no uploaded documents on this file yet" };
   }
@@ -531,6 +541,7 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
       propertyInfo: shipped.has("property") ? pkg.propertyInfoRows : 0,
       taskPdfs: taskPdfCount,
       separate: docs.attachments.length,
+      estimate: Boolean(estimatePdf),
       omitted: omittedEntries,
     }) +
     renderLinkedDocsHtml(docs.linked) +
@@ -569,7 +580,7 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
       `ids=${pkg.identificationDocs}, aps=${pkg.apsDocs}, ` +
       `personal info for ${pkg.personalInfoPeople}, property rows=${pkg.propertyInfoRows}, ` +
       `task pdfs=${taskPdfCount}, documents=${docs.attachments.length}) ` +
-      `linked=${docs.linked.length}` +
+      `linked=${docs.linked.length} estimate=${estimatePdf ? "yes" : "no"}` +
       (uncovered.length ? ` UNCOVERED=${uncovered.map((u) => u.label).join(", ")}` : ""),
   );
 
@@ -583,5 +594,6 @@ export async function sendClerkDocumentsEmail(dealId: string): Promise<ClerkEmai
     personalInfo: pkg.personalInfoPeople,
     propertyInfo: pkg.propertyInfoRows,
     uncovered: uncovered.map((u) => u.label),
+    estimate: Boolean(estimatePdf),
   };
 }

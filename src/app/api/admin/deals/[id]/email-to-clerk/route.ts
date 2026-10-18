@@ -67,6 +67,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         // from the clerk email" is answerable after the fact rather than a
         // forensic exercise against a mailbox nobody here can read.
         uncovered: result.uncovered,
+        estimate: result.estimate,
       },
       req,
     });
@@ -81,6 +82,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       personalInfo: result.personalInfo,
       propertyInfo: result.propertyInfo,
       uncovered: result.uncovered,
+      estimate: result.estimate,
     });
   } catch (err) {
     logger.error(`POST /api/admin/deals/${id}/email-to-clerk error:`, err);
