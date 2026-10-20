@@ -16,6 +16,7 @@ interface Appointment {
   property_address: string | null;
   closing_date: string | null;
   file_number: string | null;
+  deal_id?: string | null;
   google_meet_link: string | null;
   lawyer: { id: string; initials: string; full_name: string } | null;
 }
@@ -150,6 +151,9 @@ export default function SigningAppointmentsList() {
                     <div className="text-slate-900">{a.property_address || "—"}</div>
                     {a.file_number && (
                       <div className="text-xs text-slate-500">File: {a.file_number}</div>
+                    )}
+                    {a.status === "confirmed" && !a.deal_id && (
+                      <div className="text-xs font-semibold text-amber-600">Not linked to a file</div>
                     )}
                   </td>
                   <td className="px-4 py-4">

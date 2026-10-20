@@ -3764,6 +3764,27 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
   // uploaded documents embedded. Empty tasks are excluded — same rule as the
   // per-task download button.
   const [emailingClerk, setEmailingClerk] = useState(false);
+  const [remindingClient, setRemindingClient] = useState(false);
+
+  /** Emails the file's clients a reminder to complete their pending tasks. */
+  const handleRemindClient = async () => {
+    setRemindingClient(true);
+    try {
+      const res = await fetch(`/api/admin/deals/${deal.id}/remind-client`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        showToast(data.error ?? "Failed to send the reminder", "error");
+        return;
+      }
+      showToast(
+        `Reminder sent to ${data.recipients.join(", ")} (${data.pending} pending task${data.pending === 1 ? "" : "s"})`,
+      );
+    } catch (err: any) {
+      showToast(err?.message ?? "Failed to send the reminder", "error");
+    } finally {
+      setRemindingClient(false);
+    }
+  };
 
   /**
    * Send every uploaded document on the file to the conveyancing clerk.
@@ -4665,6 +4686,25 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
           <div className="flex justify-between items-center">
             <h2 className="text-lg font-bold text-slate-900">Tasks</h2>
             <div className="flex items-center gap-2">
+              {/* Manual nudge: emails the file's clients to finish their pending
+                  tasks. The automatic reminder fires once, within 2 days of first
+                  login; this one can be sent whenever. */}
+              <button
+                onClick={handleRemindClient}
+                disabled={remindingClient}
+                className="bg-white text-brand-primary border border-brand-primary hover:bg-brand-light px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-colors shadow-sm disabled:opacity-60"
+                title="Email the client a reminder to complete their pending tasks on iClosed"
+              >
+                {remindingClient ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" /> Sending…
+                  </>
+                ) : (
+                  <>
+                    <Mail size={16} /> Remind client
+                  </>
+                )}
+              </button>
               {/* "Download All" only makes sense once there's finished work to
                   export — show it only when at least one task is completed.
                   Ships a ZIP of PDFs, one per task; see handleDownloadDealZip. */}
