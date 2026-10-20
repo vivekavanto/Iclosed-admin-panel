@@ -100,23 +100,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Stamp the client's FIRST login for the once-only "complete your tasks"
-    // reminder (clientTaskReminder.ts). Conditional on NULL, so relogins and
-    // webhook retries never move it. Best-effort: a failure here must not block
-    // activation or the agent notification.
-    if (result.clientId) {
-      const { error: stampErr } = await supabaseAdmin
-        .from("clients")
-        .update({ first_login_at: new Date().toISOString() })
-        .eq("id", result.clientId)
-        .is("first_login_at", null);
-      if (stampErr) {
-        console.warn(
-          `[activate-deal webhook] first_login_at stamp failed (non-blocking): ${stampErr.message}`,
-        );
-      }
-    }
-
     // Tell the back office, in-app only, that this client is now on the portal.
     // Gated on `activated > 0` so it fires exactly once: activateClientDeals'
     // UPDATE is conditional on status = 'Inactive', so a retried webhook flips

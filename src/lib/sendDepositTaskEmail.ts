@@ -139,7 +139,7 @@ async function loadTransferInstructions(): Promise<Buffer> {
  * path and redirects a logged-out visitor to /login?next=/dashboard, so a client
  * lands on the task itself either way.
  */
-export function portalUrl(): string {
+function portalUrl(): string {
   const DEFAULT = "https://www.iclosed.ca";
   // `??` alone is not enough: an env var set to "" or whitespace is not null, so
   // it would win the fallback and leave a RELATIVE href ("/dashboard"), which

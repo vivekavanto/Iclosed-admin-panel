@@ -13,10 +13,13 @@
 // (requirement #6).
 //
 // sendUpdates is 'all' on CREATE only, so Google's native invite email goes to
-// every attendee: client, guests, clerk and reception. The lawyer owns the
-// event, so Google never emails them; they rely on our lawyer notification.
-// Update stays 'none'. Delete is 'none' by default, but admin cancel opts in
-// (notifyAttendees) so Google emails everyone on the event.
+// the client and guests alongside our own branded templates
+// (sendSigningConfirmationEmail.ts etc.). Clerk and reception are added in a
+// second, silent step (sendUpdates 'none'), so they are on the event without a
+// Google email. The lawyer owns the event, so Google never emails them; they
+// rely on our lawyer notification. Update stays 'none'. Delete is 'none' by
+// default, but admin cancel opts in (notifyAttendees) so Google emails the
+// client and guests; clerk/reception are dropped first so they stay silent.
 
 import { google, calendar_v3 } from "googleapis";
 import { logger } from "./logger";

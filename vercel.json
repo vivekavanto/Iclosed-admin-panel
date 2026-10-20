@@ -1,6 +1,5 @@
 {
   "crons": [
-    { "path": "/api/internal/signing-reminders", "schedule": "0 13 * * *" },
-    { "path": "/api/internal/client-task-reminders", "schedule": "0 14 * * *" }
+    { "path": "/api/internal/signing-reminders", "schedule": "0 13 * * *" }
   ]
 }
