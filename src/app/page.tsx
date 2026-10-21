@@ -1,8 +1,6 @@
-"use client";
-
-import React from "react";
-import Dashboard from "../components/Dashboard";
+import { redirect } from "next/navigation";
 
 export default function Home() {
-  return <Dashboard />;
+  // Always enter through the authenticated, module-aware route gate.
+  redirect("/admin/dashboard");
 }

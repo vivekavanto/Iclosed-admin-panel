@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import supabaseAdmin from "@/lib/supabaseAdmin";
+import { OWNER_EMAIL } from "@/lib/staffAccess";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -41,7 +41,7 @@ export async function POST(req: Request) {
       );
     }
     const currentEmail = userData.user.email;
-    const userId = userData.user.id;
+
 
     // Only allow admins to use this endpoint.
     const role =
@@ -73,12 +73,11 @@ export async function POST(req: Request) {
       );
     }
 
-    // Service-role update bypasses the user-facing confirmation link.
-    // email_confirm: true marks the new email as verified immediately.
-    const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(userId, {
-      email: trimmed,
-      email_confirm: true,
-    });
+    if (currentEmail.toLowerCase() === OWNER_EMAIL || trimmed === OWNER_EMAIL) {
+      return NextResponse.json({ error: "The owner email cannot be changed here." }, { status: 403 });
+    }
+    // Require mailbox verification; never auto-confirm an arbitrary email.
+    const { error: updateError } = await caller.auth.updateUser({ email: trimmed });
     if (updateError) {
       return NextResponse.json(
         { success: false, error: updateError.message },

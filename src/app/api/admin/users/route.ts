@@ -1,3 +1,5 @@
+import { getOwner } from "@/lib/staffServer";
+import { OWNER_EMAIL, isCompanyEmail } from "@/lib/staffAccess";
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
@@ -43,6 +45,7 @@ async function getCallerId(): Promise<string | null> {
 
 // ── GET: list all staff ──────────────────────────────────────────────────────
 export async function GET() {
+  if (!await getOwner()) return NextResponse.json({ error: "Owner access required." }, { status: 403 });
   const { data, error } = await supabaseAdmin
     .from("admin_users")
     .select(SELECT_COLS)
@@ -75,10 +78,10 @@ export async function GET() {
 }
 
 // ── POST: invite a new staff member ──────────────────────────────────────────
-// Creates the Supabase auth account (so they can log in), grants admin access
-// (app_metadata.role = "admin" — same gate as today), sends the existing invite
+// Creates the Supabase auth account with no modules, sends the existing invite
 // email, and records the person in the registry.
 export async function POST(req: Request) {
+  if (!await getOwner()) return NextResponse.json({ error: "Owner access required." }, { status: 403 });
   try {
     const body = (await req.json()) as {
       email?: string;
@@ -106,6 +109,7 @@ export async function POST(req: Request) {
         { status: 400 },
       );
     }
+    if (!isCompanyEmail(email)) return NextResponse.json({ error: "Use a Nava Wilson or iClosed email address." }, { status: 400 });
     if (!isValidRole(role)) {
       return NextResponse.json(
         { success: false, error: "Role must be Admin, Clerk, or Lawyer." },
@@ -162,9 +166,9 @@ export async function POST(req: Request) {
 
     const userId = invite.userId;
 
-    // Grant admin access using the SAME gate the portal already enforces.
+    // Staff invitation does not grant modules. The owner assigns them separately.
     const { error: roleErr } = await supabaseAdmin.auth.admin.updateUserById(userId, {
-      app_metadata: { role: "admin" },
+      app_metadata: { role: "staff", staff_modules: [] },
     });
     if (roleErr) {
       return NextResponse.json(
@@ -202,6 +206,7 @@ export async function POST(req: Request) {
 
 // ── PATCH: update a staff member (edit details or activate/deactivate) ────────
 export async function PATCH(req: Request) {
+  if (!await getOwner()) return NextResponse.json({ error: "Owner access required." }, { status: 403 });
   try {
     const body = (await req.json()) as {
       id?: string;
@@ -220,6 +225,9 @@ export async function PATCH(req: Request) {
       );
     }
 
+    const { data: ownerCheck, error: ownerCheckError } = await supabaseAdmin.auth.admin.getUserById(id);
+    if (ownerCheckError || !ownerCheck.user) return NextResponse.json({ error: "Account not found." }, { status: 404 });
+    if (ownerCheck.user.email?.toLowerCase() === OWNER_EMAIL) return NextResponse.json({ error: "The owner account cannot be changed here." }, { status: 400 });
     const updates: Record<string, unknown> = {};
     if (typeof body.name === "string") {
       const trimmed = body.name.trim();
@@ -259,14 +267,10 @@ export async function PATCH(req: Request) {
       );
     }
 
-    // When (de)activating, flip portal access via the SAME gate the portal
-    // uses. Deactivate → remove the "admin" role so the existing login gate
-    // (middleware + AuthProvider) rejects them. The auth account and registry
-    // row are preserved, so the record/history stays intact. Reactivate →
-    // restore "admin".
+    // Preserve module assignments when disabling or re-enabling an account.
     if (typeof body.is_active === "boolean") {
       const { error: accessErr } = await supabaseAdmin.auth.admin.updateUserById(id, {
-        app_metadata: { role: body.is_active ? "admin" : "inactive" },
+        app_metadata: { ...ownerCheck.user.app_metadata, ...(ownerCheck.user.app_metadata.role === "inactive" && body.is_active ? { role: "staff" } : {}), staff_disabled: !body.is_active },
       });
       if (accessErr) {
         return NextResponse.json(

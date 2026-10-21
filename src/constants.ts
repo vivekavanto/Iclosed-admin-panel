@@ -260,6 +260,7 @@ export const NAV_ITEMS = [
   { label: 'Blogs', id: 'blogs', icon: 'Newspaper' },
   { label: 'Partners', id: 'partners', icon: 'Handshake' },
   { label: 'Staff', id: 'staff', icon: 'UserCog' },
+  { label: 'User Access', id: 'access', icon: 'KeyRound' },
   { label: 'Signing Appointments', id: 'signing-appointments', icon: 'ClipboardCheck' },
   {
     label: 'Settings',

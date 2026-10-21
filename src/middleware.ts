@@ -1,17 +1,10 @@
+import { canSignIn, canVisit, homePath } from "./lib/staffAccess";
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-// Server-side auth gate for the admin surface.
-//
-// Why this exists: every /api/admin/* route uses the Supabase service-role
-// client, which bypasses Row Level Security and performs NO per-route auth of
-// its own. Until now the only thing protecting them was Vercel's Deployment
-// Protection login wall. This middleware replaces that wall with real,
-// app-owned auth so the routes are safe even when the deployment is public.
-//
-// It validates the cookie-backed Supabase session (set by the browser client
-// in src/lib/supabaseClient.ts) and requires app_metadata.role === "admin" —
-// the same gate AuthProvider and the login page already enforce on the client.
+// Authenticate against Supabase on each request. Permissions come only from
+// server-owned app_metadata; client-editable profile metadata never grants access.
+// Domain registration makes a verified user eligible, with no modules by default.
 
 // Routes under /api/admin that are called by EXTERNAL services (the customer
 // portal and first-login/retainer webhooks), not by the authenticated admin
@@ -50,7 +43,7 @@ export async function middleware(request: NextRequest) {
   }
 
   // The login page must stay reachable while signed out.
-  if (pathname === "/admin/login") {
+  if (["/admin/login", "/admin/signup", "/admin/auth/confirm"].includes(pathname)) {
     return NextResponse.next();
   }
 
@@ -86,23 +79,38 @@ export async function middleware(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const isAdmin = user?.app_metadata?.role === "admin";
+  // Preserve any refreshed session cookies on redirects and denials too.
+  const finish = (result: NextResponse) => {
+    response.cookies.getAll().forEach(cookie => result.cookies.set(cookie));
+    result.headers.set("Cache-Control", "private, no-store");
+    return result;
+  };
+  const isStaff = canSignIn(user);
 
-  if (!isAdmin) {
+  if (!isStaff) {
     // API routes get a clean 401; pages get bounced to the login screen.
     if (pathname.startsWith("/api/")) {
-      return NextResponse.json(
+      return finish(NextResponse.json(
         { success: false, error: "Unauthorized" },
         { status: 401 },
-      );
+      ));
     }
     const loginUrl = request.nextUrl.clone();
     loginUrl.pathname = "/admin/login";
     loginUrl.search = "";
-    return NextResponse.redirect(loginUrl);
+    return finish(NextResponse.redirect(loginUrl));
   }
 
-  return response;
+  if (!canVisit(user, pathname, request.method)) {
+    if (pathname.startsWith("/api/")) {
+      return finish(NextResponse.json({ success: false, error: "You do not have access to this module." }, { status: 403 }));
+    }
+    const destination = request.nextUrl.clone();
+    destination.pathname = homePath(user);
+    destination.search = "";
+    return finish(NextResponse.redirect(destination));
+  }
+  return finish(response);
 }
 
 export const config = {

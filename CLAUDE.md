@@ -23,9 +23,12 @@ the admin repo but flags the portal where it matters.
 ## Auth model
 
 - `src/middleware.ts` gates `/admin/**` and `/api/admin/**`: it validates the
-  Supabase session cookie via `getUser()` and requires
-  `app_metadata.role === "admin"`. Everything under `/api/admin/*` therefore runs
-  only for authenticated admins.
+  Supabase session cookie via `getUser()` and checks the central policy in
+  `src/lib/staffAccess.ts`. Verified company-domain staff can sign in, but new
+  accounts receive no modules. The verified `saru@navawilson.law` account owns
+  access management at `/admin/access`; only server-owned `app_metadata` grants
+  modules. Existing legacy admins retain modules until explicitly scoped. See
+  `docs/staff-access.md` for module boundaries and deployment requirements.
 - **Exceptions:** `PUBLIC_ADMIN_API` in `middleware.ts` lists a few routes called
   by external systems / the portal (reset-password, send-*). Those are protected
   instead by HMAC signatures — see `src/lib/verifyServiceSignature.ts` (verify
@@ -37,11 +40,10 @@ the admin repo but flags the portal where it matters.
 - `supabaseAdmin` (`src/lib/supabaseAdmin.ts`) is the **service-role** client — it
   bypasses RLS and must NEVER be imported into client code (guarded to throw in
   the browser).
-- **Access model (SEC-004, accepted decision):** every authenticated admin can
-  see and edit **every** deal/lead — there is intentionally NO per-deal or
-  per-team scoping. All admins are trusted staff. If teams/brokers who should
-  only see their own files are ever introduced, per-deal authorization must be
-  added (and Supabase RLS enabled as defence in depth).
+- **Access model:** module permissions now apply to pages and APIs. Connected
+  file modules share backing APIs; this is not per-deal or per-team scoping.
+  Per-deal authorization and database RLS remain separate work. Owner-only
+  operations include account management and unclassified maintenance APIs.
 
 ## The family-deal model (important)
 

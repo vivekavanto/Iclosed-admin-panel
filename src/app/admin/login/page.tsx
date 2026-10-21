@@ -3,6 +3,8 @@
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import Link from "next/link";
+import { canSignIn, homePath } from "@/lib/staffAccess";
 import Image from "next/image";
 import { Eye, EyeOff, Lock, Mail } from "lucide-react";
 
@@ -30,18 +32,15 @@ export default function LoginPage() {
       return;
     }
 
-    // Authorization gate — auth.users is shared with the customer portal,
-    // so a valid Supabase login alone is not enough. Only users tagged
-    // with role="admin" in app_metadata are allowed past this point.
-    const role = authData?.user?.app_metadata?.role;
-    if (role !== "admin") {
+    // Reuse existing accounts; verified new staff receive only owner-assigned modules.
+    if (!canSignIn(authData.user)) {
       await supabase.auth.signOut();
-      setError("This account does not have admin access.");
+      setError("Use a verified Nava Wilson or iClosed staff account.");
       setLoading(false);
       return;
     }
 
-    router.push("/admin/dashboard");
+    router.push(homePath(authData.user));
     router.refresh();
   };
 
@@ -163,6 +162,7 @@ export default function LoginPage() {
               )}
             </button>
           </form>
+          <p className="mt-6 text-sm text-slate-600">New staff member? <Link className="text-red-700 underline" href="/admin/signup">Create an account</Link></p>
 
           {/* <p className="text-center text-xs text-slate-400 mt-8">
             Protected by Supabase Authentication

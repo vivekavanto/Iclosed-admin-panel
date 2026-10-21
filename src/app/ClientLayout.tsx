@@ -7,6 +7,7 @@ import SearchDrawer from "../components/SearchDrawer";
 import { useNavigation } from "./providers";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuth } from "@/lib/AuthProvider";
+import { hasModule } from "@/lib/staffAccess";
 import { isPublicRoute } from "@/lib/publicRoutes";
 
 export default function ClientLayout({
@@ -50,7 +51,7 @@ export default function ClientLayout({
   }
 
   // Login page — no sidebar
-  if (pathname === "/admin/login") {
+  if (["/admin/login", "/admin/signup", "/admin/auth/confirm"].includes(pathname)) {
     return <>{children}</>;
   }
 
@@ -85,14 +86,14 @@ export default function ClientLayout({
         collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
       />
-      <SearchDrawer
+      {hasModule(user, "search") && <SearchDrawer
         isOpen={isSearchOpen}
         onClose={closeSearch}
         onNavigateToDeal={(id) => {
           router.push(`/admin/deals/${id}`);
           closeSearch();
         }}
-      />
+      />}
       {/* `<main>` is the scroll root, so AppHeader lives INSIDE it and sticks to
           the top as the page scrolls. Padding moved onto the inner wrapper so
           the header can span edge-to-edge under it. */}

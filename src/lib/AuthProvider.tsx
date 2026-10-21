@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { canSignIn } from "@/lib/staffAccess";
 import { isPublicRoute } from "@/lib/publicRoutes";
 import type { User } from "@supabase/supabase-js";
 
@@ -20,10 +21,10 @@ const AuthContext = createContext<AuthContextType>({
 export const useAuth = () => useContext(AuthContext);
 
 // auth.users is shared with the customer portal, so a valid session is
-// not proof of admin access. Only users tagged with role="admin" in
-// app_metadata are allowed in.
-function isAdmin(user: User | null): boolean {
-  return user?.app_metadata?.role === "admin";
+// not proof of staff access. Verified staff eligibility and server-owned
+// module assignments are checked separately.
+function isStaff(user: User | null): boolean {
+  return canSignIn(user);
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -40,10 +41,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (!cancelled) setUser(null);
         return;
       }
-      if (!isAdmin(sessionUser)) {
-        // A non-admin (customer) somehow has a session here. Force
-        // sign-out so they're bounced back to /admin/login.
-        await supabase.auth.signOut();
+      if (!isStaff(sessionUser)) {
+        // Reject the admin UI without making another Supabase call inside
+        // onAuthStateChange (which can deadlock the auth client's lock).
         if (!cancelled) setUser(null);
         return;
       }
@@ -51,8 +51,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
 
     // Initial session
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      await verifyAndSet(session?.user ?? null);
+    supabase.auth.getUser().then(async ({ data: { user } }) => {
+      await verifyAndSet(user ?? null);
       if (!cancelled) setLoading(false);
     });
 
@@ -64,7 +64,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (
           !cancelled &&
           !session &&
-          pathname !== "/admin/login" &&
+          !["/admin/login", "/admin/signup", "/admin/auth/confirm"].includes(pathname) &&
           !isPublicRoute(pathname)
         ) {
           router.push("/admin/login");
@@ -83,7 +83,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // session by design, and bouncing them to /admin/login is the one thing that
   // page must never do.
   useEffect(() => {
-    if (!loading && !user && pathname !== "/admin/login" && !isPublicRoute(pathname)) {
+    if (!loading && !user && !["/admin/login", "/admin/signup", "/admin/auth/confirm"].includes(pathname) && !isPublicRoute(pathname)) {
       router.push("/admin/login");
     }
   }, [loading, user, pathname, router]);

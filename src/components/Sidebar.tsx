@@ -29,6 +29,7 @@ import {
   Newspaper,
   X,
 } from "lucide-react";
+import { hasModule, isOwner } from "@/lib/staffAccess";
 import { NAV_ITEMS } from "../constants";
 import { CHAT_ENABLED } from "@/lib/chatFlag";
 import { useAuth } from "@/lib/AuthProvider";
@@ -47,6 +48,7 @@ interface SidebarProps {
 
 const ROUTE_MAP: Record<string, string> = {
   "legal-assistant": "/admin/legal-assistant",
+  access: "/admin/access",
   finance: "/admin/finance",
   dashboard: "/admin/dashboard",
   tasks: "/admin/tasks",
@@ -107,6 +109,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed =
   const [newLeadCount, setNewLeadCount] = useState(0);
 
   const loadNewLeadCount = useCallback(async () => {
+    if (!hasModule(user, "leads")) return;
     try {
       const res = await fetch("/api/admin/notifications/new-leads");
       if (!res.ok) return;
@@ -116,12 +119,12 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed =
       // Leave the last known value alone — a transient blip shouldn't blink
       // the dot off and make staff think they had already looked.
     }
-  }, []);
+  }, [user]);
 
   // Unread client chat messages -> count badge on the Messages button.
   const [unreadMessages, setUnreadMessages] = useState(0);
   useEffect(() => {
-    if (!CHAT_ENABLED) return;
+    if (!CHAT_ENABLED || !hasModule(user, "messages")) return;
     let cancelled = false;
     const load = async () => {
       try {
@@ -140,7 +143,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed =
       clearTimeout(initial);
       clearInterval(timer);
     };
-  }, [pathname]);
+  }, [pathname, user]);
 
   useEffect(() => {
     let cancelled = false;
@@ -224,7 +227,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed =
 
         {/* Navigation */}
         <nav className="flex-1 min-h-0 px-2 py-4 space-y-1 overflow-y-auto">
-          {NAV_ITEMS.filter((item) => CHAT_ENABLED || item.id !== "messages").map((item) => {
+          {NAV_ITEMS.filter((item) => (CHAT_ENABLED || item.id !== "messages") && hasModule(user, item.id)).map((item) => {
             const active =
               isActive(item.id) ||
               (item.id === "templates" && isTemplateActive);
@@ -390,7 +393,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed =
                     {user?.email ?? "Admin"}
                   </p>
                   <p className="text-xs text-slate-500 truncate capitalize">
-                    {(user?.user_metadata?.role as string) ?? "Admin"}
+                    {isOwner(user) ? "Owner" : "Staff"}
                   </p>
                 </div>
               </div>

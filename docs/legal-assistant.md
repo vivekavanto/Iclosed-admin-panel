@@ -4,7 +4,7 @@ The Orchestrator is integrated as the **Legal Assistant** navigation item in Adm
 
 ## Routes and access
 
-UI routes are under `/admin/legal-assistant` and APIs under `/api/admin/legal-assistant`, both protected by the existing Admin middleware. The module's server authorization matches this dev branch's `app_metadata.role === "admin"` rule. No customer, confirmed-domain-only staff account, or new API exception is admitted by this change. Broader clerk permissions need a separate coordinated roster/AuthProvider/middleware change. Existing messaging, reminder and other Admin features remain intact.
+UI routes are under `/admin/legal-assistant` and APIs under `/api/admin/legal-assistant`, both protected by the existing Admin middleware. The central staff access policy now requires the `legal-assistant` module, with full owner access and preserved legacy admin grants. Verified company-domain staff start with no modules; Saru assigns access on `/admin/access`. See `docs/staff-access.md`. Existing messaging, reminder and other Admin features remain intact.
 
 ## Local and hosted configuration
 

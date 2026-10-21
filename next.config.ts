@@ -54,7 +54,7 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
-  logging: { incomingRequests: { ignore: [/\/api\/admin\/legal-assistant\/mailbox\/callback/] } },
+  logging: { incomingRequests: { ignore: [/\/api\/admin\/legal-assistant\/mailbox\/callback/, /\/admin\/auth\/confirm/] } },
   turbopack: {
     root: path.join(__dirname),
   },

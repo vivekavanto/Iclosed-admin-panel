@@ -1,3 +1,5 @@
-import type {User} from "@supabase/supabase-js";
-// Match the existing dev-branch admin middleware without broadening access.
-export function canAccessOperations(user:User|null|undefined){return user?.app_metadata?.role==="admin";}
+import type { User } from "@supabase/supabase-js";
+import { hasModule } from "../staffAccess.ts";
+export function canAccessOperations(user: User | null | undefined) {
+  return hasModule(user, "legal-assistant");
+}
