@@ -6,6 +6,7 @@ import Image from "next/image";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
+  Wallet,
   Briefcase,
   Users,
   FileText,
@@ -46,6 +47,7 @@ interface SidebarProps {
 
 const ROUTE_MAP: Record<string, string> = {
   "legal-assistant": "/admin/legal-assistant",
+  finance: "/admin/finance",
   dashboard: "/admin/dashboard",
   tasks: "/admin/tasks",
   deals: "/admin/deals",
@@ -77,6 +79,7 @@ const ROUTE_MAP: Record<string, string> = {
 
 const iconMap: Record<string, React.ReactNode> = {
   LayoutDashboard: <LayoutDashboard size={20} />,
+  Wallet: <Wallet size={20} />,
   Search: <Search size={20} />,
   ClipboardCheck: <ClipboardCheck size={20} />,
   ListTodo: <ListTodo size={20} />,

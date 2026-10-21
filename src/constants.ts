@@ -239,6 +239,7 @@ export const MOCK_DEALS: Deal[] = [
 
 export const NAV_ITEMS = [
   { label: 'Legal Assistant', id: 'legal-assistant', icon: 'ClipboardCheck' },
+  { label: 'Finance', id: 'finance', icon: 'Wallet' },
   { label: 'Dashboard', id: 'dashboard', icon: 'LayoutDashboard' },
   { label: 'Search', id: 'search', icon: 'Search' },
 { label: 'Tasks', id: 'tasks', icon: 'ListTodo' },
