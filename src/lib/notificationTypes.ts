@@ -6,6 +6,8 @@
 // sides agree on the string without the client pulling in the service-role
 // client.
 
+import { CHAT_ENABLED } from "./chatFlag";
+
 /** Raised when a client and their co-party finish every client-visible task. */
 export const ALL_TASKS_COMPLETE_TYPE = "deal.all_tasks_complete";
 
@@ -59,7 +61,7 @@ export function notificationHref(n: {
   type?: string;
 }): string | null {
   // A client message opens its conversation in the Inbox (lead_id = the file's root lead).
-  if (n.type === CLIENT_MESSAGE_TYPE && n.lead_id) return `/admin/messages?c=${n.lead_id}`;
+  if (CHAT_ENABLED && n.type === CLIENT_MESSAGE_TYPE && n.lead_id) return `/admin/messages?c=${n.lead_id}`;
   if (n.deal_id) return `/admin/deals/${n.deal_id}`;
   if (n.lead_id) return `/admin/leads?lead=${n.lead_id}`;
   return null;

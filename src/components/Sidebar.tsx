@@ -29,6 +29,7 @@ import {
   X,
 } from "lucide-react";
 import { NAV_ITEMS } from "../constants";
+import { CHAT_ENABLED } from "@/lib/chatFlag";
 import { useAuth } from "@/lib/AuthProvider";
 import { NEW_LEADS_SEEN_EVENT } from "@/lib/newLeadBadge";
 
@@ -116,6 +117,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed =
   // Unread client chat messages -> count badge on the Messages button.
   const [unreadMessages, setUnreadMessages] = useState(0);
   useEffect(() => {
+    if (!CHAT_ENABLED) return;
     let cancelled = false;
     const load = async () => {
       try {
@@ -218,7 +220,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed =
 
         {/* Navigation */}
         <nav className="flex-1 min-h-0 px-2 py-4 space-y-1 overflow-y-auto">
-          {NAV_ITEMS.map((item) => {
+          {NAV_ITEMS.filter((item) => CHAT_ENABLED || item.id !== "messages").map((item) => {
             const active =
               isActive(item.id) ||
               (item.id === "templates" && isTemplateActive);
