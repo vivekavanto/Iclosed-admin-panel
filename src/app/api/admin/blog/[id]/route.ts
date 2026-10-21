@@ -3,7 +3,7 @@ import { isUuid } from "@/lib/isUuid";
 import { getActingAdmin } from "@/lib/getActingAdmin";
 import { getPostById, updatePost, deletePost } from "@/lib/blogPosts";
 import { revalidatePortalBlog } from "@/lib/revalidatePortalBlog";
-import { pickWritable } from "../route";
+import { pickWritable } from "@/lib/blogWrite";
 
 /**
  * GET / PATCH / DELETE a single post. Admin-gated by src/middleware.ts.

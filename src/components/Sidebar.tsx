@@ -45,6 +45,7 @@ interface SidebarProps {
 }
 
 const ROUTE_MAP: Record<string, string> = {
+  "legal-assistant": "/admin/legal-assistant",
   dashboard: "/admin/dashboard",
   tasks: "/admin/tasks",
   deals: "/admin/deals",

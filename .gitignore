@@ -49,3 +49,6 @@ next-env.d.ts
 
 # Never commit packaged env/secret bundles
 *.env.zip
+
+# Private Legal Assistant state
+.orchestrator-state/

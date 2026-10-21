@@ -1,0 +1,7 @@
+import {redirect,notFound} from 'next/navigation';
+import {readFile} from 'node:fs/promises';import path from 'node:path';import {createHash} from 'node:crypto';
+import {getStaff} from '@/lib/orchestrator/server-auth';import {getSnapshot} from '@/lib/orchestrator/store';import {localStateDirectory} from '@/lib/orchestrator/local-store';
+import {workflowSettings} from '@/lib/orchestrator/workflow-settings';
+import AuditWorkspace from '@/components/orchestrator/AuditWorkspace';import type {AuditReport} from '@/lib/orchestrator/audit-model';
+export const dynamic='force-dynamic';
+export default async function ReportLayout({params}:{params:Promise<{fileId:string}>}){if(!await getStaff())redirect('/admin/login');const{fileId}=await params;let id;try{id=decodeURIComponent(fileId);}catch{notFound();}const matter=(await getSnapshot()).matters.find(m=>m.id===fileId||m.id===id),root=localStateDirectory();if(!matter||!root)notFound();let layout:{report:AuditReport;sourceUrl:string};try{layout=JSON.parse(await readFile(path.join(root,'audit-layouts',createHash('sha256').update(matter.id).digest('hex')+'.json'),'utf8'));}catch{notFound();}const settings=await workflowSettings();return <AuditWorkspace matter={{...matter,auditReport:{documentId:'historical',url:layout.sourceUrl,verifiedAt:new Date().toISOString()}}} layoutPreview initial={{jobs:[],report:layout.report,overallComments:settings.comments.filter(c=>c.fileId===matter.id),readiness:{enabled:false,reasons:[]}}}/>;}

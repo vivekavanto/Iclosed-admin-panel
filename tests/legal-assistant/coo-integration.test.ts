@@ -1,0 +1,16 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
+import {decodeCooDraft,deliveryRecipient,validateCooDraft,validEmails} from "../../src/lib/coo/model.ts";
+import {initialCooDraft,municipalRecipients} from "../../src/lib/coo/prepare.ts";
+import {parseCloserReport} from "../../src/lib/orchestrator/closer-import.ts";
+const draft=()=>decodeCooDraft(JSON.parse(readFileSync(new URL("./fixtures/coo-demo.json",import.meta.url),"utf8")));
+test("combined department accepts different service emails and includes both once",()=>{const d=draft();d.recipients.water={...d.recipients.tax,email:"water@example.com, TAX@example.com"};d.combineTaxWater=true;assert.deepEqual(validateCooDraft(d),[]);assert.deepEqual(deliveryRecipient(d,"tax").email.toLowerCase().split(", ").sort(),["tax@example.com","water@example.com"]);});
+test("CC and recipient lists reject newlines even between valid addresses",()=>{assert.equal(validEmails("a@example.com,\nb@example.com"),false);assert.equal(validEmails("a@example.com; b@example.com"),true);assert.equal(validEmails(""),false);assert.equal(validEmails("",true),true);});
+test("condominium requires a corporation name and contact email",()=>{const d=draft();d.condoCorporation="";d.recipients.condo.email="";const errors=validateCooDraft(d);assert.ok(errors.some(e=>e.includes("corporation name")));assert.ok(errors.some(e=>e.includes("Condo management")));});
+test("Toronto uses one department with two addresses; Durham municipalities remain separate",()=>{const a=municipalRecipients("10 Example Street, North York, ON, A1A 1A1");assert.equal(a.combine,true);assert.notEqual(a.tax.email,a.water.email);const b=municipalRecipients("10 Toronto Avenue, Pickering, ON, A1A 1A1");assert.equal(b.combine,false);assert.equal(b.tax.email,"propertytaxes@pickering.ca");assert.equal(b.water.email,"waterbilling@durham.ca");assert.equal(municipalRecipients("10 Toronto Avenue, Unknown Town, ON").tax.email,"");});
+test("detailed Closer fields populate the COO without using opposing clerk as CC",()=>{
+ const text='file.number,file.url,file.type,file.clerk,file.lawyer,file.status,dates.opening,dates.closing,property.address,clients.names,property.type,property.condoType,property.condoPlan,lawFirm.name,lawFirm.lawyer.name,lawFirm.lawyer.email,lawFirm.clerk.email\n26P-0901,https://app.closer.ca/app/matter/example,purchase,Marcela Pitella,Example Lawyer,active,2026-10-01,2026-10-25,"10 Example Street, Toronto, ON",Example Buyer,condo,standard,,Other Firm,Other Lawyer,other@example.com,opposing@example.com';
+ const batch=parseCloserReport('Closer_Report_Closing_2026-10-12_to_2026-11-30_run_2026-10-21.csv',text);const m=batch.matters[0],d=initialCooDraft(m);
+ assert.equal(m.condominium,true);assert.equal(d.cc,'marcela@navawilson.law');assert.equal(d.condoCorporation,'');assert.equal(d.recipients.condo.enabled,true);assert.equal(d.combineTaxWater,true);assert.equal(d.registrationDate,'');assert.equal(d.completeTransferConfirmed,false);
+});

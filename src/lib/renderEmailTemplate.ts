@@ -25,7 +25,7 @@
 // only the matched `{{ … }}` tokens are replaced — so existing template markup
 // and entities pass through unchanged.
 
-import { isPendingFileNumber } from "./fileNumber";
+import { isPendingFileNumber } from "./fileNumber.ts";
 
 export type TemplateValue = {
   /** The resolved value to substitute. */
