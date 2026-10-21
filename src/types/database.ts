@@ -838,7 +838,7 @@ export interface Database {
           id: string;
           deal_id: string;
           title: string;
-          status: "Pending" | "In Progress" | "Completed" | "Waiting" | null;
+          status: "Pending" | "Completed" | "Waiting" | null;
           milestone_date: string | null;
           completed_at: string | null;
           email_sent: boolean | null;
@@ -853,7 +853,7 @@ export interface Database {
           id?: string;
           deal_id: string;
           title: string;
-          status?: "Pending" | "In Progress" | "Completed" | "Waiting" | null;
+          status?: "Pending" | "Completed" | "Waiting" | null;
           milestone_date?: string | null;
           completed_at?: string | null;
           email_sent?: boolean | null;
@@ -868,7 +868,7 @@ export interface Database {
           id?: string;
           deal_id?: string;
           title?: string;
-          status?: "Pending" | "In Progress" | "Completed" | "Waiting" | null;
+          status?: "Pending" | "Completed" | "Waiting" | null;
           milestone_date?: string | null;
           completed_at?: string | null;
           email_sent?: boolean | null;
@@ -909,7 +909,7 @@ export interface Database {
           id: string;
           deal_id: string;
           title: string;
-          status: "" | "Pending" | "In Progress" | "Completed" | null;
+          status: "" | "Pending" | "Completed" | null;
           milestone_date: string | null;
           completed_at: string | null;
           email_sent: boolean | null;
@@ -920,7 +920,7 @@ export interface Database {
           id?: string;
           deal_id: string;
           title: string;
-          status?: "" | "Pending" | "In Progress" | "Completed" | null;
+          status?: "" | "Pending" | "Completed" | null;
           milestone_date?: string | null;
           completed_at?: string | null;
           email_sent?: boolean | null;
@@ -931,7 +931,7 @@ export interface Database {
           id?: string;
           deal_id?: string;
           title?: string;
-          status?: "" | "Pending" | "In Progress" | "Completed" | null;
+          status?: "" | "Pending" | "Completed" | null;
           milestone_date?: string | null;
           completed_at?: string | null;
           email_sent?: boolean | null;
@@ -1315,7 +1315,7 @@ export interface Database {
           deal_id: string | null;
           title: string;
           completed: boolean | null;
-          status: "Pending" | "In Progress" | "Completed" | null;
+          status: "Pending" | "Completed" | null;
           due_date: string | null;
           assignee: string | null;
           completed_at: string | null;
@@ -1334,7 +1334,7 @@ export interface Database {
           deal_id?: string | null;
           title: string;
           completed?: boolean | null;
-          status?: "Pending" | "In Progress" | "Completed" | null;
+          status?: "Pending" | "Completed" | null;
           due_date?: string | null;
           assignee?: string | null;
           completed_at?: string | null;
@@ -1353,7 +1353,7 @@ export interface Database {
           deal_id?: string | null;
           title?: string;
           completed?: boolean | null;
-          status?: "Pending" | "In Progress" | "Completed" | null;
+          status?: "Pending" | "Completed" | null;
           due_date?: string | null;
           assignee?: string | null;
           completed_at?: string | null;
@@ -1398,7 +1398,7 @@ export interface Database {
           deal_id: string | null;
           title: string;
           completed: boolean | null;
-          status: "Pending" | "In Progress" | "Completed" | null;
+          status: "Pending" | "Completed" | null;
           due_date: string | null;
           assignee: string | null;
           completed_at: string | null;
@@ -1413,7 +1413,7 @@ export interface Database {
           deal_id?: string | null;
           title: string;
           completed?: boolean | null;
-          status?: "Pending" | "In Progress" | "Completed" | null;
+          status?: "Pending" | "Completed" | null;
           due_date?: string | null;
           assignee?: string | null;
           completed_at?: string | null;
@@ -1428,7 +1428,7 @@ export interface Database {
           deal_id?: string | null;
           title?: string;
           completed?: boolean | null;
-          status?: "Pending" | "In Progress" | "Completed" | null;
+          status?: "Pending" | "Completed" | null;
           due_date?: string | null;
           assignee?: string | null;
           completed_at?: string | null;

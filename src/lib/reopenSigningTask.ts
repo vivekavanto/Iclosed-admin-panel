@@ -71,7 +71,7 @@ export async function reopenSigningTask(appt: {
     if (task.milestone_id) {
       await supabaseAdmin
         .from("milestones")
-        .update({ status: "In Progress", completed_at: null })
+        .update({ status: "Pending", completed_at: null })
         .eq("id", task.milestone_id)
         .eq("status", "Completed");
     }
