@@ -3,6 +3,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { Deal, Task, Milestone, DealStatus } from "../types";
 import {
+  MessageSquare,
   ArrowLeft,
   Calendar,
   User,
@@ -4681,6 +4682,20 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
       })()}
 
       <div className="space-y-8">
+        {/* Client chat lives in the Inbox; this just opens this file's conversation */}
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+          <div className="flex items-center gap-2 text-sm text-slate-600">
+            <MessageSquare size={18} className="text-slate-700" />
+            <span>Chat with this client — messages are emailed, and they can reply by email or in their portal.</span>
+          </div>
+          <Link
+            href={`/admin/messages?deal=${deal.id}`}
+            className="shrink-0 bg-brand-primary text-white hover:bg-brand-primaryHover px-3 py-2 rounded-lg text-sm font-bold transition-colors shadow-sm"
+          >
+            Open chat
+          </Link>
+        </div>
+
         {/* Tasks Section */}
         <div className="space-y-4">
           <div className="flex justify-between items-center">

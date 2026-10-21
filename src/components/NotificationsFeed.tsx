@@ -2,8 +2,9 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Bell, CheckCheck, ChevronRight, Loader2, UserPlus, ListChecks, UserRoundPlus } from "lucide-react";
+import { Bell, CheckCheck, ChevronRight, Loader2, UserPlus, ListChecks, UserRoundPlus, MessageSquare } from "lucide-react";
 import {
+  CLIENT_MESSAGE_TYPE,
   CLIENT_SIGNUP_TYPE,
   ALL_TASKS_COMPLETE_TYPE,
   NEW_LEAD_TYPE,
@@ -45,6 +46,7 @@ function iconFor(type: string) {
   if (type === CLIENT_SIGNUP_TYPE) return <UserPlus size={16} />;
   if (type === NEW_LEAD_TYPE) return <UserRoundPlus size={16} />;
   if (type === ALL_TASKS_COMPLETE_TYPE) return <ListChecks size={16} />;
+  if (type === CLIENT_MESSAGE_TYPE) return <MessageSquare size={16} />;
   return <Bell size={16} />;
 }
 

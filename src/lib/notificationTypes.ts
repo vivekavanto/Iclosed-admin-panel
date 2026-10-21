@@ -9,6 +9,9 @@
 /** Raised when a client and their co-party finish every client-visible task. */
 export const ALL_TASKS_COMPLETE_TYPE = "deal.all_tasks_complete";
 
+/** Raised when a client sends a message (portal chat or an emailed reply). */
+export const CLIENT_MESSAGE_TYPE = "deal.client_message";
+
 /** Raised when a client activates their customer-portal account. */
 export const CLIENT_SIGNUP_TYPE = "client.signed_up";
 
@@ -53,7 +56,10 @@ export type NotificationRow = {
 export function notificationHref(n: {
   deal_id: string | null;
   lead_id: string | null;
+  type?: string;
 }): string | null {
+  // A client message opens its conversation in the Inbox (lead_id = the file's root lead).
+  if (n.type === CLIENT_MESSAGE_TYPE && n.lead_id) return `/admin/messages?c=${n.lead_id}`;
   if (n.deal_id) return `/admin/deals/${n.deal_id}`;
   if (n.lead_id) return `/admin/leads?lead=${n.lead_id}`;
   return null;

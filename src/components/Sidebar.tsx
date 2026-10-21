@@ -24,6 +24,7 @@ import {
   UserCog,
   Handshake,
   Menu,
+  MessageSquare,
   Newspaper,
   X,
 } from "lucide-react";
@@ -56,6 +57,7 @@ const ROUTE_MAP: Record<string, string> = {
   "task-templates": "/admin/templates/tasks",
   "email-templates": "/admin/templates/emails",
   leads: "/admin/leads",
+  messages: "/admin/messages",
   blogs: "/admin/blogs",
   partners: "/admin/partners",
   staff: "/admin/users",
@@ -80,6 +82,7 @@ const iconMap: Record<string, React.ReactNode> = {
   Calculator: <Calculator size={20} />,
   FileStack: <FileStack size={20} />,
   Users: <Users size={20} />,
+  MessageSquare: <MessageSquare size={20} />,
   UserCog: <UserCog size={20} />,
   Handshake: <Handshake size={20} />,
   Newspaper: <Newspaper size={20} />,
@@ -109,6 +112,29 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed =
       // the dot off and make staff think they had already looked.
     }
   }, []);
+
+  // Unread client chat messages -> count badge on the Messages button.
+  const [unreadMessages, setUnreadMessages] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch("/api/admin/messages?summary=1");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled && data?.success) setUnreadMessages(Number(data.unread) || 0);
+      } catch {
+        // Keep the last known count.
+      }
+    };
+    const initial = setTimeout(load, 0);
+    const timer = setInterval(load, 20_000);
+    return () => {
+      cancelled = true;
+      clearTimeout(initial);
+      clearInterval(timer);
+    };
+  }, [pathname]);
 
   useEffect(() => {
     let cancelled = false;
@@ -291,6 +317,15 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed =
                 >
                   {iconMap[item.icon]}
                   {showLabels && <span className="font-medium text-sm">{item.label}</span>}
+                  {item.id === "messages" && unreadMessages > 0 && (
+                    <span
+                      className={`flex h-5 min-w-5 items-center justify-center rounded-full bg-brand-primary px-1.5 text-[11px] font-semibold text-white ring-2 ring-slate-900 ${
+                        showLabels ? "ml-auto" : "absolute -top-1 -right-1"
+                      }`}
+                    >
+                      {unreadMessages}
+                    </span>
+                  )}
                   {showNewLeadDot && (
                     <>
                       {/* Amber, not the brand red the bell uses: this says
