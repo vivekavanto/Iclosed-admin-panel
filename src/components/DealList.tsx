@@ -1137,8 +1137,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
               <th className="px-2 py-1.5">Progress</th>
               <th className="px-2 py-1.5">Lawyer</th>
               <th className="px-2 py-1.5">Clerk</th>
-              {/* Agent column hidden per request — kept (not deleted) to avoid breaking anything. */}
-              <th className="px-2 py-1.5 hidden">Agent</th>
+              <th className="px-2 py-1.5">Referral Source</th>
               {/* Account created column hidden per request — kept (not deleted) to avoid breaking anything. */}
               <th className="px-2 py-1.5 hidden">Account created</th>
               {/* Free-text status the admin keeps by hand — see the cell below. */}
@@ -1347,11 +1346,8 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       <span className="text-slate-300">—</span>
                     )}
                   </td>
-                  {/* Agent — the referral partner, and the entry point for
-                      attaching one after intake. Clicking must not open the file,
-                      hence stopPropagation on the row's onClick.
-                      Hidden per request — kept (not deleted) to avoid breaking anything. */}
-                  <td className="px-2 py-1.5 hidden">
+                  {/* Referral source — click opens the agent picker, not the file. */}
+                  <td className="px-2 py-1.5">
                     {(() => {
                       const label = agentLabel(deal);
                       return (
