@@ -479,7 +479,6 @@ function StepRow({ step, status }: { step: PortalStep; status: StatusFilter }) {
         <div className="flex min-w-0 flex-1 flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-3">
           <span className={`text-sm ${step.completed ? "text-slate-500" : "font-medium text-slate-900"}`}>{step.title}</span>
           <span className="flex flex-wrap gap-x-3">
-            {step.attention && <span className="text-xs font-medium text-red-700">Needed before closing</span>}
             <TaskMeta task={step.task} />
           </span>
           {step.completedAt && <span className="text-xs text-slate-400 sm:ml-auto">{formatLocalDate(step.completedAt)}</span>}
