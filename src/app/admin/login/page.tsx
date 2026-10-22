@@ -97,7 +97,7 @@ function LoginForm() {
             <p className="text-slate-500 text-sm">Sign in to your admin account to continue.</p>
           </div>
 
-          <GoogleSignInButton disabled={loading} onError={setError} />
+          <GoogleSignInButton disabled={loading} />
           <div className="flex items-center gap-3 my-5 text-xs text-slate-400"><span className="h-px flex-1 bg-slate-200" />or use email and password<span className="h-px flex-1 bg-slate-200" /></div>
           <form onSubmit={handleLogin} className="space-y-5">
             {/* Email */}

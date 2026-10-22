@@ -43,7 +43,7 @@ export async function middleware(request: NextRequest) {
   }
 
   // The login page must stay reachable while signed out.
-  if (["/admin/login", "/admin/signup", "/admin/auth/confirm"].includes(pathname)) {
+  if (["/admin/login", "/admin/signup", "/admin/auth/confirm", "/admin/auth/google"].includes(pathname)) {
     return NextResponse.next();
   }
 
