@@ -27,6 +27,8 @@ import { normalizeRecipientEmail } from "./emailIdentity";
 import { getLeadFirmKey } from "./leadFirm";
 import { brandEmailHtml } from "./emailBrand";
 import { CLIENT_MESSAGE_TYPE } from "./notificationTypes";
+import { pingInbox, pingReadByStaff, pingVisibleMessage } from "./chatRealtime";
+import { handoverEventText, recordHandover, type HandoverHow } from "./chatHandlers";
 import {
   decodeTemplateBraces,
   escapeHtml,
@@ -210,25 +212,49 @@ export async function addEvent(
 
 export type Actor = { email: string | null; name: string };
 
-/** assignee = null unassigns. Writes an internal event. */
+/**
+ * Change who HANDLES the file's chat (null = nobody). The thread itself stays
+ * with the file, so the new handler sees all of it. Writes an internal
+ * "Handed over from … to …" line and the handler history.
+ */
 export async function setAssignee(
   rootLeadId: string,
   assignee: { email: string; name: string } | null,
   by: Actor,
+  how: HandoverHow = "manual",
 ): Promise<void> {
   await ensureConversation(rootLeadId);
+  const before = await getConversation(rootLeadId);
+  const prev = before?.assignee_email ? { email: before.assignee_email, name: before.assignee_name || before.assignee_email } : null;
   await supabaseAdmin
     .from("deal_conversations")
     .update({ assignee_email: assignee?.email ?? null, assignee_name: assignee?.name ?? null })
     .eq("root_lead_id", rootLeadId);
-  const deals = await familyDeals(rootLeadId);
-  if (deals[0]) {
-    await addEvent(
-      rootLeadId,
-      deals[0].id,
-      assignee ? `Assigned to ${assignee.name} by ${by.name}` : `Unassigned by ${by.name}`,
-    );
+  const text = handoverEventText(prev, assignee, { by: by.email ? { email: by.email, name: by.name } : null, how });
+  if (text) {
+    const deals = await familyDeals(rootLeadId);
+    if (deals[0]) await addEvent(rootLeadId, deals[0].id, text);
+    await recordHandover(rootLeadId, assignee);
   }
+  await pingInbox(rootLeadId);
+}
+
+/**
+ * Someone is leaving (or swapping work): every file chat handled by `from`
+ * moves to `to` — open and resolved alike, so a later client message reaches
+ * the new handler. Each file gets its own handover line. Returns how many moved.
+ */
+export async function handoverAll(from: string, to: { email: string; name: string }, by: Actor): Promise<number> {
+  const { data } = await supabaseAdmin
+    .from("deal_conversations")
+    .select("root_lead_id, assignee_email")
+    .not("assignee_email", "is", null);
+  const key = from.trim().toLowerCase();
+  const roots = (data ?? [])
+    .filter((c) => (c.assignee_email ?? "").toLowerCase() === key)
+    .map((c) => c.root_lead_id as string);
+  for (const root of roots) await setAssignee(root, to, by, "bulk");
+  return roots.length;
 }
 
 /** Resolve / reopen. Both write an internal event (not shown to the client). */
@@ -242,6 +268,7 @@ export async function setStatus(rootLeadId: string, status: "open" | "resolved",
   if (deals[0]) {
     await addEvent(rootLeadId, deals[0].id, status === "resolved" ? `Resolved by ${by.name}` : `Reopened by ${by.name}`);
   }
+  await pingInbox(rootLeadId);
 }
 
 /* ─────────────────────────────── thread I/O ─────────────────────────────── */
@@ -257,14 +284,22 @@ export async function loadThread(rootLeadId: string): Promise<ThreadMessage[]> {
   return (data ?? []) as ThreadMessage[];
 }
 
-/** Stamp the client's messages as seen by staff. */
-export async function markClientMessagesRead(rootLeadId: string): Promise<void> {
-  await supabaseAdmin
+/**
+ * Stamp the client's messages as seen by staff. When anything was newly
+ * stamped, the client's "Delivered" flips to "Seen" (and the inbox badges drop)
+ * without waiting for a poll.
+ */
+export async function markClientMessagesRead(rootLeadId: string): Promise<number> {
+  const { data } = await supabaseAdmin
     .from("deal_messages")
     .update({ read_by_admin_at: new Date().toISOString() })
     .eq("root_lead_id", rootLeadId)
     .eq("sender_type", "client")
-    .is("read_by_admin_at", null);
+    .is("read_by_admin_at", null)
+    .select("id");
+  const n = data?.length ?? 0;
+  if (n > 0) await pingReadByStaff(rootLeadId);
+  return n;
 }
 
 /* ─────────────────────────────── staff -> client ─────────────────────────── */
@@ -339,7 +374,10 @@ export async function sendAdminMessage(opts: {
   }
   const message = row as ThreadMessage;
 
-  if (isNote) return { ok: true, message, emailed: [] };
+  if (isNote) {
+    await pingInbox(opts.rootLeadId);
+    return { ok: true, message, emailed: [] };
+  }
 
   // Conversation bookkeeping: bump, auto-assign, auto-reopen.
   const conv = await getConversation(opts.rootLeadId);
@@ -347,7 +385,9 @@ export async function sendAdminMessage(opts: {
   if (conv && !conv.assignee_email && opts.sender.email) {
     patch.assignee_email = opts.sender.email;
     patch.assignee_name = opts.sender.name;
-    await addEvent(opts.rootLeadId, deal.id, `Assigned to ${opts.sender.name} automatically`);
+    const me = { email: opts.sender.email, name: opts.sender.name };
+    await addEvent(opts.rootLeadId, deal.id, handoverEventText(null, me, { how: "first-reply" })!);
+    await recordHandover(opts.rootLeadId, me);
   }
   if (conv?.status === "resolved") {
     patch.status = "open";
@@ -358,6 +398,10 @@ export async function sendAdminMessage(opts: {
 
   // Recipients: every client on the family's deals.
   const clientIds = [...new Set(deals.map((d) => d.client_id).filter(Boolean))] as string[];
+
+  // Live first, email second: an open widget shows the reply before the email
+  // round-trip finishes.
+  await pingVisibleMessage(opts.rootLeadId, clientIds);
   const { data: clients } = clientIds.length
     ? await supabaseAdmin.from("clients").select("id, first_name, email").in("id", clientIds)
     : { data: [] };
@@ -471,6 +515,7 @@ export async function notifyAdminsOfClientMessage(messageId: string): Promise<bo
       logger.error("[DealMessages] notification insert failed:", error.message);
       return false;
     }
+    await pingInbox(msg.root_lead_id);
     return true;
   } catch (err) {
     logger.error("[DealMessages] notify failed:", err);
@@ -566,6 +611,8 @@ export async function ingestInboundEmail(
     logger.error("[DealMessages] inbound insert failed:", error?.message);
     return { stored: false, reason: "error" };
   }
+  // Co-clients with the portal open see the emailed reply in their thread.
+  await pingVisibleMessage(rootLeadId, clientIds);
   await notifyAdminsOfClientMessage(row.id);
   return { stored: true };
 }

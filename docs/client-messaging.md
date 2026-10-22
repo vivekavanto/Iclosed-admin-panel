@@ -31,3 +31,27 @@ internal events have `visible_to_client = false` and are never read by the porta
    records) at `https://<admin>/api/webhooks/inbound-email?secret=<INBOUND_EMAIL_WEBHOOK_SECRET>`.
 4. Without 2-3 everything still works: emails carry the normal reply-to and tell the
    client to use the portal; only reply-by-email is off.
+
+## File-based chat and handovers
+The chat belongs to the FILE (one thread per file, keyed by the root lead);
+staff only HANDLE it for a while ("Handled by" in the inbox). Whoever takes
+over sees the full history; each change writes an internal "Handed over from …
+to …" line, and the side panel lists everyone who has handled the file.
+"Hand over files" in the inbox moves all of one person's file chats to another
+(audited as `chat.handover_all`). Run `migrations/2026-10-22-chat-file-handlers.sql`
+for the handler history; without it handovers still work and the list is empty.
+
+## Live updates, Online / Away, typing (always on)
+Details and the design: `docs/chat-realtime-implementation-plan.md`, section 0.
+There is no switch: messages, "Seen", typing and Online / Away are instant
+whenever the chat itself is enabled (`NEXT_PUBLIC_CHAT_ENABLED=true`).
+1. Run `migrations/2026-10-22-chat-presence.sql` (staff Online / Away, client
+   online dot) and `migrations/2026-10-22-chat-file-handlers.sql` (handler
+   history). Safe before or after the deploy; the chat works without them.
+2. Realtime uses the secret the two apps already share, `SERVICE_WEBHOOK_SECRET`
+   (a dedicated `CHAT_REALTIME_SECRET` overrides it if ever wanted). It must be the
+   SAME in admin and portal and DIFFERENT for dev and production, because they
+   share one Supabase project and the secret is what separates their channels.
+3. Supabase -> Realtime settings: public channels must be allowed (the default);
+   the channels are HMAC-named and carry no message text.
+4. Without a usable secret the chat still works, by polling, as before.

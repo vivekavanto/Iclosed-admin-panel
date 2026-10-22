@@ -4,6 +4,7 @@ import { isUuid } from "@/lib/isUuid";
 import { logger } from "@/lib/logger";
 import { recordAudit } from "@/lib/recordAudit";
 import { resolveMessageActor } from "@/lib/messageActor";
+import { loadHandlers } from "@/lib/chatHandlers";
 import {
   ensureConversation,
   familyDeals,
@@ -18,8 +19,9 @@ import {
 // One file's conversation. [leadId] is the family's ROOT lead id.
 //
 // GET   — thread (incl. private notes + events), conversation state, the
-//         client's details, their other files, and the staff list for "Assign
-//         to". Opening it marks the client's messages as seen.
+//         client's details, their other files, the staff list for "Handled
+//         by", and the handler history. Opening it marks the client's messages
+//         as seen.
 // POST  — { body, kind: "message" | "note" }: a reply (saved + emailed) or a
 //         private note (saved only).
 // PATCH — { action: "assign", email | null } | { action: "resolve" } | { action: "reopen" }
@@ -34,11 +36,12 @@ export async function GET(_req: Request, { params }: Ctx) {
     return NextResponse.json({ success: false, error: "Invalid id" }, { status: 400 });
   }
   try {
-    const [messages, conversation, deals, staff] = await Promise.all([
+    const [messages, conversation, deals, staff, handlers] = await Promise.all([
       loadThread(leadId),
       getConversation(leadId),
       familyDeals(leadId),
       supabaseAdmin.from("admin_users").select("name, email").eq("is_active", true).order("name"),
+      loadHandlers(leadId),
     ]);
     await markClientMessagesRead(leadId);
 
@@ -85,6 +88,7 @@ export async function GET(_req: Request, { params }: Ctx) {
           : null,
         other_files: (others ?? []).filter((d) => !familyIds.has(d.id)).slice(0, 5),
         staff: (staff.data ?? []).filter((s) => s.email),
+        handlers,
       },
     });
   } catch (err) {

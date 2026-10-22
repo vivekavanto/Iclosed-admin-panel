@@ -65,7 +65,6 @@ import OtherDocuments from "./OtherDocuments";
 import AddCoClientModal from "./AddCoClientModal";
 import AddressAutocomplete from "./shared/AddressAutocomplete";
 import { isVisibleByRules, ruleSource } from "@/lib/visibleWhen";
-import { CHAT_ENABLED } from "@/lib/chatFlag";
 import {
   formatPostalCode,
   isCityField,
@@ -4684,7 +4683,6 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
 
       <div className="space-y-8">
         {/* Client chat lives in the Inbox; this just opens this file's conversation */}
-        {CHAT_ENABLED && (
         <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
           <div className="flex items-center gap-2 text-sm text-slate-600">
             <MessageSquare size={18} className="text-slate-700" />
@@ -4697,7 +4695,6 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
             Open chat
           </Link>
         </div>
-        )}
 
         {/* Tasks Section */}
         <div className="space-y-4">

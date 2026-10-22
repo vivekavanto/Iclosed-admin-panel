@@ -7,6 +7,7 @@ import {
   Check,
   ChevronDown,
   CircleCheck,
+  FolderOpen,
   Lock,
   Loader2,
   Mail,
@@ -15,20 +16,31 @@ import {
   Search,
   Send,
   UserPlus,
+  Users,
+  X,
   Zap,
 } from "lucide-react";
 import { useAuth } from "@/lib/AuthProvider";
+import { useChatChannel } from "@/hooks/useChatChannel";
 
-// Staff inbox for client chats (design: "Agent inbox"). One conversation per
-// file. Left: conversations with filters. Centre: the thread with Reply /
-// Private note. Right: who the client is. Replies are emailed to the client,
-// who can answer by email or in the chat widget in their portal.
+// Staff inbox for client chats (design: "Agent inbox"). FILE-based: one
+// conversation per file, shown by its file number and property — like an order
+// whose courier can change. Staff only HANDLE a file's chat for a while
+// ("Handled by"); whoever takes over sees the whole history, and the side panel
+// lists everyone who has handled it. "Hand over files" moves all of one
+// person's file chats to another (someone leaving). Replies are emailed to the
+// client, who can answer by email or in the chat widget in their portal.
+//
+// Updates: polling, plus pings on the inbox channel
+// that trigger an immediate refetch — then polling drops to a 60 s safety net.
+// Pings also carry the client's typing and presence (online dot, "Last seen").
 
 type Row = {
   id: string;
   name: string;
   co_count: number;
   file_number: string | null;
+  property_address?: string | null;
   status: "open" | "resolved";
   assignee_email: string | null;
   assignee_name: string | null;
@@ -36,6 +48,8 @@ type Row = {
   last_at: string;
   unread: number;
   channel: "portal" | "email";
+  client_online?: boolean;
+  client_last_seen_at?: string | null;
 };
 
 type Msg = {
@@ -56,7 +70,18 @@ type Detail = {
   file: { deal_id: string; file_number: string | null; type: string | null; status: string | null; property_address: string | null; closing_date: string | null } | null;
   other_files: { id: string; file_number: string | null; property_address: string | null }[];
   staff: { name: string; email: string }[];
+  handlers?: { name: string; email: string; started_at: string; ended_at: string | null }[];
 };
+
+/** "File 26S-0368" — the chat's title everywhere in the inbox. */
+function fileTitle(fileNumber: string | null | undefined): string {
+  return fileNumber ? `File ${fileNumber}` : "File (no number yet)";
+}
+
+function shortDate(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString("en-CA", { month: "short", day: "numeric" });
+}
 
 type Filter = "open" | "mine" | "unassigned" | "resolved";
 
@@ -115,8 +140,25 @@ function dayLabel(iso: string): string {
   return d.toLocaleDateString("en-CA", { month: "long", day: "numeric", year: "numeric" });
 }
 
+/** "Last seen 5 min ago" for the client's presence. */
+function lastSeen(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return null;
+  const m = Math.max(1, Math.round((Date.now() - t) / 60000));
+  if (m < 60) return `Last seen ${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `Last seen ${h} h ago`;
+  return `Last seen ${new Date(iso).toLocaleDateString("en-CA", { month: "short", day: "numeric" })}`;
+}
+
 const LIST_POLL = 10_000;
 const THREAD_POLL = 6_000;
+/** While realtime pings flow, polling is only a safety net. */
+const LIVE_POLL = 60_000;
+/** A typing indicator clears this long after the last ping (pings come every ~3 s). */
+const TYPING_TTL = 6_000;
+const TYPING_SEND_EVERY = 3_000;
 
 const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = null }) => {
   const { user } = useAuth();
@@ -133,9 +175,38 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
+  const assignRef = useRef<HTMLDivElement>(null);
+
+  // Close the Assign menu on a click outside it, or on Escape.
+  useEffect(() => {
+    if (!assignOpen) return;
+    const onDown = (e: MouseEvent | TouchEvent) => {
+      if (!assignRef.current?.contains(e.target as Node)) setAssignOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setAssignOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("touchstart", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("touchstart", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [assignOpen]);
   const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const seenCount = useRef(0);
+  const [inboxChannel, setInboxChannel] = useState<string | null>(null);
+  // root -> { name, until }: the client on that file is typing.
+  const [typing, setTyping] = useState<Record<string, { name: string; until: number }>>({});
+  const [teamStatus, setTeamStatus] = useState<Record<string, "online" | "away" | "offline">>({});
+  const lastTypingSent = useRef(0);
+  const activeRef = useRef<string | null>(initialId);
+  useEffect(() => {
+    activeRef.current = activeId;
+  }, [activeId]);
 
   const flash = (text: string, error = false) => {
     setToast({ text, error });
@@ -146,7 +217,10 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
     try {
       const res = await fetch("/api/admin/messages", { cache: "no-store" });
       const json = await res.json();
-      if (json.success) setRows(json.data as Row[]);
+      if (json.success) {
+        setRows(json.data as Row[]);
+        setInboxChannel(json.realtime?.inbox ?? null);
+      }
     } catch {
       /* keep what we have */
     } finally {
@@ -167,11 +241,96 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
     }
   }, []);
 
+  // Teammates' Online / Away, for the assign menu. Silent when presence is off
+  // (and stops asking once the server says the migration hasn't run).
+  const teamUnavailable = useRef(false);
+  const loadTeam = useCallback(async () => {
+    if (teamUnavailable.current) return;
+    try {
+      const res = await fetch("/api/admin/messages/presence", { cache: "no-store" });
+      const json = await res.json();
+      if (json.success && json.available === false) teamUnavailable.current = true;
+      if (json.success && json.available) {
+        const map: Record<string, "online" | "away" | "offline"> = {};
+        for (const s of json.staff as { email: string; status: "online" | "away" | "offline" }[]) map[s.email.toLowerCase()] = s.status;
+        setTeamStatus(map);
+      }
+    } catch {
+      /* keep what we have */
+    }
+  }, []);
+
+  // Realtime: a ping means "refetch". Bursts (message + read + assign) are
+  // coalesced, and nothing is fetched for a hidden tab — opening the thread
+  // marks the client's messages Seen, which must only happen when someone looks.
+  const pending = useRef<{ list: boolean; detail: boolean; t: ReturnType<typeof setTimeout> | null }>({ list: false, detail: false, t: null });
+  const refetchSoon = useCallback(
+    (detailToo: boolean) => {
+      const p = pending.current;
+      p.list = true;
+      p.detail = p.detail || detailToo;
+      if (p.t) return;
+      p.t = setTimeout(() => {
+        const { list, detail: d } = p;
+        p.list = p.detail = false;
+        p.t = null;
+        if (document.visibilityState !== "visible") return;
+        if (list) void loadList();
+        if (d && activeRef.current) void loadDetail(activeRef.current, true);
+      }, 250);
+    },
+    [loadList, loadDetail],
+  );
+  const resync = useCallback(() => {
+    void loadList();
+    void loadTeam();
+    if (activeRef.current) void loadDetail(activeRef.current, true);
+  }, [loadList, loadDetail, loadTeam]);
+
+  const { connected: live } = useChatChannel(
+    inboxChannel,
+    (event, payload) => {
+      const root = typeof payload.root === "string" ? payload.root : "";
+      if (event === "changed") {
+        if (root) setTyping((t) => (t[root] ? Object.fromEntries(Object.entries(t).filter(([k]) => k !== root)) : t));
+        refetchSoon(!!root && root === activeRef.current);
+      } else if (event === "presence") {
+        refetchSoon(false);
+      } else if (event === "typing" && root) {
+        const name = typeof payload.name === "string" ? payload.name : "";
+        setTyping((t) => ({ ...t, [root]: { name, until: Date.now() + TYPING_TTL } }));
+      } else if (event === "staff") {
+        void loadTeam();
+      }
+    },
+    resync,
+  );
+
+  // Expire typing indicators.
+  const typingCount = Object.keys(typing).length;
+  useEffect(() => {
+    if (typingCount === 0) return;
+    const t = setInterval(() => {
+      const now = Date.now();
+      setTyping((cur) => {
+        const kept = Object.entries(cur).filter(([, v]) => v.until > now);
+        return kept.length === Object.keys(cur).length ? cur : Object.fromEntries(kept);
+      });
+    }, 1000);
+    return () => clearInterval(t);
+  }, [typingCount]);
+
   useEffect(() => {
     void loadList();
-    const t = setInterval(() => document.visibilityState === "visible" && void loadList(), LIST_POLL);
+    const t = setInterval(() => document.visibilityState === "visible" && void loadList(), live ? LIVE_POLL : LIST_POLL);
     return () => clearInterval(t);
-  }, [loadList]);
+  }, [loadList, live]);
+
+  useEffect(() => {
+    void loadTeam();
+    const t = setInterval(() => document.visibilityState === "visible" && void loadTeam(), LIVE_POLL);
+    return () => clearInterval(t);
+  }, [loadTeam]);
 
   useEffect(() => {
     if (!activeId) {
@@ -181,9 +340,22 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
     seenCount.current = 0;
     setDetail(null);
     void loadDetail(activeId);
-    const t = setInterval(() => document.visibilityState === "visible" && void loadDetail(activeId, true), THREAD_POLL);
-    return () => clearInterval(t);
   }, [activeId, loadDetail]);
+
+  useEffect(() => {
+    if (!activeId) return;
+    const t = setInterval(() => document.visibilityState === "visible" && void loadDetail(activeId, true), live ? LIVE_POLL : THREAD_POLL);
+    return () => clearInterval(t);
+  }, [activeId, loadDetail, live]);
+
+  // Staff typing a REPLY (never a private note) -> dots in the client's widget.
+  const sendTyping = () => {
+    if (!live || mode !== "reply" || !activeId) return;
+    const now = Date.now();
+    if (now - lastTypingSent.current < TYPING_SEND_EVERY) return;
+    lastTypingSent.current = now;
+    void fetch(`/api/admin/messages/${activeId}/typing`, { method: "POST" }).catch(() => {});
+  };
 
   useEffect(() => {
     const n = detail?.messages.length ?? 0;
@@ -212,16 +384,27 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
       if (filter === "mine" && !mine(r)) return false;
       if (filter === "unassigned" && r.assignee_email) return false;
       if (!q) return true;
-      return r.name.toLowerCase().includes(q) || r.preview.toLowerCase().includes(q) || (r.file_number ?? "").toLowerCase().includes(q);
+      return (
+        r.name.toLowerCase().includes(q) ||
+        r.preview.toLowerCase().includes(q) ||
+        (r.file_number ?? "").toLowerCase().includes(q) ||
+        (r.property_address ?? "").toLowerCase().includes(q)
+      );
     });
   }, [rows, filter, search, mine]);
 
   const activeRow = rows.find((r) => r.id === activeId) ?? null;
   const people = detail?.people ?? [];
-  const title = activeRow?.name ?? people[0]?.name ?? "Conversation";
+  // The CLIENTS on the file (avatars, saved-reply {name}); the FILE is the title.
+  const title = activeRow?.name ?? people[0]?.name ?? "Client";
+  const fileName = fileTitle(detail?.file?.file_number ?? activeRow?.file_number);
+  const address = detail?.file?.property_address ?? activeRow?.property_address ?? null;
+  const clientNames = people.length > 0 ? people.map((p) => p.name).join(", ") : title + (activeRow?.co_count ? ` +${activeRow.co_count}` : "");
   const status = detail?.conversation?.status ?? activeRow?.status ?? "open";
   const assigneeName = detail?.conversation?.assignee_name ?? activeRow?.assignee_name ?? null;
   const assigneeEmail = detail?.conversation?.assignee_email ?? activeRow?.assignee_email ?? null;
+  const clientPresence = activeRow?.client_online ? "Online" : lastSeen(activeRow?.client_last_seen_at);
+  const activeTyping = activeId ? typing[activeId] : undefined;
 
   const pick = (id: string) => {
     setActiveId(id);
@@ -280,10 +463,48 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
     }
   };
 
+  // "Hand over files": move every file chat one person handles to another.
+  const [handover, setHandover] = useState<null | {
+    staff: { name: string; email: string }[];
+    handlers: { email: string; name: string; files: number }[];
+    from: string;
+    to: string;
+    busy: boolean;
+  }>(null);
+  const openHandover = async () => {
+    try {
+      const res = await fetch("/api/admin/messages/handover", { cache: "no-store" });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error || "Could not load staff");
+      setHandover({ staff: json.staff, handlers: json.handlers, from: json.handlers[0]?.email ?? "", to: "", busy: false });
+    } catch (err) {
+      flash(err instanceof Error ? err.message : "Could not load staff", true);
+    }
+  };
+  const runHandover = async () => {
+    if (!handover?.from || !handover.to) return;
+    setHandover({ ...handover, busy: true });
+    try {
+      const res = await fetch("/api/admin/messages/handover", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from: handover.from, to: handover.to }),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error || "Could not move the files");
+      setHandover(null);
+      flash(`${json.moved} file chat${json.moved === 1 ? "" : "s"} handed over`);
+      await Promise.all([loadList(), activeId ? loadDetail(activeId, true) : Promise.resolve()]);
+    } catch (err) {
+      setHandover((h) => (h ? { ...h, busy: false } : h));
+      flash(err instanceof Error ? err.message : "Could not move the files", true);
+    }
+  };
+
   const filters: { id: Filter; label: string }[] = [
     { id: "open", label: "Open" },
     { id: "mine", label: "Mine" },
-    { id: "unassigned", label: "Unassigned" },
+    { id: "unassigned", label: "Unhandled" },
     { id: "resolved", label: "Resolved" },
   ];
 
@@ -298,9 +519,18 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
         className={`${activeId ? "hidden lg:flex" : "flex"} w-full lg:w-80 xl:w-[340px] flex-none flex-col border-r border-slate-200`}
       >
         <div className="space-y-3 border-b border-slate-100 p-4">
-          <div className="flex items-baseline justify-between gap-2">
-            <h1 className="text-lg font-bold text-slate-900">Inbox</h1>
-            <span className="text-xs text-slate-500">{counts.open} open</span>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-baseline gap-2">
+              <h1 className="text-lg font-bold text-slate-900">File chats</h1>
+              <span className="text-xs text-slate-500">{counts.open} open</span>
+            </div>
+            <button
+              onClick={() => void openHandover()}
+              title="Move all of one person's file chats to someone else"
+              className="flex h-8 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 text-[12.5px] font-medium text-slate-700 hover:bg-slate-50"
+            >
+              <Users size={14} /> Hand over files
+            </button>
           </div>
           <div className="relative">
             <label htmlFor="conv-search" className="sr-only">Search conversations</label>
@@ -310,17 +540,18 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
               type="search"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search names, files or messages"
+              placeholder="Search file no., address, client or message"
               className="h-9 w-full rounded-lg border border-slate-300 bg-slate-50 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary/30"
             />
           </div>
-          <div className="grid grid-cols-4 gap-1 rounded-lg bg-slate-100 p-1">
+          {/* Tabs size to their label + count (no wrapping), sharing the row. */}
+          <div className="flex gap-0.5 rounded-lg bg-slate-100 p-1">
             {filters.map((f) => (
               <button
                 key={f.id}
                 onClick={() => setFilter(f.id)}
                 aria-pressed={filter === f.id}
-                className={`flex h-8 items-center justify-center gap-1 rounded-md px-1 text-[12.5px] font-medium transition-all ${
+                className={`flex h-8 flex-auto items-center justify-center gap-1 whitespace-nowrap rounded-md px-1.5 text-[12px] font-medium transition-all ${
                   filter === f.id ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
                 }`}
               >
@@ -357,19 +588,27 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
                       }`}
                     >
                       {current && <span aria-hidden className="absolute inset-y-2 left-0 w-1 rounded-full bg-brand-primary" />}
-                      <span className={`flex h-10 w-10 flex-none items-center justify-center rounded-full text-[13px] font-semibold ${tint(r.name)}`}>
-                        {initials(r.name)}
+                      <span className="relative flex h-10 w-10 flex-none items-center justify-center rounded-lg bg-slate-100 text-slate-600">
+                        <FolderOpen size={18} />
+                        {r.client_online && (
+                          <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-white bg-emerald-500">
+                            <span className="sr-only">Client online</span>
+                          </span>
+                        )}
                       </span>
                       <span className="flex min-w-0 flex-1 flex-col gap-1">
                         <span className="flex items-center gap-2">
                           <span className={`min-w-0 flex-1 truncate text-sm ${r.unread ? "font-bold" : "font-semibold"} text-slate-900`}>
-                            {r.name}
-                            {r.co_count > 0 && <span className="font-normal text-slate-400"> +{r.co_count}</span>}
+                            {fileTitle(r.file_number)}
                           </span>
                           <span className={`flex-none text-[11.5px] ${r.unread ? "font-semibold text-brand-primary" : "text-slate-400"}`}>{relTime(r.last_at)}</span>
                         </span>
                         <span className="flex items-center gap-2">
-                          <span className={`min-w-0 flex-1 truncate text-[13px] ${r.unread ? "font-medium text-slate-900" : "text-slate-500"}`}>{r.preview}</span>
+                          {typing[r.id] ? (
+                            <span className="min-w-0 flex-1 truncate text-[13px] italic text-emerald-700">typing…</span>
+                          ) : (
+                            <span className={`min-w-0 flex-1 truncate text-[13px] ${r.unread ? "font-medium text-slate-900" : "text-slate-500"}`}>{r.preview}</span>
+                          )}
                           {r.unread > 0 && (
                             <span className="flex h-5 min-w-5 flex-none items-center justify-center rounded-full bg-brand-primary px-1.5 text-[11px] font-semibold text-white">
                               {r.unread}
@@ -381,10 +620,13 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
                             {r.channel === "email" ? <Mail size={11} /> : <MessageSquare size={11} />}
                             {r.channel === "email" ? "Email" : "Chat"}
                           </span>
-                          {r.file_number && <span className="flex-none whitespace-nowrap">{r.file_number}</span>}
+                          <span className="min-w-0 truncate">
+                            {r.name}
+                            {r.co_count > 0 && ` +${r.co_count}`}
+                          </span>
                           <span aria-hidden className="flex-none">·</span>
-                          <span className={`truncate ${r.assignee_name ? "" : "italic text-slate-400"}`}>
-                            {r.assignee_name ? (mine(r) ? "You" : r.assignee_name) : "Unassigned"}
+                          <span className={`flex-none whitespace-nowrap ${r.assignee_name ? "" : "italic text-slate-400"}`}>
+                            {r.assignee_name ? (mine(r) ? "You" : r.assignee_name.split(" ")[0]) : "Unhandled"}
                           </span>
                         </span>
                       </span>
@@ -402,8 +644,8 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
         {!activeId ? (
           <div className="m-auto flex flex-col items-center gap-2 px-6 text-center text-slate-500">
             <MessageSquare size={32} className="text-slate-300" />
-            <p className="font-semibold text-slate-800">Select a conversation</p>
-            <p className="max-w-xs text-sm">Replies you send are emailed to the client, who can answer by email or in their portal chat.</p>
+            <p className="font-semibold text-slate-800">Select a file chat</p>
+            <p className="max-w-xs text-sm">Each file has one chat that stays with the file. Replies are emailed to the clients, who can answer by email or in their portal.</p>
           </div>
         ) : (
           <>
@@ -411,17 +653,34 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
               <button onClick={() => setActiveId(null)} aria-label="Back to conversations" className="rounded-lg p-1.5 text-slate-600 hover:bg-slate-100 lg:hidden">
                 <ArrowLeft size={18} />
               </button>
-              <span className={`flex h-9 w-9 flex-none items-center justify-center rounded-full text-[13px] font-semibold ${tint(title)}`}>{initials(title)}</span>
+              <span className="relative flex h-9 w-9 flex-none items-center justify-center rounded-lg bg-slate-100 text-slate-600">
+                <FolderOpen size={17} />
+                {activeRow?.client_online && <span aria-hidden className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-white bg-emerald-500" />}
+              </span>
               <div className="min-w-[140px] flex-1">
-                <h2 className="truncate text-[15px] font-semibold text-slate-900">{title}</h2>
-                <p className="flex items-center gap-1.5 text-xs text-slate-500">
-                  <span className={`h-2 w-2 rounded-full ${status === "open" ? "bg-emerald-500" : "bg-slate-300"}`} />
-                  {status === "open" ? "Open" : "Resolved"}
-                  {detail?.file?.file_number && (<><span aria-hidden>·</span>File {detail.file.file_number}</>)}
+                {/* The FILE is the title; the clients and their presence (one
+                    dot on the icon, one word here) go underneath. Open needs no
+                    marker (the Resolve button says it); Resolved gets a chip. */}
+                <div className="flex min-w-0 items-center gap-2">
+                  <h2 className="min-w-0 truncate text-[15px] font-semibold text-slate-900" title={address ?? undefined}>
+                    {fileName}
+                  </h2>
+                  {status === "resolved" && (
+                    <span className="flex-none rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">Resolved</span>
+                  )}
+                </div>
+                <p className="flex min-w-0 items-center gap-1.5 whitespace-nowrap text-xs text-slate-500">
+                  <span className="truncate">{clientNames}</span>
+                  {clientPresence && (
+                    <>
+                      <span aria-hidden>·</span>
+                      <span className={`flex-none ${activeRow?.client_online ? "font-medium text-emerald-700" : ""}`}>{clientPresence}</span>
+                    </>
+                  )}
                 </p>
               </div>
 
-              <div className="relative">
+              <div ref={assignRef} className="relative">
                 <button
                   onClick={() => setAssignOpen((v) => !v)}
                   aria-haspopup="menu"
@@ -429,19 +688,21 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
                   className="flex h-9 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 text-[13px] font-medium text-slate-700 hover:bg-slate-50"
                 >
                   <UserPlus size={16} />
-                  <span>{assigneeEmail ? (assigneeEmail.toLowerCase() === myEmail ? "You" : assigneeName) : "Assign"}</span>
+                  <span className="text-slate-500">Handled by</span>
+                  <span>{assigneeEmail ? (assigneeEmail.toLowerCase() === myEmail ? "You" : (assigneeName ?? "").split(" ")[0] || assigneeEmail) : "nobody"}</span>
                   <ChevronDown size={14} />
                 </button>
                 {assignOpen && (
-                  <div role="menu" className="absolute right-0 top-11 z-20 w-60 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl">
-                    <p className="px-2.5 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Assign to</p>
+                  <div role="menu" className="absolute right-0 top-11 z-20 w-64 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl">
+                    <p className="px-2.5 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Who handles this file</p>
+                    <p className="px-2.5 pb-1.5 text-[11.5px] leading-snug text-slate-500">The chat stays with the file, so whoever takes over sees all of it.</p>
                     <button
                       role="menuitemradio"
                       aria-checked={!assigneeEmail}
                       onClick={() => { setAssignOpen(false); void patch({ action: "assign", email: null }); }}
                       className="flex h-10 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm hover:bg-slate-50"
                     >
-                      <span className="flex-1 text-slate-600">Unassigned</span>
+                      <span className="flex-1 text-slate-600">Nobody yet</span>
                       {!assigneeEmail && <Check size={16} />}
                     </button>
                     {(detail?.staff ?? []).map((s) => {
@@ -456,6 +717,12 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
                         >
                           <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-semibold ${tint(s.name || s.email)}`}>{initials(s.name || s.email)}</span>
                           <span className="flex-1 truncate">{s.email.toLowerCase() === myEmail ? "You" : s.name || s.email}</span>
+                          {teamStatus[s.email.toLowerCase()] && teamStatus[s.email.toLowerCase()] !== "offline" && (
+                            <span className="flex items-center gap-1 text-[11px] text-slate-500">
+                              <span aria-hidden className={`h-2 w-2 rounded-full ${teamStatus[s.email.toLowerCase()] === "online" ? "bg-emerald-500" : "bg-amber-500"}`} />
+                              {teamStatus[s.email.toLowerCase()] === "online" ? "Online" : "Away"}
+                            </span>
+                          )}
                           {checked && <Check size={16} />}
                         </button>
                       );
@@ -535,6 +802,16 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
                       {detail.conversation.rating_comment && <p className="mt-1 text-slate-600">“{detail.conversation.rating_comment}”</p>}
                     </div>
                   )}
+                  {activeTyping && (
+                    <div className="flex items-center gap-2.5">
+                      <span className="flex h-9 items-center gap-1 rounded-2xl rounded-bl-sm border border-slate-200 bg-white px-3.5 shadow-sm" aria-hidden>
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400" style={{ animationDelay: "-0.3s" }} />
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400" style={{ animationDelay: "-0.15s" }} />
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400" />
+                      </span>
+                      <span className="text-[11.5px] text-slate-500">{(activeTyping.name || firstName).split(" ")[0]} is typing…</span>
+                    </div>
+                  )}
                   <div ref={endRef} />
                 </div>
               )}
@@ -565,7 +842,10 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
                   id="composer"
                   rows={3}
                   value={draft}
-                  onChange={(e) => setDraft(e.target.value.slice(0, 5000))}
+                  onChange={(e) => {
+                    setDraft(e.target.value.slice(0, 5000));
+                    if (e.target.value.trim() && !e.target.value.startsWith("/")) sendTyping();
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
@@ -597,22 +877,65 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
         )}
       </main>
 
-      {/* ── Client details ── */}
+      {/* ── File details ── */}
       {activeId && (
-        <aside aria-label="Client details" className="hidden w-80 flex-none flex-col overflow-y-auto border-l border-slate-200 bg-slate-50/50 xl:flex">
+        <aside aria-label="File details" className="hidden w-80 flex-none flex-col overflow-y-auto border-l border-slate-200 bg-slate-50/50 xl:flex">
           <div className="flex flex-col items-center gap-2.5 border-b border-slate-200 bg-white px-5 pb-5 pt-7 text-center">
-            <span className={`flex h-16 w-16 items-center justify-center rounded-full text-xl font-semibold ${tint(title)}`}>{initials(title)}</span>
+            <span className="flex h-14 w-14 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
+              <FolderOpen size={26} />
+            </span>
             <div>
-              <h2 className="text-base font-semibold text-slate-900">{title}</h2>
-              {people[0]?.email && <p className="break-all text-[13px] text-slate-500">{people[0].email}</p>}
+              <h2 className="text-base font-semibold text-slate-900">{fileName}</h2>
+              {address && <p className="text-[13px] text-slate-500">{address}</p>}
             </div>
-            <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${status === "open" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
-              {status === "open" ? "Open conversation" : "Resolved"}
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
+              {status === "open" ? "Open chat" : "Resolved"}
             </span>
           </div>
 
+          <section className="m-3 mb-0 rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
+            <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Clients on this file</h3>
+            <ul className="space-y-2.5">
+              {(people.length > 0 ? people : [{ name: title, email: null, phone: null, primary: true }]).map((p) => (
+                <li key={p.name + (p.email ?? "")} className="flex items-center gap-2.5 text-[13px]">
+                  <span className={`flex h-7 w-7 flex-none items-center justify-center rounded-full text-[11px] font-semibold ${tint(p.name)}`}>{initials(p.name)}</span>
+                  <span className="min-w-0">
+                    <span className="block truncate text-slate-900">{p.name}</span>
+                    {p.email && <span className="block truncate text-xs text-slate-500">{p.email}</span>}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            {clientPresence && (
+              <p className={`mt-3 text-xs ${activeRow?.client_online ? "font-medium text-emerald-700" : "text-slate-500"}`}>
+                {activeRow?.client_online ? "Online in the portal now" : clientPresence}
+              </p>
+            )}
+          </section>
+
+          <section className="m-3 mb-0 rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
+            <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Handled by</h3>
+            {(detail?.handlers?.length ?? 0) === 0 ? (
+              <p className="text-[13px] text-slate-500">
+                {assigneeEmail ? `${assigneeName || assigneeEmail} (now)` : "Nobody has taken this file’s chat yet."}
+              </p>
+            ) : (
+              <ol className="space-y-2">
+                {detail!.handlers!.map((h, i) => (
+                  <li key={h.email + h.started_at + i} className="flex items-baseline gap-2.5 text-[13px]">
+                    <span aria-hidden className={`mt-1 h-2 w-2 flex-none rounded-full ${h.ended_at ? "bg-slate-300" : "bg-brand-primary"}`} />
+                    <span className="min-w-0 flex-1 truncate text-slate-900">{h.email.toLowerCase() === myEmail ? "You" : h.name}</span>
+                    <span className="flex-none text-xs text-slate-500">
+                      {shortDate(h.started_at)} – {h.ended_at ? shortDate(h.ended_at) : "now"}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </section>
+
           <section className="m-3 rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
-            <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">File</h3>
+            <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">File details</h3>
             <dl className="grid grid-cols-[88px_minmax(0,1fr)] gap-x-3 gap-y-2.5 text-[13px]">
               {([
                 ["File no.", detail?.file?.file_number],
@@ -635,22 +958,8 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
             )}
           </section>
 
-          {people.length > 1 && (
-            <section className="mx-3 mb-3 rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
-              <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">On this file</h3>
-              <ul className="space-y-2">
-                {people.map((p) => (
-                  <li key={p.name + (p.email ?? "")} className="flex items-center gap-2.5 text-[13px]">
-                    <span className={`flex h-7 w-7 flex-none items-center justify-center rounded-full text-[11px] font-semibold ${tint(p.name)}`}>{initials(p.name)}</span>
-                    <span className="min-w-0"><span className="block truncate text-slate-900">{p.name}</span><span className="block truncate text-xs text-slate-500">{p.email}</span></span>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-
           <section className="mx-3 mb-3 rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
-            <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Other files</h3>
+            <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">The clients’ other files</h3>
             {(detail?.other_files.length ?? 0) === 0 ? (
               <p className="text-[13px] text-slate-500">This is their only file.</p>
             ) : (
@@ -665,6 +974,79 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
             )}
           </section>
         </aside>
+      )}
+
+      {handover && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-slate-900/30 p-4" onMouseDown={(e) => e.target === e.currentTarget && !handover.busy && setHandover(null)}>
+          <div role="dialog" aria-modal="true" aria-labelledby="handover-title" className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+            <div className="mb-1 flex items-center justify-between">
+              <h2 id="handover-title" className="text-base font-bold text-slate-900">Hand over files</h2>
+              <button onClick={() => !handover.busy && setHandover(null)} aria-label="Close" className="rounded-lg p-1 text-slate-500 hover:bg-slate-100">
+                <X size={18} />
+              </button>
+            </div>
+            <p className="mb-4 text-[13px] leading-relaxed text-slate-600">
+              Every file chat handled by one person moves to another — for someone leaving or going on leave. The chats stay
+              with their files, so the new person sees each one’s full history.
+            </p>
+            {handover.handlers.length === 0 ? (
+              <p className="rounded-lg bg-slate-50 px-3 py-3 text-[13px] text-slate-600">Nobody is handling any file chats right now.</p>
+            ) : (
+              <div className="space-y-3">
+                <label className="block text-[13px] font-medium text-slate-700">
+                  From
+                  <select
+                    value={handover.from}
+                    onChange={(e) => setHandover({ ...handover, from: e.target.value })}
+                    className="mt-1 block h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm"
+                  >
+                    {handover.handlers.map((h) => {
+                      const active = handover.staff.some((s) => s.email.toLowerCase() === h.email.toLowerCase());
+                      return (
+                        <option key={h.email} value={h.email}>
+                          {h.name} — {h.files} file{h.files === 1 ? "" : "s"}
+                          {active ? "" : " (no longer active)"}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </label>
+                <label className="block text-[13px] font-medium text-slate-700">
+                  To
+                  <select
+                    value={handover.to}
+                    onChange={(e) => setHandover({ ...handover, to: e.target.value })}
+                    className="mt-1 block h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm"
+                  >
+                    <option value="">Choose who takes over…</option>
+                    {handover.staff
+                      .filter((s) => s.email.toLowerCase() !== handover.from.toLowerCase())
+                      .map((s) => (
+                        <option key={s.email} value={s.email}>
+                          {s.email.toLowerCase() === myEmail ? `You (${s.name || s.email})` : s.name || s.email}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              </div>
+            )}
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={() => setHandover(null)} disabled={handover.busy} className="h-9 rounded-lg border border-slate-300 bg-white px-3.5 text-[13px] font-medium text-slate-700 hover:bg-slate-50">
+                Cancel
+              </button>
+              <button
+                onClick={() => void runHandover()}
+                disabled={handover.busy || !handover.from || !handover.to}
+                className="flex h-9 items-center gap-2 rounded-lg bg-brand-primary px-3.5 text-[13px] font-semibold text-white hover:bg-brand-primaryHover disabled:opacity-50"
+              >
+                {handover.busy && <Loader2 size={14} className="animate-spin" />}
+                Move{" "}
+                {handover.handlers.find((h) => h.email === handover.from)?.files ?? 0} file chat
+                {(handover.handlers.find((h) => h.email === handover.from)?.files ?? 0) === 1 ? "" : "s"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {toast && (

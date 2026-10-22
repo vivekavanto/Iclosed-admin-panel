@@ -2,9 +2,7 @@
 
 import React, { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { notFound } from "next/navigation";
 import MessagesInbox from "@/components/MessagesInbox";
-import { CHAT_ENABLED } from "@/lib/chatFlag";
 
 // /admin/messages            — the inbox
 // /admin/messages?c=<lead>   — open a conversation (notification links)
@@ -31,7 +29,6 @@ function Inner() {
 }
 
 export default function Page() {
-  if (!CHAT_ENABLED) notFound();
   return (
     <Suspense fallback={null}>
       <Inner />

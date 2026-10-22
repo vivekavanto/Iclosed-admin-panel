@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
@@ -21,6 +21,7 @@ import {
   ClipboardCheck,
   Calculator,
   ListTodo,
+  Check,
   KeyRound,
   UserCog,
   Handshake,
@@ -31,9 +32,93 @@ import {
 } from "lucide-react";
 import { hasModule, isOwner } from "@/lib/staffAccess";
 import { NAV_ITEMS } from "../constants";
-import { CHAT_ENABLED } from "@/lib/chatFlag";
 import { useAuth } from "@/lib/AuthProvider";
 import { NEW_LEADS_SEEN_EVENT } from "@/lib/newLeadBadge";
+import { useChatChannel } from "@/hooks/useChatChannel";
+import { useStaffPresence, type Availability } from "@/hooks/useStaffPresence";
+
+// Online / Away menu on the user avatar (design: "Agent inbox" rail avatar).
+// Only for staff with the Messages module, and only once the presence
+// migration has run (`me` stays null until the server confirms the table).
+function AvailabilityMenu({
+  me,
+  onPick,
+  label,
+  children,
+}: {
+  me: Availability | null;
+  onPick: (m: "online" | "away") => void;
+  label: string;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  if (!me) return <>{children}</>;
+  const state = me.status === "online" ? "Online" : "Away";
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`${label}. Your availability: ${state}`}
+        title={`Availability: ${state}`}
+        className="relative block rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/60"
+      >
+        {children}
+        <span
+          aria-hidden="true"
+          className={`absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full ring-2 ring-slate-900 ${
+            me.status === "online" ? "bg-emerald-500" : "bg-amber-500"
+          }`}
+        />
+      </button>
+      {open && (
+        <div role="menu" className="absolute bottom-full left-0 z-50 mb-2 w-64 rounded-xl border border-slate-200 bg-white p-1.5 text-slate-900 shadow-xl">
+          <p className="px-2.5 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Your availability</p>
+          {(["online", "away"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              role="menuitemradio"
+              aria-checked={me.manual === m}
+              onClick={() => {
+                setOpen(false);
+                onPick(m);
+              }}
+              className="flex h-10 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm hover:bg-slate-50"
+            >
+              <span aria-hidden="true" className={`h-2.5 w-2.5 rounded-full ${m === "online" ? "bg-emerald-500" : "bg-amber-500"}`} />
+              <span className="flex-1">{m === "online" ? "Online" : "Away"}</span>
+              {me.manual === m && <Check size={16} />}
+            </button>
+          ))}
+          <p className="mx-2.5 mb-2 mt-1 text-xs leading-snug text-slate-600">
+            When nobody is online, clients see that the team is away and that we&apos;ll reply by email.
+          </p>
+          {me.manual === "online" && me.status === "away" && (
+            <p className="mx-2.5 mb-2 text-xs leading-snug text-amber-700">Set to Away automatically after 15 minutes without activity.</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // How often the sidebar asks whether a new lead is waiting. Intake is a
 // human-paced event and the endpoint reads ids only, so a minute is plenty —
@@ -121,29 +206,46 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed =
     }
   }, [user]);
 
-  // Unread client chat messages -> count badge on the Messages button.
+  // Unread client chat messages -> count badge on the Messages button. Polled,
+  // and refreshed the moment the inbox channel pings when realtime is on.
+  const chatOn = hasModule(user, "messages");
   const [unreadMessages, setUnreadMessages] = useState(0);
-  useEffect(() => {
-    if (!CHAT_ENABLED || !hasModule(user, "messages")) return;
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const res = await fetch("/api/admin/messages?summary=1");
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!cancelled && data?.success) setUnreadMessages(Number(data.unread) || 0);
-      } catch {
-        // Keep the last known count.
+  const [inboxChannel, setInboxChannel] = useState<string | null>(null);
+  const loadUnread = useCallback(async () => {
+    try {
+      const res = await fetch("/api/admin/messages?summary=1");
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data?.success) {
+        setUnreadMessages(Number(data.unread) || 0);
+        setInboxChannel(data.realtime?.inbox ?? null);
       }
-    };
-    const initial = setTimeout(load, 0);
-    const timer = setInterval(load, 20_000);
+    } catch {
+      // Keep the last known count.
+    }
+  }, []);
+  const unreadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { connected: inboxLive } = useChatChannel(
+    chatOn ? inboxChannel : null,
+    (event) => {
+      if (event !== "changed") return;
+      // Coalesce a burst of pings (message + read + assign) into one fetch.
+      if (unreadTimer.current) clearTimeout(unreadTimer.current);
+      unreadTimer.current = setTimeout(() => void loadUnread(), 300);
+    },
+    () => void loadUnread(),
+  );
+  useEffect(() => {
+    if (!chatOn) return;
+    const initial = setTimeout(loadUnread, 0);
+    const timer = setInterval(loadUnread, inboxLive ? 60_000 : 20_000);
     return () => {
-      cancelled = true;
       clearTimeout(initial);
       clearInterval(timer);
     };
-  }, [pathname, user]);
+  }, [pathname, chatOn, inboxLive, loadUnread]);
+
+  const { me: availability, setManual: setAvailability } = useStaffPresence(chatOn);
 
   useEffect(() => {
     let cancelled = false;
@@ -227,7 +329,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed =
 
         {/* Navigation */}
         <nav className="flex-1 min-h-0 px-2 py-4 space-y-1 overflow-y-auto">
-          {NAV_ITEMS.filter((item) => (CHAT_ENABLED || item.id !== "messages") && hasModule(user, item.id)).map((item) => {
+          {NAV_ITEMS.filter((item) => hasModule(user, item.id)).map((item) => {
             const active =
               isActive(item.id) ||
               (item.id === "templates" && isTemplateActive);
@@ -328,9 +430,13 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed =
                   {showLabels && <span className="font-medium text-sm">{item.label}</span>}
                   {item.id === "messages" && unreadMessages > 0 && (
                     <span
-                      className={`flex h-5 min-w-5 items-center justify-center rounded-full bg-brand-primary px-1.5 text-[11px] font-semibold text-white ring-2 ring-slate-900 ${
-                        showLabels ? "ml-auto" : "absolute -top-1 -right-1"
-                      }`}
+                      className={`flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] font-bold leading-none tabular-nums ${
+                        // On the red active pill a red badge disappears and its dark
+                        // ring reads as a black circle, so invert it there.
+                        active
+                          ? "bg-white text-brand-primary"
+                          : "bg-brand-primary text-white ring-2 ring-slate-900"
+                      } ${showLabels ? "ml-auto" : "absolute -top-1 -right-1"}`}
                     >
                       {unreadMessages}
                     </span>
@@ -361,9 +467,11 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed =
           {!showLabels ? (
             <>
               <div className="flex justify-center">
-                <div className="w-9 h-9 rounded-full border-2 border-slate-600 bg-slate-700 flex items-center justify-center text-white font-semibold text-xs">
-                  {user?.email?.charAt(0).toUpperCase() ?? "A"}
-                </div>
+                <AvailabilityMenu me={chatOn ? availability : null} onPick={(m) => void setAvailability(m)} label={user?.email ?? "Account"}>
+                  <div className="w-9 h-9 rounded-full border-2 border-slate-600 bg-slate-700 flex items-center justify-center text-white font-semibold text-xs">
+                    {user?.email?.charAt(0).toUpperCase() ?? "A"}
+                  </div>
+                </AvailabilityMenu>
               </div>
               <div className="flex flex-col items-center gap-1">
                 <Link
@@ -385,15 +493,20 @@ const Sidebar: React.FC<SidebarProps> = ({ onSearchClick = () => {}, collapsed =
           ) : (
             <>
               <div className="flex items-center space-x-3 px-3 py-2.5 rounded-lg bg-slate-800/50">
-                <div className="w-9 h-9 rounded-full border-2 border-slate-600 bg-slate-700 flex items-center justify-center text-white font-semibold text-sm shrink-0">
-                  {user?.email?.charAt(0).toUpperCase() ?? "A"}
-                </div>
+                <AvailabilityMenu me={chatOn ? availability : null} onPick={(m) => void setAvailability(m)} label={user?.email ?? "Account"}>
+                  <div className="w-9 h-9 rounded-full border-2 border-slate-600 bg-slate-700 flex items-center justify-center text-white font-semibold text-sm shrink-0">
+                    {user?.email?.charAt(0).toUpperCase() ?? "A"}
+                  </div>
+                </AvailabilityMenu>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-white truncate">
                     {user?.email ?? "Admin"}
                   </p>
                   <p className="text-xs text-slate-500 truncate capitalize">
                     {isOwner(user) ? "Owner" : "Staff"}
+                    {chatOn && availability && (
+                      <span className="normal-case"> · {availability.status === "online" ? "Online" : "Away"}</span>
+                    )}
                   </p>
                 </div>
               </div>
