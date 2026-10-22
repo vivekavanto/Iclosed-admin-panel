@@ -14,6 +14,7 @@ export const MODULES = [
   { id: "messages", label: "Messages", path: "/admin/messages" },
   { id: "blogs", label: "Blogs", path: "/admin/blogs" },
   { id: "partners", label: "Partners", path: "/admin/partners" },
+  { id: "agent-portal", label: "Agent Portal", path: "/admin/agent-portal" },
   { id: "signing-appointments", label: "Signing Appointments", path: "/admin/settings/signing/appointments" },
   { id: "settings", label: "Settings", path: "/admin/settings" },
 ] as const;
@@ -59,6 +60,7 @@ export function requiredModules(path: string, method = "GET"): string[] {
   if (within(path, "/api/admin/blog") || within(path, "/admin/blogs")) return ["blogs"];
   if (within(path, "/api/admin/messages") || within(path, "/admin/messages")) return ["messages"];
   if (within(path, "/api/admin/partners") || within(path, "/admin/partners")) return ["partners"];
+  if (within(path, "/api/admin/agent-portal") || within(path, "/admin/agent-portal")) return ["agent-portal", "partners"];
   if (within(path, "/admin/templates")) return ["templates"];
   if (["email-templates", "milestone-templates", "task-templates", "task-form-fields"].some(x => within(path, "/api/admin/" + x))) {
     return ["GET", "HEAD"].includes(method.toUpperCase()) ? ["templates", "settings", "deals", "tasks", "leads"] : ["templates", "settings"];
