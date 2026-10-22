@@ -6,6 +6,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { canSignIn } from "@/lib/staffAccess";
 import { isPublicRoute } from "@/lib/publicRoutes";
 import type { User } from "@supabase/supabase-js";
+import { watchAuthUser } from "@/lib/watchAuthUser";
 
 interface AuthContextType {
   user: User | null;
@@ -34,49 +35,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
   useEffect(() => {
-    let cancelled = false;
-
-    const verifyAndSet = async (sessionUser: User | null) => {
-      if (!sessionUser) {
-        if (!cancelled) setUser(null);
-        return;
-      }
-      if (!isStaff(sessionUser)) {
-        // Reject the admin UI without making another Supabase call inside
-        // onAuthStateChange (which can deadlock the auth client's lock).
-        if (!cancelled) setUser(null);
-        return;
-      }
-      if (!cancelled) setUser(sessionUser);
-    };
-
-    // Initial session
-    supabase.auth.getUser().then(async ({ data: { user } }) => {
-      await verifyAndSet(user ?? null);
-      if (!cancelled) setLoading(false);
+    return watchAuthUser(supabase.auth, verifiedUser => {
+      setUser(isStaff(verifiedUser) ? verifiedUser : null);
+      setLoading(false);
     });
-
-    // Future auth changes (login/logout in another tab, token refresh, etc.)
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      verifyAndSet(session?.user ?? null).then(() => {
-        if (
-          !cancelled &&
-          !session &&
-          !["/admin/login", "/admin/signup", "/admin/auth/confirm"].includes(pathname) &&
-          !isPublicRoute(pathname)
-        ) {
-          router.push("/admin/login");
-        }
-      });
-    });
-
-    return () => {
-      cancelled = true;
-      subscription.unsubscribe();
-    };
-  }, [router, pathname]);
+  }, [pathname]);
 
   // Redirect to login if not authenticated (or not authorized as admin).
   // Public pages (src/lib/publicRoutes.ts) are exempt: a visitor there has no

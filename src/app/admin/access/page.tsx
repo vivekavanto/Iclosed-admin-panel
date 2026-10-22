@@ -21,7 +21,7 @@ export default function AccessPage() {
   }, []);
   async function save(user: Account) {
     setBusy(user.id); setMessage("");
-    try { const res = await fetch("/api/admin/access", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: user.id, modules: user.modules, disabled: user.disabled }) }); const data = await res.json(); setMessage(res.ok ? `Access saved for ${user.email}.` : data.error); }
+    try { const res = await fetch("/api/admin/access", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: user.id, modules: user.modules, disabled: user.disabled }) }); const data = await res.json(); setMessage(res.ok ? `Access saved for ${user.email}. They can refresh their page to update the menu.` : data.error); }
     catch { setMessage("Could not save access. Please try again."); } finally { setBusy(null); }
   }
   function change(id: string, update: Partial<Account>) { setUsers(current => current.map(u => u.id === id ? { ...u, ...update } : u)); }
