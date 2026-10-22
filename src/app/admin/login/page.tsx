@@ -1,18 +1,26 @@
 "use client";
 
-import React, { useState } from "react";
-import { useRouter } from "next/navigation";
+import React, { Suspense, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import Link from "next/link";
 import { canSignIn, homePath } from "@/lib/staffAccess";
 import Image from "next/image";
 import { Eye, EyeOff, Lock, Mail } from "lucide-react";
+import GoogleSignInButton from "@/components/GoogleSignInButton";
 
 export default function LoginPage() {
+  return <Suspense><LoginForm /></Suspense>;
+}
+
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useState(searchParams.get("confirmation") === "failed"
+    ? "Sign-in could not be completed. Use your verified Nava Wilson or iClosed account and try again."
+    : "");
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
@@ -89,6 +97,8 @@ export default function LoginPage() {
             <p className="text-slate-500 text-sm">Sign in to your admin account to continue.</p>
           </div>
 
+          <GoogleSignInButton disabled={loading} onError={setError} />
+          <div className="flex items-center gap-3 my-5 text-xs text-slate-400"><span className="h-px flex-1 bg-slate-200" />or use email and password<span className="h-px flex-1 bg-slate-200" /></div>
           <form onSubmit={handleLogin} className="space-y-5">
             {/* Email */}
             <div>

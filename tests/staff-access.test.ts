@@ -85,3 +85,30 @@ test('file forms can load supporting templates and calendars without permission 
     assert.equal(canVisit(user, path, 'POST'), false, path);
   }
 });
+
+test('Google identities obey the same staff, owner and server-owned grant rules', () => {
+  const google = (email: string, metadata: Record<string, unknown> = {}) => staff(email, {
+    provider: 'google', providers: ['google'], ...metadata,
+  });
+  for (const email of ['clerk@navawilson.law', 'clerk@iclosed.ca']) {
+    const user = google(email);
+    assert.equal(canSignIn(user), true);
+    assert.equal(homePath(user), '/admin/welcome');
+    assert.deepEqual(moduleIds(user), []);
+    assert.equal(canVisit(user, '/api/admin/deals'), false);
+  }
+  const outsider = google('someone@gmail.com');
+  outsider.user_metadata = { email: 'saru@navawilson.law', email_verified: true, hd: 'navawilson.law' };
+  assert.equal(canSignIn(outsider), false);
+  assert.equal(isOwner(outsider), false);
+  assert.equal(canVisit(outsider, '/admin/welcome'), false);
+  assert.equal(isOwner(google('saru@navawilson.law')), true);
+  assert.equal(canSignIn(google('clerk@iclosed.ca', { staff_disabled: true })), false);
+  const unverified = google('saru@navawilson.law');
+  unverified.email_confirmed_at = undefined;
+  assert.equal(canSignIn(unverified), false);
+  // Linking another provider must neither reset nor broaden an existing grant.
+  const linked = google('clerk@iclosed.ca', { providers: ['email', 'google'], staff_modules: ['finance'] });
+  assert.deepEqual(moduleIds(linked), ['finance']);
+  assert.equal(canVisit(linked, '/admin/legal-assistant'), false);
+});

@@ -11,10 +11,12 @@ export async function GET(request: NextRequest) {
     if (!error) {
       const { data: { user } } = await sb.auth.getUser();
       if (canSignIn(user)) { response.headers.set("Location", new URL(homePath(user), url.origin).toString()); response.headers.set("Cache-Control", "private, no-store"); return response; }
-      await sb.auth.signOut();
+      // Denying this Admin sign-in must not revoke other customer-portal sessions.
+      await sb.auth.signOut({ scope: "local" });
     }
   }
   const redirect = NextResponse.redirect(new URL("/admin/login?confirmation=failed", url.origin));
   response.cookies.getAll().forEach(c => redirect.cookies.set(c));
+  redirect.headers.set("Cache-Control", "private, no-store");
   return redirect;
 }
