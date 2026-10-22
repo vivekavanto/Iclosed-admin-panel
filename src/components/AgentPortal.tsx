@@ -397,7 +397,7 @@ function FileCard({
       ? { pill: "bg-slate-100 text-slate-600", label: "Closed" }
       : file.status === "Cancelled"
         ? { pill: "bg-slate-100 text-slate-600", label: "Cancelled" }
-        : { pill: "bg-slate-100 text-slate-600", label: file.status ?? "Active" };
+        : { pill: "bg-emerald-50 text-emerald-700", label: file.status ?? "Active" };
 
   return (
     <div ref={ref} className="scroll-mt-4 rounded-2xl border border-slate-200 bg-white shadow-sm">
