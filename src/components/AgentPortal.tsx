@@ -35,15 +35,15 @@ type Row = { id: string; file: PortalFile; section: PortalSection };
 const STORAGE_KEY = "agentPortal.partnerId";
 
 const TONE: Record<StageStatus, { bar: string; text: string; cell: string; dot: string; pill: string; label: string }> = {
-  complete: { bar: "bg-emerald-500", text: "text-emerald-700", cell: "bg-emerald-50 text-emerald-700", dot: "bg-emerald-500", pill: "bg-emerald-50 text-emerald-700", label: "Complete" },
-  attention: { bar: "bg-red-500", text: "text-red-700", cell: "bg-red-50 text-red-700", dot: "bg-red-500", pill: "bg-red-50 text-red-700", label: "Needs attention" },
-  progress: { bar: "bg-amber-500", text: "text-amber-700", cell: "bg-amber-50 text-amber-700", dot: "bg-amber-500", pill: "bg-amber-50 text-amber-700", label: "In progress" },
-  not_started: { bar: "bg-slate-300", text: "text-slate-500", cell: "bg-slate-50 text-slate-500", dot: "bg-slate-300", pill: "bg-slate-100 text-slate-500", label: "Not started" },
+  complete: { bar: "bg-emerald-500", text: "text-slate-700", cell: "bg-emerald-50 text-emerald-800", dot: "bg-emerald-500", pill: "bg-emerald-50 text-emerald-700", label: "Complete" },
+  attention: { bar: "bg-slate-500", text: "text-slate-700", cell: "bg-slate-100 text-slate-800", dot: "bg-slate-700", pill: "bg-slate-100 text-slate-700", label: "Needs attention" },
+  progress: { bar: "bg-slate-500", text: "text-slate-700", cell: "bg-slate-100 text-slate-700", dot: "bg-slate-400", pill: "bg-slate-100 text-slate-600", label: "In progress" },
+  not_started: { bar: "bg-slate-300", text: "text-slate-400", cell: "bg-slate-50 text-slate-400", dot: "bg-slate-300", pill: "bg-slate-50 text-slate-400", label: "Not started" },
 };
 
 const SIDE_BADGE: Record<PortalSide, string> = {
-  purchase: "bg-sky-50 text-sky-700 border-sky-200",
-  sale: "bg-violet-50 text-violet-700 border-violet-200",
+  purchase: "bg-slate-50 text-slate-600 border-slate-200",
+  sale: "bg-slate-50 text-slate-600 border-slate-200",
   other: "bg-slate-50 text-slate-600 border-slate-200",
 };
 
@@ -93,7 +93,7 @@ const AgentPortal: React.FC = () => {
 
   return (
     <div className="space-y-5 animate-in fade-in duration-300">
-      <div className="flex flex-col gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 md:flex-row md:items-center md:justify-between">
+      <div className="flex flex-col gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 md:flex-row md:items-center md:justify-between">
         <span className="flex items-center gap-2">
           <Eye size={16} className="shrink-0" />
           Staff preview: pick an agent to see their portal.
@@ -101,7 +101,7 @@ const AgentPortal: React.FC = () => {
         <select
           value={partnerId}
           onChange={(e) => pick(e.target.value)}
-          className="w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm text-slate-800 md:w-96"
+          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 md:w-96"
         >
           <option value="">Select an agent…</option>
           {partners.map((p) => (
@@ -193,7 +193,7 @@ function Portal({ partner }: { partner: Partner }) {
         label: "Closing in 30 days",
         value: active.filter((f) => f.closingDate && today && daysBetween(today, f.closingDate) >= 0 && daysBetween(today, f.closingDate) <= 30).length,
       },
-      { label: "Needs attention", value: all.filter((f) => f.sections.some((s) => s.attention)).length, alert: true },
+      { label: "Needs attention", value: all.filter((f) => f.sections.some((s) => s.attention)).length },
       { label: "Pending tasks", value: all.flatMap((f) => f.sections).reduce((n, s) => n + s.pendingTasks, 0) },
     ];
   }, [files, today]);
@@ -234,7 +234,7 @@ function Portal({ partner }: { partner: Partner }) {
             {stats.map((s) => (
               <div key={s.label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{s.label}</p>
-                <p className={`mt-1 text-2xl font-bold ${s.alert && s.value > 0 ? "text-red-700" : "text-slate-900"}`}>{s.value}</p>
+                <p className="mt-1 text-2xl font-bold text-slate-900">{s.value}</p>
               </div>
             ))}
           </div>
@@ -328,7 +328,7 @@ function StageBar({ stages }: { stages: PortalStage[] }) {
             <div className={`h-1.5 rounded-full ${TONE[s.status].bar}`} style={{ width: `${s.total ? (s.done / s.total) * 100 : 0}%` }} />
           </div>
           <div className="mt-1 flex items-center justify-between gap-1 text-[11px]">
-            <span className={`truncate ${s.status === "not_started" ? "text-slate-500" : TONE[s.status].text}`}>{s.short}</span>
+            <span className={`truncate ${TONE[s.status].text}`}>{s.short}</span>
             <span className="font-mono text-slate-400">
               {s.done}/{s.total}
             </span>
@@ -370,11 +370,11 @@ function FileCard({
     : file.status === "Closed"
       ? { pill: "bg-slate-100 text-slate-600", label: "Closed" }
       : file.status === "Cancelled"
-        ? { pill: "bg-red-50 text-red-700", label: "Cancelled" }
-        : { pill: "bg-emerald-50 text-emerald-700", label: file.status ?? "Active" };
+        ? { pill: "bg-slate-100 text-slate-600", label: "Cancelled" }
+        : { pill: "bg-slate-100 text-slate-600", label: file.status ?? "Active" };
 
   return (
-    <div ref={ref} className={`scroll-mt-4 rounded-2xl border bg-white shadow-sm ${section.attention ? "border-red-200" : "border-slate-200"}`}>
+    <div ref={ref} className="scroll-mt-4 rounded-2xl border border-slate-200 bg-white shadow-sm">
       <button onClick={onToggle} className="w-full px-4 py-4 text-left md:px-5" aria-expanded={open}>
         <div className="flex items-start gap-2">
           <span className="mt-1 text-slate-400">{open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</span>
@@ -393,7 +393,7 @@ function FileCard({
               <div className="flex shrink-0 items-center gap-2 text-sm md:flex-col md:items-end md:gap-1">
                 <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${pill.pill}`}>{pill.label}</span>
                 {file.closingDate && (
-                  <span className={section.attention ? "text-red-700" : "text-slate-500"}>
+                  <span className="text-slate-500">
                     Closing {formatLocalDate(file.closingDate)}
                     {when ? ` · ${when}` : ""}
                   </span>
@@ -456,16 +456,16 @@ function TaskMeta({ task }: { task: ClubbedTask | null }) {
   if (!task || task.completed) return null;
   return (
     <>
-      {task.total > 1 && <span className="text-xs text-amber-700">{task.done} of {task.total} clients</span>}
+      {task.total > 1 && <span className="text-xs text-slate-500">{task.done} of {task.total} clients</span>}
       {task.waitingOn.length > 0 && task.total > 1 && <span className="text-xs text-slate-500">Waiting on {task.waitingOn.join(", ")}</span>}
       {task.dueDate && <span className="text-xs text-slate-500">Due {formatLocalDate(task.dueDate)}</span>}
     </>
   );
 }
 
-function StepIcon({ done, attention, size }: { done: boolean; attention?: boolean; size: number }) {
+function StepIcon({ done, size }: { done: boolean; size: number }) {
   if (done) return <CheckCircle2 size={size} className="shrink-0 text-emerald-600" />;
-  return <Circle size={size} className={`shrink-0 ${attention ? "text-red-500" : "text-amber-500"}`} />;
+  return <Circle size={size} className="shrink-0 text-slate-300" />;
 }
 
 function StepRow({ step, status }: { step: PortalStep; status: StatusFilter }) {
@@ -474,7 +474,7 @@ function StepRow({ step, status }: { step: PortalStep; status: StatusFilter }) {
     <li className="py-2">
       <div className="flex items-start gap-2.5">
         <span className="mt-0.5">
-          <StepIcon done={step.completed} attention={step.attention} size={18} />
+          <StepIcon done={step.completed} size={18} />
         </span>
         <div className="flex min-w-0 flex-1 flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-3">
           <span className={`text-sm ${step.completed ? "text-slate-500" : "font-medium text-slate-900"}`}>{step.title}</span>
@@ -562,7 +562,7 @@ function Matrix({ rows, today, onOpen }: { rows: Row[]; today: string; onOpen: (
         {r.section.address ? ` · ${r.section.address}` : ""}
       </p>
       {r.file.closingDate && (
-        <p className={`text-xs ${r.section.attention ? "text-red-700" : "text-slate-500"}`}>
+        <p className="text-xs text-slate-500">
           {formatLocalDate(r.file.closingDate)} · {closingText(r.file, today)}
         </p>
       )}
