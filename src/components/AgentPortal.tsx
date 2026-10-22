@@ -49,12 +49,21 @@ const SIDE_BADGE: Record<PortalSide, string> = {
 
 const isClosed = (f: PortalFile) => f.status === "Closed" || f.status === "Cancelled";
 
-function closingText(file: PortalFile, today: string): string | null {
-  if (!file.closingDate) return null;
-  const d = daysBetween(today, file.closingDate);
-  if (d > 0) return `in ${d} day${d === 1 ? "" : "s"}`;
-  if (d === 0) return "today";
-  return file.status === "Closed" ? `closed ${-d} day${d === -1 ? "" : "s"} ago` : `${-d} day${d === -1 ? "" : "s"} ago`;
+// A click that ends a text selection shouldn't toggle, so text stays copyable.
+const selecting = () => !!window.getSelection()?.toString();
+
+function clickable(onClick: () => void) {
+  return {
+    role: "button" as const,
+    tabIndex: 0,
+    onClick: () => !selecting() && onClick(),
+    onKeyDown: (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        onClick();
+      }
+    },
+  };
 }
 
 // Admin-side preview of the agent portal. Agents will eventually log in and see
@@ -268,7 +277,6 @@ function Portal({ partner }: { partner: Partner }) {
                 <FileCard
                   key={r.id}
                   row={r}
-                  today={today}
                   status={status}
                   open={expanded.has(r.id)}
                   onToggle={() => toggle(r.id)}
@@ -278,7 +286,7 @@ function Portal({ partner }: { partner: Partner }) {
               ))}
             </div>
           ) : (
-            <Matrix rows={visible} today={today} onOpen={openFromMatrix} />
+            <Matrix rows={visible} onOpen={openFromMatrix} />
           )}
         </>
       )}
@@ -341,7 +349,6 @@ function StageBar({ stages }: { stages: PortalStage[] }) {
 
 function FileCard({
   row,
-  today,
   status,
   open,
   onToggle,
@@ -349,7 +356,6 @@ function FileCard({
   onFocused,
 }: {
   row: Row;
-  today: string;
   status: StatusFilter;
   open: boolean;
   onToggle: () => void;
@@ -364,7 +370,6 @@ function FileCard({
     onFocused();
   }, [focus, onFocused]);
 
-  const when = closingText(file, today);
   const pill = section.attention
     ? TONE.attention
     : file.status === "Closed"
@@ -375,7 +380,7 @@ function FileCard({
 
   return (
     <div ref={ref} className="scroll-mt-4 rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <button onClick={onToggle} className="w-full px-4 py-4 text-left md:px-5" aria-expanded={open}>
+      <div {...clickable(onToggle)} className="w-full cursor-pointer px-4 py-4 text-left md:px-5" aria-expanded={open}>
         <div className="flex items-start gap-2">
           <span className="mt-1 text-slate-400">{open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</span>
           <div className="min-w-0 flex-1">
@@ -395,7 +400,6 @@ function FileCard({
                 {file.closingDate && (
                   <span className="text-slate-500">
                     Closing {formatLocalDate(file.closingDate)}
-                    {when ? ` · ${when}` : ""}
                   </span>
                 )}
               </div>
@@ -410,7 +414,7 @@ function FileCard({
             )}
           </div>
         </div>
-      </button>
+      </div>
       {open && (
         <div className="space-y-1 border-t border-slate-100 px-2 py-3 md:px-5">
           {section.stages.map((s) => (
@@ -550,7 +554,7 @@ function Overall({ section }: { section: PortalSection }) {
   );
 }
 
-function Matrix({ rows, today, onOpen }: { rows: Row[]; today: string; onOpen: (id: string) => void }) {
+function Matrix({ rows, onOpen }: { rows: Row[]; onOpen: (id: string) => void }) {
   const fileLabel = (r: Row) => (
     <>
       <div className="flex min-w-0 items-center gap-2">
@@ -563,7 +567,7 @@ function Matrix({ rows, today, onOpen }: { rows: Row[]; today: string; onOpen: (
       </p>
       {r.file.closingDate && (
         <p className="text-xs text-slate-500">
-          {formatLocalDate(r.file.closingDate)} · {closingText(r.file, today)}
+          Closing {formatLocalDate(r.file.closingDate)}
         </p>
       )}
     </>
@@ -590,7 +594,7 @@ function Matrix({ rows, today, onOpen }: { rows: Row[]; today: string; onOpen: (
             {rows.map((r) => {
               const map = stageMap(r);
               return (
-                <tr key={r.id} onClick={() => onOpen(r.id)} className="cursor-pointer align-top hover:[&>td]:bg-slate-50/50">
+                <tr key={r.id} onClick={() => !selecting() && onOpen(r.id)} className="cursor-pointer align-top hover:[&>td]:bg-slate-50/50">
                   <td className="w-64 max-w-64 rounded-lg px-3 py-2">{fileLabel(r)}</td>
                   {STAGES.map((s) => (
                     <td key={s.id} className="w-36 max-w-36 p-0">
@@ -612,7 +616,7 @@ function Matrix({ rows, today, onOpen }: { rows: Row[]; today: string; onOpen: (
         {rows.map((r) => {
           const map = stageMap(r);
           return (
-            <button key={r.id} onClick={() => onOpen(r.id)} className="w-full rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm">
+            <div key={r.id} {...clickable(() => onOpen(r.id))} className="w-full cursor-pointer rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm">
               {fileLabel(r)}
               <div className="mt-3 grid grid-cols-2 gap-2">
                 {STAGES.filter((s) => map.has(s.id)).map((s) => (
@@ -625,7 +629,7 @@ function Matrix({ rows, today, onOpen }: { rows: Row[]; today: string; onOpen: (
               <div className="mt-3">
                 <Overall section={r.section} />
               </div>
-            </button>
+            </div>
           );
         })}
       </div>
