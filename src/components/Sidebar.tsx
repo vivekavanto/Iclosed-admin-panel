@@ -151,6 +151,7 @@ const ROUTE_MAP: Record<string, string> = {
   messages: "/admin/messages",
   blogs: "/admin/blogs",
   partners: "/admin/partners",
+  "agent-portal": "/admin/agent-portal",
   staff: "/admin/users",
   settings: "/admin/settings",
   "default-tasks": "/admin/settings/default-tasks",

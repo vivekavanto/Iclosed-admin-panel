@@ -112,3 +112,12 @@ test('Google identities obey the same staff, owner and server-owned grant rules'
   assert.deepEqual(moduleIds(linked), ['finance']);
   assert.equal(canVisit(linked, '/admin/legal-assistant'), false);
 });
+
+test('agent portal preview is open to agent-portal or partners holders only', () => {
+  for (const id of ['agent-portal', 'partners']) {
+    const user = staff('clerk@iclosed.ca', { staff_modules: [id] });
+    assert.equal(canVisit(user, '/admin/agent-portal'), true);
+    assert.equal(canVisit(user, '/api/admin/agent-portal/123/notifications', 'PUT'), true);
+  }
+  assert.equal(canVisit(staff('clerk@iclosed.ca', { staff_modules: ['deals'] }), '/api/admin/agent-portal'), false);
+});
