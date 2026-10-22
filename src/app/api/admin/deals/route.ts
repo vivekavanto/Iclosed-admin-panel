@@ -38,7 +38,7 @@ async function getAuthSignInMap(): Promise<Map<string, string>> {
 export async function GET() {
   const { data, error } = await supabase
     .from("deals")
-    .select("*, tasks(id, status, is_deleted, role_type, is_shared), leads(id, parent_lead_id, is_deleted, first_name, last_name, email, co_person_role, address_street, address_unit, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code, clients(id, auth_user_id, citizenship_status))")
+    .select("*, tasks(id, status, is_deleted, role_type, is_shared), leads(id, parent_lead_id, is_deleted, first_name, last_name, email, co_person_role, address_street, address_unit, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code, partner_id, referral_agent_name, referral_agent_company, referral_agent_email, clients(id, auth_user_id, citizenship_status))")
     .or("source.is.null,source.neq.bulk_import")
     .eq("is_deleted", false)
     .order("created_at", { ascending: false });
@@ -71,10 +71,17 @@ export async function GET() {
   // Soft-deleted partners are excluded, matching the detail page: a deleted
   // partner must not resurface as the file's agent. A deal still pointing at one
   // reads as unlinked here, which is also what the milestone-email CC does.
+  // Portal-created deals don't copy the intake referral, so fall back to the lead's.
+  const referralOfDeal = (d: any) => ({
+    partner_id: d.partner_id ?? d.leads?.partner_id ?? null,
+    referral_agent_name: d.referral_agent_name ?? d.leads?.referral_agent_name ?? null,
+    referral_agent_company: d.referral_agent_company ?? d.leads?.referral_agent_company ?? null,
+    referral_agent_email: d.referral_agent_email ?? d.leads?.referral_agent_email ?? null,
+  });
   const partnerIds = Array.from(
     new Set(
       deals
-        .map((d) => (d as { partner_id?: unknown }).partner_id)
+        .map((d) => referralOfDeal(d).partner_id as unknown)
         .filter((id: unknown): id is string => typeof id === "string" && !!id),
     ),
   );
@@ -273,15 +280,16 @@ export async function GET() {
       lead && !lead.parent_lead_id
         ? coPartyNamesByPrimaryLead.get(lead.id) ?? []
         : [];
+    const referral = referralOfDeal(deal);
     return {
       ...rest,
       totalTasks,
       completedTasks,
       signing_appointments: signingAppointments,
-      // The linked partner, or null. `referral_agent_*` stay on `rest` as the
-      // free-text intake fallback the UI reads behind this.
-      referral_partner: deal.partner_id
-        ? (partnersById.get(deal.partner_id) ?? null)
+      // The linked partner, or null; `referral_agent_*` are the free-text intake fallback.
+      ...referral,
+      referral_partner: referral.partner_id
+        ? (partnersById.get(referral.partner_id) ?? null)
         : null,
       auth_user_id: authUserId,
       is_co_purchaser: isCoPurchaser,
