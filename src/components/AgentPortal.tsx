@@ -220,7 +220,7 @@ function Portal({ partner }: { partner: Partner }) {
         <Segmented
           value={view}
           onChange={setView}
-          strong
+          tabs
           options={[
             { id: "file", label: "By file" },
             { id: "matrix", label: "Milestone matrix" },
@@ -298,22 +298,43 @@ function Segmented<T extends string>({
   value,
   onChange,
   options,
-  strong,
+  tabs,
 }: {
   value: T;
   onChange: (v: T) => void;
   options: { id: T; label: string; icon?: React.ReactNode }[];
-  strong?: boolean;
+  tabs?: boolean;
 }) {
+  // Same looks as All Files: text tabs like its date presets, button groups like its Sort.
+  if (tabs) {
+    return (
+      <div className="flex max-w-full items-center gap-5 overflow-x-auto">
+        {options.map((o) => (
+          <button
+            key={o.id}
+            type="button"
+            onClick={() => onChange(o.id)}
+            className={`flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap text-sm font-medium transition-colors ${
+              value === o.id ? "text-brand-primary" : "text-slate-600 hover:text-brand-primary"
+            }`}
+          >
+            {o.icon}
+            {o.label}
+          </button>
+        ))}
+      </div>
+    );
+  }
   return (
-    <div className="flex max-w-full overflow-x-auto rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
-      {options.map((o) => (
+    <div className="inline-flex max-w-full items-center overflow-hidden rounded-md border border-slate-200 text-xs">
+      {options.map((o, i) => (
         <button
           key={o.id}
+          type="button"
           onClick={() => onChange(o.id)}
-          className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
-            value === o.id ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"
-          } ${strong ? "md:text-sm" : ""}`}
+          className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1 font-medium transition-colors ${i > 0 ? "border-l border-slate-200" : ""} ${
+            value === o.id ? "bg-brand-primary text-white" : "bg-white text-slate-600 hover:text-brand-primary"
+          }`}
         >
           {o.icon}
           {o.label}
