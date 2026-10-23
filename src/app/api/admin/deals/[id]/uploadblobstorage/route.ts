@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { completeApsTask } from "@/lib/completeApsTask";
 import { isBlobUrl, BLOB_ACCESS } from "@/lib/blobPrivacy";
+import { requestApsDepositRead } from "@/lib/requestApsDepositRead";
 
 /**
  * POST /api/admin/deals/[id]/uploadblobstorage
@@ -177,6 +178,15 @@ export async function POST(
         { status: 500 },
       );
     }
+
+    // The reader lives in the customer portal; hand it the new files so the
+    // deal's deposit is read from them, the way a client's own upload is.
+    // Best-effort — never fails an upload that is already saved.
+    await requestApsDepositRead({
+      dealId,
+      side,
+      fileUrls: files.map((f) => f.file_url),
+    });
 
     return NextResponse.json({
       success: true,
