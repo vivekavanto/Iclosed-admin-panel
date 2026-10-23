@@ -1077,11 +1077,11 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
             - xl and up (large laptops / desktops): no min-width, so w-full makes
               the table fit the content area exactly and ALL columns show in a
               single view without horizontal scroll — even with the sidebar open.
-            - below xl (small laptops, tablets): min-w-[1080px] keeps the 11
+            - below xl (small laptops, tablets): min-w-[1200px] keeps the 14
               columns readable instead of crushing them to fit; this parent's
               overflow-x-auto scrolls horizontally and the sticky Actions column
               stays pinned. We intentionally do NOT force single-view here. */}
-        <table className="w-full min-w-[1080px] xl:min-w-0 table-fixed text-left border-t border-slate-200">
+        <table className="w-full min-w-[1200px] xl:min-w-0 table-fixed text-left border-t border-slate-200">
           {/* colgroup is the single source of truth for column widths. With
               table-fixed, the header and every body row inherit these exact
               percentages, so columns stay perfectly aligned at any browser
@@ -1093,22 +1093,22 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
               this list — otherwise Notes/Actions inherit their 0% widths.
               Visible widths sum to 100%. */}
           <colgroup>
-            <col style={{ width: '4%' }} />{/* Row number */}
+            <col style={{ width: '3%' }} />{/* Row number */}
             <col style={{ width: '6%' }} />{/* Account status */}
-            <col style={{ width: '7%' }} />{/* File No. */}
-            <col style={{ width: '12%' }} />{/* Client Name */}
-            <col style={{ width: '11%' }} />{/* Address */}
-            <col style={{ width: '8%' }} />{/* Closing date */}
-            <col style={{ width: '9%' }} />{/* Progress */}
-            <col style={{ width: '6%' }} />{/* Lawyer */}
-            <col style={{ width: '6%' }} />{/* Clerk */}
-            <col style={{ width: '9%' }} />{/* Notes */}
-            <col style={{ width: '10%' }} />{/* Signing */}
-            <col style={{ width: '6%' }} />{/* Last updated */}
-            <col style={{ width: '6%' }} />{/* Actions */}
-            {/* Hidden columns — Agent, Account created, Requisition date, File
-                name. Their cells are display:none, so these collapse to 0%. */}
-            <col style={{ width: '0%' }} />
+            <col style={{ width: '8%' }} />{/* File No. */}
+            <col style={{ width: '10%' }} />{/* Client Name */}
+            <col style={{ width: '10%' }} />{/* Address */}
+            <col style={{ width: '7%' }} />{/* Closing date */}
+            <col style={{ width: '8%' }} />{/* Progress */}
+            <col style={{ width: '5%' }} />{/* Lawyer */}
+            <col style={{ width: '5%' }} />{/* Clerk */}
+            <col style={{ width: '8%' }} />{/* Referral Source */}
+            <col style={{ width: '10%' }} />{/* Notes */}
+            <col style={{ width: '8%' }} />{/* Signing */}
+            <col style={{ width: '7%' }} />{/* Last updated */}
+            <col style={{ width: '5%' }} />{/* Actions */}
+            {/* Hidden columns — Account created, Requisition date, File name.
+                Their cells are display:none, so these collapse to 0%. */}
             <col style={{ width: '0%' }} />
             <col style={{ width: '0%' }} />
             <col style={{ width: '0%' }} />
@@ -1212,7 +1212,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       );
                     })()}
                   </td>
-                  <td className="px-2 py-1.5 font-medium">{displayFileNumber(deal.fileNumber)}</td>
+                  <td className="px-2 py-1.5 font-medium truncate" title={displayFileNumber(deal.fileNumber)}>{displayFileNumber(deal.fileNumber)}</td>
                   <td className="px-2 py-1.5">
                     {/* min-w-0 + truncate lets a long name ellipsize instead of
                         spilling past this fixed-width column, while the badges
@@ -1453,7 +1453,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                           {noteSavingId === deal.id ? (
                             <Loader2 size={12} className="animate-spin mt-0.5 flex-shrink-0" />
                           ) : null}
-                          <span className="whitespace-normal break-words">{note || 'Add note'}</span>
+                          <span className="min-w-0 whitespace-normal [overflow-wrap:anywhere]">{note || 'Add note'}</span>
                         </button>
                       );
                     })()}
@@ -1503,7 +1503,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                     })()}
                   </td>
                   {/* Last updated — when the note was last added/edited. */}
-                  <td className="px-2 py-1.5 text-slate-600">
+                  <td className="px-2 py-1.5 text-slate-600 truncate">
                     {(deal as Deal & { adminNote?: string | null }).adminNote && noteUpdatedAt(deal)
                       ? new Date(noteUpdatedAt(deal)!).toLocaleDateString('en-US', {
                           month: 'short',
