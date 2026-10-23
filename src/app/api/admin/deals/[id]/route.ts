@@ -356,6 +356,8 @@ export async function GET(
                   lead_name: dLead
                     ? `${dLead.first_name ?? ""} ${dLead.last_name ?? ""}`.trim()
                     : null,
+                  lead_first_name: dLead?.first_name ?? null,
+                  lead_last_name: dLead?.last_name ?? null,
                   lead_corporate_name: dLead?.corporate_name ?? null,
                   lead_email: dLead?.email ?? null,
                   lead_phone: dLead?.phone ?? null,

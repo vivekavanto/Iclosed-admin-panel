@@ -426,6 +426,18 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
   const [phoneDraft, setPhoneDraft] = useState<string>("");
   const [savingPhoneId, setSavingPhoneId] = useState<string | null>(null);
 
+  // Inline name editing in "People involved" — same idea as the phone editor:
+  // saves through /api/admin/leads (which mirrors to `clients`), and
+  // `nameOverrides` (keyed by lead_id) shows the saved name immediately.
+  const [nameOverrides, setNameOverrides] = useState<
+    Record<string, { first: string; last: string }>
+  >({});
+  const [editingNameLeadId, setEditingNameLeadId] = useState<string | null>(null);
+  const [firstNameDraft, setFirstNameDraft] = useState<string>("");
+  const [lastNameDraft, setLastNameDraft] = useState<string>("");
+  const [savingNameId, setSavingNameId] = useState<string | null>(null);
+  const [nameError, setNameError] = useState<string | null>(null);
+
   // ── "Who uploads documents" reassignment ──────────────────────────────────
   // The family's upload_mode lives on the PRIMARY lead. Until now it could only
   // be answered once, at intake in the customer portal; this control lets an
@@ -2684,6 +2696,8 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
     id: string;
     lead_id: string | null;
     lead_name: string;
+    lead_first_name: string;
+    lead_last_name: string;
     lead_email: string;
     lead_phone: string;
     role: string;
@@ -2700,14 +2714,18 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
     canUploadForAll: boolean;
   };
   const familyPeople: FamilyPerson[] = (() => {
-    const currentName = [rawDeal?.lead_first_name, rawDeal?.lead_last_name]
-      .filter(Boolean)
-      .join(" ")
-      .trim();
+    const currentOverride = primaryLeadId ? nameOverrides[primaryLeadId] : undefined;
+    const currentFirst =
+      currentOverride?.first ?? ((rawDeal?.lead_first_name as string | null) || "");
+    const currentLast =
+      currentOverride?.last ?? ((rawDeal?.lead_last_name as string | null) || "");
+    const currentName = [currentFirst, currentLast].filter(Boolean).join(" ").trim();
     const currentEntry: FamilyPerson = {
       id: deal.id,
       lead_id: primaryLeadId,
       lead_name: currentName || "Current viewer",
+      lead_first_name: currentFirst,
+      lead_last_name: currentLast,
       lead_email: (rawDeal?.lead_email as string | null) || "",
       lead_phone:
         (primaryLeadId ? phoneOverrides[primaryLeadId] : undefined) ??
@@ -2723,10 +2741,18 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
       identificationStatus: (rawDeal?.identification_status as string | null) ?? null,
       canUploadForAll: (rawDeal as any)?.can_upload_for_all === true,
     };
-    const linked: FamilyPerson[] = ((rawDeal?.linked_deals ?? []) as any[]).map((ld) => ({
+    const linked: FamilyPerson[] = ((rawDeal?.linked_deals ?? []) as any[]).map((ld) => {
+      const o = ld.lead_id ? nameOverrides[ld.lead_id as string] : undefined;
+      const first = o?.first ?? ((ld.lead_first_name as string | null) || "");
+      const last = o?.last ?? ((ld.lead_last_name as string | null) || "");
+      const name = o ? [first, last].filter(Boolean).join(" ").trim() : "";
+      return { ...ld, __first: first, __last: last, __name: name };
+    }).map((ld) => ({
       id: ld.id,
       lead_id: (ld.lead_id as string | null) ?? null,
-      lead_name: ld.lead_name || "Unknown",
+      lead_name: ld.__name || ld.lead_name || "Unknown",
+      lead_first_name: ld.__first as string,
+      lead_last_name: ld.__last as string,
       lead_email: ld.lead_email || "",
       lead_phone:
         (ld.lead_id ? phoneOverrides[ld.lead_id as string] : undefined) ??
@@ -3033,6 +3059,69 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
       showToast(err?.message ?? "Failed to update phone", "error");
     } finally {
       setSavingPhoneId(null);
+    }
+  };
+
+  const beginEditName = (person: FamilyPerson) => {
+    if (!person.lead_id) return;
+    setEditingNameLeadId(person.lead_id);
+    setFirstNameDraft(person.lead_first_name);
+    setLastNameDraft(person.lead_last_name);
+    setNameError(null);
+  };
+
+  const cancelEditName = () => {
+    setEditingNameLeadId(null);
+    setFirstNameDraft("");
+    setLastNameDraft("");
+    setNameError(null);
+  };
+
+  // Persist a person's name to their lead row via the existing leads PUT, which
+  // also mirrors it to `clients` and the person's other files. A first name is
+  // required; the last name may be blank (some records legitimately have none).
+  const handleSaveName = async (person: FamilyPerson) => {
+    if (!person.lead_id) {
+      setNameError("Cannot edit name: missing lead reference.");
+      return;
+    }
+    const first = firstNameDraft.trim();
+    const last = lastNameDraft.trim();
+    if (!first) {
+      setNameError("First name is required.");
+      return;
+    }
+    if (first === person.lead_first_name && last === person.lead_last_name) {
+      cancelEditName();
+      return;
+    }
+    setSavingNameId(person.id);
+    try {
+      const res = await fetch("/api/admin/leads", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: person.lead_id, firstName: first, lastName: last }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        throw new Error(json.error || "Failed to update name");
+      }
+      setNameOverrides((prev) => ({
+        ...prev,
+        [person.lead_id as string]: { first, last },
+      }));
+      cancelEditName();
+      if (Array.isArray(json.warnings) && json.warnings.length > 0) {
+        showToast(json.warnings[0], "error");
+      } else {
+        showToast(`Name updated to ${[first, last].filter(Boolean).join(" ")}`);
+      }
+      // Task owner names elsewhere on the page read the same lead rows.
+      void Promise.all([refetchData(), onDealChanged?.()]);
+    } catch (err: any) {
+      setNameError(err?.message ?? "Failed to update name");
+    } finally {
+      setSavingNameId(null);
     }
   };
 
@@ -3940,10 +4029,17 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
       {toast && (
         <div
           style={{ top: "calc(var(--app-header-h, 0px) + 1.5rem)" }}
-          className={`fixed right-6 z-[60] px-5 py-3 rounded-lg shadow-lg text-sm font-medium text-white transition-all ${
-            toast.type === "success" ? "bg-green-600" : "bg-red-600"
+          className={`fixed right-6 z-[60] flex items-center gap-3 px-5 py-4 rounded-xl border shadow-lg text-sm font-semibold max-w-md ${
+            toast.type === "success"
+              ? "bg-green-50 border-green-200 text-green-800"
+              : "bg-red-50 border-red-200 text-red-700"
           }`}
         >
+          {toast.type === "success" ? (
+            <CheckCircle size={18} className="flex-shrink-0" />
+          ) : (
+            <AlertTriangle size={18} className="flex-shrink-0" />
+          )}
           {toast.message}
         </div>
       )}
@@ -4406,13 +4502,74 @@ const DealDetail: React.FC<DealDetailProps> = ({ deal, rawDeal, onDealChanged, o
                       {p.role}
                     </span>
                     <div>
-                      <p className={`text-sm font-bold transition-colors ${
-                        includeFamilyTasks || p.isCurrent
-                          ? "text-slate-800"
-                          : "text-slate-800 group-hover:text-blue-700"
-                      }`}>
-                        {p.lead_name}
-                      </p>
+                      {editingNameLeadId && editingNameLeadId === p.lead_id ? (
+                        <div onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center gap-1.5">
+                            {(["first", "last"] as const).map((part) => (
+                              <input
+                                key={part}
+                                type="text"
+                                value={part === "first" ? firstNameDraft : lastNameDraft}
+                                autoFocus={part === "first"}
+                                placeholder={part === "first" ? "First name" : "Last name"}
+                                onChange={(e) => {
+                                  (part === "first" ? setFirstNameDraft : setLastNameDraft)(
+                                    e.target.value,
+                                  );
+                                  setNameError(null);
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") handleSaveName(p);
+                                  if (e.key === "Escape") cancelEditName();
+                                }}
+                                className="text-sm border border-slate-300 rounded px-1.5 py-0.5 w-40 sm:w-44 focus:outline-none focus:ring-1 focus:ring-brand-primary font-medium text-black bg-white"
+                              />
+                            ))}
+                            <button
+                              onClick={() => handleSaveName(p)}
+                              disabled={savingNameId === p.id}
+                              title="Save name"
+                              className="text-green-600 hover:text-green-700 disabled:opacity-40 p-0.5 cursor-pointer"
+                            >
+                              <Check size={16} />
+                            </button>
+                            <button
+                              onClick={cancelEditName}
+                              disabled={savingNameId === p.id}
+                              title="Cancel"
+                              className="text-slate-400 hover:text-red-500 p-0.5 cursor-pointer"
+                            >
+                              <X size={16} />
+                            </button>
+                          </div>
+                          {nameError && (
+                            <p className="flex items-center gap-1 mt-1 text-[11px] font-semibold text-red-600">
+                              <AlertTriangle size={11} className="flex-shrink-0" />
+                              {nameError}
+                            </p>
+                          )}
+                        </div>
+                      ) : (
+                        <p className={`text-sm font-bold transition-colors flex items-center gap-1.5 ${
+                          includeFamilyTasks || p.isCurrent
+                            ? "text-slate-800"
+                            : "text-slate-800 group-hover:text-blue-700"
+                        }`}>
+                          {p.lead_name}
+                          {p.lead_id && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                beginEditName(p);
+                              }}
+                              title="Edit name"
+                              className="text-slate-300 hover:text-brand-primary transition-colors p-0.5 cursor-pointer"
+                            >
+                              <Pencil size={10} />
+                            </button>
+                          )}
+                        </p>
+                      )}
                       <p className="text-[11px] text-slate-400">
                         {p.file_number}
                         {(() => {
