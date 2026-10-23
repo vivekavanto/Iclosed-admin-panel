@@ -26,8 +26,6 @@ type Partner = {
 type Template = { id: string; name: string; lead_type: string; milestone: string | null };
 
 type View = "file" | "matrix" | "notifications";
-type SideFilter = "all" | PortalSide;
-type StatusFilter = "all" | "pending" | "completed";
 
 /** One side of one file; a Purchase & Sale file gives two rows. */
 type Row = { id: string; file: PortalFile; section: PortalSection };
@@ -139,8 +137,6 @@ function Portal({ partner }: { partner: Partner }) {
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<View>("file");
   const [search, setSearch] = useState("");
-  const [side, setSide] = useState<SideFilter>("all");
-  const [status, setStatus] = useState<StatusFilter>("all");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [focusId, setFocusId] = useState<string | null>(null);
 
@@ -171,12 +167,8 @@ function Portal({ partner }: { partner: Partner }) {
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return rows.filter(
-      (r) =>
-        (side === "all" || r.section.side === side) &&
-        (!q || [r.file.fileNumber, r.section.address, ...r.file.clients].some((v) => (v ?? "").toLowerCase().includes(q))),
-    );
-  }, [rows, search, side]);
+    return rows.filter((r) => !q || [r.file.fileNumber, r.section.address, ...r.file.clients].some((v) => (v ?? "").toLowerCase().includes(q)));
+  }, [rows, search]);
 
   const toggle = (id: string) =>
     setExpanded((prev) => {
@@ -197,13 +189,10 @@ function Portal({ partner }: { partner: Partner }) {
     const active = all.filter((f) => !isClosed(f));
     return [
       { label: "Files", value: all.length },
-      { label: "Active", value: active.length },
       {
         label: "Closing in 30 days",
         value: active.filter((f) => f.closingDate && today && daysBetween(today, f.closingDate) >= 0 && daysBetween(today, f.closingDate) <= 30).length,
       },
-      { label: "Needs attention", value: all.filter((f) => f.sections.some((s) => s.attention)).length },
-      { label: "Pending tasks", value: all.flatMap((f) => f.sections).reduce((n, s) => n + s.pendingTasks, 0) },
     ];
   }, [files, today]);
 
@@ -220,7 +209,6 @@ function Portal({ partner }: { partner: Partner }) {
         <Segmented
           value={view}
           onChange={setView}
-          tabs
           options={[
             { id: "file", label: "By file" },
             { id: "matrix", label: "Milestone matrix" },
@@ -239,37 +227,29 @@ function Portal({ partner }: { partner: Partner }) {
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+          <div className="flex flex-wrap gap-2">
             {stats.map((s) => (
-              <div key={s.label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{s.label}</p>
-                <p className="mt-1 text-2xl font-bold text-slate-900">{s.value}</p>
+              <div key={s.label} className="inline-flex h-8 items-center gap-2 rounded-md bg-brand-primary px-3 text-white">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-white/80">{s.label}</span>
+                <span className="text-sm font-bold">{s.value}</span>
               </div>
             ))}
           </div>
 
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-            <div className="relative flex-1">
+          <div className="relative">
               <input
                 type="text"
                 placeholder="Search client, address or file number…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-4 text-sm shadow-sm focus:border-brand-primary focus:outline-none focus:ring-2 focus:ring-brand-primary/20"
+                className="h-8 w-full rounded-md border border-slate-200 bg-white pl-9 pr-3 text-sm focus:border-brand-primary focus:outline-none focus:ring-2 focus:ring-brand-primary/20"
               />
-              <Search className="absolute left-3 top-3 text-slate-400" size={18} />
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Segmented value={side} onChange={setSide} options={[{ id: "all", label: "All" }, { id: "purchase", label: "Purchase" }, { id: "sale", label: "Sale" }]} />
-              {view === "file" && (
-                <Segmented value={status} onChange={setStatus} options={[{ id: "all", label: "All tasks" }, { id: "pending", label: "Pending" }, { id: "completed", label: "Completed" }]} />
-              )}
-            </div>
+              <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
           </div>
 
           {visible.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center text-slate-500">
-              {files.length === 0 ? "No referred files yet." : "No files match these filters."}
+              {files.length === 0 ? "No referred files yet." : "No files match this search."}
             </div>
           ) : view === "file" ? (
             <div className="space-y-3">
@@ -277,7 +257,6 @@ function Portal({ partner }: { partner: Partner }) {
                 <FileCard
                   key={r.id}
                   row={r}
-                  status={status}
                   open={expanded.has(r.id)}
                   onToggle={() => toggle(r.id)}
                   focus={focusId === r.id}
@@ -298,42 +277,21 @@ function Segmented<T extends string>({
   value,
   onChange,
   options,
-  tabs,
 }: {
   value: T;
   onChange: (v: T) => void;
   options: { id: T; label: string; icon?: React.ReactNode }[];
-  tabs?: boolean;
 }) {
-  // Same looks as All Files: text tabs like its date presets, button groups like its Sort.
-  if (tabs) {
-    return (
-      <div className="flex max-w-full items-center gap-5 overflow-x-auto">
-        {options.map((o) => (
-          <button
-            key={o.id}
-            type="button"
-            onClick={() => onChange(o.id)}
-            className={`flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap text-sm font-medium transition-colors ${
-              value === o.id ? "text-brand-primary" : "text-slate-600 hover:text-brand-primary"
-            }`}
-          >
-            {o.icon}
-            {o.label}
-          </button>
-        ))}
-      </div>
-    );
-  }
+  // Text tabs, the same look as the All Files date presets.
   return (
-    <div className="inline-flex max-w-full items-center overflow-hidden rounded-md border border-slate-200 text-xs">
-      {options.map((o, i) => (
+    <div className="flex max-w-full items-center gap-5 overflow-x-auto">
+      {options.map((o) => (
         <button
           key={o.id}
           type="button"
           onClick={() => onChange(o.id)}
-          className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1 font-medium transition-colors ${i > 0 ? "border-l border-slate-200" : ""} ${
-            value === o.id ? "bg-brand-primary text-white" : "bg-white text-slate-600 hover:text-brand-primary"
+          className={`flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap text-sm font-medium transition-colors ${
+            value === o.id ? "text-brand-primary" : "text-slate-600 hover:text-brand-primary"
           }`}
         >
           {o.icon}
@@ -370,14 +328,12 @@ function StageBar({ stages }: { stages: PortalStage[] }) {
 
 function FileCard({
   row,
-  status,
   open,
   onToggle,
   focus,
   onFocused,
 }: {
   row: Row;
-  status: StatusFilter;
   open: boolean;
   onToggle: () => void;
   focus: boolean;
@@ -439,7 +395,7 @@ function FileCard({
       {open && (
         <div className="space-y-1 border-t border-slate-100 px-2 py-3 md:px-5">
           {section.stages.map((s) => (
-            <StageRow key={`${s.id}:${status}`} stage={s} status={status} />
+            <StageRow key={s.id} stage={s} />
           ))}
         </div>
       )}
@@ -447,12 +403,9 @@ function FileCard({
   );
 }
 
-const keepStep = (s: PortalStep, status: StatusFilter) =>
-  status === "all" || (status === "completed" ? s.completed || s.subTasks.some((t) => t.completed) : !s.completed || s.subTasks.some((t) => !t.completed));
-
-function StageRow({ stage, status }: { stage: PortalStage; status: StatusFilter }) {
-  const steps = stage.steps.filter((s) => keepStep(s, status));
-  const [open, setOpen] = useState(status !== "all" || stage.status !== "complete");
+function StageRow({ stage }: { stage: PortalStage }) {
+  const [open, setOpen] = useState(stage.status !== "complete");
+  const steps = stage.steps;
   if (steps.length === 0) return null;
   const tone = TONE[stage.status];
   return (
@@ -469,7 +422,7 @@ function StageRow({ stage, status }: { stage: PortalStage; status: StatusFilter 
       {open && (
         <ul className="mb-2 ml-6 divide-y divide-slate-100 md:ml-8">
           {steps.map((s) => (
-            <StepRow key={s.key} step={s} status={status} />
+            <StepRow key={s.key} step={s} />
           ))}
         </ul>
       )}
@@ -493,8 +446,8 @@ function StepIcon({ done, size }: { done: boolean; size: number }) {
   return <Circle size={size} className="shrink-0 text-slate-300" />;
 }
 
-function StepRow({ step, status }: { step: PortalStep; status: StatusFilter }) {
-  const subTasks = step.subTasks.filter((t) => status === "all" || (status === "completed") === t.completed);
+function StepRow({ step }: { step: PortalStep }) {
+  const subTasks = step.subTasks;
   return (
     <li className="py-2">
       <div className="flex items-start gap-2.5">
@@ -754,11 +707,6 @@ function NotificationSettings({ partnerId }: { partnerId: string }) {
           Save preferences
         </button>
       </div>
-      {!schemaReady && (
-        <div className="px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800">
-          Settings can&apos;t be saved until <code>migrations/2026-10-22-partner-notification-settings.sql</code> is applied.
-        </div>
-      )}
       {message && (
         <div className={`px-4 py-3 rounded-xl text-sm border ${message.ok ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-red-50 border-red-200 text-red-700"}`}>
           {message.text}
