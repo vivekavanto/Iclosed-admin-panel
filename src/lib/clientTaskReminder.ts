@@ -15,6 +15,11 @@
 // webhook. Clients who logged in before that column existed have NULL there and
 // are deliberately never auto-reminded.
 //
+// Recipients are the file's leads (deals.lead_id → leads.email), not
+// clients.email, so a reminder can never go to an address that is not on the
+// file; clients.email is only the fallback. Subject and body always name the
+// property.
+//
 // Wording lives in the "Pending Tasks Reminder" email_templates row (editable
 // without a deploy); a missing/inactive row falls back to the copy below rather
 // than going quiet.
@@ -26,7 +31,8 @@ import { maskEmail } from "./maskEmail";
 import { normalizeRecipientEmail } from "./emailIdentity";
 import { getLeadFirmKey } from "./leadFirm";
 import { brandEmailHtml } from "./emailBrand";
-import { portalUrl } from "./sendDepositTaskEmail";
+import { portalUrl, DEPOSIT_TASK_LEAD_COLUMNS } from "./sendDepositTaskEmail";
+import { buildLeadAddressForEmail } from "./leadEmailAddress";
 import { isTaskInactive } from "./depositTask";
 import {
   decodeTemplateBraces,
@@ -81,16 +87,26 @@ function joinNames(names: string[]): string {
  * rollup's rules: deleted tasks and not-yet-activated ("Inactive") tasks never
  * count — the client cannot act on either.
  */
-async function loadPendingTasks(
-  clientIds: string[],
-): Promise<{ tasks: PendingTask[]; fileNumber: string | null; leadId: string | null }> {
+async function loadPendingTasks(clientIds: string[]): Promise<{
+  tasks: PendingTask[];
+  fileNumber: string | null;
+  leadId: string | null;
+  /** Leads of the live files — the people the reminder is about. */
+  leadIds: string[];
+  /** Leads of the live files that actually have something open. */
+  taskLeadIds: string[];
+}> {
   const { data: deals } = await supabaseAdmin
     .from("deals")
     .select("id, file_number, lead_id, status")
-    .in("client_id", clientIds);
+    .in("client_id", clientIds)
+    .eq("is_deleted", false);
 
   const live = (deals ?? []).filter((d) => !FINISHED_DEAL_STATUSES.includes(d.status ?? ""));
-  if (live.length === 0) return { tasks: [], fileNumber: null, leadId: null };
+  const leadIds = [...new Set(live.map((d) => d.lead_id).filter(Boolean) as string[])];
+  if (live.length === 0) {
+    return { tasks: [], fileNumber: null, leadId: null, leadIds: [], taskLeadIds: [] };
+  }
 
   const { data: rows } = await supabaseAdmin
     .from("tasks")
@@ -103,11 +119,13 @@ async function loadPendingTasks(
 
   const seen = new Set<string>();
   const tasks: PendingTask[] = [];
+  const dealsWithTasks = new Set<string>();
   for (const t of rows ?? []) {
     if (t.status === "Completed" || t.completed) continue;
     if (isTaskInactive(t)) continue;
     // Staff-side tasks are not the client's to complete.
     if (t.role_type && String(t.role_type).toLowerCase() !== "client") continue;
+    dealsWithTasks.add(t.deal_id);
     // Shared tasks exist once per family deal; list each title once.
     const key = String(t.title).trim().toLowerCase();
     if (seen.has(key)) continue;
@@ -115,7 +133,53 @@ async function loadPendingTasks(
     tasks.push({ title: t.title, deal_id: t.deal_id });
   }
 
-  return { tasks, fileNumber: live[0].file_number ?? null, leadId: live[0].lead_id ?? null };
+  const taskLeadIds = [
+    ...new Set(
+      live.filter((d) => dealsWithTasks.has(d.id)).map((d) => d.lead_id).filter(Boolean) as string[],
+    ),
+  ];
+
+  return {
+    tasks,
+    fileNumber: live[0].file_number ?? null,
+    leadId: live[0].lead_id ?? null,
+    leadIds,
+    taskLeadIds,
+  };
+}
+
+/**
+ * Who the reminder goes to: the leads on the file(s), the same addresses every
+ * other file email uses. `clients.email` is only a fallback — that row can hold
+ * a different address from the file (an older sign-up, an edited email), which
+ * is how a reminder reached aliya+47 instead of the file's aliya+202.
+ */
+async function loadFileRecipients(leadIds: string[]) {
+  if (leadIds.length === 0) return [];
+  const { data: leads } = await supabaseAdmin
+    .from("leads")
+    .select(DEPOSIT_TASK_LEAD_COLUMNS)
+    .in("id", leadIds)
+    .eq("is_deleted", false)
+    .order("parent_lead_id", { ascending: true, nullsFirst: true });
+  return (leads ?? []).filter((l) => (l.email ?? "").trim());
+}
+
+/** Property line(s) for the files that still have something open. */
+async function loadPropertyAddresses(leadIds: string[]): Promise<string> {
+  if (leadIds.length === 0) return "";
+  const { data: leads } = await supabaseAdmin
+    .from("leads")
+    .select(DEPOSIT_TASK_LEAD_COLUMNS)
+    .in("id", leadIds)
+    .eq("is_deleted", false)
+    .order("parent_lead_id", { ascending: true, nullsFirst: true });
+  const out: string[] = [];
+  for (const l of leads ?? []) {
+    const a = (await buildLeadAddressForEmail(l)).trim();
+    if (a && !out.includes(a)) out.push(a);
+  }
+  return out.join("; ");
 }
 
 function pendingTasksHtml(tasks: PendingTask[]): string {
@@ -132,6 +196,7 @@ function fallbackBody(v: Record<string, string>): string {
   return `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#0f172a;">
   <p>Hi ${v.client_name},</p>
   <p>This is a friendly reminder to log into iClosed and complete your pending tasks so we can keep your file moving.</p>
+  ${v.property_address ? `<p style="margin:0 0 4px;"><strong>Property:</strong> ${v.property_address}</p>` : ""}
   ${v.pending_tasks}
   <p style="margin-top:24px;">
     <a href="${v.portal_url}" style="background:#e11d48;color:#ffffff;text-decoration:none;padding:10px 18px;border-radius:8px;display:inline-block;font-weight:600;">
@@ -162,23 +227,41 @@ export async function sendClientTaskReminder(clientIds: string[]): Promise<TaskR
     .select("id, first_name, last_name, email")
     .in("id", clientIds);
   const people = ((clients ?? []) as ReminderClient[]).filter((c) => (c.email ?? "").trim());
-  if (people.length === 0) return fail("No client on this file has an email address.");
 
-  const { tasks, fileNumber, leadId } = await loadPendingTasks(clientIds);
+  const { tasks, fileNumber, leadId, leadIds, taskLeadIds } = await loadPendingTasks(clientIds);
   if (tasks.length === 0) return fail("This client has no pending tasks.");
 
-  const to = Array.from(
-    new Set(people.map((p) => normalizeRecipientEmail(p.email as string))),
-  );
+  // The file's own addresses win; the client row is only the fallback.
+  const fileLeads = await loadFileRecipients(leadIds);
+  const recipients =
+    fileLeads.length > 0
+      ? fileLeads.map((l) => ({ first_name: l.first_name, email: l.email as string }))
+      : people.map((p) => ({ first_name: p.first_name, email: p.email as string }));
 
+  const seenEmails = new Set<string>();
+  const to: string[] = [];
+  for (const r of recipients) {
+    const e = normalizeRecipientEmail(r.email);
+    if (!e || seenEmails.has(e.toLowerCase())) continue;
+    seenEmails.add(e.toLowerCase());
+    to.push(e);
+  }
+  if (to.length === 0) return fail("No client on this file has an email address.");
+
+  const propertyAddress = await loadPropertyAddresses(taskLeadIds.length ? taskLeadIds : leadIds);
+  const names = joinNames(recipients.map((r) => r.first_name ?? ""));
+
+  const tasksHtml = pendingTasksHtml(tasks);
   const values: Record<string, TemplateValue> = {
-    client_name: { value: joinNames(people.map((p) => p.first_name ?? "")) },
-    first_name: { value: joinNames(people.map((p) => p.first_name ?? "")) },
-    "user.first_name": { value: joinNames(people.map((p) => p.first_name ?? "")) },
-    pending_tasks: { value: pendingTasksHtml(tasks), raw: true },
+    client_name: { value: names },
+    first_name: { value: names },
+    "user.first_name": { value: names },
+    pending_tasks: { value: tasksHtml, raw: true },
     pending_count: { value: String(tasks.length) },
     portal_url: { value: portalUrl() },
     file_number: { value: fileNumber ?? "" },
+    property_address: { value: propertyAddress },
+    lead_address: { value: propertyAddress },
   };
   const resolve = (name: string): TemplateValue | null => {
     const key = name.toLowerCase().replace(/^\.+/, "");
@@ -192,20 +275,31 @@ export async function sendClientTaskReminder(clientIds: string[]): Promise<TaskR
     .order("created_at", { ascending: false });
   const template = (templates ?? []).find((t) => t.is_active && !t.is_deleted && t.body);
 
-  const html = template
+  let html = template
     ? renderTemplateSafe(decodeTemplateBraces(template.body), resolve)
     : fallbackBody({
         client_name: escapeHtml(values.client_name.value),
         pending_tasks: values.pending_tasks.value,
         portal_url: escapeHtml(values.portal_url.value),
+        property_address: escapeHtml(propertyAddress),
       });
-  const subject = renderTemplateSafe(
+  let subject = renderTemplateSafe(
     decodeTemplateBraces(
       template?.subject || "Reminder: please complete your pending tasks on iClosed",
     ),
     resolve,
     { escape: false },
   );
+
+  // House rule: every client email names the property. An editable template
+  // that predates this (or drops {{property_address}}) must not lose it.
+  if (propertyAddress) {
+    if (!subject.includes(propertyAddress)) subject = `${subject} — ${propertyAddress}`;
+    if (!html.includes(escapeHtml(propertyAddress))) {
+      const line = `<p style="margin:0 0 4px;"><strong>Property:</strong> ${escapeHtml(propertyAddress)}</p>`;
+      html = html.includes(tasksHtml) ? html.replace(tasksHtml, `${line}${tasksHtml}`) : `${line}${html}`;
+    }
+  }
 
   const firm = await getLeadFirmKey(leadId);
   const result = await sendEmail(

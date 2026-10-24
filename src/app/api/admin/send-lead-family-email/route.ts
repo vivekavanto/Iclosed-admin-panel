@@ -13,6 +13,7 @@ import { brandEmailHtml } from "@/lib/emailBrand";
 import type { FirmKey } from "@/lib/firms";
 import { buildAgentCcList } from "@/lib/agentCc";
 import { collectMilestoneRecipients, sendCombinedMilestoneEmail } from "@/lib/sendMilestoneEmail";
+import { sendClientTaskReminder, TASK_REMINDER_TEMPLATE_NAME } from "@/lib/clientTaskReminder";
 
 /**
  * POST /api/admin/send-lead-family-email
@@ -694,7 +695,39 @@ export async function POST(req: NextRequest) {
         });
       }
     }
+    // The "Pending Tasks Reminder" template is filled from the file's open tasks
+    // ({{ pending_tasks }}), which only sendClientTaskReminder knows how to build.
+    // Through the generic path below the tag is left in the email as literal text.
+    // Like the All Files "Remind client" button, it goes out as ONE email to the
+    // file's leads.
+    const reminderMode =
+      !authType &&
+      !templateRow?.agent_only &&
+      (templateName ?? "").toLowerCase().includes(TASK_REMINDER_TEMPLATE_NAME.toLowerCase());
+    if (reminderMode) {
+      const first = recipients[0];
+      const firstName = `${first.first_name ?? ""} ${first.last_name ?? ""}`.trim() || "(no name)";
+      const { data: dealRows } = await supabaseAdmin
+        .from("deals")
+        .select("client_id")
+        .in("lead_id", recipients.map((x) => x.id))
+        .eq("is_deleted", false);
+      const clientIds = [
+        ...new Set((dealRows ?? []).map((d: { client_id: string | null }) => d.client_id).filter(Boolean) as string[]),
+      ];
+      const res = await sendClientTaskReminder(clientIds);
+      results.push({
+        lead_id: first.id,
+        name: firstName,
+        email: res.sent.join(", ") || (first.email ?? ""),
+        role: first.role,
+        success: res.ok,
+        template_used: templateName ?? undefined,
+        error: res.ok ? undefined : res.reason,
+      });
+    }
     for (const r of recipients) {
+      if (reminderMode) break;
       if (!authType && templateRow?.agent_only) break;
       const name = `${r.first_name ?? ""} ${r.last_name ?? ""}`.trim() || "(no name)";
 
