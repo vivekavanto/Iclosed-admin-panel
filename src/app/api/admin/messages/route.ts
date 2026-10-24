@@ -5,6 +5,42 @@ import { isUuid } from "@/lib/isUuid";
 import { rootLeadOfDeal } from "@/lib/dealMessages";
 import { staffChannels } from "@/lib/chatRealtime";
 import { clientIsOnline } from "@/lib/chatPresence";
+import { attachmentSummary, parseAttachments } from "@/lib/chatAttachments";
+
+type ListMsg = {
+  root_lead_id: string;
+  sender_type: string;
+  sender_name: string | null;
+  body: string;
+  source: string;
+  created_at: string;
+  read_by_admin_at: string | null;
+  attachments?: unknown;
+  deleted_at?: string | null;
+};
+
+const LIST_MSG_COLS = "root_lead_id, sender_type, sender_name, body, source, created_at, read_by_admin_at";
+
+/** The last messages of these conversations. Retries without the 2026-10-23 columns before that migration. */
+async function recentMessages(roots: string[]): Promise<ListMsg[]> {
+  const run = (cols: string) =>
+    supabaseAdmin
+      .from("deal_messages")
+      .select(cols)
+      .in("root_lead_id", roots)
+      .eq("kind", "message")
+      .order("created_at", { ascending: false })
+      .limit(4000);
+  let { data, error } = await run(`${LIST_MSG_COLS}, attachments, deleted_at`);
+  if (error?.code === "42703") ({ data, error } = await run(LIST_MSG_COLS));
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as ListMsg[];
+}
+
+function previewText(m: ListMsg): string {
+  if (m.deleted_at) return "Message deleted";
+  return m.body.trim() || attachmentSummary(parseAttachments(m.attachments)) || "";
+}
 
 // GET /api/admin/messages            — the inbox: one row per file conversation.
 // GET /api/admin/messages?summary=1  — just { unread } for the sidebar badge.
@@ -44,7 +80,7 @@ export async function GET(req: Request) {
     const roots = (convs ?? []).map((c) => c.root_lead_id);
     if (roots.length === 0) return NextResponse.json({ success: true, data: [], realtime: staffChannels() });
 
-    const [{ data: leads }, { data: kids }, { data: deals }, { data: msgs }, { data: presence }] = await Promise.all([
+    const [{ data: leads }, { data: kids }, { data: deals }, msgs, { data: presence }] = await Promise.all([
       supabaseAdmin.from("leads").select("id, first_name, last_name, email").in("id", roots),
       supabaseAdmin.from("leads").select("parent_lead_id").in("parent_lead_id", roots),
       supabaseAdmin
@@ -53,13 +89,7 @@ export async function GET(req: Request) {
         .in("lead_id", roots)
         .eq("is_deleted", false)
         .order("created_at", { ascending: false }),
-      supabaseAdmin
-        .from("deal_messages")
-        .select("root_lead_id, sender_type, sender_name, body, source, created_at, read_by_admin_at")
-        .in("root_lead_id", roots)
-        .eq("kind", "message")
-        .order("created_at", { ascending: false })
-        .limit(4000),
+      recentMessages(roots),
       // Separate query on purpose: before migrations/2026-10-22-chat-presence.sql
       // has run these columns don't exist, and the error must not empty the inbox.
       supabaseAdmin
@@ -83,10 +113,10 @@ export async function GET(req: Request) {
     const coCount = new Map<string, number>();
     for (const k of kids ?? []) coCount.set(k.parent_lead_id, (coCount.get(k.parent_lead_id) ?? 0) + 1);
 
-    const last = new Map<string, NonNullable<typeof msgs>[number]>();
+    const last = new Map<string, ListMsg>();
     const unread = new Map<string, number>();
     const lastClientSource = new Map<string, string>();
-    for (const m of msgs ?? []) {
+    for (const m of msgs) {
       if (!last.has(m.root_lead_id)) last.set(m.root_lead_id, m);
       if (m.sender_type === "client") {
         if (!lastClientSource.has(m.root_lead_id)) lastClientSource.set(m.root_lead_id, m.source);
@@ -109,7 +139,7 @@ export async function GET(req: Request) {
           status: c.status,
           assignee_email: c.assignee_email,
           assignee_name: c.assignee_name,
-          preview: `${lm.sender_type === "admin" ? "You: " : ""}${lm.body}`.slice(0, 160),
+          preview: `${lm.sender_type === "admin" ? "You: " : ""}${previewText(lm)}`.slice(0, 160),
           last_at: lm.created_at,
           unread: unread.get(c.root_lead_id) ?? 0,
           channel: lastClientSource.get(c.root_lead_id) === "email" ? "email" : "portal",

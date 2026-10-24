@@ -29,8 +29,38 @@ internal events have `visible_to_client = false` and are never read by the porta
    (falls back to `SERVICE_WEBHOOK_SECRET`).
 3. Point the inbound-mail provider (Resend inbound on `INBOUND_EMAIL_DOMAIN`, MX
    records) at `https://<admin>/api/webhooks/inbound-email?secret=<INBOUND_EMAIL_WEBHOOK_SECRET>`.
-4. Without 2-3 everything still works: emails carry the normal reply-to and tell the
+4. Recommended: copy the Resend webhook's **Signing secret** (`whsec_…`) into admin
+   env `RESEND_WEBHOOK_SECRET`. From then on the route accepts ONLY deliveries with a
+   valid Resend (Svix) signature made in the last 5 minutes, and `?secret=` alone is
+   refused — a leaked URL is useless. Unset = the old `?secret=` check
+   (`src/lib/verifyResendWebhook.ts`).
+5. Without 2-3 everything still works: emails carry the normal reply-to and tell the
    client to use the portal; only reply-by-email is off.
+
+## Attachments, edit / delete, saved replies
+Migration `2026-10-23-chat-attachments-edits-saved-replies.sql`. Safe before or after
+the deploy: until it runs, both apps read the old columns and the chat works as
+before; only these features say they aren't available yet.
+- **Attachments** (both sides): up to 5 files per message, 10 MB each, images / PDF /
+  Word / Excel (`src/lib/chatAttachments.ts`, mirrored in the portal). The browser
+  uploads straight to Blob under `chat/<root lead>/` (token routes:
+  admin `/api/admin/messages/<root>/attachment/token`, portal
+  `/api/messages/attachment/token`); the send route re-checks every URL with
+  `head()` and refuses anything outside that file's prefix. Files open only through
+  `/api/admin/messages/<root>/attachment` and `/api/messages/attachment`, which serve
+  a URL only if it is on a live message in a thread the caller can read (the portal
+  also requires `visible_to_client`). Private store when `NEXT_PUBLIC_PRIVATE_BLOB`
+  is on, like every other document. The client email lists the file names and
+  points to the portal; files are never emailed.
+- **Edit / delete**: staff change only their own replies and notes; clients only
+  their own portal messages (an emailed reply can be deleted, not edited). Delete is
+  soft: `deleted_at` is set, the row and text stay for the record, and both apps show
+  "This message was deleted" and stop serving its files. The first edit copies the
+  text to `original_body` (what the client was emailed); the email is not re-sent.
+  Staff edits / deletes are audited (`chat.message_edited` / `chat.message_deleted`).
+- **Saved replies** live in `chat_saved_replies`, managed from the inbox (gear icon
+  next to "Saved replies"). Seeded with the old built-in list; `{name}` becomes the
+  client's first name.
 
 ## File-based chat and handovers
 The chat belongs to the FILE (one thread per file, keyed by the root lead);

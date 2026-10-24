@@ -35,6 +35,16 @@ import {
   renderTemplateSafe,
   type TemplateValue,
 } from "./renderEmailTemplate";
+import { isBlobUrl } from "./blobPrivacy";
+import { BlobDocumentError, readBlobMeta } from "./blobDocument";
+import {
+  CHAT_ATTACHMENT_TYPES,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_ATTACHMENT_BYTES,
+  chatAttachmentPrefix,
+  parseAttachments,
+  type ChatAttachment,
+} from "./chatAttachments";
 
 export const CLIENT_MESSAGE_TEMPLATE_NAME = "Client Message";
 export const MAX_MESSAGE_LENGTH = 5000;
@@ -46,10 +56,16 @@ export type ThreadMessage = {
   kind: MessageKind;
   sender_type: "admin" | "client" | "system";
   sender_name: string | null;
+  sender_email: string | null;
   body: string;
   source: "portal" | "email";
   created_at: string;
   read_by_client_at: string | null;
+  attachments: ChatAttachment[];
+  edited_at: string | null;
+  deleted_at: string | null;
+  /** The message this one answers (same thread), or null. */
+  reply_to_id: string | null;
 };
 
 export type Conversation = {
@@ -62,8 +78,46 @@ export type Conversation = {
   last_message_at: string;
 };
 
-const MESSAGE_COLS =
-  "id, kind, sender_type, sender_name, body, source, created_at, read_by_client_at";
+// Attachments / edit / delete columns arrive with
+// migrations/2026-10-23-chat-attachments-edits-saved-replies.sql. Until it has
+// run, selecting them fails with 42703 and every read would come back empty —
+// so reads retry with the original columns and the chat works as before.
+const LEGACY_MESSAGE_COLS =
+  "id, kind, sender_type, sender_name, sender_email, body, source, created_at, read_by_client_at";
+const V1_MESSAGE_COLS = `${LEGACY_MESSAGE_COLS}, attachments, edited_at, deleted_at`;
+// reply_to_id comes with migrations/2026-10-23-chat-reply-to.sql.
+const MESSAGE_COLS = `${V1_MESSAGE_COLS}, reply_to_id`;
+/** Newest first: each read falls back a step when a migration hasn't run yet. */
+const MESSAGE_COL_TIERS = [MESSAGE_COLS, V1_MESSAGE_COLS, LEGACY_MESSAGE_COLS];
+
+/** Postgres "undefined column" (select) / PostgREST "column not in schema cache" (write). */
+export function isMissingColumn(code: string | undefined): boolean {
+  return code === "42703" || code === "PGRST204";
+}
+
+export const CHAT_MIGRATION_MISSING =
+  "This needs the chat migration (2026-10-23-chat-attachments-edits-saved-replies.sql) to be run first.";
+
+/** A row as the thread shows it. A deleted message keeps its row but loses its content. */
+function toThreadMessage(row: Record<string, unknown>): ThreadMessage {
+  const deleted = (row.deleted_at as string | null | undefined) ?? null;
+  return {
+    id: row.id as string,
+    kind: row.kind as MessageKind,
+    sender_type: row.sender_type as ThreadMessage["sender_type"],
+    sender_name: (row.sender_name as string | null) ?? null,
+    sender_email: (row.sender_email as string | null) ?? null,
+    body: deleted ? "" : ((row.body as string) ?? ""),
+    source: row.source as ThreadMessage["source"],
+    created_at: row.created_at as string,
+    read_by_client_at: (row.read_by_client_at as string | null) ?? null,
+    attachments: deleted ? [] : parseAttachments(row.attachments),
+    edited_at: (row.edited_at as string | null | undefined) ?? null,
+    deleted_at: deleted,
+    reply_to_id: (row.reply_to_id as string | null | undefined) ?? null,
+  };
+}
+
 const CONVERSATION_COLS =
   "root_lead_id, status, assignee_email, assignee_name, rating, rating_comment, last_message_at";
 
@@ -169,27 +223,48 @@ async function insertRow(row: {
   visibleToClient: boolean;
   readByAdmin?: boolean;
   readByClient?: boolean;
-}) {
+  attachments?: ChatAttachment[];
+  /** Already checked with checkReplyTarget. */
+  replyToId?: string | null;
+}): Promise<{ data: ThreadMessage | null; error: { code?: string; message: string } | null }> {
   const now = new Date().toISOString();
-  return supabaseAdmin
-    .from("deal_messages")
-    .insert({
-      root_lead_id: row.rootLeadId,
-      deal_id: row.dealId,
-      kind: row.kind,
-      sender_type: row.senderType,
-      sender_name: row.senderName ?? null,
-      sender_email: row.senderEmail ?? null,
-      sender_client_id: row.senderClientId ?? null,
-      body: row.body,
-      source: row.source ?? "portal",
-      email_message_id: row.emailMessageId ?? null,
-      visible_to_client: row.visibleToClient,
-      read_by_admin_at: row.readByAdmin ? now : null,
-      read_by_client_at: row.readByClient ? now : null,
-    })
-    .select(MESSAGE_COLS)
-    .single();
+  const attachments = row.attachments ?? [];
+  const values: Record<string, unknown> = {
+    root_lead_id: row.rootLeadId,
+    deal_id: row.dealId,
+    kind: row.kind,
+    sender_type: row.senderType,
+    sender_name: row.senderName ?? null,
+    sender_email: row.senderEmail ?? null,
+    sender_client_id: row.senderClientId ?? null,
+    body: row.body,
+    source: row.source ?? "portal",
+    email_message_id: row.emailMessageId ?? null,
+    visible_to_client: row.visibleToClient,
+    read_by_admin_at: row.readByAdmin ? now : null,
+    read_by_client_at: row.readByClient ? now : null,
+    // Only named when there is something to store, so a plain message still
+    // inserts on a database the migration hasn't reached.
+    ...(attachments.length > 0 ? { attachments } : {}),
+    ...(row.replyToId ? { reply_to_id: row.replyToId } : {}),
+  };
+  // Pre-migration a failed statement inserted nothing, so stepping down a tier
+  // and retrying is safe. A reply quote is dropped rather than losing the
+  // message; an attachment can't be stored without its column, so say so.
+  let lastError: { code?: string; message: string } | null = null;
+  for (const cols of MESSAGE_COL_TIERS) {
+    const hasReply = cols.includes("reply_to_id");
+    if (!cols.includes("attachments") && attachments.length > 0) {
+      return { data: null, error: { code: lastError?.code, message: CHAT_MIGRATION_MISSING } };
+    }
+    const tierValues = { ...values };
+    if (!hasReply) delete tierValues.reply_to_id;
+    const res = await supabaseAdmin.from("deal_messages").insert(tierValues).select(cols).single();
+    if (!res.error) return { data: toThreadMessage(res.data as unknown as Record<string, unknown>), error: null };
+    if (!isMissingColumn(res.error.code)) return { data: null, error: res.error };
+    lastError = res.error;
+  }
+  return { data: null, error: lastError };
 }
 
 export async function addEvent(
@@ -274,14 +349,19 @@ export async function setStatus(rootLeadId: string, status: "open" | "resolved",
 /* ─────────────────────────────── thread I/O ─────────────────────────────── */
 
 export async function loadThread(rootLeadId: string): Promise<ThreadMessage[]> {
-  const { data, error } = await supabaseAdmin
-    .from("deal_messages")
-    .select(MESSAGE_COLS)
-    .eq("root_lead_id", rootLeadId)
-    .order("created_at", { ascending: true })
-    .limit(1000);
-  if (error) throw new Error(error.message);
-  return (data ?? []) as ThreadMessage[];
+  const run = (cols: string) =>
+    supabaseAdmin
+      .from("deal_messages")
+      .select(cols)
+      .eq("root_lead_id", rootLeadId)
+      .order("created_at", { ascending: true })
+      .limit(1000);
+  for (const cols of MESSAGE_COL_TIERS) {
+    const { data, error } = await run(cols);
+    if (!error) return ((data ?? []) as unknown as Record<string, unknown>[]).map(toThreadMessage);
+    if (!isMissingColumn(error.code)) throw new Error(error.message);
+  }
+  throw new Error("deal_messages is missing its base columns");
 }
 
 /**
@@ -324,6 +404,117 @@ function fallbackBody(v: Record<string, string>): string {
 </div>`;
 }
 
+/**
+ * Check the attachments a sender claims to have uploaded, against storage.
+ * Each must be a blob under THIS file's chat prefix (so a URL from another
+ * file — or any other document — can't be attached), exist, and be within the
+ * size / type limits. Name comes from the request (what the user picked);
+ * size and type come from storage, never from the request.
+ */
+export async function verifyChatAttachments(
+  rootLeadId: string,
+  input: unknown,
+): Promise<{ ok: true; attachments: ChatAttachment[] } | { ok: false; error: string }> {
+  if (input == null) return { ok: true, attachments: [] };
+  if (!Array.isArray(input)) return { ok: false, error: "Invalid attachments." };
+  if (input.length > MAX_ATTACHMENTS_PER_MESSAGE) {
+    return { ok: false, error: `You can attach up to ${MAX_ATTACHMENTS_PER_MESSAGE} files per message.` };
+  }
+  const prefix = chatAttachmentPrefix(rootLeadId);
+  const out: ChatAttachment[] = [];
+  for (const raw of input) {
+    const a = (raw ?? {}) as Record<string, unknown>;
+    const url = typeof a.url === "string" ? a.url : "";
+    if (!isBlobUrl(url)) return { ok: false, error: "Invalid attachment." };
+    let meta;
+    try {
+      meta = await readBlobMeta(url);
+    } catch (err) {
+      if (err instanceof BlobDocumentError) return { ok: false, error: "An attachment could not be found. Please attach it again." };
+      throw err;
+    }
+    if (!meta.pathname.startsWith(prefix)) return { ok: false, error: "Invalid attachment." };
+    if (meta.size > MAX_ATTACHMENT_BYTES) return { ok: false, error: "An attachment is larger than 10 MB." };
+    if (!CHAT_ATTACHMENT_TYPES.includes(meta.contentType.split(";")[0].trim())) {
+      return { ok: false, error: "An attachment has a file type that can't be sent." };
+    }
+    const name =
+      (typeof a.name === "string" ? a.name : "").replace(/[\u0000-\u001f"\\]/g, "").trim().slice(0, 150) ||
+      meta.pathname.split("/").pop() ||
+      "file";
+    if (out.some((x) => x.url === url)) continue;
+    out.push({ url, name, size: meta.size, type: meta.contentType });
+  }
+  return { ok: true, attachments: out };
+}
+
+export type ReplyTarget = {
+  id: string;
+  sender_name: string | null;
+  sender_type: string;
+  body: string;
+  attachments: ChatAttachment[];
+  deleted: boolean;
+};
+
+/**
+ * The message a new one quotes. It must be in the SAME thread and be a message
+ * or note (never an event line). A client-visible reply may only quote a
+ * client-visible message — quoting a private note would put its text in front
+ * of the client (in the portal and in the email). Notes may quote anything.
+ */
+export async function checkReplyTarget(
+  rootLeadId: string,
+  replyToId: unknown,
+  newIsVisibleToClient: boolean,
+): Promise<{ ok: true; target: ReplyTarget | null } | { ok: false; error: string }> {
+  if (replyToId == null || replyToId === "") return { ok: true, target: null };
+  if (typeof replyToId !== "string" || !/^[0-9a-f-]{36}$/i.test(replyToId)) return { ok: false, error: "Invalid reply." };
+  const { data, error } = await supabaseAdmin
+    .from("deal_messages")
+    .select("id, root_lead_id, kind, visible_to_client, sender_name, sender_type, body, attachments, deleted_at")
+    .eq("id", replyToId)
+    .maybeSingle();
+  if (error) {
+    // Columns not there yet: send without the quote rather than failing.
+    if (isMissingColumn(error.code)) return { ok: true, target: null };
+    throw new Error(error.message);
+  }
+  if (!data || data.root_lead_id !== rootLeadId || (data.kind !== "message" && data.kind !== "note")) {
+    return { ok: false, error: "The message you replied to is no longer in this chat." };
+  }
+  if (newIsVisibleToClient && !data.visible_to_client) {
+    return { ok: false, error: "A private note can't be quoted in a reply to the client." };
+  }
+  return {
+    ok: true,
+    target: {
+      id: data.id,
+      sender_name: data.sender_name,
+      sender_type: data.sender_type,
+      body: data.deleted_at ? "" : data.body ?? "",
+      attachments: data.deleted_at ? [] : parseAttachments(data.attachments),
+      deleted: !!data.deleted_at,
+    },
+  };
+}
+
+/** The "Replying to …" block above a reply in the notification email. */
+function quoteToHtml(t: ReplyTarget | null): string {
+  if (!t) return "";
+  const who = t.sender_type === "client" ? "you" : t.sender_name || "our team";
+  let text = t.deleted ? "This message was deleted" : t.body.trim() || (t.attachments.length ? `📎 ${t.attachments.map((a) => a.name).join(", ")}` : "");
+  if (text.length > 200) text = `${text.slice(0, 197)}…`;
+  return `<div style="margin:0 0 10px;padding:6px 10px;border-left:3px solid #cbd5e1;background:#f1f5f9;color:#475569;font-size:13px;">Replying to ${escapeHtml(who)}: ${escapeHtml(text).replace(/\r?\n/g, " ")}</div>`;
+}
+
+/** The "Attached: …" line under a message in the notification email. */
+function attachmentsToHtml(list: ChatAttachment[], afterText: boolean): string {
+  if (list.length === 0) return "";
+  const names = list.map((a) => escapeHtml(a.name)).join(", ");
+  return `${afterText ? "<br><br>" : ""}<span style="color:#475569;font-size:13px;">&#128206; Attached: ${names}<br>Open your portal to view ${list.length === 1 ? "it" : "them"}.</span>`;
+}
+
 export type SendMessageResult =
   | { ok: true; message: ThreadMessage; emailed: string[]; emailError?: string }
   | { ok: false; error: string };
@@ -342,9 +533,14 @@ export async function sendAdminMessage(opts: {
   body: string;
   kind: "message" | "note";
   sender: { name: string; email: string | null };
+  /** Already checked with verifyChatAttachments. */
+  attachments?: ChatAttachment[];
+  /** Already checked with checkReplyTarget (for this kind's visibility). */
+  replyTo?: ReplyTarget | null;
 }): Promise<SendMessageResult> {
   const text = opts.body.trim();
-  if (!text) return { ok: false, error: "Message is empty." };
+  const attachments = opts.attachments ?? [];
+  if (!text && attachments.length === 0) return { ok: false, error: "Message is empty." };
   if (text.length > MAX_MESSAGE_LENGTH) {
     return { ok: false, error: `Message is too long (max ${MAX_MESSAGE_LENGTH} characters).` };
   }
@@ -367,12 +563,14 @@ export async function sendAdminMessage(opts: {
     visibleToClient: !isNote,
     readByAdmin: true,
     readByClient: isNote,
+    attachments,
+    replyToId: opts.replyTo?.id ?? null,
   });
   if (error || !row) {
     logger.error("[DealMessages] insert failed:", error?.message);
-    return { ok: false, error: "Could not save the message." };
+    return { ok: false, error: error?.message === CHAT_MIGRATION_MISSING ? CHAT_MIGRATION_MISSING : "Could not save the message." };
   }
-  const message = row as ThreadMessage;
+  const message = row;
 
   if (isNote) {
     await pingInbox(opts.rootLeadId);
@@ -417,7 +615,7 @@ export async function sendAdminMessage(opts: {
     first_name: { value: names },
     "user.first_name": { value: names },
     sender_name: { value: opts.sender.name },
-    message_body: { value: bodyToHtml(text), raw: true },
+    message_body: { value: quoteToHtml(opts.replyTo ?? null) + bodyToHtml(text) + attachmentsToHtml(attachments, !!text), raw: true },
     portal_url: { value: portalMessagesUrl() },
     file_number: { value: deal.file_number ?? "" },
   };
@@ -463,6 +661,154 @@ export async function sendAdminMessage(opts: {
   return { ok: true, message, emailed: to };
 }
 
+/* ─────────────────────────── edit / delete (staff) ───────────────────────── */
+
+export type ChangeMessageResult =
+  | { ok: true; message: ThreadMessage }
+  | { ok: false; error: string; status: number };
+
+type OwnRow = {
+  id: string;
+  kind: MessageKind;
+  sender_type: string;
+  sender_email: string | null;
+  body: string;
+  original_body: string | null;
+  attachments: unknown;
+  visible_to_client: boolean;
+  deleted_at: string | null;
+};
+
+/**
+ * A staff member may change only their OWN replies and notes — never a
+ * client's message, an event line, or a colleague's message. Matched on the
+ * sender email the row was written with.
+ */
+async function loadOwnStaffMessage(
+  rootLeadId: string,
+  messageId: string,
+  actorEmail: string | null,
+): Promise<{ ok: true; row: OwnRow } | { ok: false; error: string; status: number }> {
+  const { data, error } = await supabaseAdmin
+    .from("deal_messages")
+    .select("id, kind, sender_type, sender_email, body, original_body, attachments, visible_to_client, deleted_at")
+    .eq("id", messageId)
+    .eq("root_lead_id", rootLeadId)
+    .maybeSingle();
+  if (error) {
+    if (isMissingColumn(error.code)) return { ok: false, error: CHAT_MIGRATION_MISSING, status: 409 };
+    throw new Error(error.message);
+  }
+  const row = data as OwnRow | null;
+  if (!row) return { ok: false, error: "Message not found.", status: 404 };
+  const own =
+    row.sender_type === "admin" &&
+    (row.kind === "message" || row.kind === "note") &&
+    !!actorEmail &&
+    (row.sender_email ?? "").toLowerCase() === actorEmail.toLowerCase();
+  if (!own) return { ok: false, error: "You can only change your own messages.", status: 403 };
+  if (row.deleted_at) return { ok: false, error: "This message was already deleted.", status: 409 };
+  return { ok: true, row };
+}
+
+/** Live refresh after a change: clients see it only if the row is theirs to see. */
+async function pingChanged(rootLeadId: string, visibleToClient: boolean): Promise<void> {
+  if (visibleToClient) await pingVisibleMessage(rootLeadId);
+  else await pingInbox(rootLeadId);
+}
+
+/**
+ * Edit a staff reply / note. The text as FIRST sent is kept in original_body
+ * (it is what the client was emailed); the thread shows "edited". The email is
+ * not re-sent.
+ */
+export async function editStaffMessage(opts: {
+  rootLeadId: string;
+  messageId: string;
+  body: string;
+  actor: Actor;
+}): Promise<ChangeMessageResult> {
+  const text = opts.body.trim();
+  if (text.length > MAX_MESSAGE_LENGTH) {
+    return { ok: false, error: `Message is too long (max ${MAX_MESSAGE_LENGTH} characters).`, status: 400 };
+  }
+  const found = await loadOwnStaffMessage(opts.rootLeadId, opts.messageId, opts.actor.email);
+  if (!found.ok) return found;
+  const { row } = found;
+  if (!text && parseAttachments(row.attachments).length === 0) {
+    return { ok: false, error: "Message is empty. Delete it instead.", status: 400 };
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("deal_messages")
+    .update({
+      body: text,
+      edited_at: new Date().toISOString(),
+      original_body: row.original_body ?? row.body,
+    })
+    .eq("id", row.id)
+    .select(V1_MESSAGE_COLS)
+    .single();
+  if (error || !data) {
+    logger.error("[DealMessages] edit failed:", error?.message);
+    return { ok: false, error: "Could not edit the message.", status: 500 };
+  }
+  await pingChanged(opts.rootLeadId, row.visible_to_client);
+  return { ok: true, message: toThreadMessage(data as Record<string, unknown>) };
+}
+
+/**
+ * Soft-delete a staff reply / note: the row stays (with its text, for the
+ * record), but both apps show "This message was deleted" and stop serving its
+ * attachments. An email already sent can't be recalled.
+ */
+export async function deleteStaffMessage(opts: {
+  rootLeadId: string;
+  messageId: string;
+  actor: Actor;
+}): Promise<ChangeMessageResult> {
+  const found = await loadOwnStaffMessage(opts.rootLeadId, opts.messageId, opts.actor.email);
+  if (!found.ok) return found;
+  const { row } = found;
+
+  const { data, error } = await supabaseAdmin
+    .from("deal_messages")
+    .update({ deleted_at: new Date().toISOString(), deleted_by: opts.actor.email })
+    .eq("id", row.id)
+    .select(V1_MESSAGE_COLS)
+    .single();
+  if (error || !data) {
+    logger.error("[DealMessages] delete failed:", error?.message);
+    return { ok: false, error: "Could not delete the message.", status: 500 };
+  }
+  await pingChanged(opts.rootLeadId, row.visible_to_client);
+  return { ok: true, message: toThreadMessage(data as Record<string, unknown>) };
+}
+
+/* ───────────────────────────── attachment access ─────────────────────────── */
+
+/**
+ * The attachment with this URL, if it is on a live (not deleted) message in
+ * this file's thread. Staff can see notes too, so no visibility filter here.
+ */
+export async function findThreadAttachment(rootLeadId: string, url: string): Promise<ChatAttachment | null> {
+  const { data, error } = await supabaseAdmin
+    .from("deal_messages")
+    .select("attachments")
+    .eq("root_lead_id", rootLeadId)
+    .is("deleted_at", null)
+    // JSON text on purpose: .contains() with a JS array sends a Postgres ARRAY
+    // literal ({...}), which a jsonb column rejects with 22P02.
+    .filter("attachments", "cs", JSON.stringify([{ url }]))
+    .limit(1);
+  if (error) {
+    if (isMissingColumn(error.code)) return null;
+    throw new Error(error.message);
+  }
+  const list = parseAttachments(data?.[0]?.attachments);
+  return list.find((a) => a.url === url) ?? null;
+}
+
 /* ─────────────────────────────── client -> staff ─────────────────────────── */
 
 /**
@@ -501,7 +847,9 @@ export async function notifyAdminsOfClientMessage(messageId: string): Promise<bo
       .maybeSingle();
 
     const who = msg.sender_name?.trim() || "A client";
-    const preview = msg.body.length > 140 ? `${msg.body.slice(0, 137)}…` : msg.body;
+    // An attachment-only message has an empty body.
+    const text = msg.body.trim() || "Sent an attachment.";
+    const preview = text.length > 140 ? `${text.slice(0, 137)}…` : text;
     const { error } = await supabaseAdmin.from("notifications").insert({
       type: CLIENT_MESSAGE_TYPE,
       title: `${who} sent you a message${deal?.file_number ? ` (File ${deal.file_number})` : ""}.`,

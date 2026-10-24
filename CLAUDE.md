@@ -134,6 +134,9 @@ Rotation cadence is in `docs/key-rotation.md`.
 - `RESEND_API_KEY`, `RESEND_FROM_EMAIL`
 - `GEMINI_API_KEY`
 - `SERVICE_WEBHOOK_SECRET` (+ `SERVICE_WEBHOOK_ENFORCE`) — shared with the portal
+- `RESEND_WEBHOOK_SECRET` — Resend webhook signing secret (`whsec_…`); when set,
+  the inbound-email route requires a valid Svix signature (see
+  `docs/client-messaging.md`)
 - `RESEND_FROM_EMAIL_NAVAWILSON` / `RESEND_FROM_EMAIL_ICLOSED` (+ the matching
   `RESEND_REPLY_TO_EMAIL_*`) — per-firm sender overrides; see "Firms" below.
   The legacy firm-agnostic `RESEND_FROM_EMAIL` no longer applies to

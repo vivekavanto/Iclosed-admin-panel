@@ -82,7 +82,18 @@ const nextConfig: NextConfig = {
     "/api/admin/deals/[id]/email-to-clerk": ["./public/email-logo.png"],
   },
   async headers() {
-    return [{ source: "/:path*", headers: securityHeaders }];
+    return [
+      { source: "/:path*", headers: securityHeaders },
+      // The chat's file viewer shows a PDF in an <iframe> on the inbox page, so
+      // this ONE route may be framed by our own origin. Listed after the
+      // catch-all so its value wins; every other response stays DENY. When the
+      // CSP above is switched to enforcing, this route needs frame-ancestors
+      // 'self' as well, or the PDF preview goes blank.
+      {
+        source: "/api/admin/messages/:leadId/attachment",
+        headers: [{ key: "X-Frame-Options", value: "SAMEORIGIN" }],
+      },
+    ];
   },
   // ARC-004: legacy top-level URLs now redirect to their /admin/* home instead of
   // being duplicated as redirect-only page stubs. Keeps old bookmarks working.

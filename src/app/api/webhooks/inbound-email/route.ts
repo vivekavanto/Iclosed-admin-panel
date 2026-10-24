@@ -2,23 +2,29 @@ import { NextRequest, NextResponse } from "next/server";
 import { timingSafeEqual } from "crypto";
 import { ingestInboundEmail } from "@/lib/dealMessages";
 import { logger } from "@/lib/logger";
+import { verifyResendWebhook } from "@/lib/verifyResendWebhook";
 
 /**
- * POST /api/webhooks/inbound-email?secret=...
+ * POST /api/webhooks/inbound-email[?secret=...]
  *
  * Receives a client's emailed reply to a "Client Message" notification and
  * files it into the file's chat thread. Point the inbound-mail provider's
  * webhook at this URL (see docs/client-messaging.md).
  *
- * Auth: ?secret= must equal INBOUND_EMAIL_WEBHOOK_SECRET. Unset secret = the
- * route refuses everything (fail closed). Beyond that, the recipient address is
- * itself an HMAC-signed per-file token and the sender must be a client on that
- * file, so a leaked URL alone cannot post into a thread.
+ * Auth, one of two modes (both fail closed):
+ *   - RESEND_WEBHOOK_SECRET set (recommended): the request must carry a valid
+ *     Resend (Svix) signature, made within the last 5 minutes. ?secret= is then
+ *     not needed and not accepted on its own, so a leaked URL is useless.
+ *   - otherwise: ?secret= must equal INBOUND_EMAIL_WEBHOOK_SECRET. Unset = the
+ *     route refuses everything.
+ * Beyond that, the recipient address is itself an HMAC-signed per-file token and
+ * the sender must be a client on that file.
  *
  * Accepts two shapes:
  *   - Resend inbound `email.received` event (metadata only; the body is fetched
  *     from Resend's receiving API with RESEND_API_KEY)
  *   - a plain JSON { from, to, text, message_id } for any other provider/relay
+ *     (secret mode only — it has no Resend signature)
  */
 export function OPTIONS() {
   return new NextResponse(null, { status: 405 });
@@ -54,11 +60,20 @@ function htmlToText(html: string): string {
 }
 
 export async function POST(req: NextRequest) {
-  if (!secretOk(req.nextUrl.searchParams.get("secret"))) {
+  // The signature covers the exact bytes, so read the body as text first.
+  const rawBody = await req.text();
+  const signingSecret = (process.env.RESEND_WEBHOOK_SECRET ?? "").trim();
+  if (signingSecret) {
+    const check = verifyResendWebhook(rawBody, req.headers, signingSecret);
+    if (!check.ok) {
+      logger.warn(`[inbound-email] rejected: ${check.reason}`);
+      return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+    }
+  } else if (!secretOk(req.nextUrl.searchParams.get("secret"))) {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
   }
   try {
-    const payload = (await req.json()) as Record<string, any>;
+    const payload = JSON.parse(rawBody) as Record<string, any>;
     const data = (payload.type === "email.received" ? payload.data : payload) ?? {};
 
     let text: string = typeof data.text === "string" ? data.text : "";

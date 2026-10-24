@@ -7,21 +7,44 @@ import {
   Check,
   ChevronDown,
   CircleCheck,
-  FolderOpen,
+  Copy,
+  Download,
+  FileText,
   Lock,
   Loader2,
   Mail,
   MessageSquare,
+  Paperclip,
+  Pencil,
+  Phone,
+  Plus,
+  Reply,
   RotateCcw,
   Search,
   Send,
+  Trash2,
   UserPlus,
   Users,
   X,
   Zap,
 } from "lucide-react";
+import { upload } from "@vercel/blob/client";
 import { useAuth } from "@/lib/AuthProvider";
 import { useChatChannel } from "@/hooks/useChatChannel";
+import { BLOB_ACCESS } from "@/lib/blobPrivacy";
+import {
+  CHAT_ATTACHMENT_ACCEPT,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  chatAttachmentPath,
+  attachmentSummary,
+  checkChatAttachment,
+  dragHasFiles,
+  formatAttachmentSize,
+  nameClipboardFile,
+  isImageAttachment,
+  type ChatAttachment,
+} from "@/lib/chatAttachments";
+import AttachmentViewer from "@/components/chat/AttachmentViewer";
 
 // Staff inbox for client chats (design: "Agent inbox"). FILE-based: one
 // conversation per file, shown by its file number and property — like an order
@@ -57,11 +80,29 @@ type Msg = {
   kind: "message" | "note" | "event";
   sender_type: "admin" | "client" | "system";
   sender_name: string | null;
+  sender_email: string | null;
   body: string;
   source: "portal" | "email";
   created_at: string;
   read_by_client_at: string | null;
+  attachments: ChatAttachment[];
+  edited_at: string | null;
+  deleted_at: string | null;
+  reply_to_id?: string | null;
 };
+
+/** One line of a message, for a quote ("Replying to …" bar and the quote in a bubble). */
+function quoteText(m: Pick<Msg, "body" | "attachments" | "deleted_at">): string {
+  if (m.deleted_at) return "This message was deleted";
+  const line = m.body.replace(/\s+/g, " ").trim();
+  if (line) return line.length > 120 ? `${line.slice(0, 117)}…` : line;
+  return attachmentSummary(m.attachments) || "Message";
+}
+
+type SavedReply = { id: string; shortcut: string; title: string; body: string };
+
+/** A file picked in the composer: uploading, then ready to send with the message. */
+type Pending = { key: string; name: string; size: number; status: "uploading" | "ready" | "error"; url?: string; type?: string; error?: string };
 
 type Detail = {
   messages: Msg[];
@@ -73,10 +114,59 @@ type Detail = {
   handlers?: { name: string; email: string; started_at: string; ended_at: string | null }[];
 };
 
-/** "File 26S-0368" — the chat's title everywhere in the inbox. */
-function fileTitle(fileNumber: string | null | undefined): string {
-  return fileNumber ? `File ${fileNumber}` : "File (no number yet)";
+/** "26S-0368 · 12 King St" — the file, shown under the client's name. */
+function fileLine(fileNumber: string | null | undefined, address?: string | null): string {
+  return [fileNumber || "No file no. yet", address].filter(Boolean).join(" · ");
 }
+
+/**
+ * Shows `full` (every client's name) when it fits the space it has, otherwise
+ * `short` ("Vivek +1") — never a half-cut list of names.
+ */
+const FitName: React.FC<{ full: string; short: string; className?: string }> = ({ full, short, className = "" }) => {
+  const box = useRef<HTMLSpanElement>(null);
+  const probe = useRef<HTMLSpanElement>(null);
+  const [fits, setFits] = useState(false);
+  useEffect(() => {
+    const check = () => {
+      if (box.current && probe.current) setFits(probe.current.offsetWidth <= box.current.clientWidth);
+    };
+    check();
+    if (typeof ResizeObserver === "undefined" || !box.current) return;
+    const ro = new ResizeObserver(check);
+    ro.observe(box.current);
+    return () => ro.disconnect();
+  }, [full]);
+  return (
+    <span ref={box} className={`relative block min-w-0 flex-1 ${className}`}>
+      <span ref={probe} aria-hidden className={`invisible absolute left-0 top-0 whitespace-nowrap ${className}`}>{full}</span>
+      <span className="block truncate">{fits ? full : short}</span>
+    </span>
+  );
+};
+
+/**
+ * WhatsApp-style round avatar: the client's initials in their own colour, an
+ * "+N" disc behind it for co-clients, and the green dot when they're online.
+ */
+const ClientAvatar: React.FC<{ name: string; co?: number; online?: boolean; size?: "sm" | "md" | "lg" }> = ({ name, co = 0, online, size = "md" }) => {
+  const box = size === "lg" ? "h-20 w-20 text-2xl" : size === "sm" ? "h-9 w-9 text-[13px]" : "h-10 w-10 text-sm";
+  return (
+    <span className="relative flex flex-none">
+      {co > 0 && (
+        <span aria-hidden className={`absolute -right-1.5 top-0 flex items-center justify-center rounded-full border-2 border-white bg-slate-200 font-semibold text-slate-600 ${size === "lg" ? "h-8 w-8 text-xs" : "h-5 w-5 text-[9px]"}`}>
+          +{co}
+        </span>
+      )}
+      <span className={`relative flex items-center justify-center rounded-full font-semibold ${box} ${tint(name)}`}>{initials(name)}</span>
+      {online && (
+        <span className={`absolute bottom-0 right-0 rounded-full border-2 border-white bg-emerald-500 ${size === "lg" ? "h-4 w-4" : "h-3 w-3"}`}>
+          <span className="sr-only">Client online</span>
+        </span>
+      )}
+    </span>
+  );
+};
 
 function shortDate(iso: string): string {
   const d = new Date(iso);
@@ -85,14 +175,73 @@ function shortDate(iso: string): string {
 
 type Filter = "open" | "mine" | "unassigned" | "resolved";
 
-const SAVED_REPLIES = [
-  { key: "/hi", title: "Greeting", text: "Hi {name}, thanks for reaching out! Give me a moment to look into this." },
-  { key: "/docs", title: "Documents reminder", text: "Could you please upload the outstanding documents in your portal under Your Documents? Let me know if anything is unclear." },
-  { key: "/tasks", title: "Pending tasks", text: "A quick reminder to complete your pending tasks in the portal so we can keep your file moving." },
-  { key: "/closing", title: "Closing date", text: "Your closing date is on track. I’ll let you know as soon as anything changes." },
-  { key: "/handoff", title: "Hand off", text: "I’m looping in a colleague who will reply right here in this chat." },
-  { key: "/bye", title: "Close out", text: "Glad I could help! I’ll mark this as resolved. Just reply here if anything else comes up." },
-];
+/** Where a chat attachment opens (thread-scoped, auth-gated). */
+function attachmentHref(rootId: string, a: ChatAttachment, download = false): string {
+  return `/api/admin/messages/${rootId}/attachment?u=${encodeURIComponent(a.url)}${download ? "&download=1" : ""}`;
+}
+
+/**
+ * Thumbnails for images, file cards for everything else. Clicking OPENS the
+ * file in the viewer (WhatsApp-style); only the ⬇ icon downloads.
+ * `onDark` = inside a staff (brand) bubble.
+ */
+const AttachmentList: React.FC<{
+  rootId: string;
+  items: ChatAttachment[];
+  onDark?: boolean;
+  onOpen: (items: ChatAttachment[], index: number) => void;
+}> = ({ rootId, items, onDark = false, onOpen }) => {
+  if (items.length === 0) return null;
+  return (
+    // Fixed-width rows whose names truncate, so a long filename can't widen the bubble.
+    <div className="mt-1.5 flex w-72 max-w-full flex-col gap-1.5">
+      {items.map((a, i) =>
+        isImageAttachment(a) ? (
+          // Thumbnail at the image's own size, capped — never stretched up.
+          <button
+            key={a.url}
+            type="button"
+            onClick={() => onOpen(items, i)}
+            title={`Open ${a.name}`}
+            className="block w-fit max-w-full overflow-hidden rounded-lg border border-slate-200 hover:opacity-90"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element -- auth-gated route, not a static asset */}
+            <img src={attachmentHref(rootId, a)} alt={a.name} loading="lazy" className="block h-auto max-h-48 w-auto max-w-[240px] object-contain" />
+          </button>
+        ) : (
+          <div
+            key={a.url}
+            className={`flex w-full min-w-0 items-center rounded-lg ${onDark ? "bg-white/15" : "border border-slate-200 bg-slate-50"}`}
+          >
+            <button
+              type="button"
+              onClick={() => onOpen(items, i)}
+              title={`Open ${a.name}`}
+              className={`flex min-w-0 flex-1 items-center gap-2.5 rounded-l-lg px-2.5 py-2 text-left ${onDark ? "hover:bg-white/10" : "hover:bg-slate-100"}`}
+            >
+              <span className={`flex h-8 w-8 flex-none items-center justify-center rounded-md ${onDark ? "bg-white text-brand-primary" : "bg-brand-primary/10 text-brand-primary"}`}>
+                <FileText size={16} />
+              </span>
+              <span className="flex min-w-0 flex-1 flex-col leading-tight">
+                <span className={`truncate text-[13px] font-medium ${onDark ? "text-white" : "text-slate-800"}`}>{a.name}</span>
+                <span className={`text-[11px] ${onDark ? "text-white/75" : "text-slate-500"}`}>{formatAttachmentSize(a.size)}</span>
+              </span>
+            </button>
+            <a
+              href={attachmentHref(rootId, a, true)}
+              download={a.name}
+              aria-label={`Download ${a.name}`}
+              title="Download"
+              className={`mr-1 flex h-8 w-8 flex-none items-center justify-center rounded-md ${onDark ? "text-white hover:bg-white/15" : "text-slate-500 hover:bg-slate-200 hover:text-slate-800"}`}
+            >
+              <Download size={15} />
+            </a>
+          </div>
+        ),
+      )}
+    </div>
+  );
+};
 
 const TINTS = [
   "bg-rose-100 text-rose-800",
@@ -152,6 +301,171 @@ function lastSeen(iso: string | null | undefined): string | null {
   return `Last seen ${new Date(iso).toLocaleDateString("en-CA", { month: "short", day: "numeric" })}`;
 }
 
+/**
+ * Add / edit / delete the "/" saved replies (shared by all staff). Read-only
+ * with a note while the table doesn't exist yet (migration not run).
+ */
+const SavedRepliesManager: React.FC<{
+  replies: SavedReply[];
+  editable: boolean;
+  onClose: () => void;
+  onChanged: () => Promise<void>;
+  flash: (text: string, error?: boolean) => void;
+}> = ({ replies, editable, onClose, onChanged, flash }) => {
+  // null = list view; { id: null } = adding; { id } = editing that reply.
+  const [form, setForm] = useState<null | { id: string | null; shortcut: string; title: string; body: string }>(null);
+  const [busy, setBusy] = useState(false);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+
+  const call = async (url: string, method: string, body?: unknown) => {
+    setBusy(true);
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error || "Could not save");
+      await onChanged();
+      return true;
+    } catch (err) {
+      flash(err instanceof Error ? err.message : "Could not save", true);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const save = async () => {
+    if (!form) return;
+    const payload = { shortcut: form.shortcut, title: form.title, body: form.body };
+    const ok = form.id
+      ? await call(`/api/admin/messages/saved-replies/${form.id}`, "PATCH", payload)
+      : await call("/api/admin/messages/saved-replies", "POST", payload);
+    if (ok) {
+      setForm(null);
+      flash("Saved reply updated");
+    }
+  };
+
+  const remove = async (id: string) => {
+    setConfirmId(null);
+    if (await call(`/api/admin/messages/saved-replies/${id}`, "DELETE")) flash("Saved reply deleted");
+  };
+
+  return (
+    <div className="absolute inset-0 z-40 flex items-center justify-center bg-slate-900/30 p-4" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
+      <div role="dialog" aria-modal="true" aria-labelledby="saved-title" className="flex max-h-full w-full max-w-lg flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+          <h2 id="saved-title" className="text-base font-bold text-slate-900">Saved replies</h2>
+          <button onClick={() => !busy && onClose()} aria-label="Close" className="rounded-lg p-1 text-slate-500 hover:bg-slate-100">
+            <X size={18} />
+          </button>
+        </div>
+
+        {form ? (
+          <div className="space-y-3 overflow-y-auto px-5 py-4">
+            <div className="grid grid-cols-[8rem_minmax(0,1fr)] gap-3">
+              <label className="block text-[13px] font-medium text-slate-700">
+                Shortcut
+                <input
+                  value={form.shortcut}
+                  onChange={(e) => setForm({ ...form, shortcut: e.target.value.slice(0, 31) })}
+                  placeholder="/docs"
+                  className="mt-1 block h-10 w-full rounded-lg border border-slate-300 px-3 font-mono text-sm"
+                />
+              </label>
+              <label className="block text-[13px] font-medium text-slate-700">
+                Title
+                <input
+                  value={form.title}
+                  onChange={(e) => setForm({ ...form, title: e.target.value.slice(0, 80) })}
+                  placeholder="Documents reminder"
+                  className="mt-1 block h-10 w-full rounded-lg border border-slate-300 px-3 text-sm"
+                />
+              </label>
+            </div>
+            <label className="block text-[13px] font-medium text-slate-700">
+              Reply
+              <textarea
+                rows={5}
+                value={form.body}
+                onChange={(e) => setForm({ ...form, body: e.target.value.slice(0, 5000) })}
+                className="mt-1 block w-full resize-y rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              />
+            </label>
+            <p className="text-xs text-slate-500">
+              Write <code className="rounded bg-slate-100 px-1">{"{name}"}</code> where the client’s first name should go.
+            </p>
+            <div className="flex justify-end gap-2 pt-1">
+              <button onClick={() => setForm(null)} disabled={busy} className="h-9 rounded-lg border border-slate-300 bg-white px-3.5 text-[13px] font-medium text-slate-700 hover:bg-slate-50">
+                Back
+              </button>
+              <button
+                onClick={() => void save()}
+                disabled={busy || !form.shortcut.trim() || !form.title.trim() || !form.body.trim()}
+                className="flex h-9 items-center gap-2 rounded-lg bg-brand-primary px-3.5 text-[13px] font-semibold text-white hover:bg-brand-primaryHover disabled:opacity-50"
+              >
+                {busy && <Loader2 size={14} className="animate-spin" />}
+                {form.id ? "Save changes" : "Add reply"}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {!editable && (
+              <p className="mx-5 mt-4 rounded-lg bg-amber-50 px-3 py-2.5 text-[13px] text-amber-900">
+                These are the built-in replies. They can be edited once the chat migration has been run.
+              </p>
+            )}
+            <ul className="min-h-0 flex-1 divide-y divide-slate-100 overflow-y-auto px-2 py-2">
+              {replies.length === 0 && <li className="px-3 py-6 text-center text-sm text-slate-500">No saved replies yet.</li>}
+              {replies.map((r) => (
+                <li key={r.id} className="flex items-start gap-3 px-3 py-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="flex items-baseline gap-2">
+                      <span className="font-mono text-[12.5px] font-medium text-brand-primary">{r.shortcut}</span>
+                      <span className="truncate text-[13.5px] font-medium text-slate-900">{r.title}</span>
+                    </p>
+                    <p className="mt-0.5 line-clamp-2 text-xs text-slate-500">{r.body}</p>
+                  </div>
+                  {editable &&
+                    (confirmId === r.id ? (
+                      <span className="flex flex-none items-center gap-1 text-[12px]">
+                        <button onClick={() => void remove(r.id)} disabled={busy} className="rounded px-1.5 py-1 font-semibold text-red-600 hover:bg-red-50">Delete</button>
+                        <button onClick={() => setConfirmId(null)} className="rounded px-1.5 py-1 text-slate-600 hover:bg-slate-100">Cancel</button>
+                      </span>
+                    ) : (
+                      <span className="flex flex-none gap-0.5">
+                        <button onClick={() => setForm({ id: r.id, shortcut: r.shortcut, title: r.title, body: r.body })} aria-label={`Edit ${r.shortcut}`} className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-800">
+                          <Pencil size={14} />
+                        </button>
+                        <button onClick={() => setConfirmId(r.id)} aria-label={`Delete ${r.shortcut}`} className="rounded-md p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600">
+                          <Trash2 size={14} />
+                        </button>
+                      </span>
+                    ))}
+                </li>
+              ))}
+            </ul>
+            {editable && (
+              <div className="flex justify-end border-t border-slate-100 px-5 py-3">
+                <button
+                  onClick={() => setForm({ id: null, shortcut: "/", title: "", body: "" })}
+                  className="flex h-9 items-center gap-1.5 rounded-lg bg-brand-primary px-3.5 text-[13px] font-semibold text-white hover:bg-brand-primaryHover"
+                >
+                  <Plus size={15} /> New reply
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const LIST_POLL = 10_000;
 const THREAD_POLL = 6_000;
 /** While realtime pings flow, polling is only a safety net. */
@@ -176,6 +490,49 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
   const [sending, setSending] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const assignRef = useRef<HTMLDivElement>(null);
+  const [savedReplies, setSavedReplies] = useState<SavedReply[]>([]);
+  const [savedEditable, setSavedEditable] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
+  const [savedOpen, setSavedOpen] = useState(false);
+  const savedPopRef = useRef<HTMLDivElement>(null);
+  const savedBtnRef = useRef<HTMLButtonElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const [files, setFiles] = useState<Pending[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [editing, setEditing] = useState<{ id: string; text: string; busy: boolean } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  // The ⌄ menu on one of my messages, and the file viewer.
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [viewer, setViewer] = useState<{ items: ChatAttachment[]; index: number } | null>(null);
+  // Contact info panel (click the client's avatar/name). Always shown on xl;
+  // below that it slides over the thread, WhatsApp-style.
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
+  // The message the composer is answering (WhatsApp "Reply"), and a file drag in progress.
+  const [replyTo, setReplyTo] = useState<Msg | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
+  const [flashId, setFlashId] = useState<string | null>(null);
+
+  // Close the message menu on a click outside it, or on Escape.
+  useEffect(() => {
+    if (!menuFor) return;
+    const onDown = (e: MouseEvent | TouchEvent) => {
+      if (!menuRef.current?.contains(e.target as Node)) setMenuFor(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuFor(null);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("touchstart", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("touchstart", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuFor]);
 
   // Close the Assign menu on a click outside it, or on Escape.
   useEffect(() => {
@@ -240,6 +597,22 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
       setDetailLoading(false);
     }
   }, []);
+
+  const loadSavedReplies = useCallback(async () => {
+    try {
+      const res = await fetch("/api/admin/messages/saved-replies", { cache: "no-store" });
+      const json = await res.json();
+      if (json.success) {
+        setSavedReplies(json.data as SavedReply[]);
+        setSavedEditable(!!json.editable);
+      }
+    } catch {
+      /* keep what we have */
+    }
+  }, []);
+  useEffect(() => {
+    void loadSavedReplies();
+  }, [loadSavedReplies]);
 
   // Teammates' Online / Away, for the assign menu. Silent when presence is off
   // (and stops asking once the server says the migration hasn't run).
@@ -384,9 +757,10 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
       if (filter === "mine" && !mine(r)) return false;
       if (filter === "unassigned" && r.assignee_email) return false;
       if (!q) return true;
+      // File no., address or client — not message text (it only ever saw the
+      // latest message, so it found some chats and silently missed others).
       return (
         r.name.toLowerCase().includes(q) ||
-        r.preview.toLowerCase().includes(q) ||
         (r.file_number ?? "").toLowerCase().includes(q) ||
         (r.property_address ?? "").toLowerCase().includes(q)
       );
@@ -395,11 +769,11 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
 
   const activeRow = rows.find((r) => r.id === activeId) ?? null;
   const people = detail?.people ?? [];
-  // The CLIENTS on the file (avatars, saved-reply {name}); the FILE is the title.
+  // The CLIENT is the title (avatar, saved-reply {name}); the FILE goes underneath.
   const title = activeRow?.name ?? people[0]?.name ?? "Client";
-  const fileName = fileTitle(detail?.file?.file_number ?? activeRow?.file_number);
-  const address = detail?.file?.property_address ?? activeRow?.property_address ?? null;
-  const clientNames = people.length > 0 ? people.map((p) => p.name).join(", ") : title + (activeRow?.co_count ? ` +${activeRow.co_count}` : "");
+  const coCount = people.length > 1 ? people.length - 1 : activeRow?.co_count ?? 0;
+  const clientTitle = title + (coCount ? ` +${coCount}` : "");
+  const fileName = fileLine(detail?.file?.file_number ?? activeRow?.file_number);
   const status = detail?.conversation?.status ?? activeRow?.status ?? "open";
   const assigneeName = detail?.conversation?.assignee_name ?? activeRow?.assignee_name ?? null;
   const assigneeEmail = detail?.conversation?.assignee_email ?? activeRow?.assignee_email ?? null;
@@ -411,31 +785,156 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
     setAssignOpen(false);
     setMode("reply");
     setDraft("");
+    setFiles([]);
+    setEditing(null);
+    setConfirmDelete(null);
+    setSavedOpen(false);
+    setMenuFor(null);
+    setViewer(null);
+    setReplyTo(null);
+    setProfileOpen(false);
     setRows((rs) => rs.map((r) => (r.id === id ? { ...r, unread: 0 } : r)));
   };
 
+  // Answer one message. A private note can only be answered with a note (a
+  // reply would show its text to the client), so that switches the composer.
+  const startReply = (m: Msg) => {
+    setMenuFor(null);
+    setEditing(null);
+    setReplyTo(m);
+    if (m.kind === "note") setMode("note");
+    setTimeout(() => composerRef.current?.focus(), 0);
+  };
+  // Jump to the quoted original and flash it.
+  const jumpTo = (id: string) => {
+    const el = document.getElementById(`msg-${id}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    setFlashId(id);
+    setTimeout(() => setFlashId((f) => (f === id ? null : f)), 1600);
+  };
+
+  // Files dragged onto the open chat. The depth counter stops the overlay
+  // flickering as the pointer crosses child elements.
+  const dropProps = {
+    onDragEnter: (e: React.DragEvent) => {
+      if (!dragHasFiles(e)) return;
+      e.preventDefault();
+      dragDepth.current += 1;
+      setDragging(true);
+    },
+    onDragOver: (e: React.DragEvent) => {
+      if (dragHasFiles(e)) e.preventDefault();
+    },
+    onDragLeave: (e: React.DragEvent) => {
+      if (!dragHasFiles(e)) return;
+      dragDepth.current = Math.max(0, dragDepth.current - 1);
+      if (dragDepth.current === 0) setDragging(false);
+    },
+    onDrop: (e: React.DragEvent) => {
+      if (!dragHasFiles(e)) return;
+      e.preventDefault();
+      dragDepth.current = 0;
+      setDragging(false);
+      addFiles(e.dataTransfer.files);
+    },
+  };
+
+  // The saved-replies list is open (the button, or "/" typed at the start of the
+  // box). It closes on a click anywhere else, Escape, or picking a reply.
+  const showSaved = savedOpen && mode === "reply";
   const shortcutMatches = useMemo(() => {
-    if (mode !== "reply" || !draft.startsWith("/") || draft.includes(" ")) return [];
-    const q = draft.slice(1).toLowerCase();
-    return SAVED_REPLIES.filter((k) => k.key.slice(1).startsWith(q) || k.title.toLowerCase().includes(q));
-  }, [draft, mode]);
+    if (!showSaved) return [];
+    // Typing "/hi" filters; opened from the button with other text, show them all.
+    const q = draft.startsWith("/") && !draft.includes(" ") ? draft.slice(1).toLowerCase() : "";
+    return savedReplies.filter((k) => k.shortcut.slice(1).startsWith(q) || k.title.toLowerCase().includes(q));
+  }, [draft, showSaved, savedReplies]);
+
+  useEffect(() => {
+    if (!savedOpen) return;
+    const onDown = (e: MouseEvent | TouchEvent) => {
+      const t = e.target as Node;
+      if (savedPopRef.current?.contains(t) || savedBtnRef.current?.contains(t) || composerRef.current?.contains(t)) return;
+      setSavedOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setSavedOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("touchstart", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("touchstart", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [savedOpen]);
 
   const firstName = (people[0]?.name ?? "").split(" ")[0] || "there";
-  const insertSaved = (k: (typeof SAVED_REPLIES)[number]) => setDraft(k.text.replace("{name}", firstName));
+  const insertSaved = (k: SavedReply) => {
+    const text = k.body.replace(/\{name\}/g, firstName);
+    // A "/hi" query is replaced by the reply; anything already written is kept.
+    setDraft((d) => (d.startsWith("/") && !d.includes(" ") ? text : d.trim() ? `${d.trimEnd()}\n${text}` : text));
+    setSavedOpen(false);
+    composerRef.current?.focus();
+  };
+
+  // Attachments upload as soon as they're picked (📎), dropped on the chat, or
+  // pasted (a screenshot), straight to Blob, so Send only carries their URLs.
+  // The server re-checks each one before storing it.
+  const addFiles = (list: FileList | File[] | null) => {
+    if (!list || list.length === 0 || !activeId) return;
+    const root = activeId;
+    const room = MAX_ATTACHMENTS_PER_MESSAGE - files.length;
+    const all = Array.from(list).map(nameClipboardFile);
+    const picked = all.slice(0, Math.max(0, room));
+    if (all.length > picked.length) flash(`You can attach up to ${MAX_ATTACHMENTS_PER_MESSAGE} files per message.`, true);
+    for (const file of picked) {
+      const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const problem = checkChatAttachment(file);
+      if (problem) {
+        flash(problem, true);
+        continue;
+      }
+      setFiles((f) => [...f, { key, name: file.name, size: file.size, status: "uploading" }]);
+      void upload(chatAttachmentPath(root, file.name), file, {
+        access: BLOB_ACCESS,
+        handleUploadUrl: `/api/admin/messages/${root}/attachment/token`,
+        contentType: file.type || undefined,
+      })
+        .then((blob) =>
+          setFiles((f) => f.map((p) => (p.key === key ? { ...p, status: "ready", url: blob.url, type: blob.contentType } : p))),
+        )
+        .catch((err: unknown) =>
+          setFiles((f) =>
+            f.map((p) => (p.key === key ? { ...p, status: "error", error: err instanceof Error ? err.message : "Upload failed" } : p)),
+          ),
+        );
+    }
+  };
+  const uploadingFiles = files.some((f) => f.status === "uploading");
+  const readyFiles = files.filter((f) => f.status === "ready" && f.url);
 
   const send = async () => {
     const body = draft.trim();
-    if (!body || sending || !activeId) return;
+    if ((!body && readyFiles.length === 0) || sending || uploadingFiles || !activeId) return;
     setSending(true);
     try {
       const res = await fetch(`/api/admin/messages/${activeId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body, kind: mode === "note" ? "note" : "message" }),
+        body: JSON.stringify({
+          body,
+          kind: mode === "note" ? "note" : "message",
+          attachments: readyFiles.map((f) => ({ url: f.url, name: f.name })),
+          ...(replyTo ? { reply_to_id: replyTo.id } : {}),
+        }),
       });
       const json = await res.json();
       if (!json.success) throw new Error(json.error || "Could not send");
       setDraft("");
+      setFiles([]);
+      setReplyTo(null);
       if (mode === "reply") {
         flash(json.emailError ? `Saved to the chat, but the email failed: ${json.emailError}` : "Sent — the client was emailed", !!json.emailError);
       }
@@ -445,6 +944,35 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
     } finally {
       setSending(false);
     }
+  };
+
+  // Edit / delete one of MY replies or notes.
+  const changeMessage = async (id: string, method: "PATCH" | "DELETE", body?: string) => {
+    if (!activeId) return false;
+    try {
+      const res = await fetch(`/api/admin/messages/${activeId}/messages/${id}`, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        ...(body !== undefined ? { body: JSON.stringify({ body }) } : {}),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error || "Could not update the message");
+      await Promise.all([loadDetail(activeId, true), loadList()]);
+      return true;
+    } catch (err) {
+      flash(err instanceof Error ? err.message : "Could not update the message", true);
+      return false;
+    }
+  };
+  const saveEdit = async () => {
+    if (!editing || editing.busy) return;
+    setEditing({ ...editing, busy: true });
+    const ok = await changeMessage(editing.id, "PATCH", editing.text);
+    setEditing((e) => (ok ? null : e ? { ...e, busy: false } : e));
+  };
+  const removeMessage = async (id: string) => {
+    setConfirmDelete(null);
+    if (await changeMessage(id, "DELETE")) flash("Message deleted");
   };
 
   const patch = async (payload: Record<string, unknown>) => {
@@ -511,6 +1039,147 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
   let lastDay = "";
   const lastAdminId = [...(detail?.messages ?? [])].reverse().find((m) => m.sender_type === "admin" && m.kind === "message")?.id;
 
+  /** Only my own, live replies / notes can be edited or deleted. */
+  const isMine = (m: Msg) =>
+    !!myEmail &&
+    m.sender_type === "admin" &&
+    (m.kind === "message" || m.kind === "note") &&
+    !m.deleted_at &&
+    (m.sender_email ?? "").toLowerCase() === myEmail;
+
+  // WhatsApp-style ⌄ beside every bubble (on hover; always shown on touch
+  // screens): Reply on any message, Edit / Delete on my own. Delete confirms in
+  // a popup. `side` = which side of the bubble the ⌄ sits on.
+  const renderActions = (m: Msg, side: "left" | "right" = "left") => {
+    if (m.deleted_at || editing?.id === m.id || (m.kind !== "message" && m.kind !== "note")) return null;
+    const open = menuFor === m.id;
+    const own = isMine(m);
+    return (
+      <div ref={open ? menuRef : undefined} className="relative flex-none self-start pt-1">
+        <button
+          onClick={() => setMenuFor(open ? null : m.id)}
+          aria-label="Message options"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          className={`flex h-7 w-7 items-center justify-center rounded-full text-slate-500 transition-opacity hover:bg-slate-200/70 hover:text-slate-800 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 ${
+            open ? "bg-slate-200/70 opacity-100" : "opacity-0 group-hover:opacity-100"
+          }`}
+        >
+          <ChevronDown size={16} />
+        </button>
+        {open && (
+          <div role="menu" className={`absolute top-9 z-20 w-36 rounded-xl border border-slate-200 bg-white p-1 shadow-xl ${side === "left" ? "right-0" : "left-0"}`}>
+            <button
+              role="menuitem"
+              onClick={() => startReply(m)}
+              className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] text-slate-700 hover:bg-slate-50"
+            >
+              <Reply size={14} /> Reply
+            </button>
+            {own && (
+              <>
+            <button
+              role="menuitem"
+              onClick={() => {
+                setMenuFor(null);
+                setEditing({ id: m.id, text: m.body, busy: false });
+              }}
+              className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] text-slate-700 hover:bg-slate-50"
+            >
+              <Pencil size={14} /> Edit
+            </button>
+            <button
+              role="menuitem"
+              onClick={() => {
+                setMenuFor(null);
+                setConfirmDelete(m.id);
+              }}
+              className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] text-red-600 hover:bg-red-50"
+            >
+              <Trash2 size={14} /> Delete
+            </button>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+  const deleting =confirmDelete ? detail?.messages.find((x) => x.id === confirmDelete) ?? null : null;
+
+  const byId = new Map((detail?.messages ?? []).map((x) => [x.id, x]));
+  /** Who wrote a quoted message, as the quote's heading. */
+  const quotedName = (q: Msg) =>
+    isMine(q) || (q.sender_type === "admin" && (q.sender_email ?? "").toLowerCase() === myEmail && !!myEmail)
+      ? "You"
+      : q.sender_name || (q.sender_type === "client" ? "Client" : "iClosed Team");
+
+  // Body + attachments of one bubble, or its inline editor, or the deleted marker.
+  const renderContent = (m: Msg, tone: "staff" | "client" | "note") => {
+    if (m.deleted_at) return <p className="italic text-slate-500">This message was deleted</p>;
+    if (editing?.id === m.id) {
+      return (
+        <div className="flex w-[min(28rem,60vw)] flex-col gap-2">
+          <label htmlFor={`edit-${m.id}`} className="sr-only">Edit message</label>
+          <textarea
+            id={`edit-${m.id}`}
+            autoFocus
+            rows={3}
+            value={editing.text}
+            onChange={(e) => setEditing({ ...editing, text: e.target.value.slice(0, 5000) })}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setEditing(null);
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                void saveEdit();
+              }
+            }}
+            className="w-full resize-y rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-brand-primary/30"
+          />
+          <div className="flex items-center justify-end gap-2 text-[12.5px]">
+            {m.kind === "message" && <span className="mr-auto text-slate-500">The client was already emailed the original.</span>}
+            <button onClick={() => setEditing(null)} className="rounded-md px-2.5 py-1 text-slate-600 hover:bg-slate-100">Cancel</button>
+            <button
+              onClick={() => void saveEdit()}
+              disabled={editing.busy || (!editing.text.trim() && m.attachments.length === 0)}
+              className="flex items-center gap-1.5 rounded-md bg-brand-primary px-2.5 py-1 font-semibold text-white hover:bg-brand-primaryHover disabled:opacity-50"
+            >
+              {editing.busy && <Loader2 size={12} className="animate-spin" />} Save
+            </button>
+          </div>
+        </div>
+      );
+    }
+    const quoted = m.reply_to_id ? byId.get(m.reply_to_id) : undefined;
+    return (
+      <>
+        {m.reply_to_id && (
+          <button
+            type="button"
+            onClick={() => quoted && jumpTo(quoted.id)}
+            title={quoted ? "Go to the original message" : undefined}
+            className={`mb-1.5 block w-full min-w-0 rounded-md border-l-[3px] px-2.5 py-1.5 text-left text-[12.5px] leading-snug ${
+              tone === "staff"
+                ? "border-white/70 bg-white/15 text-white hover:bg-white/20"
+                : tone === "note"
+                  ? "border-amber-500 bg-amber-100/70 text-amber-950 hover:bg-amber-100"
+                  : "border-brand-primary bg-slate-100 text-slate-700 hover:bg-slate-200/70"
+            }`}
+          >
+            <span className="block truncate font-semibold">{quoted ? quotedName(quoted) : "Original message"}</span>
+            <span className={`block truncate ${tone === "staff" ? "text-white/85" : "opacity-80"}`}>
+              {quoted ? quoteText(quoted) : "Not loaded"}
+            </span>
+          </button>
+        )}
+        {m.body && <p className={`whitespace-pre-wrap break-words ${tone === "note" ? "text-sm text-amber-950" : ""}`}>{m.body}</p>}
+        {activeId && (
+          <AttachmentList rootId={activeId} items={m.attachments} onDark={tone === "staff"} onOpen={(items, index) => setViewer({ items, index })} />
+        )}
+      </>
+    );
+  };
+
   return (
     <div className="relative flex h-[calc(100vh-9.5rem)] min-h-[560px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
       {/* ── Conversations ── */}
@@ -540,7 +1209,7 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
               type="search"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search file no., address, client or message"
+              placeholder="Search file no., address or client"
               className="h-9 w-full rounded-lg border border-slate-300 bg-slate-50 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-primary/30"
             />
           </div>
@@ -588,18 +1257,12 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
                       }`}
                     >
                       {current && <span aria-hidden className="absolute inset-y-2 left-0 w-1 rounded-full bg-brand-primary" />}
-                      <span className="relative flex h-10 w-10 flex-none items-center justify-center rounded-lg bg-slate-100 text-slate-600">
-                        <FolderOpen size={18} />
-                        {r.client_online && (
-                          <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-white bg-emerald-500">
-                            <span className="sr-only">Client online</span>
-                          </span>
-                        )}
-                      </span>
+                      <ClientAvatar name={r.name} online={r.client_online} />
                       <span className="flex min-w-0 flex-1 flex-col gap-1">
                         <span className="flex items-center gap-2">
                           <span className={`min-w-0 flex-1 truncate text-sm ${r.unread ? "font-bold" : "font-semibold"} text-slate-900`}>
-                            {fileTitle(r.file_number)}
+                            {r.name}
+                            {r.co_count > 0 && <span className="font-normal text-slate-500"> +{r.co_count}</span>}
                           </span>
                           <span className={`flex-none text-[11.5px] ${r.unread ? "font-semibold text-brand-primary" : "text-slate-400"}`}>{relTime(r.last_at)}</span>
                         </span>
@@ -620,9 +1283,8 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
                             {r.channel === "email" ? <Mail size={11} /> : <MessageSquare size={11} />}
                             {r.channel === "email" ? "Email" : "Chat"}
                           </span>
-                          <span className="min-w-0 truncate">
-                            {r.name}
-                            {r.co_count > 0 && ` +${r.co_count}`}
+                          <span className="min-w-0 truncate" title={r.property_address ?? undefined}>
+                            {r.file_number ?? "No file no. yet"}
                           </span>
                           <span aria-hidden className="flex-none">·</span>
                           <span className={`flex-none whitespace-nowrap ${r.assignee_name ? "" : "italic text-slate-400"}`}>
@@ -640,7 +1302,14 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
       </section>
 
       {/* ── Thread ── */}
-      <main className={`${activeId ? "flex" : "hidden lg:flex"} min-w-0 flex-1 flex-col`}>
+      <main className={`${activeId ? "flex" : "hidden lg:flex"} relative min-w-0 flex-1 flex-col`} {...(activeId ? dropProps : {})}>
+        {dragging && activeId && (
+          <div className="pointer-events-none absolute inset-2 z-30 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-brand-primary bg-white/90 text-brand-primary">
+            <Paperclip size={28} />
+            <p className="text-sm font-semibold">Drop files to attach</p>
+            <p className="text-xs text-slate-500">Images, PDF, Word or Excel · up to 10 MB each</p>
+          </div>
+        )}
         {!activeId ? (
           <div className="m-auto flex flex-col items-center gap-2 px-6 text-center text-slate-500">
             <MessageSquare size={32} className="text-slate-300" />
@@ -653,32 +1322,33 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
               <button onClick={() => setActiveId(null)} aria-label="Back to conversations" className="rounded-lg p-1.5 text-slate-600 hover:bg-slate-100 lg:hidden">
                 <ArrowLeft size={18} />
               </button>
-              <span className="relative flex h-9 w-9 flex-none items-center justify-center rounded-lg bg-slate-100 text-slate-600">
-                <FolderOpen size={17} />
-                {activeRow?.client_online && <span aria-hidden className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-white bg-emerald-500" />}
-              </span>
-              <div className="min-w-[140px] flex-1">
-                {/* The FILE is the title; the clients and their presence (one
-                    dot on the icon, one word here) go underneath. Open needs no
-                    marker (the Resolve button says it); Resolved gets a chip. */}
-                <div className="flex min-w-0 items-center gap-2">
-                  <h2 className="min-w-0 truncate text-[15px] font-semibold text-slate-900" title={address ?? undefined}>
-                    {fileName}
-                  </h2>
-                  {status === "resolved" && (
-                    <span className="flex-none rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">Resolved</span>
-                  )}
-                </div>
-                <p className="flex min-w-0 items-center gap-1.5 whitespace-nowrap text-xs text-slate-500">
-                  <span className="truncate">{clientNames}</span>
+              {/* The CLIENT is the title (WhatsApp-style); the file and their
+                  presence go underneath. Clicking opens Contact info. Open needs
+                  no marker (the Resolve button says it); Resolved gets a chip. */}
+              <button
+                onClick={() => setProfileOpen((v) => !v)}
+                aria-label={`Contact info for ${clientTitle}`}
+                aria-expanded={profileOpen}
+                className="flex min-w-[140px] flex-1 items-center gap-3 rounded-lg py-0.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-brand-primary/40"
+              >
+                <ClientAvatar name={title} online={activeRow?.client_online} size="sm" />
+                <span className="min-w-0 flex-1">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <FitName
+                      full={people.length > 1 ? people.map((p) => p.name).join(", ") : clientTitle}
+                      short={clientTitle}
+                      className="text-[15px] font-semibold text-slate-900"
+                    />
+                    {status === "resolved" && (
+                      <span className="flex-none rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">Resolved</span>
+                    )}
+                  </span>
+                  {/* Only the client's presence here (WhatsApp-style); the file is in Contact info. */}
                   {clientPresence && (
-                    <>
-                      <span aria-hidden>·</span>
-                      <span className={`flex-none ${activeRow?.client_online ? "font-medium text-emerald-700" : ""}`}>{clientPresence}</span>
-                    </>
+                    <span className={`block truncate text-xs ${activeRow?.client_online ? "font-medium text-emerald-700" : "text-slate-500"}`}>{clientPresence}</span>
                   )}
-                </p>
-              </div>
+                </span>
+              </button>
 
               <div ref={assignRef} className="relative">
                 <button
@@ -767,30 +1437,46 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
                             <span className="rounded-full bg-slate-200/70 px-3 py-1 text-xs text-slate-600">{m.body} · {clock(m.created_at)}</span>
                           </div>
                         ) : m.kind === "note" ? (
-                          <div className="max-w-[78%] self-end rounded-xl border border-amber-300 bg-amber-50 px-3.5 py-2.5">
-                            <p className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-amber-800">
-                              <Lock size={12} /> Private note · {m.sender_name} · {clock(m.created_at)}
-                            </p>
-                            <p className="whitespace-pre-wrap break-words text-sm text-amber-950">{m.body}</p>
+                          <div id={`msg-${m.id}`} className={`group flex max-w-[78%] scroll-mt-4 items-start gap-1 self-end rounded-2xl transition-shadow ${flashId === m.id ? "ring-2 ring-amber-300 ring-offset-2" : ""}`}>
+                            {renderActions(m)}
+                            <div className="min-w-0 rounded-xl border border-amber-300 bg-amber-50 px-3.5 py-2.5">
+                              <p className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-amber-800">
+                                <Lock size={12} /> Private note · {m.sender_name} · {clock(m.created_at)}
+                                {m.edited_at && !m.deleted_at && <span className="font-normal">· edited</span>}
+                              </p>
+                              {renderContent(m, "note")}
+                            </div>
                           </div>
                         ) : m.sender_type === "client" ? (
-                          <div className="flex max-w-[78%] items-end gap-2.5">
+                          <div id={`msg-${m.id}`} className={`group flex max-w-[78%] scroll-mt-4 items-end gap-2.5 rounded-2xl transition-shadow ${flashId === m.id ? "ring-2 ring-amber-300 ring-offset-2" : ""}`}>
                             <span className={`flex h-7 w-7 flex-none items-center justify-center rounded-full text-[11px] font-semibold ${tint(m.sender_name || "c")}`}>{initials(m.sender_name || "C")}</span>
                             <div className="min-w-0">
-                              <div className="whitespace-pre-wrap break-words rounded-2xl rounded-bl-sm border border-slate-200 bg-white px-4 py-2.5 text-sm leading-relaxed text-slate-900 shadow-sm">{m.body}</div>
+                              <div className="min-w-0 max-w-full rounded-2xl rounded-bl-sm border border-slate-200 bg-white px-4 py-2.5 text-sm leading-relaxed text-slate-900 shadow-sm">{renderContent(m, "client")}</div>
                               <p className="mt-1 flex items-center gap-1 pl-1 text-[11.5px] text-slate-500">
                                 {m.sender_name} · {clock(m.created_at)}
+                                {m.edited_at && !m.deleted_at && " · edited"}
                                 {m.source === "email" && (<><span aria-hidden>·</span><Mail size={11} /> by email</>)}
                               </p>
                             </div>
+                            <div className="self-start">{renderActions(m, "right")}</div>
                           </div>
                         ) : (
-                          <div className="flex max-w-[78%] flex-col items-end self-end">
-                            <div className="whitespace-pre-wrap break-words rounded-2xl rounded-br-sm bg-brand-primary px-4 py-2.5 text-sm leading-relaxed text-white shadow-sm">{m.body}</div>
-                            <p className="mt-1 pr-1 text-[11.5px] text-slate-500">
-                              {m.sender_name} · {clock(m.created_at)}
-                              {m.id === lastAdminId && (m.read_by_client_at ? " · Seen" : " · Delivered")}
-                            </p>
+                          <div id={`msg-${m.id}`} className={`group flex max-w-[78%] scroll-mt-4 items-start gap-1 self-end rounded-2xl transition-shadow ${flashId === m.id ? "ring-2 ring-amber-300 ring-offset-2" : ""}`}>
+                            {renderActions(m)}
+                            <div className="flex min-w-0 flex-col items-end">
+                              <div
+                                className={`min-w-0 max-w-full rounded-2xl rounded-br-sm px-4 py-2.5 text-sm leading-relaxed shadow-sm ${
+                                  m.deleted_at ? "border border-slate-200 bg-white text-slate-500" : editing?.id === m.id ? "border border-slate-300 bg-white text-slate-900" : "bg-brand-primary text-white"
+                                }`}
+                              >
+                                {renderContent(m, "staff")}
+                              </div>
+                              <p className="mt-1 pr-1 text-[11.5px] text-slate-500">
+                                {m.sender_name} · {clock(m.created_at)}
+                                {m.edited_at && !m.deleted_at && " · edited"}
+                                {m.id === lastAdminId && !m.deleted_at && (m.read_by_client_at ? " · Seen" : " · Delivered")}
+                              </p>
+                            </div>
                           </div>
                         )}
                       </React.Fragment>
@@ -818,54 +1504,138 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
             </div>
 
             <div className="relative border-t border-slate-100 bg-white px-4 pb-4 pt-3 sm:px-5">
-              {shortcutMatches.length > 0 && (
-                <div role="listbox" aria-label="Saved replies" className="absolute inset-x-4 bottom-[calc(100%-4px)] z-20 max-h-72 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl sm:inset-x-5">
-                  <div className="flex items-center justify-between px-2.5 pb-1 pt-1.5">
+              {showSaved && (
+                <div ref={savedPopRef} role="listbox" aria-label="Saved replies" className="absolute inset-x-4 bottom-[calc(100%-4px)] z-20 max-h-72 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl sm:inset-x-5">
+                  <div className="flex items-center justify-between gap-2 px-2.5 pb-1 pt-1.5">
                     <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Saved replies</span>
-                    <span className="text-[11px] text-slate-500">Enter inserts the first match</span>
+                    <button onClick={() => { setSavedOpen(false); setManageOpen(true); }} className="text-[11px] font-semibold text-brand-primary hover:underline">Manage</button>
                   </div>
+                  {shortcutMatches.length === 0 && (
+                    <p className="px-2.5 py-3 text-[13px] text-slate-500">No saved replies match. Use Manage to add one.</p>
+                  )}
                   {shortcutMatches.map((k) => (
-                    <button key={k.key} onClick={() => insertSaved(k)} className="flex w-full flex-col items-start rounded-lg px-2.5 py-2 text-left hover:bg-slate-50">
-                      <span className="flex items-baseline gap-2"><span className="font-mono text-[12.5px] font-medium text-brand-primary">{k.key}</span><span className="text-[13.5px] font-medium text-slate-900">{k.title}</span></span>
-                      <span className="max-w-full truncate text-xs text-slate-500">{k.text}</span>
+                    <button key={k.id} onClick={() => insertSaved(k)} className="flex w-full flex-col items-start rounded-lg px-2.5 py-2 text-left hover:bg-slate-50">
+                      <span className="flex items-baseline gap-2"><span className="font-mono text-[12.5px] font-medium text-brand-primary">{k.shortcut}</span><span className="text-[13.5px] font-medium text-slate-900">{k.title}</span></span>
+                      <span className="max-w-full truncate text-xs text-slate-500">{k.body}</span>
                     </button>
                   ))}
                 </div>
               )}
               <div className={`rounded-xl border ${mode === "note" ? "border-amber-300 bg-amber-50" : "border-slate-300 bg-white"} focus-within:ring-2 focus-within:ring-brand-primary/20`}>
                 <div className="flex gap-0.5 px-1.5 pt-1.5">
-                  <button onClick={() => setMode("reply")} aria-pressed={mode === "reply"} className={`h-[30px] rounded-md px-2.5 text-[13px] font-medium ${mode === "reply" ? "bg-slate-100 text-slate-900" : "text-slate-500 hover:bg-slate-50"}`}>Reply</button>
-                  <button onClick={() => setMode("note")} aria-pressed={mode === "note"} className={`flex h-[30px] items-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium ${mode === "note" ? "bg-amber-100 text-amber-900" : "text-slate-500 hover:bg-slate-50"}`}><Lock size={12} /> Private note</button>
+                  <button
+                    onClick={() => {
+                      setMode("reply");
+                      // A quoted private note can't go out in a client reply.
+                      if (replyTo?.kind === "note") setReplyTo(null);
+                    }}
+                    aria-pressed={mode === "reply"}
+                    className={`h-[30px] rounded-md px-2.5 text-[13px] font-medium ${mode === "reply" ? "bg-slate-100 text-slate-900" : "text-slate-500 hover:bg-slate-50"}`}
+                  >
+                    Reply
+                  </button>
+                  <button onClick={() => { setMode("note"); setSavedOpen(false); }} aria-pressed={mode === "note"} className={`flex h-[30px] items-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium ${mode === "note" ? "bg-amber-100 text-amber-900" : "text-slate-500 hover:bg-slate-50"}`}><Lock size={12} /> Private note</button>
                 </div>
+                {replyTo && (
+                  <div className="mx-2 mt-2 flex items-start gap-2 rounded-lg border-l-[3px] border-brand-primary bg-slate-50 py-1.5 pl-2.5 pr-1.5">
+                    <Reply size={14} className="mt-0.5 flex-none text-brand-primary" />
+                    <button type="button" onClick={() => jumpTo(replyTo.id)} className="min-w-0 flex-1 text-left">
+                      <span className="block truncate text-[12.5px] font-semibold text-slate-800">Replying to {quotedName(replyTo)}</span>
+                      <span className="block truncate text-[12.5px] text-slate-500">{quoteText(replyTo)}</span>
+                    </button>
+                    <button type="button" onClick={() => setReplyTo(null)} aria-label="Cancel reply" className="flex-none rounded p-1 text-slate-500 hover:bg-slate-200">
+                      <X size={14} />
+                    </button>
+                  </div>
+                )}
                 <label htmlFor="composer" className="sr-only">{mode === "note" ? "Private note" : "Reply to the client"}</label>
                 <textarea
                   id="composer"
+                  ref={composerRef}
                   rows={3}
                   value={draft}
+                  onPaste={(e) => {
+                    // A pasted screenshot / copied file becomes an attachment; pasted text stays text.
+                    const pasted = Array.from(e.clipboardData?.files ?? []);
+                    if (pasted.length === 0) return;
+                    e.preventDefault();
+                    addFiles(pasted);
+                  }}
                   onChange={(e) => {
-                    setDraft(e.target.value.slice(0, 5000));
-                    if (e.target.value.trim() && !e.target.value.startsWith("/")) sendTyping();
+                    const v = e.target.value.slice(0, 5000);
+                    setDraft(v);
+                    // "/" at the start opens the list; ordinary typing closes it.
+                    setSavedOpen(v.startsWith("/") && !v.includes(" "));
+                    if (v.trim() && !v.startsWith("/")) sendTyping();
                   }}
                   onKeyDown={(e) => {
+                    if (e.key === "Escape" && replyTo && !showSaved) setReplyTo(null);
                     if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
-                      if (shortcutMatches.length > 0) insertSaved(shortcutMatches[0]);
+                      if (showSaved && draft.startsWith("/") && shortcutMatches.length > 0) insertSaved(shortcutMatches[0]);
                       else void send();
                     }
                   }}
                   placeholder={mode === "note" ? "Write a private note — only staff can see it" : "Reply to the client — they’ll be emailed. Type / for saved replies"}
                   className="block min-h-[76px] w-full resize-none rounded-b-xl bg-transparent px-3.5 py-2.5 text-sm text-slate-900 outline-none"
                 />
-                <div className="flex items-center gap-1 px-2 pb-2">
-                  <button onClick={() => setDraft("/")} className="flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium text-slate-600 hover:bg-slate-100">
+                {files.length > 0 && (
+                  <ul aria-label="Attachments" className="flex flex-wrap gap-1.5 px-3 pb-2">
+                    {files.map((f) => (
+                      <li
+                        key={f.key}
+                        title={f.error}
+                        className={`flex max-w-[16rem] items-center gap-1.5 rounded-lg border px-2 py-1 text-[12.5px] ${
+                          f.status === "error" ? "border-red-300 bg-red-50 text-red-700" : "border-slate-200 bg-slate-50 text-slate-700"
+                        }`}
+                      >
+                        {f.status === "uploading" ? <Loader2 size={13} className="flex-none animate-spin" /> : <FileText size={13} className="flex-none" />}
+                        <span className="min-w-0 truncate">{f.name}</span>
+                        <span className="flex-none text-[11px] text-slate-500">{f.status === "error" ? "failed" : formatAttachmentSize(f.size)}</span>
+                        <button onClick={() => setFiles((all) => all.filter((x) => x.key !== f.key))} aria-label={`Remove ${f.name}`} className="flex-none rounded p-0.5 hover:bg-slate-200">
+                          <X size={12} />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <div className="flex items-center gap-1 border-t border-slate-100 px-2 py-2">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    accept={CHAT_ATTACHMENT_ACCEPT}
+                    className="hidden"
+                    onChange={(e) => {
+                      addFiles(e.target.files);
+                      e.target.value = "";
+                    }}
+                  />
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={files.length >= MAX_ATTACHMENTS_PER_MESSAGE}
+                    aria-label="Attach files"
+                    title="Attach files (images, PDF, Word, Excel · up to 10 MB each)"
+                    className="flex h-8 w-8 flex-none items-center justify-center rounded-md text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+                  >
+                    <Paperclip size={16} />
+                  </button>
+                  <button
+                    ref={savedBtnRef}
+                    onClick={() => setSavedOpen((v) => !v)}
+                    disabled={mode !== "reply"}
+                    aria-expanded={showSaved}
+                    title="Saved replies (or type / in the box)"
+                    className={`flex h-8 flex-none items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-[13px] font-medium hover:bg-slate-100 disabled:opacity-40 ${showSaved ? "bg-slate-100 text-slate-900" : "text-slate-600"}`}
+                  >
                     <Zap size={15} /> Saved replies
                   </button>
-                  <span className="flex-1" />
-                  <span className="mr-2 hidden text-xs text-slate-500 sm:inline">Enter to send · Shift + Enter for a new line</span>
+                  <span className="min-w-0 flex-1" />
                   <button
                     onClick={() => void send()}
-                    disabled={sending || !draft.trim()}
-                    className="flex h-9 items-center gap-2 rounded-lg bg-brand-primary px-3.5 text-[13.5px] font-semibold text-white shadow-sm transition-colors hover:bg-brand-primaryHover disabled:opacity-50"
+                    disabled={sending || uploadingFiles || (!draft.trim() && readyFiles.length === 0)}
+                    title="Enter to send · Shift + Enter for a new line"
+                    className="flex h-9 flex-none items-center gap-2 whitespace-nowrap rounded-lg bg-brand-primary px-4 text-[13.5px] font-semibold text-white shadow-sm transition-colors hover:bg-brand-primaryHover disabled:opacity-50"
                   >
                     {mode === "note" ? "Add note" : "Send"}
                     {sending ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
@@ -877,40 +1647,73 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
         )}
       </main>
 
-      {/* ── File details ── */}
+      {/* ── Contact info ── (always on xl; slides over the thread below that) */}
+      {activeId && profileOpen && (
+        <div aria-hidden className="absolute inset-0 z-20 bg-slate-900/20" onMouseDown={() => setProfileOpen(false)} />
+      )}
       {activeId && (
-        <aside aria-label="File details" className="hidden w-80 flex-none flex-col overflow-y-auto border-l border-slate-200 bg-slate-50/50 xl:flex">
-          <div className="flex flex-col items-center gap-2.5 border-b border-slate-200 bg-white px-5 pb-5 pt-7 text-center">
-            <span className="flex h-14 w-14 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
-              <FolderOpen size={26} />
-            </span>
+        <aside
+          aria-label="Contact info"
+          className={`${profileOpen ? "absolute inset-y-0 right-0 z-30 flex shadow-2xl" : "hidden"} w-80 max-w-full flex-none flex-col overflow-y-auto border-l border-slate-200 bg-slate-50`}
+        >
+          <div className="relative flex flex-col items-center gap-2.5 border-b border-slate-200 bg-white px-5 pb-5 pt-7 text-center">
+            <button onClick={() => setProfileOpen(false)} aria-label="Close contact info" className="absolute left-3 top-3 rounded-lg p-1.5 text-slate-500 hover:bg-slate-100">
+              <X size={18} />
+            </button>
+            <ClientAvatar name={title} online={activeRow?.client_online} size="lg" />
             <div>
-              <h2 className="text-base font-semibold text-slate-900">{fileName}</h2>
-              {address && <p className="text-[13px] text-slate-500">{address}</p>}
+              <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
+              {people[0]?.phone && <p className="text-[13px] text-slate-600">{people[0].phone}</p>}
+              <p className={`text-xs ${activeRow?.client_online ? "font-medium text-emerald-700" : "text-slate-500"}`}>
+                {activeRow?.client_online ? "Online in the portal now" : clientPresence || "Client"}
+              </p>
             </div>
             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
-              {status === "open" ? "Open chat" : "Resolved"}
+              {fileName} · {status === "open" ? "Open chat" : "Resolved"}
             </span>
           </div>
 
           <section className="m-3 mb-0 rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
-            <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Clients on this file</h3>
-            <ul className="space-y-2.5">
+            <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+              {people.length > 1 ? `${people.length} people on this file` : "Contact"}
+            </h3>
+            <ul className="space-y-4">
               {(people.length > 0 ? people : [{ name: title, email: null, phone: null, primary: true }]).map((p) => (
-                <li key={p.name + (p.email ?? "")} className="flex items-center gap-2.5 text-[13px]">
-                  <span className={`flex h-7 w-7 flex-none items-center justify-center rounded-full text-[11px] font-semibold ${tint(p.name)}`}>{initials(p.name)}</span>
-                  <span className="min-w-0">
-                    <span className="block truncate text-slate-900">{p.name}</span>
-                    {p.email && <span className="block truncate text-xs text-slate-500">{p.email}</span>}
-                  </span>
+                <li key={p.name + (p.email ?? "")} className="text-[13px]">
+                  <div className="flex items-center gap-2.5">
+                    <span className={`flex h-8 w-8 flex-none items-center justify-center rounded-full text-[11px] font-semibold ${tint(p.name)}`}>{initials(p.name)}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium text-slate-900">{p.name}</span>
+                      <span className="block text-xs text-slate-500">{p.primary ? "Primary client" : "Co-client"}</span>
+                    </span>
+                  </div>
+                  {([
+                    ["phone", p.phone, p.phone ? `tel:${p.phone.replace(/[^\d+]/g, "")}` : ""],
+                    ["email", p.email, p.email ? `mailto:${p.email}` : ""],
+                  ] as const).map(([kind, value, href]) =>
+                    value ? (
+                      <div key={kind} className="mt-1.5 flex items-center gap-2 pl-[42px]">
+                        {kind === "phone" ? <Phone size={13} className="flex-none text-slate-400" /> : <Mail size={13} className="flex-none text-slate-400" />}
+                        <a href={href} className="min-w-0 flex-1 truncate text-slate-700 hover:text-brand-primary hover:underline">{value}</a>
+                        <button
+                          onClick={() => {
+                            void navigator.clipboard?.writeText(value).then(() => {
+                              setCopied(value);
+                              setTimeout(() => setCopied((c) => (c === value ? null : c)), 1500);
+                            });
+                          }}
+                          aria-label={`Copy ${kind}`}
+                          title={copied === value ? "Copied" : `Copy ${kind}`}
+                          className="flex-none rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                        >
+                          {copied === value ? <Check size={13} className="text-emerald-600" /> : <Copy size={13} />}
+                        </button>
+                      </div>
+                    ) : null,
+                  )}
                 </li>
               ))}
             </ul>
-            {clientPresence && (
-              <p className={`mt-3 text-xs ${activeRow?.client_online ? "font-medium text-emerald-700" : "text-slate-500"}`}>
-                {activeRow?.client_online ? "Online in the portal now" : clientPresence}
-              </p>
-            )}
           </section>
 
           <section className="m-3 mb-0 rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
@@ -943,7 +1746,6 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
                 ["Status", detail?.file?.status],
                 ["Property", detail?.file?.property_address],
                 ["Closing", detail?.file?.closing_date ? new Date(detail.file.closing_date).toLocaleDateString("en-CA", { year: "numeric", month: "short", day: "numeric" }) : null],
-                ["Phone", people[0]?.phone],
               ] as [string, string | null | undefined][]).map(([k, v]) => (
                 <React.Fragment key={k}>
                   <dt className="text-slate-500">{k}</dt>
@@ -1047,6 +1849,46 @@ const MessagesInbox: React.FC<{ initialId?: string | null }> = ({ initialId = nu
             </div>
           </div>
         </div>
+      )}
+
+      {viewer && activeId && (
+        <AttachmentViewer
+          items={viewer.items}
+          startIndex={viewer.index}
+          hrefFor={(a, download) => attachmentHref(activeId, a, download)}
+          onClose={() => setViewer(null)}
+        />
+      )}
+
+      {deleting && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-slate-900/30 p-4" onMouseDown={(e) => e.target === e.currentTarget && setConfirmDelete(null)}>
+          <div role="alertdialog" aria-modal="true" aria-labelledby="del-title" className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+            <h2 id="del-title" className="text-base font-bold text-slate-900">Delete this {deleting.kind === "note" ? "note" : "message"}?</h2>
+            <p className="mt-1.5 text-[13px] leading-relaxed text-slate-600">
+              {deleting.kind === "note"
+                ? "It will show as “This message was deleted” for staff."
+                : "It will show as “This message was deleted” for everyone, including the client. An email already sent can’t be taken back."}
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={() => setConfirmDelete(null)} autoFocus className="h-9 rounded-lg border border-slate-300 bg-white px-3.5 text-[13px] font-medium text-slate-700 hover:bg-slate-50">
+                Cancel
+              </button>
+              <button onClick={() => void removeMessage(deleting.id)} className="h-9 rounded-lg bg-red-600 px-3.5 text-[13px] font-semibold text-white hover:bg-red-700">
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {manageOpen && (
+        <SavedRepliesManager
+          replies={savedReplies}
+          editable={savedEditable}
+          onClose={() => setManageOpen(false)}
+          onChanged={loadSavedReplies}
+          flash={flash}
+        />
       )}
 
       {toast && (

@@ -14,6 +14,8 @@ import {
   sendAdminMessage,
   setAssignee,
   setStatus,
+  verifyChatAttachments,
+  checkReplyTarget,
 } from "@/lib/dealMessages";
 
 // One file's conversation. [leadId] is the family's ROOT lead id.
@@ -22,8 +24,10 @@ import {
 //         client's details, their other files, the staff list for "Handled
 //         by", and the handler history. Opening it marks the client's messages
 //         as seen.
-// POST  — { body, kind: "message" | "note" }: a reply (saved + emailed) or a
-//         private note (saved only).
+// POST  — { body, kind: "message" | "note", attachments?: [{ url, name }],
+//         reply_to_id? }: a
+//         reply (saved + emailed) or a private note (saved only). Attachments
+//         were uploaded via ./attachment/token and are re-checked against storage.
 // PATCH — { action: "assign", email | null } | { action: "resolve" } | { action: "reopen" }
 //
 // Gated to admins by src/middleware.ts.
@@ -103,16 +107,32 @@ export async function POST(req: Request, { params }: Ctx) {
     return NextResponse.json({ success: false, error: "Invalid id" }, { status: 400 });
   }
   try {
-    const { body, kind } = (await req.json().catch(() => ({}))) as { body?: unknown; kind?: unknown };
+    const { body, kind, attachments, reply_to_id } = (await req.json().catch(() => ({}))) as {
+      body?: unknown;
+      kind?: unknown;
+      attachments?: unknown;
+      reply_to_id?: unknown;
+    };
     if (typeof body !== "string") {
       return NextResponse.json({ success: false, error: "Message is required" }, { status: 400 });
+    }
+    const isNote = kind === "note";
+    const checked = await verifyChatAttachments(leadId, attachments);
+    if (!checked.ok) {
+      return NextResponse.json({ success: false, error: checked.error }, { status: 400 });
+    }
+    const reply = await checkReplyTarget(leadId, reply_to_id, !isNote);
+    if (!reply.ok) {
+      return NextResponse.json({ success: false, error: reply.error }, { status: 400 });
     }
     const actor = await resolveMessageActor();
     const result = await sendAdminMessage({
       rootLeadId: leadId,
       body,
-      kind: kind === "note" ? "note" : "message",
+      kind: isNote ? "note" : "message",
       sender: { name: actor.name, email: actor.email },
+      attachments: checked.attachments,
+      replyTo: reply.target,
     });
     if (!result.ok) {
       return NextResponse.json({ success: false, error: result.error }, { status: 400 });
@@ -124,7 +144,11 @@ export async function POST(req: Request, { params }: Ctx) {
         actorUserId: actor.id,
         resourceType: "leads",
         resourceId: leadId,
-        metadata: { message_id: result.message.id, recipients: result.emailed.length },
+        metadata: {
+          message_id: result.message.id,
+          recipients: result.emailed.length,
+          attachments: checked.attachments.length,
+        },
         req,
       });
     }
