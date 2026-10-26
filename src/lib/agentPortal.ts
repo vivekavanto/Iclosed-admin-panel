@@ -60,7 +60,14 @@ export type ClubbedTask = {
   dueDate: string | null;
   /** Clients who still owe a per-person task. */
   waitingOn: string[];
+  /** Open copies the agent can upload files into; one for a shared task. */
+  uploads: UploadTarget[];
 };
+
+export type FileField = { id: string; label: string; required: boolean };
+
+/** One open task copy with file fields; `client` is empty for a shared task. */
+export type UploadTarget = { taskId: string; leadId: string; client: string; fields: (FileField & { filled: boolean })[] };
 
 /** One milestone (or a task with no milestone): a single step on the file. */
 export type PortalStep = {
@@ -119,7 +126,14 @@ export type PortalFile = {
   clients: string[];
   closingDate: string | null;
   sections: PortalSection[];
+  /** Documents the agent has uploaded on the file, newest first. */
+  agentUploads: AgentUpload[];
 };
+
+export type AgentUpload = { fileName: string; label: string; uploadedAt: string | null };
+
+/** Files uploaded by an agent live under this Blob path, so the portal can tell them apart. */
+export const AGENT_UPLOAD_PREFIX = "agent-uploads";
 
 export type BuildInput = {
   leads: PortalLead[];
@@ -131,6 +145,9 @@ export type BuildInput = {
   taskLeadTypes: Map<string, string | null>;
   /** YYYY-MM-DD; injected so tests are deterministic. */
   today: string;
+  /** task_template_id -> its file fields, and task id -> field ids/labels already holding a file. */
+  fileFields?: Map<string, FileField[]>;
+  filledFields?: Map<string, Set<string>>;
 };
 
 /** Open pre-closing steps flag the file this many days before closing. */
@@ -258,11 +275,12 @@ type TaskAcc = {
   dueDate: string | null;
   shared: boolean;
   waitingOn: string[];
+  uploads: UploadTarget[];
 };
 
-function addTask(map: Map<string, TaskAcc>, t: PortalTask, client: string) {
+function addTask(map: Map<string, TaskAcc>, t: PortalTask, client: string, leadId: string, input: BuildInput) {
   const key = t.task_template_id ?? `t:${norm(t.title)}`;
-  const acc = map.get(key) ?? { key, title: t.title, order: MAX, done: 0, total: 0, completedAt: null, dueDate: null, shared: false, waitingOn: [] };
+  const acc = map.get(key) ?? { key, title: t.title, order: MAX, done: 0, total: 0, completedAt: null, dueDate: null, shared: false, waitingOn: [], uploads: [] };
   acc.shared ||= t.is_shared === true;
   acc.total += 1;
   if (isDone(t)) {
@@ -271,6 +289,11 @@ function addTask(map: Map<string, TaskAcc>, t: PortalTask, client: string) {
   } else {
     acc.dueDate = earliest(acc.dueDate, t.due_date);
     if (client && !acc.waitingOn.includes(client)) acc.waitingOn.push(client);
+    const fields = t.task_template_id ? input.fileFields?.get(t.task_template_id) : undefined;
+    if (fields?.length) {
+      const filled = input.filledFields?.get(t.id);
+      acc.uploads.push({ taskId: t.id, leadId, client, fields: fields.map((f) => ({ ...f, filled: !!filled && (filled.has(f.id) || filled.has(f.label)) })) });
+    }
   }
   acc.order = Math.min(acc.order, t.order_index ?? MAX);
   map.set(key, acc);
@@ -279,7 +302,7 @@ function addTask(map: Map<string, TaskAcc>, t: PortalTask, client: string) {
 function finishTasks(map: Map<string, TaskAcc>): ClubbedTask[] {
   return [...map.values()]
     .sort((a, b) => a.order - b.order || a.title.localeCompare(b.title))
-    .map(({ key, title, done, total, completedAt, dueDate, shared, waitingOn }) => {
+    .map(({ key, title, done, total, completedAt, dueDate, shared, waitingOn, uploads }) => {
       const completed = done === total;
       // A shared task is one task mirrored onto every family deal, so it counts once.
       return {
@@ -291,6 +314,8 @@ function finishTasks(map: Map<string, TaskAcc>): ClubbedTask[] {
         completedAt: completed ? completedAt : null,
         dueDate: completed ? null : dueDate,
         waitingOn: shared || completed ? [] : waitingOn,
+        // A shared upload mirrors to every copy, so one target is enough.
+        uploads: completed ? [] : shared ? uploads.slice(0, 1).map((u) => ({ ...u, client: "" })) : uploads,
       };
     });
 }
@@ -368,7 +393,7 @@ export function buildAgentFiles(input: BuildInput): PortalFile[] {
           step = sec.get(key) ?? { key, title: t.title.trim(), order: t.order_index ?? MAX, copies: [], tasks: new Map() };
           sec.set(key, step);
         }
-        addTask(step.tasks, t, clientOf(d.id));
+        addTask(step.tasks, t, clientOf(d.id), d.lead_id ?? "", input);
       }
     }
 
@@ -428,6 +453,7 @@ export function buildAgentFiles(input: BuildInput): PortalFile[] {
       clients,
       closingDate: primary.closing_date,
       sections: builtSections,
+      agentUploads: [],
     });
   }
 
