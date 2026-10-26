@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { logger } from "@/lib/logger";
+import { isPendingFileNumber } from "@/lib/fileNumber";
 
 const supabase = supabaseAdmin;
 
@@ -63,6 +64,24 @@ export async function GET() {
   // instead of scanning the whole auth table on every request.
   const authCreatedAtMap =
     authUserIds.size > 0 ? await getAuthSignInMap() : new Map<string, string>();
+
+  // A file still on a placeholder number whose family hasn't signed the retainer
+  // is still a lead to the clerk (the real number comes with signing).
+  const pendingFamilyLeadIds = new Set<string>();
+  for (const deal of deals as any[]) {
+    if (!isPendingFileNumber(deal.file_number) || !deal.leads?.id) continue;
+    pendingFamilyLeadIds.add(deal.leads.id);
+    if (deal.leads.parent_lead_id) pendingFamilyLeadIds.add(deal.leads.parent_lead_id);
+  }
+  const signedLeadIds = new Set<string>();
+  if (pendingFamilyLeadIds.size > 0) {
+    const { data: sigs, error: sigErr } = await supabase
+      .from("retainer_signatures")
+      .select("lead_id")
+      .in("lead_id", [...pendingFamilyLeadIds]);
+    if (sigErr) logger.error("[admin/deals] retainer signature lookup failed (non-blocking):", sigErr);
+    for (const sig of sigs ?? []) if (sig.lead_id) signedLeadIds.add(sig.lead_id);
+  }
 
   // ── Referral attribution ─────────────────────────────────────────────────
   // Resolve every linked partner in ONE query rather than per row — the detail
@@ -297,6 +316,11 @@ export async function GET() {
       co_person_role: coPersonRole,
       co_party_names: coPartyNames,
       account_created_at: accountCreatedAt,
+      awaiting_retainer:
+        isPendingFileNumber(deal.file_number) &&
+        !!lead?.id &&
+        !signedLeadIds.has(lead.id) &&
+        !(lead.parent_lead_id && signedLeadIds.has(lead.parent_lead_id)),
       lead_name: lead ? `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim() : null,
       // Intake email (leads.email, NOT NULL) — surfaced so the All Files list
       // can hide test accounts by the @navawilson.law domain and search by email.
@@ -315,5 +339,92 @@ export async function GET() {
     };
   });
 
-  return NextResponse.json(result);
+  const leadRows = await unconvertedLeadRows(partnersById);
+  return NextResponse.json([...result, ...leadRows]);
+}
+
+const addressOf = (parts: (string | null | undefined)[]) => parts.filter(Boolean).join(", ");
+
+/**
+ * Leads with no file yet (retainer sent, account not created), shaped like a
+ * deal row so All Files lists them as Inactive. `is_lead_only` rows open the lead.
+ */
+async function unconvertedLeadRows(partnersById: Map<string, Record<string, unknown>>) {
+  const [{ data: leads, error }, { data: dealLeads }] = await Promise.all([
+    supabase
+      .from("leads")
+      .select("id, first_name, last_name, email, lead_type, price, selling_price, closing_date, created_at, address_street, address_unit, address_city, address_province, address_postal_code, selling_address_street, selling_address_city, selling_address_province, selling_address_postal_code, partner_id, referral_agent_name, referral_agent_company, referral_agent_email")
+      .is("parent_lead_id", null)
+      .neq("status", "Converted")
+      .eq("is_deleted", false),
+    supabase.from("deals").select("lead_id").eq("is_deleted", false),
+  ]);
+  if (error) {
+    logger.error("[admin/deals] unconverted lead lookup failed (non-blocking):", error);
+    return [];
+  }
+  const withDeal = new Set((dealLeads ?? []).map((d) => d.lead_id));
+  const pending = (leads ?? []).filter((l) => !withDeal.has(l.id));
+  if (pending.length === 0) return [];
+
+  const ids = pending.map((l) => l.id);
+  const missingPartners = [...new Set(pending.map((l) => l.partner_id).filter((id): id is string => !!id && !partnersById.has(id)))];
+  const [{ data: coLeads }, { data: partners }] = await Promise.all([
+    supabase.from("leads").select("first_name, last_name, parent_lead_id").in("parent_lead_id", ids).eq("is_deleted", false),
+    missingPartners.length
+      ? supabase
+          .from("partners")
+          .select("id, agent_name, agent_email, agent_phone, brokerage_type, brokerage_name, referral_code")
+          .in("id", missingPartners)
+          .eq("is_deleted", false)
+      : { data: [] },
+  ]);
+  for (const p of partners ?? []) partnersById.set(p.id, p);
+  const coNames = new Map<string, string[]>();
+  for (const c of coLeads ?? []) {
+    const name = `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim();
+    if (name && c.parent_lead_id) coNames.set(c.parent_lead_id, [...(coNames.get(c.parent_lead_id) ?? []), name]);
+  }
+
+  return pending.map((l) => {
+    const purchase = addressOf([l.address_street, l.address_unit && `Unit ${l.address_unit}`, l.address_city, l.address_province, l.address_postal_code]);
+    const selling = addressOf([l.selling_address_street, l.selling_address_city, l.selling_address_province, l.selling_address_postal_code]);
+    return {
+      id: l.id,
+      lead_id: l.id,
+      is_lead_only: true,
+      file_number: null,
+      type: l.lead_type,
+      status: "Inactive",
+      property_address: l.lead_type === "Sale" ? selling : purchase,
+      selling_property_address: selling,
+      closing_date: l.closing_date,
+      price: l.lead_type === "Sale" ? l.selling_price : l.price,
+      created_at: l.created_at,
+      totalTasks: 0,
+      completedTasks: 0,
+      signing_appointments: [],
+      partner_id: l.partner_id,
+      referral_agent_name: l.referral_agent_name,
+      referral_agent_company: l.referral_agent_company,
+      referral_agent_email: l.referral_agent_email,
+      referral_partner: l.partner_id ? (partnersById.get(l.partner_id) ?? null) : null,
+      auth_user_id: null,
+      is_co_purchaser: false,
+      has_co_purchasers: coNames.has(l.id),
+      co_person_role: null,
+      co_party_names: coNames.get(l.id) ?? [],
+      account_created_at: null,
+      lead_name: `${l.first_name ?? ""} ${l.last_name ?? ""}`.trim(),
+      lead_email: l.email,
+      lead_citizenship_status: null,
+      purchase_property_address: purchase,
+      lead_address_city: l.address_city,
+      lead_address_province: l.address_province,
+      lead_address_postal_code: l.address_postal_code,
+      lead_selling_address_city: l.selling_address_city,
+      lead_selling_address_province: l.selling_address_province,
+      lead_selling_address_postal_code: l.selling_address_postal_code,
+    };
+  });
 }

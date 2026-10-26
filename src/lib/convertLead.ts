@@ -48,8 +48,10 @@ export async function convertSingleLead(
      *   "retainer" — the retainer-first flow: send the account-free "sign your
      *               retainer" link instead and DEFER account creation until the
      *               party activates after signing.
+     *   "none"     — no client email at all (no welcome either): staff opening a
+     *               file early to work on it, e.g. upload documents before signing.
      */
-    authEmailMode?: "invite" | "retainer";
+    authEmailMode?: "invite" | "retainer" | "none";
   },
 ): Promise<ConvertOneResult> {
   const leadId: string = lead.id;
@@ -604,7 +606,7 @@ export async function convertSingleLead(
                 .eq("lead_id", rootLeadId)
                 .maybeSingle();
               const primaryId = rootDeal?.id ?? dealId;
-              await recalcMilestonesForFamily(familyDealIds, primaryId);
+              await recalcMilestonesForFamily(familyDealIds, primaryId, { sendEmails: opts.authEmailMode !== "none" });
             } catch {
               // Non-blocking
             }
@@ -640,7 +642,7 @@ export async function convertSingleLead(
     // ── Auto-complete APS task if aps_uploaded is already true ─────────────
     try {
       if (lead.aps_uploaded === true) {
-        await completeApsTask(dealId);
+        await completeApsTask(dealId, { sendEmails: opts.authEmailMode !== "none" });
       }
     } catch (err) {
       console.error("[Convert] Failed to auto-complete APS task (non-blocking):", err);
@@ -661,7 +663,9 @@ export async function convertSingleLead(
       alreadyHasLogin = true;
     }
 
-    if (authEmailMode === "retainer") {
+    if (authEmailMode === "none") {
+      // Silent: the client hears from us when they sign the retainer.
+    } else if (authEmailMode === "retainer") {
       // Retainer-first flow: send the account-free signing link(s) instead of
       // the invite/login email. A combined Purchase & Sale primary gets one per
       // side; everyone else one. Account creation is deferred to activation,
@@ -742,10 +746,12 @@ export async function convertSingleLead(
     // sendWelcomeEmail checks leads.welcome_email_sent, so this is a no-op
     // if the email already went out at intake stage or first login. Failure
     // is non-blocking; the conversion itself is already complete.
-    try {
-      await sendWelcomeEmail(leadId, { source: "conversion" });
-    } catch (welcomeErr) {
-      console.error("[Convert] Welcome email failed (non-blocking):", welcomeErr);
+    if (authEmailMode !== "none") {
+      try {
+        await sendWelcomeEmail(leadId, { source: "conversion" });
+      } catch (welcomeErr) {
+        console.error("[Convert] Welcome email failed (non-blocking):", welcomeErr);
+      }
     }
 
     return {

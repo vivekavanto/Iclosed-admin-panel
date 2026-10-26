@@ -131,6 +131,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
   // Deal id currently being logged into (client-view impersonation in flight),
   // so the row's button can show a disabled/loading state.
   const [impersonatingId, setImpersonatingId] = useState<string | null>(null);
+  const [openingLeadId, setOpeningLeadId] = useState<string | null>(null);
   const [deals, setDeals] = useState<Deal[]>([]);
   // Closing-date column sort. null = no sort (API order), 'asc' = earliest
   // first, 'desc' = latest first. Clicking the header cycles asc → desc.
@@ -221,7 +222,8 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
     setSavingAgent(true);
     setAgentResult(null);
     try {
-      const res = await fetch(`/api/admin/deals/${deal.id}/agent`, {
+      // A lead row has no file yet, so the agent is set on the lead (same family-wide write).
+      const res = await fetch(`/api/admin/${(deal as any).isLeadOnly ? 'leads' : 'deals'}/${deal.id}/agent`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ partnerId }),
@@ -252,8 +254,8 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
       const name = partner?.agent_name || 'Agent';
       const parts = [
         partnerId
-          ? `${name} linked to file ${deal.fileNumber || ''}`.trim() + '.'
-          : `Agent removed from file ${deal.fileNumber || ''}`.trim() + '.',
+          ? `${name} linked to ${(deal as any).isLeadOnly ? 'the lead' : `file ${deal.fileNumber || ''}`.trim()}.`
+          : `Agent removed from ${(deal as any).isLeadOnly ? 'the lead' : `file ${deal.fileNumber || ''}`.trim()}.`,
       ];
       if (data.agentNotified) {
         parts.push('The signup email was sent to the agent.');
@@ -458,7 +460,12 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
           adminNote: d.admin_note ?? null,
           adminNoteUpdatedAt: d.admin_note_updated_at ?? null,
           signingAppointments: Array.isArray(d.signing_appointments) ? d.signing_appointments : [],
+          // A lead with no file yet: listed as Inactive, opens the lead, has no file actions.
+          isLeadOnly: d.is_lead_only === true,
+          // Has a file, but the retainer isn't signed yet, so no real file number.
+          awaitingRetainer: d.awaiting_retainer === true,
         } as Deal & {
+          isLeadOnly: boolean;
           signingAppointments: SigningAppointmentSummary[];
           authUserId: string | null;
           isCoPurchaser: boolean;
@@ -771,6 +778,26 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
       alert(`Failed to log into client view: ${err?.message ?? "unknown error"}`);
     } finally {
       setImpersonatingId(null);
+    }
+  };
+
+  // Opening a lead creates its file without emailing the client, so a clerk can
+  // upload documents before they sign. Signing later reuses this file.
+  const handleOpenAsFile = async (leadId: string) => {
+    if (openingLeadId) return;
+    setOpeningLeadId(leadId);
+    try {
+      const res = await fetch("/api/admin/convert-lead", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lead_id: leadId, email_mode: "none" }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success || !json.deal_id) throw new Error(json.error || "Could not create the file");
+      onSelectDeal(json.deal_id);
+    } catch (err: any) {
+      alert(`Could not open as file: ${err?.message ?? "unknown error"}`);
+      setOpeningLeadId(null);
     }
   };
 
@@ -1177,8 +1204,8 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
               return (
                 <React.Fragment key={deal.id}>
                 <tr onClick={() => {
-                  console.log("Clicked deal id:", deal.id);
-                  onSelectDeal(deal.id);
+                  if ((deal as any).isLeadOnly) handleOpenAsFile(deal.id);
+                  else onSelectDeal(deal.id);
                 }} className={`${rowClass} hover:bg-brand-light/20 cursor-pointer transition-colors border-b border-slate-100 text-xs text-slate-700 whitespace-nowrap`}>
                   <td className="px-2 py-1.5">{rowNumber}</td>
                   <td className="px-2 py-1.5">
@@ -1212,7 +1239,16 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       );
                     })()}
                   </td>
-                  <td className="px-2 py-1.5 font-medium truncate" title={displayFileNumber(deal.fileNumber)}>{displayFileNumber(deal.fileNumber)}</td>
+                  <td className="px-2 py-1.5 font-medium truncate" title={(deal as any).isLeadOnly ? 'Lead — click to open it as a file (the client is not emailed)' : (deal as any).awaitingRetainer ? 'Lead — the file number is assigned when the client signs the retainer' : displayFileNumber(deal.fileNumber)}>
+                    {(deal as any).isLeadOnly || (deal as any).awaitingRetainer ? (
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                        {openingLeadId === deal.id && <Loader2 size={10} className="animate-spin" />}
+                        {openingLeadId === deal.id ? 'Opening…' : 'Lead'}
+                      </span>
+                    ) : (
+                      displayFileNumber(deal.fileNumber)
+                    )}
+                  </td>
                   <td className="px-2 py-1.5">
                     {/* min-w-0 + truncate lets a long name ellipsize instead of
                         spilling past this fixed-width column, while the badges
@@ -1300,6 +1336,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                   </td>
                   <td className="px-2 py-1.5">{formatDate(deal.closingDate)}</td>
                   <td className="px-2 py-1.5">
+                    {(deal as any).isLeadOnly ? <span className="text-slate-300">—</span> : (
                     <button
                       type="button"
                       onClick={(e) => {
@@ -1321,6 +1358,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                         className={`text-slate-400 group-hover/steps:text-brand-primary transition-all flex-shrink-0 ${expandedDealId === deal.id ? 'rotate-180' : ''}`}
                       />
                     </button>
+                    )}
                   </td>
                   <td className="px-2 py-1.5">
                     {(deal as any).lawyerName ? (
@@ -1399,6 +1437,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       stopPropagation on the row's onClick. */}
                   <td className="px-2 py-1.5 align-middle">
                     {(() => {
+                      if ((deal as any).isLeadOnly) return <span className="text-slate-300">—</span>;
                       const note =
                         (deal as Deal & { adminNote?: string | null }).adminNote ?? '';
                       if (noteEditId === deal.id) {
@@ -1520,7 +1559,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                   </td>
                   <td className={`sticky right-0 z-10 ${stickyBg} px-2 py-1.5 text-center`}>
                     <div className="inline-flex items-center justify-center gap-1">
-                      {(() => {
+                      {!(deal as any).isLeadOnly && (() => {
                         const canImpersonate = !!(deal as any).accountCreatedAt && !!(deal as any).authUserId;
                         const busy = impersonatingId === deal.id;
                         return (
@@ -1545,7 +1584,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                           </button>
                         );
                       })()}
-                      <button
+                      {!(deal as any).isLeadOnly && <button
                         onClick={(e) => {
                           e.stopPropagation();
                           handleDelete(deal.id);
@@ -1554,7 +1593,7 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                         title="Delete deal"
                       >
                         <Trash2 size={14} />
-                      </button>
+                      </button>}
                     </div>
                   </td>
                 </tr>
@@ -1703,11 +1742,11 @@ const DealList: React.FC<DealListProps> = ({ onSelectDeal = () => { } }) => {
                       {currentPartnerId ? 'Change Referral Agent' : 'Add Referral Agent'}
                     </h3>
                     <p className="text-xs text-slate-500 mt-0.5 truncate">
-                      File {displayFileNumber(agentDeal.fileNumber) || '—'}
+                      {(agentDeal as any).isLeadOnly ? 'Lead' : `File ${displayFileNumber(agentDeal.fileNumber) || '—'}`}
                       {referralOf(agentDeal).leadName
                         ? ` · ${referralOf(agentDeal).leadName}`
                         : ''}
-                      {' · applies to everyone on this file.'}
+                      {(agentDeal as any).isLeadOnly ? ' · applies to everyone on this lead.' : ' · applies to everyone on this file.'}
                     </p>
                   </div>
                   <button
