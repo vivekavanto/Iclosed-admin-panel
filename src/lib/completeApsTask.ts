@@ -24,7 +24,7 @@ import { recalcMilestonesForFamily } from "./recalcMilestones";
  */
 export async function completeApsTask(
   dealId: string,
-  opts: { forLeadTypes?: string[] } = {},
+  opts: { forLeadTypes?: string[]; sendEmails?: boolean } = {},
 ): Promise<{
   success: boolean;
   already_completed?: boolean;
@@ -313,7 +313,7 @@ export async function completeApsTask(
     }
 
     // ── 6. Recalculate milestones for all family deals ───────────────────────
-    await recalcMilestonesForFamily(familyDealIds, primaryDealId);
+    await recalcMilestonesForFamily(familyDealIds, primaryDealId, { sendEmails: opts.sendEmails });
 
     const completedLeadTypes = [
       ...new Set(

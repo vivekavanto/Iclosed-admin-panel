@@ -13,7 +13,8 @@ import { dispatchAutoCompleteMilestoneEmails } from "@/lib/sendMilestoneEmail";
  *   lead_id: string,
  *   file_number?: string,
  *   closing_date?: string,
- *   convert_family?: boolean
+ *   convert_family?: boolean,
+ *   email_mode?: "retainer" (default) | "invite" | "none" (open the file silently)
  * }
  */
 export async function POST(req: Request) {
@@ -24,7 +25,7 @@ export async function POST(req: Request) {
       file_number?: string;
       closing_date?: string;
       convert_family?: boolean;
-      email_mode?: "invite" | "retainer";
+      email_mode?: "invite" | "retainer" | "none";
     };
 
     if (!lead_id) {
@@ -34,8 +35,11 @@ export async function POST(req: Request) {
     // New default for the interactive "Convert to Deal" action: lead with the
     // account-free retainer signing link rather than the invite/activate email.
     // Callers can pass email_mode:"invite" to keep the legacy behavior.
-    const authEmailMode: "invite" | "retainer" =
-      email_mode === "invite" ? "invite" : "retainer";
+    const authEmailMode: "invite" | "retainer" | "none" =
+      email_mode === "invite" || email_mode === "none" ? email_mode : "retainer";
+    // A silent open sends nothing, including the auto-complete milestone emails.
+    const dispatchEmails = (emails: Parameters<typeof dispatchAutoCompleteMilestoneEmails>[0]) =>
+      authEmailMode === "none" ? Promise.resolve() : dispatchAutoCompleteMilestoneEmails(emails);
 
     // Reject past closing dates. Admin's local date is computed in
     // America/Toronto so a 9pm-Eastern convert isn't wrongly rejected for
@@ -98,7 +102,7 @@ export async function POST(req: Request) {
 
       // Auto-complete milestone emails are deferred out of convertSingleLead so
       // a family gets ONE combined email per stage rather than one per party.
-      await dispatchAutoCompleteMilestoneEmails(one.auto_complete_emails ?? []);
+      await dispatchEmails(one.auto_complete_emails ?? []);
 
       const retainerMode = authEmailMode === "retainer";
 
@@ -111,7 +115,9 @@ export async function POST(req: Request) {
         retainer_link_sent: one.retainer_link_sent ?? false,
         already_has_login: one.already_has_login ?? false,
         auth_error: one.auth_error ?? null,
-        message: retainerMode
+        message: authEmailMode === "none"
+          ? "File created. No email was sent to the client."
+          : retainerMode
           ? one.retainer_link_sent
             ? `Deal created and retainer signing link sent to ${selectedLead.email}`
             : `Deal created, but the retainer link could not be sent: ${one.auth_error || "send it manually from the deal"}`
@@ -177,9 +183,7 @@ export async function POST(req: Request) {
     // as ONE email per stage addressed to the whole family — sending them inside
     // convertSingleLead gave each party their own copy and CC'd the referral
     // agent once per party.
-    await dispatchAutoCompleteMilestoneEmails(
-      results.flatMap((r) => r.auto_complete_emails ?? []),
-    );
+    await dispatchEmails(results.flatMap((r) => r.auto_complete_emails ?? []));
 
     const created_count = results.filter((r) => r.created).length;
     const skipped_count = results.length - created_count;
