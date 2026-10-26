@@ -8,7 +8,7 @@ import { loadAgentPortalPartner, loadNotificationTemplates, MISSING_TABLE_CODES 
 
 type Params = { params: Promise<{ partnerId: string }> };
 
-// GET — the opt-in task templates plus which ones this agent has selected.
+// GET — the opt-in milestone templates plus which ones this agent has selected.
 // One setting per agent, applied across all of their clients' files.
 export async function GET(_req: NextRequest, { params }: Params) {
   const { partnerId } = await params;
@@ -18,7 +18,7 @@ export async function GET(_req: NextRequest, { params }: Params) {
     const templates = await loadNotificationTemplates();
     const { data, error } = await supabaseAdmin
       .from("partner_notification_settings")
-      .select("task_template_ids, updated_at, updated_by")
+      .select("stage_template_ids, updated_at, updated_by")
       .eq("partner_id", partnerId)
       .maybeSingle();
     if (error && MISSING_TABLE_CODES.has(error.code)) {
@@ -29,7 +29,7 @@ export async function GET(_req: NextRequest, { params }: Params) {
       success: true,
       schemaReady: true,
       templates,
-      selected: data?.task_template_ids ?? [],
+      selected: data?.stage_template_ids ?? [],
       updatedAt: data?.updated_at ?? null,
       updatedBy: data?.updated_by ?? null,
     });
@@ -39,25 +39,25 @@ export async function GET(_req: NextRequest, { params }: Params) {
   }
 }
 
-// PUT { taskTemplateIds: string[] } — replace the agent's opted-in list.
+// PUT { stageTemplateIds: string[] } — replace the agent's opted-in list.
 export async function PUT(req: NextRequest, { params }: Params) {
   const { partnerId } = await params;
   if (!isUuid(partnerId)) return NextResponse.json({ success: false, error: "Invalid partner id" }, { status: 400 });
 
   const body = await req.json().catch(() => null);
-  const ids: unknown = body?.taskTemplateIds;
+  const ids: unknown = body?.stageTemplateIds;
   if (!Array.isArray(ids) || !ids.every(isUuid)) {
-    return NextResponse.json({ success: false, error: "taskTemplateIds must be a list of ids" }, { status: 400 });
+    return NextResponse.json({ success: false, error: "stageTemplateIds must be a list of ids" }, { status: 400 });
   }
   if (!(await loadAgentPortalPartner(partnerId))) {
     return NextResponse.json({ success: false, error: "Partner not found" }, { status: 404 });
   }
 
   const actor = await getActingAdmin();
-  const taskTemplateIds = [...new Set(ids as string[])];
+  const stageTemplateIds = [...new Set(ids as string[])];
   const { error } = await supabaseAdmin.from("partner_notification_settings").upsert({
     partner_id: partnerId,
-    task_template_ids: taskTemplateIds,
+    stage_template_ids: stageTemplateIds,
     updated_by: actor.email,
     updated_at: new Date().toISOString(),
   });
@@ -76,8 +76,8 @@ export async function PUT(req: NextRequest, { params }: Params) {
     actorUserId: actor.id,
     resourceType: "partner",
     resourceId: partnerId,
-    metadata: { count: taskTemplateIds.length },
+    metadata: { count: stageTemplateIds.length },
     req,
   });
-  return NextResponse.json({ success: true, selected: taskTemplateIds });
+  return NextResponse.json({ success: true, selected: stageTemplateIds });
 }

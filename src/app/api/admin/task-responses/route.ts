@@ -3,6 +3,7 @@ import supabaseAdmin from "@/lib/supabaseAdmin";
 import { getFamilyDealIds } from "@/lib/familyDeals";
 import { findFamilySharedTaskPeers } from "@/lib/findFamilySharedTaskPeers";
 import { maybeCompleteFileTask } from "@/lib/maybeCompleteFileTask";
+import { addTaskResponse, TaskResponseInsertError } from "@/lib/addTaskResponse";
 
 type TaskRow = {
   id: string;
@@ -632,90 +633,16 @@ export async function POST(req: Request) {
       file_name: file_name || null,
     };
 
-    const { data, error } = await supabaseAdmin
-      .from("task_responses")
-      .insert(insertRow)
-      .select("id, task_id, field_id, field_label, field_type, value, file_url, file_name")
-      .single();
-    if (error) {
-      return NextResponse.json({ success: false, error: error.message }, { status: 400 });
-    }
-
-    // Family-wide mirror for shared-task responses — same matching as PATCH
-    // (skip the source task; match peers by field_id or field_label).
-    let mirroredCount = 0;
-    const { data: srcTask } = await supabaseAdmin
-      .from("tasks")
-      .select("id, deal_id, is_shared, task_template_id, title")
-      .eq("id", task_id)
-      .single();
-    if (srcTask?.is_shared && srcTask.task_template_id && srcTask.deal_id) {
-      const { data: tmpl } = await supabaseAdmin
-        .from("task_templates")
-        .select("is_aps_task")
-        .eq("id", srcTask.task_template_id)
-        .maybeSingle();
-      const isApsTask = Boolean(tmpl?.is_aps_task);
-
-      const peerTaskIds = await findFamilySharedTaskPeers({
-        sourceTaskId: srcTask.id,
-        dealId: srcTask.deal_id,
-        taskTemplateId: srcTask.task_template_id,
-        title: srcTask.title ?? null,
-        isApsTask,
-      });
-      if (peerTaskIds.length > 0) {
-        // GAP-004: a network retry re-POSTs the same response, which would
-        // duplicate the mirrored peer rows. Skip any peer that already holds an
-        // identical response — matched on field + the file_url for file answers
-        // (else the value). We dedupe in code rather than with a unique
-        // constraint because a file field can legitimately hold MULTIPLE distinct
-        // files, so (task_id, field_id) is NOT unique.
-        const matchCol = insertRow.file_url ? "file_url" : "value";
-        const matchVal = insertRow.file_url ?? insertRow.value ?? null;
-        let alreadyHave = new Set<string>();
-        if (matchVal != null && insertRow.field_id != null) {
-          const { data: existing } = await supabaseAdmin
-            .from("task_responses")
-            .select("task_id")
-            .in("task_id", peerTaskIds)
-            .eq("field_id", insertRow.field_id)
-            .eq(matchCol, matchVal);
-          alreadyHave = new Set(
-            (existing ?? []).map((r) => r.task_id as string),
-          );
-        }
-        const peerRows = peerTaskIds
-          .filter((tid) => !alreadyHave.has(tid))
-          .map((tid) => ({
-            task_id: tid,
-            field_id: insertRow.field_id,
-            field_label: insertRow.field_label,
-            field_type: insertRow.field_type,
-            value: insertRow.value,
-            file_url: insertRow.file_url,
-            file_name: insertRow.file_name,
-          }));
-        if (peerRows.length > 0) {
-          const { data: mirrored } = await supabaseAdmin
-            .from("task_responses")
-            .insert(peerRows)
-            .select("id");
-          mirroredCount = mirrored?.length ?? 0;
-        }
+    let result: Awaited<ReturnType<typeof addTaskResponse>>;
+    try {
+      result = await addTaskResponse(insertRow);
+    } catch (err) {
+      if (err instanceof TaskResponseInsertError) {
+        return NextResponse.json({ success: false, error: err.message }, { status: 400 });
       }
+      throw err;
     }
-
-    // Auto-complete file-only tasks once all required files are present.
-    let taskCompleted = false;
-    if (field_type === "file" && file_url) {
-      try {
-        const result = await maybeCompleteFileTask(task_id);
-        taskCompleted = result.completed;
-      } catch (err) {
-        console.error("[task-responses POST] auto-complete failed:", err);
-      }
-    }
+    const { data, mirrored: mirroredCount, taskCompleted } = result;
 
     return NextResponse.json({
       success: true,

@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
-import { completeApsTask } from "@/lib/completeApsTask";
+import { recordApsUpload } from "@/lib/recordApsUpload";
 import { isBlobUrl, BLOB_ACCESS } from "@/lib/blobPrivacy";
-import { requestApsDepositRead } from "@/lib/requestApsDepositRead";
 
 /**
  * POST /api/admin/deals/[id]/uploadblobstorage
@@ -129,71 +128,17 @@ export async function POST(
     // We do NOT delete prior APS rows: uploads accumulate so a deal can hold
     // the agreement plus amendments/waivers. Removal is via DELETE
     // /aps-document?file_url=…
-    const docType = side === "purchase"
-      ? "aps_purchase"
-      : side === "sale"
-      ? "aps_sale"
-      : "aps";
-    const customType = side === "purchase"
-      ? "APS Purchase Document"
-      : side === "sale"
-      ? "APS Sale Document"
-      : "APS Document";
-    const { error: docError } = await supabaseAdmin
-      .from("lead_corporate_docs")
-      .insert(
-        files.map((f) => ({
-          lead_id: deal.lead_id,
-          doc_type: docType,
-          custom_type: customType,
-          file_url: f.file_url,
-          file_name: f.file_name,
-        })),
-      );
-
-    if (docError) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: `Failed to record document: ${docError.message}`,
-        },
-        { status: 500 },
-      );
-    }
-
-    // ── 4. Complete the APS task across the family ───────────────────────────
-    // Pass the explicit side so completeApsTask only completes + bridges
-    // the matching lead_type's APS task, not the other side.
-    const result = await completeApsTask(dealId, {
-      forLeadTypes: side === "purchase"
-        ? ["Purchase"]
-        : side === "sale"
-        ? ["Sale"]
-        : undefined,
-    });
-
+    const result = await recordApsUpload(dealId, deal.lead_id, side, files);
     if (!result.success) {
-      return NextResponse.json(
-        { success: false, error: result.error ?? "Task completion failed" },
-        { status: 500 },
-      );
+      return NextResponse.json({ success: false, error: result.error }, { status: 500 });
     }
-
-    // The reader lives in the customer portal; hand it the new files so the
-    // deal's deposit is read from them, the way a client's own upload is.
-    // Best-effort — never fails an upload that is already saved.
-    await requestApsDepositRead({
-      dealId,
-      side,
-      fileUrls: files.map((f) => f.file_url),
-    });
 
     return NextResponse.json({
       success: true,
       files: files,
       uploaded_count: files.length,
-      already_completed: result.already_completed ?? false,
-      completed_lead_types: result.completed_lead_types ?? [],
+      already_completed: result.already_completed,
+      completed_lead_types: result.completed_lead_types,
     });
   } catch (err: any) {
     console.error("POST /api/admin/deals/[id]/uploadblobstorage error:", err);

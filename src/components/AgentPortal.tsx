@@ -1,9 +1,10 @@
 "use client";
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Bell, CheckCircle2, Circle, ChevronDown, ChevronRight, Eye, Loader2, Save, Search } from "lucide-react";
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { upload } from "@vercel/blob/client";
+import { ArrowLeft, Bell, CheckCircle2, Circle, ChevronDown, ChevronRight, Eye, Loader2, Save, Search, Upload } from "lucide-react";
 import { formatLocalDate } from "@/lib/formatDate";
+import { BLOB_ACCESS } from "@/lib/blobPrivacy";
 import {
-  STAGES,
   daysBetween,
   type ClubbedTask,
   type PortalFile,
@@ -12,7 +13,12 @@ import {
   type PortalStage,
   type PortalStep,
   type StageStatus,
+  type UploadTarget,
+  AGENT_UPLOAD_PREFIX,
 } from "@/lib/agentPortal";
+
+/** Lets a task row upload as the agent and refresh the dashboard afterwards. */
+const UploadContext = createContext<{ partnerId: string; reload: () => void } | null>(null);
 
 type Partner = {
   id: string;
@@ -23,20 +29,20 @@ type Partner = {
   referral_code: string | null;
 };
 
-type Template = { id: string; name: string; lead_type: string; milestone: string | null };
+type Template = { id: string; name: string; lead_type: string };
 
-type View = "file" | "matrix" | "notifications";
+type View = "file" | "notifications";
 
 /** One side of one file; a Purchase & Sale file gives two rows. */
 type Row = { id: string; file: PortalFile; section: PortalSection };
 
 const STORAGE_KEY = "agentPortal.partnerId";
 
-const TONE: Record<StageStatus, { bar: string; text: string; cell: string; dot: string; pill: string; label: string }> = {
-  complete: { bar: "bg-emerald-500", text: "text-slate-700", cell: "bg-emerald-50 text-emerald-800", dot: "bg-emerald-500", pill: "bg-emerald-50 text-emerald-700", label: "Complete" },
-  attention: { bar: "bg-slate-500", text: "text-slate-700", cell: "bg-slate-100 text-slate-800", dot: "bg-slate-700", pill: "bg-slate-100 text-slate-700", label: "Needs attention" },
-  progress: { bar: "bg-slate-500", text: "text-slate-700", cell: "bg-slate-100 text-slate-700", dot: "bg-slate-400", pill: "bg-slate-100 text-slate-600", label: "In progress" },
-  not_started: { bar: "bg-slate-300", text: "text-slate-400", cell: "bg-slate-50 text-slate-400", dot: "bg-slate-300", pill: "bg-slate-50 text-slate-400", label: "Not started" },
+const TONE: Record<StageStatus, { bar: string; text: string; dot: string; pill: string; label: string }> = {
+  complete: { bar: "bg-emerald-500", text: "text-slate-700", dot: "bg-emerald-500", pill: "bg-emerald-50 text-emerald-700", label: "Complete" },
+  attention: { bar: "bg-slate-500", text: "text-slate-700", dot: "bg-slate-700", pill: "bg-slate-100 text-slate-700", label: "Needs attention" },
+  progress: { bar: "bg-slate-500", text: "text-slate-700", dot: "bg-slate-400", pill: "bg-slate-100 text-slate-600", label: "In progress" },
+  not_started: { bar: "bg-slate-300", text: "text-slate-400", dot: "bg-slate-300", pill: "bg-slate-50 text-slate-400", label: "Not started" },
 };
 
 const SIDE_BADGE: Record<PortalSide, string> = {
@@ -138,7 +144,8 @@ function Portal({ partner }: { partner: Partner }) {
   const [view, setView] = useState<View>("file");
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [focusId, setFocusId] = useState<string | null>(null);
+  const [version, setVersion] = useState(0);
+  const uploadContext = useMemo(() => ({ partnerId: partner.id, reload: () => setVersion((v) => v + 1) }), [partner.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -153,7 +160,8 @@ function Portal({ partner }: { partner: Partner }) {
         // Files needing attention open by default; the rest start collapsed.
         const open = new Set<string>();
         for (const f of data.files as PortalFile[]) for (const s of f.sections) if (s.attention) open.add(`${f.rootLeadId}:${s.side}`);
-        setExpanded(open);
+        // A reload after an upload keeps whatever the viewer has open.
+        if (version === 0) setExpanded(open);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       }
@@ -161,7 +169,7 @@ function Portal({ partner }: { partner: Partner }) {
     return () => {
       cancelled = true;
     };
-  }, [partner.id]);
+  }, [partner.id, version]);
 
   const rows = useMemo<Row[]>(() => (files ?? []).flatMap((file) => file.sections.map((section) => ({ id: `${file.rootLeadId}:${section.side}`, file, section }))), [files]);
 
@@ -178,12 +186,6 @@ function Portal({ partner }: { partner: Partner }) {
       return next;
     });
 
-  const openFromMatrix = (id: string) => {
-    setExpanded((prev) => new Set(prev).add(id));
-    setFocusId(id);
-    setView("file");
-  };
-
   const stats = useMemo(() => {
     const all = files ?? [];
     const active = all.filter((f) => !isClosed(f));
@@ -197,108 +199,77 @@ function Portal({ partner }: { partner: Partner }) {
   }, [files, today]);
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-        <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Agent portal</p>
-          <h1 className="truncate text-2xl font-bold tracking-tight text-slate-900 md:text-3xl">
-            {partner.agent_name}
-            {partner.brokerage_name && <span className="ml-2 text-lg font-normal text-slate-500 md:text-xl">{partner.brokerage_name}</span>}
-          </h1>
-        </div>
-        <Segmented
-          value={view}
-          onChange={setView}
-          options={[
-            { id: "file", label: "By file" },
-            { id: "matrix", label: "Milestone matrix" },
-            { id: "notifications", label: "Notifications", icon: <Bell size={14} /> },
-          ]}
-        />
-      </div>
-
-      {view === "notifications" ? (
-        <NotificationSettings partnerId={partner.id} />
-      ) : error ? (
-        <div className="px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">{error}</div>
-      ) : !files ? (
-        <div className="flex items-center gap-2 text-slate-500">
-          <Loader2 className="animate-spin" size={16} /> Loading files…
-        </div>
-      ) : (
-        <>
-          <div className="flex flex-wrap gap-2">
-            {stats.map((s) => (
-              <div key={s.label} className="inline-flex h-8 items-center gap-2 rounded-md bg-brand-primary px-3 text-white">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-white/80">{s.label}</span>
-                <span className="text-sm font-bold">{s.value}</span>
-              </div>
-            ))}
+    <UploadContext.Provider value={uploadContext}>
+      <div className="space-y-5">
+        <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Agent portal</p>
+            <h1 className="truncate text-2xl font-bold tracking-tight text-slate-900 md:text-3xl">
+              {partner.agent_name}
+              {partner.brokerage_name && <span className="ml-2 text-lg font-normal text-slate-500 md:text-xl">{partner.brokerage_name}</span>}
+            </h1>
           </div>
+          {/* Files are the default view; Notifications is the one place to step away to. */}
+          <button
+            type="button"
+            onClick={() => setView(view === "file" ? "notifications" : "file")}
+            className="flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap text-sm font-medium text-slate-600 transition-colors hover:text-brand-primary"
+          >
+            {view === "file" ? <Bell size={14} /> : <ArrowLeft size={14} />}
+            {view === "file" ? "Notifications" : "Back to files"}
+          </button>
+        </div>
 
-          <div className="relative">
-              <input
-                type="text"
-                placeholder="Search client, address or file number…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="h-8 w-full rounded-md border border-slate-200 bg-white pl-9 pr-3 text-sm focus:border-brand-primary focus:outline-none focus:ring-2 focus:ring-brand-primary/20"
-              />
-              <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+        {view === "notifications" ? (
+          <NotificationSettings partnerId={partner.id} />
+        ) : error ? (
+          <div className="px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">{error}</div>
+        ) : !files ? (
+          <div className="flex items-center gap-2 text-slate-500">
+            <Loader2 className="animate-spin" size={16} /> Loading files…
           </div>
-
-          {visible.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center text-slate-500">
-              {files.length === 0 ? "No referred files yet." : "No files match this search."}
-            </div>
-          ) : view === "file" ? (
-            <div className="space-y-3">
-              {visible.map((r) => (
-                <FileCard
-                  key={r.id}
-                  row={r}
-                  open={expanded.has(r.id)}
-                  onToggle={() => toggle(r.id)}
-                  focus={focusId === r.id}
-                  onFocused={() => setFocusId(null)}
-                />
+        ) : (
+          <>
+            <div className="flex flex-wrap gap-2">
+              {stats.map((s) => (
+                <div key={s.label} className="inline-flex h-8 items-center gap-2 rounded-md bg-brand-primary px-3 text-white">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-white/80">{s.label}</span>
+                  <span className="text-sm font-bold">{s.value}</span>
+                </div>
               ))}
             </div>
-          ) : (
-            <Matrix rows={visible} onOpen={openFromMatrix} />
-          )}
-        </>
-      )}
-    </div>
-  );
-}
 
-function Segmented<T extends string>({
-  value,
-  onChange,
-  options,
-}: {
-  value: T;
-  onChange: (v: T) => void;
-  options: { id: T; label: string; icon?: React.ReactNode }[];
-}) {
-  // Text tabs, the same look as the All Files date presets.
-  return (
-    <div className="flex max-w-full items-center gap-5 overflow-x-auto">
-      {options.map((o) => (
-        <button
-          key={o.id}
-          type="button"
-          onClick={() => onChange(o.id)}
-          className={`flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap text-sm font-medium transition-colors ${
-            value === o.id ? "text-brand-primary" : "text-slate-600 hover:text-brand-primary"
-          }`}
-        >
-          {o.icon}
-          {o.label}
-        </button>
-      ))}
-    </div>
+            <div className="relative">
+                <input
+                  type="text"
+                  placeholder="Search client, address or file number…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="h-8 w-full rounded-md border border-slate-200 bg-white pl-9 pr-3 text-sm focus:border-brand-primary focus:outline-none focus:ring-2 focus:ring-brand-primary/20"
+                />
+                <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+            </div>
+
+            {visible.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center text-slate-500">
+                {files.length === 0 ? "No referred files yet." : "No files match this search."}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {visible.map((r) => (
+                  <FileCard
+                    key={r.id}
+                    row={r}
+                    open={expanded.has(r.id)}
+                    onToggle={() => toggle(r.id)}
+                  />
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </UploadContext.Provider>
   );
 }
 
@@ -330,23 +301,18 @@ function FileCard({
   row,
   open,
   onToggle,
-  focus,
-  onFocused,
 }: {
   row: Row;
   open: boolean;
   onToggle: () => void;
-  focus: boolean;
-  onFocused: () => void;
 }) {
   const { file, section } = row;
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!focus) return;
-    ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    onFocused();
-  }, [focus, onFocused]);
-
+  const [docsOpen, setDocsOpen] = useState(false);
+  const openDocs = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!open) onToggle();
+    setDocsOpen((v) => !open || !v);
+  };
   const pill = section.attention
     ? TONE.attention
     : file.status === "Closed"
@@ -356,7 +322,7 @@ function FileCard({
         : { pill: "bg-emerald-50 text-emerald-700", label: file.status ?? "Active" };
 
   return (
-    <div ref={ref} className="scroll-mt-4 rounded-2xl border border-slate-200 bg-white shadow-sm">
+    <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div {...clickable(onToggle)} className="w-full cursor-pointer px-4 py-4 text-left md:px-5" aria-expanded={open}>
         <div className="flex items-start gap-2">
           <span className="mt-1 text-slate-400">{open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</span>
@@ -374,6 +340,15 @@ function FileCard({
               </div>
               <div className="flex shrink-0 items-center gap-2 text-sm md:flex-col md:items-end md:gap-1">
                 <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${pill.pill}`}>{pill.label}</span>
+                <button
+                  type="button"
+                  onClick={openDocs}
+                  onKeyDown={(e) => e.stopPropagation()}
+                  aria-expanded={open && docsOpen}
+                  className="inline-flex h-7 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-xs font-semibold text-brand-primary hover:bg-red-50"
+                >
+                  <Upload size={12} /> Upload documents
+                </button>
                 {file.closingDate && (
                   <span className="text-slate-500">
                     Closing {formatLocalDate(file.closingDate)}
@@ -394,6 +369,7 @@ function FileCard({
       </div>
       {open && (
         <div className="space-y-1 border-t border-slate-100 px-2 py-3 md:px-5">
+          {docsOpen && <DocumentsPanel file={file} section={section} />}
           {section.stages.map((s) => (
             <StageRow key={s.id} stage={s} />
           ))}
@@ -484,138 +460,185 @@ function StepRow({ step }: { step: PortalStep }) {
   );
 }
 
-/** Outstanding work in a stage: open steps, plus open sub-tasks of finished ones. */
-function outstanding(stage: PortalStage): string[] {
-  return stage.steps.flatMap((s) => [...(s.completed ? [] : [s.title]), ...s.subTasks.filter((t) => !t.completed).map((t) => `${s.title}: ${t.title}`)]);
+/** One document the file still accepts: a task's file field for one client (or the whole file). */
+type Slot = { id: string; taskId: string; leadId: string; client: string; task: string; field: string | null; fieldId: string; required: boolean; filled: boolean };
+
+const OTHER = "other";
+
+// "Upload Identification" -> "Identification"; the agent is already uploading.
+const docName = (title: string) => title.trim().replace(/^(upload|provide)\s+(your\s+)?/i, "").replace(/^./, (c) => c.toUpperCase());
+
+/** "Primary ID - Front" + "Primary ID - Back" -> "Primary ID (front & back)". */
+function joinFields(fields: string[]) {
+  const out: string[] = [];
+  for (const f of fields) {
+    const m = f.match(/^(.*?)\s*-\s*(front|back)$/i);
+    const pair = m && fields.find((g) => g !== f && g.toLowerCase() === `${m[1]} - ${m[2].toLowerCase() === "front" ? "back" : "front"}`.toLowerCase());
+    if (m && pair) {
+      const both = `${m[1]} (front & back)`;
+      if (!out.includes(both)) out.push(both);
+    } else out.push(f);
+  }
+  return out.join(", ");
 }
 
-function MatrixCell({ stage, fill = "h-full" }: { stage: PortalStage | undefined; fill?: string }) {
-  if (!stage) return <div className={`flex ${fill} min-h-14 items-center rounded-lg bg-slate-50/60 px-3 text-sm text-slate-300`}>—</div>;
-  const tone = TONE[stage.status];
-  const open = stage.steps.filter((s) => !s.completed);
-  const missing = open.filter((s) => s.attention);
-  const lead = (missing[0] ?? open[0])?.title;
-  const extra = (missing.length || open.length) - 1;
-  const tip = outstanding(stage);
-  return (
-    <div className={`flex ${fill} min-h-14 flex-col justify-center rounded-lg px-3 py-2 ${tone.cell}`} title={tip.length ? `Outstanding:\n• ${tip.join("\n• ")}` : "All done"}>
-      {stage.status === "complete" ? (
-        <span className="text-sm font-semibold">✓ Done</span>
-      ) : (
-        <>
-          <span className="text-sm font-semibold">{stage.status === "attention" ? `${missing.length} missing` : `${stage.done} / ${stage.total}`}</span>
-          {lead && (
-            <span className="truncate text-xs opacity-80">
-              {lead}
-              {extra > 0 ? ` +${extra}` : ""}
-            </span>
-          )}
-        </>
-      )}
-    </div>
+function slotsOf(section: PortalSection): Slot[] {
+  const tasks = section.stages.flatMap((st) => st.steps.flatMap((s) => [s.task, ...s.subTasks])).filter((t): t is ClubbedTask => !!t);
+  return tasks.flatMap((t) =>
+    t.uploads.flatMap((u: UploadTarget) =>
+      u.fields.map((f) => ({
+        id: `${u.taskId}:${f.id}`,
+        taskId: u.taskId,
+        leadId: u.leadId,
+        client: u.client,
+        task: docName(t.title),
+        // Only worth naming when the task asks for several files.
+        field: u.fields.length > 1 && docName(f.label).toLowerCase() !== docName(t.title).toLowerCase() ? f.label.trim() : null,
+        fieldId: f.id,
+        required: f.required,
+        filled: f.filled,
+      })),
+    ),
   );
 }
 
-function Overall({ section }: { section: PortalSection }) {
-  const pct = section.total ? Math.round((section.done / section.total) * 100) : 0;
+const slotLabel = (s: Slot) => `${s.field ? `${s.task} – ${s.field}` : s.task}${s.client ? ` (${s.client})` : ""}`;
+
+/** The one place an agent uploads documents for a file, one at a time. */
+function DocumentsPanel({ file, section }: { file: PortalFile; section: PortalSection }) {
+  const ctx = useContext(UploadContext);
+  const slots = useMemo(() => slotsOf(section), [section]);
+  const [choice, setChoice] = useState("");
+  const [label, setLabel] = useState("");
+  const [picked, setPicked] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const input = useRef<HTMLInputElement>(null);
+  if (!ctx) return null;
+
+  // One line per missing document (per client for personal ones), with the parts still missing.
+  const pending = new Map<string, { doc: string; client: string; parts: string[] }>();
+  for (const s of slots) {
+    if (!s.required || s.filled) continue;
+    const key = `${s.task}|${s.client}`;
+    const line = pending.get(key) ?? { doc: s.task, client: s.client, parts: [] };
+    if (s.field) line.parts.push(s.field);
+    pending.set(key, line);
+  }
+
+  const submit = async () => {
+    const slot = slots.find((s) => s.id === choice);
+    if (!picked || (!slot && choice !== OTHER)) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const owner = slot ? slot.leadId : file.rootLeadId;
+      const blob = await upload(`${AGENT_UPLOAD_PREFIX}/${owner}/${Date.now()}-${picked.name}`, picked, {
+        access: BLOB_ACCESS,
+        handleUploadUrl: `/api/admin/agent-portal/${ctx.partnerId}/upload/token`,
+        clientPayload: JSON.stringify(slot ? { taskId: slot.taskId } : { leadId: file.rootLeadId }),
+        contentType: picked.type,
+      });
+      const res = await fetch(`/api/admin/agent-portal/${ctx.partnerId}/upload`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          slot
+            ? { taskId: slot.taskId, fieldId: slot.fieldId, fileUrl: blob.url, fileName: picked.name }
+            : { leadId: file.rootLeadId, label, fileUrl: blob.url, fileName: picked.name },
+        ),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
+      setMessage({ ok: true, text: `${picked.name} uploaded${data.taskCompleted ? " and the task is complete" : ""}.` });
+      setPicked(null);
+      setChoice("");
+      setLabel("");
+      if (input.current) input.current.value = "";
+      ctx.reload();
+    } catch (err) {
+      setMessage({ ok: false, text: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const control = "h-8 rounded-md border border-slate-200 bg-white px-2 text-sm focus:border-brand-primary focus:outline-none";
   return (
-    <div className="w-full">
-      <p className="text-right text-sm font-bold text-slate-900">{pct}%</p>
-      <div className="mt-1 h-1.5 rounded-full bg-slate-200">
-        <div className="h-1.5 rounded-full bg-emerald-500" style={{ width: `${pct}%` }} />
+    <div className="mx-2 mb-3 space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-4 md:mx-0">
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
+        <input
+          ref={input}
+          type="file"
+          accept="application/pdf,image/jpeg,image/png"
+          onChange={(e) => setPicked(e.target.files?.[0] ?? null)}
+          className="min-w-0 text-sm text-slate-700 file:mr-3 file:h-8 file:cursor-pointer file:rounded-md file:border file:border-slate-200 file:bg-white file:px-3 file:text-sm file:font-medium file:text-slate-700"
+        />
+        <select value={choice} onChange={(e) => setChoice(e.target.value)} className={`${control} min-w-0 lg:flex-1`} aria-label="What is this document?">
+          <option value="">What is it?</option>
+          {slots.map((s) => (
+            <option key={s.id} value={s.id}>
+              {slotLabel(s)}
+              {s.filled ? " – uploaded" : !s.required ? " – optional" : ""}
+            </option>
+          ))}
+          <option value={OTHER}>Other document</option>
+        </select>
+        {choice === OTHER && (
+          <input value={label} onChange={(e) => setLabel(e.target.value)} maxLength={120} placeholder="Describe it (optional)" className={`${control} lg:w-56`} />
+        )}
+        <button
+          type="button"
+          onClick={submit}
+          disabled={!picked || !choice || busy}
+          className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-brand-primary px-3 text-sm font-semibold text-white disabled:opacity-50"
+        >
+          {busy ? <Loader2 className="animate-spin" size={14} /> : <Upload size={14} />}
+          Upload
+        </button>
       </div>
-    </div>
-  );
-}
+      <p className="text-xs text-slate-500">PDF, JPG or PNG, up to 10 MB, uploaded on the client&apos;s behalf. Other documents go to our team only.</p>
+      {message && <p className={`text-sm ${message.ok ? "text-emerald-700" : "text-red-700"}`}>{message.text}</p>}
 
-function Matrix({ rows, onOpen }: { rows: Row[]; onOpen: (id: string) => void }) {
-  const fileLabel = (r: Row) => (
-    <>
-      <div className="flex min-w-0 items-center gap-2">
-        <SideBadge side={r.section.side} label={r.section.label} />
-        <span className="truncate font-semibold text-slate-900">{r.file.clients.join(" & ") || "Unnamed client"}</span>
-      </div>
-      <p className="mt-0.5 truncate text-xs text-slate-500">
-        {r.file.fileNumber}
-        {r.section.address ? ` · ${r.section.address}` : ""}
-      </p>
-      {r.file.closingDate && (
-        <p className="text-xs text-slate-500">
-          Closing {formatLocalDate(r.file.closingDate)}
-        </p>
-      )}
-    </>
-  );
-  const stageMap = (r: Row) => new Map(r.section.stages.map((s) => [s.id, s]));
-
-  return (
-    <div className="space-y-3">
-      {/* Desktop: one row per file side, one column per stage. */}
-      <div className="hidden overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm md:block">
-        <table className="w-full min-w-[900px] border-separate border-spacing-1.5 text-left">
-          <thead>
-            <tr className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              <th className="px-3 py-2">Client / file</th>
-              {STAGES.map((s) => (
-                <th key={s.id} className="px-3 py-2">
-                  {s.short}
-                </th>
+      <div className="grid gap-4 md:grid-cols-2">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Pending documents</p>
+          {pending.size === 0 ? (
+            <p className="mt-1 text-sm text-slate-500">Nothing outstanding.</p>
+          ) : (
+            <ul className="mt-1 space-y-1.5">
+              {[...pending.values()].map((l) => (
+                <li key={`${l.doc}|${l.client}`} className="flex items-start gap-2 text-sm">
+                  <Circle size={12} className="mt-1 shrink-0 text-slate-300" />
+                  <span className="min-w-0">
+                    <span className="text-slate-800">{l.doc}</span>
+                    {l.client && <span className="text-slate-500"> · {l.client}</span>}
+                    {l.parts.length > 0 && <span className="block text-xs text-slate-500">{joinFields(l.parts)}</span>}
+                  </span>
+                </li>
               ))}
-              <th className="px-3 py-2 text-right">Overall</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => {
-              const map = stageMap(r);
-              return (
-                <tr key={r.id} onClick={() => !selecting() && onOpen(r.id)} className="cursor-pointer align-top hover:[&>td]:bg-slate-50/50">
-                  <td className="w-64 max-w-64 rounded-lg px-3 py-2">{fileLabel(r)}</td>
-                  {STAGES.map((s) => (
-                    <td key={s.id} className="w-36 max-w-36 p-0">
-                      <MatrixCell stage={map.get(s.id)} />
-                    </td>
-                  ))}
-                  <td className="w-24 rounded-lg px-3 py-2 align-middle">
-                    <Overall section={r.section} />
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Mobile: the same matrix as one card per file side. */}
-      <div className="space-y-3 md:hidden">
-        {rows.map((r) => {
-          const map = stageMap(r);
-          return (
-            <div key={r.id} {...clickable(() => onOpen(r.id))} className="w-full cursor-pointer rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm">
-              {fileLabel(r)}
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                {STAGES.filter((s) => map.has(s.id)).map((s) => (
-                  <div key={s.id} className="flex flex-col">
-                    <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">{s.short}</p>
-                    <MatrixCell stage={map.get(s.id)} fill="flex-1" />
-                  </div>
-                ))}
-              </div>
-              <div className="mt-3">
-                <Overall section={r.section} />
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500">
-        {(Object.keys(TONE) as StageStatus[]).map((k) => (
-          <span key={k} className="flex items-center gap-1.5">
-            <span className={`h-3 w-3 rounded border border-black/5 ${TONE[k].cell}`} />
-            {TONE[k].label}
-          </span>
-        ))}
-        <span>Hover a cell for outstanding tasks · click a row to open the file</span>
+            </ul>
+          )}
+        </div>
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Uploaded by you</p>
+          {file.agentUploads.length === 0 ? (
+            <p className="mt-1 text-sm text-slate-500">No uploads yet.</p>
+          ) : (
+            <ul className="mt-1 space-y-1.5 text-sm">
+              {file.agentUploads.map((u, i) => (
+                <li key={i} className="flex items-start gap-2">
+                  <CheckCircle2 size={14} className="mt-0.5 shrink-0 text-emerald-600" />
+                  <span className="min-w-0 flex-1 break-words">
+                    <span className="text-slate-800">{u.fileName}</span>
+                    <span className="text-slate-500"> — {u.label}</span>
+                  </span>
+                  {u.uploadedAt && <span className="shrink-0 text-xs text-slate-400">{formatLocalDate(u.uploadedAt)}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -646,15 +669,10 @@ function NotificationSettings({ partnerId }: { partnerId: string }) {
     })();
   }, [partnerId]);
 
-  // lead_type -> milestone -> templates, keeping the server's order.
+  // lead_type -> milestones, keeping the server's order.
   const groups = useMemo(() => {
-    const out = new Map<string, Map<string, Template[]>>();
-    for (const t of templates ?? []) {
-      const byMs = out.get(t.lead_type) ?? new Map<string, Template[]>();
-      const ms = t.milestone ?? "Other tasks";
-      byMs.set(ms, [...(byMs.get(ms) ?? []), t]);
-      out.set(t.lead_type, byMs);
-    }
+    const out = new Map<string, Template[]>();
+    for (const t of templates ?? []) out.set(t.lead_type, [...(out.get(t.lead_type) ?? []), t]);
     return out;
   }, [templates]);
 
@@ -677,7 +695,7 @@ function NotificationSettings({ partnerId }: { partnerId: string }) {
       const res = await fetch(`/api/admin/agent-portal/${partnerId}/notifications`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ taskTemplateIds: [...selected] }),
+        body: JSON.stringify({ stageTemplateIds: [...selected] }),
       });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
@@ -696,7 +714,7 @@ function NotificationSettings({ partnerId }: { partnerId: string }) {
     <div className="space-y-4">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
         <p className="text-sm text-slate-600">
-          Choose the tasks you want an email about when they are completed. This applies to all of your clients&apos; files.
+          Choose the milestones you want an email about when they are completed. This applies to all of your clients&apos; files.
         </p>
         <button
           onClick={save}
@@ -713,8 +731,8 @@ function NotificationSettings({ partnerId }: { partnerId: string }) {
         </div>
       )}
       <div className="grid gap-4 lg:grid-cols-2">
-        {[...groups].map(([leadType, byMs]) => {
-          const ids = [...byMs.values()].flat().map((t) => t.id);
+        {[...groups].map(([leadType, list]) => {
+          const ids = list.map((t) => t.id);
           const allOn = ids.every((id) => selected.has(id));
           return (
             <div key={leadType} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -724,28 +742,21 @@ function NotificationSettings({ partnerId }: { partnerId: string }) {
                   {allOn ? "Clear all" : "Select all"}
                 </button>
               </div>
-              <div className="mt-3 space-y-3">
-                {[...byMs].map(([ms, list]) => (
-                  <div key={ms}>
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{ms}</p>
-                    <ul className="mt-1 space-y-1">
-                      {list.map((t) => (
-                        <li key={t.id}>
-                          <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-800">
-                            <input
-                              type="checkbox"
-                              className="checkbox checkbox-sm"
-                              checked={selected.has(t.id)}
-                              onChange={(e) => toggle([t.id], e.target.checked)}
-                            />
-                            {t.name}
-                          </label>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
+              <ul className="mt-3 space-y-1">
+                {list.map((t) => (
+                  <li key={t.id}>
+                    <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-800">
+                      <input
+                        type="checkbox"
+                        className="checkbox checkbox-sm"
+                        checked={selected.has(t.id)}
+                        onChange={(e) => toggle([t.id], e.target.checked)}
+                      />
+                      {t.name}
+                    </label>
+                  </li>
                 ))}
-              </div>
+              </ul>
             </div>
           );
         })}
