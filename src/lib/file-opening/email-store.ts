@@ -14,7 +14,7 @@ import path from 'node:path';import {randomUUID} from 'node:crypto';
 import {localStateDirectory} from '../orchestrator/local-store.ts';
 import {digest,validateInput,type OpeningInput} from './model.ts';
 import {canSeeOpening,checkOpening,STAFF,type EmailOpening} from './email-model.ts';
-export interface MonitorState {version:1;extractionEnabled?:boolean;discoveryVersion?:number;historyId?:string;lastCheck?:string;lastSuccess?:string;error?:string;backfillDone?:boolean;pending:string[];threads:Record<string,{hash?:string;status:'pending'|'done'|'failed'|'calling';error?:string}>;usage:{date:string;calls:number;input:number;output:number}[];}
+export interface MonitorState {unavailableMessages?:{messageId:string;threadId?:string;at:string}[];version:1;extractionEnabled?:boolean;discoveryVersion?:number;historyId?:string;lastCheck?:string;lastSuccess?:string;error?:string;backfillDone?:boolean;pending:string[];threads:Record<string,{hash?:string;status:'pending'|'done'|'failed'|'calling';error?:string}>;usage:{date:string;calls:number;input:number;output:number}[];}
 export const emptyMonitor=():MonitorState=>({version:1,pending:[],threads:{},usage:[]});
 export function intakeDirectory(){const root=localStateDirectory();if(!root||process.env.NODE_ENV==='production')throw Error('Local email intake storage is unavailable.');return path.join(root,'email-intake');}
 async function directory(){const dir=intakeDirectory();await readFile(path.join(path.dirname(dir),'state.json'));await mkdir(dir,{recursive:true,mode:0o700});return dir;}

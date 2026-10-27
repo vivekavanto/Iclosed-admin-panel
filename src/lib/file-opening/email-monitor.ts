@@ -2,18 +2,41 @@ import {hostedDocumentsEnabled} from "../orchestrator/hosted/document.ts";
 import {withHostedDiscoveryLease} from "./email-store.ts";
 import {readFile,writeFile,mkdir,rm,rename} from 'node:fs/promises';import path from 'node:path';import {createHash} from 'node:crypto';
 import {digest,type TicklerRow} from './model.ts';
-import {INTAKE_VERSION,senderAddress,attachments,checkOpening,header,matchTickler,openingInstruction,participants,threadFingerprint,substantive,type MailThread,type EmailOpening} from './email-model.ts';
+import {INTAKE_VERSION,senderAddress,attachments,checkOpening,header,matchTickler,openingInstruction,participants,threadFingerprint,substantive,type MailThread,type MailMessage,type EmailOpening} from './email-model.ts';
 import {intakeDirectory,readMonitor,readEmailOpenings,updateMonitor,upsertEmailOpenings,invalidateEmailOpeningSource} from './email-store.ts';
 import {IntakeGmail} from './email-gmail.ts';import {extractEmailOpenings} from './email-extract.ts';import {readTickler} from './tickler.ts';
-export interface IntakeSource {profile():Promise<{historyId:string}>;backfill():Promise<string[]>;history(start:string):Promise<{ids:string[];historyId:string}>;message:IntakeGmail['message'];thread:IntakeGmail['thread'];attachment:IntakeGmail['attachment'];}
+export interface IntakeSource {profile():Promise<{historyId:string}>;backfill():Promise<string[]>;history(start:string):Promise<{ids:string[];historyId:string;messageThreads?:Record<string,string>}>;message:IntakeGmail['message'];thread:IntakeGmail['thread'];attachment:IntakeGmail['attachment'];}
 const safeError=(e:unknown)=>e instanceof Error&&/^(Gmail|Mailbox|Opening backfill|Mailbox catch-up|Email extraction|This conversation|An extracted|Invalid extract|An extract|Too many|Duplicate extraction)/.test(e.message)?e.message:'Email intake could not finish. Existing records and pending work retained.';
-export async function discover(source:IntakeSource){const state=await readMonitor();let ids:string[],historyId:string;let backfill=false;
- try{if(state.historyId&&state.discoveryVersion===INTAKE_VERSION){const changes=await source.history(state.historyId);ids=changes.ids;historyId=changes.historyId;}else throw Error('gmail_history_expired');}
+export async function discover(source:IntakeSource){
+ const state=await readMonitor();let ids:string[],historyId:string;let backfill=false;let messageThreads:Record<string,string>={};
+ try{if(state.historyId&&state.discoveryVersion===INTAKE_VERSION){const changes=await source.history(state.historyId);ids=changes.ids;historyId=changes.historyId;messageThreads=changes.messageThreads??{};}else throw Error('gmail_history_expired');}
  catch(e){if(!(e instanceof Error)||e.message!=='gmail_history_expired')throw e;historyId=(await source.profile()).historyId;ids=await source.backfill();backfill=true;}
- const changedThreads=new Set<string>();const threads=new Set<string>();for(let i=0;i<ids.length;i+=6){const batch=await Promise.all(ids.slice(i,i+6).map(id=>source.message(id)));for(const m of batch)if(openingInstruction(m)||state.threads[m.threadId]){threads.add(m.threadId);if(state.threads[m.threadId]&&substantive(m))changedThreads.add(m.threadId);}}
- for(const id of changedThreads)await invalidateEmailOpeningSource(id,threadFingerprint(await source.thread(id)));
- await updateMonitor(s=>{for(const id of threads){if(!s.pending.includes(id))s.pending.push(id);if(!s.threads[id])s.threads[id]={status:'pending'};}s.historyId=historyId;s.discoveryVersion=INTAKE_VERSION;s.backfillDone=s.backfillDone||backfill;s.lastCheck=new Date().toISOString();s.lastSuccess=s.lastCheck;s.error=undefined;});return {messagesChecked:ids.length,candidates:threads.size};
+ const changedThreads=new Set<string>(),threads=new Set<string>(),missingThreads=new Set<string>(),recovered=new Map<string,MailThread>();
+ const gaps:{messageId:string;threadId?:string;at:string}[]=[];
+ const unavailable=(error:unknown)=>error instanceof Error&&['gmail_message_unavailable','gmail_history_expired'].includes(error.message);
+ const consider=(m:MailMessage)=>{if(openingInstruction(m)||state.threads[m.threadId]){threads.add(m.threadId);if(state.threads[m.threadId]&&substantive(m))changedThreads.add(m.threadId);}};
+ for(let i=0;i<ids.length;i+=6){
+  const group=ids.slice(i,i+6),results=await Promise.allSettled(group.map(id=>source.message(id)));
+  for(let n=0;n<results.length;n++){
+   const result=results[n];if(result.status==='fulfilled'){consider(result.value);continue;}
+   if(!unavailable(result.reason))throw result.reason;
+   const messageId=group[n],threadId=messageThreads[messageId];gaps.push({messageId,threadId,at:new Date().toISOString()});
+   if(!threadId)continue;
+   if(state.threads[threadId]){threads.add(threadId);changedThreads.add(threadId);}
+   if(missingThreads.has(threadId))continue;
+   try{const thread=recovered.get(threadId)??await source.thread(threadId);recovered.set(threadId,thread);thread.messages.forEach(consider);}
+   catch(error){if(!unavailable(error))throw error;missingThreads.add(threadId);}
+  }
+ }
+ for(const id of changedThreads){
+  if(missingThreads.has(id)){await invalidateEmailOpeningSource(id,digest({unavailableThread:id,historyId}));continue;}
+  try{await invalidateEmailOpeningSource(id,threadFingerprint(recovered.get(id)??await source.thread(id)));}
+  catch(error){if(!unavailable(error))throw error;await invalidateEmailOpeningSource(id,digest({unavailableThread:id,historyId}));}
+ }
+ await updateMonitor(s=>{for(const id of threads){if(!s.pending.includes(id))s.pending.push(id);if(!s.threads[id])s.threads[id]={status:'pending'};}for(const gap of gaps){const list=s.unavailableMessages??=[];if(!list.some(g=>g.messageId===gap.messageId))list.push(gap);}s.historyId=historyId;s.discoveryVersion=INTAKE_VERSION;s.backfillDone=s.backfillDone||backfill;s.lastCheck=new Date().toISOString();s.lastSuccess=s.lastCheck;s.error=undefined;});
+ return {messagesChecked:ids.length,candidates:threads.size,unavailableMessages:gaps.length};
 }
+
 async function captureAttachments(source:IntakeSource,thread:MailThread){const list=attachments(thread);if(list.length>80||list.reduce((n,a)=>n+a.size,0)>100_000_000)throw Error('Opening attachments exceed automatic capture limits.');const dir=path.join(intakeDirectory(),'attachments');await mkdir(dir,{recursive:true,mode:0o700});let total=0;for(const a of list){const bytes=await source.attachment(a.messageId,a.attachmentId);if(bytes.length!==a.size)throw Error('Opening attachment verification failed.');total+=bytes.length;if(total>100_000_000)throw Error('Opening attachment capture exceeds checked coverage.');a.sha256=createHash('sha256').update(bytes).digest('hex');const target=path.join(dir,a.sha256);try{const existing=await readFile(target);if(createHash('sha256').update(existing).digest('hex')!==a.sha256)throw Error('Opening attachment cache is corrupt.');}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;const tmp=target+'.tmp';await writeFile(tmp,bytes,{mode:0o600});await rename(tmp,target);}}return list;}
 export async function processPending(source:IntakeSource,extract=extractEmailOpenings,tickler:()=>Promise<{rows:TicklerRow[]}>=readTickler,max=3,only?:string[]){let processed=0;for(const id of (await readMonitor()).pending.filter(id=>!only||only.includes(id)).slice(0,max)){let hash='';try{
  const state=await readMonitor(),thread=await source.thread(id);hash=threadFingerprint(thread);const previous=state.threads[id];await invalidateEmailOpeningSource(id,hash);if(previous?.hash===hash&&['done','failed'].includes(previous.status)){await updateMonitor(s=>{s.pending=s.pending.filter(x=>x!==id);});continue;}

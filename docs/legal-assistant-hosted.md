@@ -54,3 +54,9 @@ The read-only source transfer plan found revision 52 with 67 matters, 78 frozen 
 ## Current activation gate
 
 Automatic approval review rejected applying the additive schema/privilege migration to the shared `iclosed-dev` database because the retained repository instructions require a separate reviewed deployment gate. No schema migration ran. The owner-only pending environment configuration is staged locally with audit submissions/imports/sending disabled; it has not been applied to Vercel or distributed to running services. The reviewed rollout must cover the SQL, private bucket, verified baseline transfer, dev-only environment settings and worker enrollment before the alias is promoted. Production and existing local workflows remain unchanged.
+
+## Final verification findings
+
+- Full repository checks now pass 479 tests; the production build, TypeScript and scoped lint pass. Full lint's two imported fixture errors were corrected; remaining warnings are non-blocking.
+- Signed-in local verification uncovered a real discovery stall: one added message had been deleted before retrieval. Discovery now recovers remaining thread content where possible, records unavailable-message coverage explicitly and prevents approval from surviving an unverifiable existing source. The isolated fix was backported and committed to the active local app; discovery resumed with zero model calls, preserved its queue and displayed its coverage gap on the signed-in screen. The source manifest must be regenerated after quiescing writers for transfer.
+- Vercel blocked the draft branch's automatic previews because it could not find a Git account for the commit author. This is separate from the reviewed schema gate. Resolve deployment through an existing linked operator account after approval; do not add paid members, rewrite contributor identity or weaken project permissions. The dev alias has not changed.
