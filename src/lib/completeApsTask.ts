@@ -217,6 +217,20 @@ export async function completeApsTask(
           return new Set();
         };
 
+        // The template's file field, so a bridged file is tied to the form field
+        // the client portal renders (it re-links by field_id, else exact label).
+        const apsTemplateIdsForFields = [...new Set((apsTasks ?? []).map((t) => t.task_template_id).filter((id): id is string => !!id))];
+        const { data: apsFileFields } = apsTemplateIdsForFields.length
+          ? await supabaseAdmin
+              .from("task_form_fields")
+              .select("id, label, task_template_id")
+              .in("task_template_id", apsTemplateIdsForFields)
+              .eq("field_type", "file")
+              .order("order_index", { ascending: true })
+          : { data: [] as { id: string; label: string; task_template_id: string }[] };
+        const fileFieldByTemplate = new Map<string, { id: string; label: string }>();
+        for (const f of apsFileFields ?? []) if (!fileFieldByTemplate.has(f.task_template_id)) fileFieldByTemplate.set(f.task_template_id, f);
+
         if (apsDocs && apsDocs.length > 0) {
           // Bridge into ALL APS tasks (not just pending), so re-uploads after
           // completion still attach to the right task.
@@ -251,7 +265,7 @@ export async function completeApsTask(
 
             const { data: existingResponses } = await supabaseAdmin
               .from("task_responses")
-              .select("id, file_name, file_url")
+              .select("id, file_name, file_url, field_id")
               .eq("task_id", apsTaskRow.id)
               .eq("field_type", "file");
 
@@ -267,6 +281,17 @@ export async function completeApsTask(
               await supabaseAdmin.from("task_responses").delete().in("id", staleIds);
             }
 
+            const fileField = fileFieldByTemplate.get(apsTaskRow.task_template_id ?? "");
+            // Heal rows bridged before the field was attached, so they show in the portal form.
+            if (fileField) {
+              const unlinked = (existingResponses ?? [])
+                .filter((r) => desiredKeys.has(`${r.file_name ?? ""}|${r.file_url ?? ""}`) && !r.field_id)
+                .map((r) => r.id);
+              if (unlinked.length > 0) {
+                await supabaseAdmin.from("task_responses").update({ field_id: fileField.id, field_label: fileField.label }).in("id", unlinked);
+              }
+            }
+
             const existingKeys = new Set(
               (existingResponses ?? [])
                 .filter((r) => desiredKeys.has(`${r.file_name ?? ""}|${r.file_url ?? ""}`))
@@ -278,7 +303,8 @@ export async function completeApsTask(
               .map((doc) => ({
                 task_id: apsTaskRow.id,
                 field_type: "file",
-                field_label: "Upload Agreement of Purchase and Sale",
+                field_id: fileField?.id ?? null,
+                field_label: fileField?.label ?? "Upload Agreement of Purchase and Sale",
                 file_name: doc.file_name,
                 file_url: doc.file_url,
               }));

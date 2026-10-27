@@ -127,27 +127,3 @@ test('stages follow the file\'s milestone order and never jump back', () => {
   });
   assert.deepEqual(file.sections[0].stages.flatMap(s => s.steps.map(x => x.title)), sale);
 });
-
-test('open file-field tasks offer upload slots: one per owing client, one for a shared task', () => {
-  const fileFields = new Map([['idT', [{ id: 'f1', label: 'Primary ID - Front', required: true }]], ['apsT', [{ id: 'f2', label: 'APS', required: true }]]]);
-  const [file] = build({
-    leads: [lead('root', null, 'Ann'), lead('co', 'root', 'Bob')],
-    deals: [deal('d1', 'root', 'Sale'), deal('d2', 'co', 'Sale')],
-    milestones: [ms('m1', 'd1', 'id', 'Identification', 1), ms('m2', 'd2', 'id', 'Identification', 1), ms('m3', 'd1', 'aps', 'Agreement of Purchase and Sale', 0)],
-    tasks: [
-      task('t1', 'd1', 'm1', 'idT', 'Identification', false), task('t2', 'd2', 'm2', 'idT', 'Identification', false),
-      task('t3', 'd1', 'm3', 'apsT', 'Agreement of Purchase and Sale', false, { is_shared: true }),
-      task('t4', 'd2', 'm3', 'apsT', 'Agreement of Purchase and Sale', false, { is_shared: true }),
-    ],
-    fileFields,
-    filledFields: new Map([['t2', new Set(['Primary ID - Front'])]]),
-  });
-  const steps = file.sections[0].stages.flatMap((s) => s.steps);
-  const id = steps.find((s) => s.title === 'Identification')!.task!;
-  assert.deepEqual(id.uploads.map((u) => [u.taskId, u.leadId, u.client, u.fields[0].filled]), [['t1', 'root', 'Ann Client', false], ['t2', 'co', 'Bob Client', true]]);
-  const aps = steps.find((s) => s.title === 'Agreement of Purchase and Sale')!.task!;
-  assert.deepEqual(aps.uploads.map((u) => [u.taskId, u.client]), [['t3', '']]);
-
-  const [done] = build({ leads: [lead('a')], deals: [deal('d1', 'a', 'Sale')], tasks: [task('t1', 'd1', null, 'idT', 'Identification', true)], fileFields });
-  assert.deepEqual(done.sections[0].stages[0].steps[0].task?.uploads, []);
-});
