@@ -11,10 +11,28 @@ export const OFFICE_TIMEZONE = "America/Toronto";
 /**
  * The UTC instant corresponding to a wall-clock date+time in `timeZone`.
  *
- * Classic double-format trick: format the UTC guess back through the target
- * timezone, measure the drift, and correct for it. Accurate for everyday
- * office-hours scheduling; not meant for the exact DST-transition hour.
+ * Format the UTC guess through the target timezone as numeric parts, measure how
+ * far that zone is from UTC at that instant, and correct for it. Reads the parts
+ * directly (never re-parses a formatted string), so the result does not depend on
+ * the timezone of the machine running this: a dev box in India and Vercel (UTC)
+ * agree. Not meant for the exact DST-transition hour.
  */
+function zoneOffsetMs(utcMs: number, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    second: "numeric",
+  }).formatToParts(new Date(utcMs));
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+  const asIfUtc = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
+  return asIfUtc - utcMs;
+}
+
 export function zonedTimeToUtc(
   year: number,
   month: number, // 1-12
@@ -23,10 +41,8 @@ export function zonedTimeToUtc(
   minute: number,
   timeZone: string = OFFICE_TIMEZONE,
 ): Date {
-  const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute));
-  const asZoned = new Date(utcGuess.toLocaleString("en-US", { timeZone }));
-  const drift = utcGuess.getTime() - asZoned.getTime();
-  return new Date(utcGuess.getTime() + drift);
+  const utcGuess = Date.UTC(year, month - 1, day, hour, minute);
+  return new Date(utcGuess - zoneOffsetMs(utcGuess, timeZone));
 }
 
 /** Parse "HH:MM" or "HH:MM:SS" into { hour, minute }. */

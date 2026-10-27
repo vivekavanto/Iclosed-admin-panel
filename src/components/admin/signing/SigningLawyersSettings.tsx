@@ -368,37 +368,100 @@ export default function SigningLawyersSettings({ initialTab = "lawyers" }: Signi
   );
 }
 
+type HoursTab = "default" | "purchase" | "sale";
+const HOURS_TABS: { key: HoursTab; label: string }[] = [
+  { key: "default", label: "Default" },
+  { key: "purchase", label: "Purchase" },
+  { key: "sale", label: "Sale" },
+];
+
+type DayHours = Record<number, { enabled: boolean; start: string; end: string }>;
+
+function hoursQuery(tab: HoursTab) {
+  return tab === "default" ? "" : `?dealType=${tab}`;
+}
+
+function rowsToDays(rows: LawyerHour[], hasAnyHours: boolean): DayHours {
+  const byDay: DayHours = {};
+  // Mon-Fri are only pre-ticked for a lawyer with no saved hours of any kind (a
+  // brand-new lawyer). Once any schedule exists, the saved rows are the whole week:
+  // a Wed-only schedule must not come back with Mon/Tue/Thu/Fri ticked, and a
+  // Default that was deliberately emptied must stay empty.
+  const preticked = rows.length === 0 && !hasAnyHours;
+  for (let d = 0; d < 7; d++) {
+    byDay[d] = { enabled: preticked && DEFAULT_WORKDAYS.includes(d), start: "10:00", end: "16:00" };
+  }
+  for (const row of rows) {
+    byDay[row.day_of_week] = {
+      enabled: true,
+      start: row.start_time.slice(0, 5),
+      end: row.end_time.slice(0, 5),
+    };
+  }
+  return byDay;
+}
+
 function LawyerHoursModal({ lawyer, onClose }: { lawyer: Lawyer; onClose: () => void }) {
-  const [hours, setHours] = useState<Record<number, { enabled: boolean; start: string; end: string }>>({});
+  const [tab, setTab] = useState<HoursTab>("default");
+  const [hours, setHours] = useState<DayHours>({});
+  // A purchase/sale tab with no schedule of its own is booked with the default
+  // hours; the form is seeded from them so an admin only changes what differs.
+  const [usingDefault, setUsingDefault] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/admin/signing/lawyers/${lawyer.id}/hours`);
+        const base = `/api/admin/signing/lawyers/${lawyer.id}/hours`;
+        const res = await fetch(`${base}${hoursQuery(tab)}`);
         const json = await res.json();
-        const byDay: Record<number, { enabled: boolean; start: string; end: string }> = {};
-        for (let d = 0; d < 7; d++) {
-          byDay[d] = { enabled: DEFAULT_WORKDAYS.includes(d), start: "10:00", end: "16:00" };
+        if (!json.success) throw new Error(json.error || `Could not load ${tab} hours`);
+        let rows = json.data as LawyerHour[];
+        const hasAnyHours = json.hasAnyHours === true;
+        let fallback = false;
+        if (tab !== "default" && rows.length === 0) {
+          const defRes = await fetch(base);
+          const defJson = await defRes.json();
+          if (!defJson.success) throw new Error(defJson.error || "Could not load default hours");
+          rows = defJson.data as LawyerHour[];
+          fallback = true;
         }
-        if (json.success) {
-          for (const row of json.data as LawyerHour[]) {
-            byDay[row.day_of_week] = {
-              enabled: true,
-              start: row.start_time.slice(0, 5),
-              end: row.end_time.slice(0, 5),
-            };
-          }
-        }
-        setHours(byDay);
+        if (cancelled) return;
+        setHours(rowsToDays(rows, hasAnyHours));
+        setUsingDefault(fallback);
+        setLoadError(null);
+      } catch (err) {
+        // Never leave the previous tab's hours on screen under this tab's label.
+        if (cancelled) return;
+        setHours({});
+        setLoadError(err instanceof Error ? err.message : "Could not load hours");
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
-  }, [lawyer.id]);
+    return () => {
+      cancelled = true;
+    };
+  }, [lawyer.id, tab]);
+
+  function switchTab(next: HoursTab) {
+    if (next === tab) return;
+    setLoading(true);
+    setTab(next);
+  }
 
   async function save() {
+    // The browser's time picker opens on 12:00 AM, so a stray click can silently turn
+    // 10:00 AM into 12:00 AM and the booking page then offers slots from midnight.
+    const early = Object.entries(hours)
+      .filter(([, v]) => v.enabled && v.start < "06:00")
+      .map(([day, v]) => `${DAY_LABELS[Number(day)]} ${v.start}`);
+    if (early.length > 0 && !window.confirm(`Start time is before 6:00 AM (${early.join(", ")}). Clients will be offered slots from then. Save anyway?`)) {
+      return;
+    }
     setSaving(true);
     try {
       const payload = Object.entries(hours)
@@ -407,7 +470,7 @@ function LawyerHoursModal({ lawyer, onClose }: { lawyer: Lawyer; onClose: () => 
       const res = await fetch(`/api/admin/signing/lawyers/${lawyer.id}/hours`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ hours: payload }),
+        body: JSON.stringify({ hours: payload, ...(tab === "default" ? {} : { dealType: tab }) }),
       });
       const json = await res.json();
       if (!json.success) {
@@ -443,11 +506,33 @@ function LawyerHoursModal({ lawyer, onClose }: { lawyer: Lawyer; onClose: () => 
         </div>
 
         <div className="px-6 py-6 overflow-y-auto flex-1">
+          <div className="flex gap-1 mb-4 p-1 bg-slate-100 rounded-lg">
+            {HOURS_TABS.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => switchTab(t.key)}
+                className={`flex-1 px-3 py-1.5 rounded-md text-sm font-semibold transition-colors ${
+                  tab === t.key ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+          {loadError && <p className="text-xs text-red-600 mb-4">{loadError}</p>}
+          <p className="text-xs text-slate-500 mb-4">
+            {tab === "default"
+              ? "Used for every signing unless a Purchase or Sale schedule is set below."
+              : usingDefault
+                ? `No separate ${tab} hours yet, so ${tab} signings use the Default hours. Edit and save to set ${tab}-specific hours.`
+                : `Used for ${tab} signings only. Untick every day and save to go back to the Default hours.`}
+          </p>
           {loading ? (
             <div className="flex items-center justify-center py-12">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-brand-primary"></div>
             </div>
-          ) : (
+          ) : loadError ? null : (
             <div className="space-y-3">
               {DAY_LABELS.map((label, day) => {
                 const v = hours[day] ?? { enabled: false, start: "10:00", end: "16:00" };
@@ -494,7 +579,7 @@ function LawyerHoursModal({ lawyer, onClose }: { lawyer: Lawyer; onClose: () => 
             <X size={16} /> Cancel
           </button>
           <button
-            disabled={saving || loading}
+            disabled={saving || loading || loadError !== null}
             onClick={save}
             className="px-4 py-2 rounded-lg bg-brand-primary text-white text-sm font-semibold hover:bg-brand-primaryHover transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >

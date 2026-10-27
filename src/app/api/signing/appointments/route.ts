@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { logger } from "@/lib/logger";
 import { maskEmail } from "@/lib/maskEmail";
-import { getLawyerByInitials, getSettings } from "@/lib/signingConfig";
+import { getLawyerByInitials, getSettings, normalizeHoursType } from "@/lib/signingConfig";
 import { isSlotStillAvailable } from "@/lib/signingAvailability";
 import { latestSigningDate } from "@/lib/signingCutoff";
 import { todayInTimeZone } from "@/lib/signingTimezone";
@@ -100,7 +100,9 @@ export async function POST(req: Request) {
 
   // The close-the-race re-check: recompute availability right now and refuse
   // anything the client's page is stale about.
-  const stillAvailable = await isSlotStillAvailable(lawyer, startAt.toISOString(), closingDate);
+  // Same schedule the page showed: the file's side if given, else the deal type.
+  const hoursType = normalizeHoursType(sideRaw) ?? normalizeHoursType(dealTypeRaw);
+  const stillAvailable = await isSlotStillAvailable(lawyer, startAt.toISOString(), closingDate, hoursType);
   if (!stillAvailable) {
     return NextResponse.json(
       { success: false, error: "That time is no longer available. Please pick another slot." },
