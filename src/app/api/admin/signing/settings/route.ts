@@ -17,6 +17,7 @@ const EDITABLE_FIELDS = [
   "office_address",
   "clerk_email",
   "reception_email",
+  "optional_guest_email",
   "disclaimer_text",
   "default_signing_with",
   "min_business_days_before_closing",
@@ -93,6 +94,18 @@ export async function PUT(req: Request) {
         { status: 400 },
       );
     }
+  }
+
+  // Blank clears the optional guest; anything else must be a plain email.
+  if (updates.optional_guest_email !== undefined) {
+    const v = String(updates.optional_guest_email ?? "").trim();
+    if (v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) {
+      return NextResponse.json(
+        { success: false, error: "Optional guest must be a valid email address" },
+        { status: 400 },
+      );
+    }
+    updates.optional_guest_email = v;
   }
 
   // A blank default clears it (stored as NULL), never as "".

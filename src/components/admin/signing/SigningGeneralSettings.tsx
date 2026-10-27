@@ -10,6 +10,7 @@ interface Settings {
   office_address: string;
   clerk_email: string;
   reception_email: string;
+  optional_guest_email: string;
   disclaimer_text: string;
   default_signing_with: string | null;
   min_business_days_before_closing: number;
@@ -208,6 +209,22 @@ export default function SigningGeneralSettings() {
             onChange={(e) => setSettings({ ...settings, reception_email: e.target.value })}
           />
         </div>
+      </div>
+
+      <div>
+        <label className="block text-xs font-semibold text-slate-500 mb-1.5">
+          Optional guest email (receives an optional calendar invite)
+        </label>
+        <input
+          type="email"
+          className={inputClasses}
+          placeholder="Leave blank for none"
+          value={settings.optional_guest_email ?? ""}
+          onChange={(e) => setSettings({ ...settings, optional_guest_email: e.target.value })}
+        />
+        <p className="mt-1.5 text-xs text-slate-400">
+          Added to every signing appointment as an optional attendee. Google emails them the invite and any cancellation.
+        </p>
       </div>
 
       <div>

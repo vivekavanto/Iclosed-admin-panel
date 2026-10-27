@@ -68,4 +68,17 @@ export function buildAttendeeList(
   return Array.from(set);
 }
 
+/**
+ * The standing optional guest, or [] when none is set or the address is already
+ * a required attendee (required wins, so nobody is listed twice).
+ */
+export function buildOptionalAttendeeList(
+  booking: SigningBookingInput,
+  settings: SigningSettings,
+): string[] {
+  const email = (settings.optional_guest_email ?? "").trim().toLowerCase();
+  if (!email) return [];
+  return buildAttendeeList(booking, settings).includes(email) ? [] : [email];
+}
+
 export { OFFICE_TIMEZONE };

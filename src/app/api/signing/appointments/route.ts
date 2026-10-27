@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { logger } from "@/lib/logger";
+import { maskEmail } from "@/lib/maskEmail";
 import { getLawyerByInitials, getSettings } from "@/lib/signingConfig";
 import { isSlotStillAvailable } from "@/lib/signingAvailability";
 import { latestSigningDate } from "@/lib/signingCutoff";
@@ -13,6 +14,7 @@ import {
   buildEventDescription,
   buildLocation,
   buildAttendeeList,
+  buildOptionalAttendeeList,
   type SigningBookingInput,
 } from "@/lib/signingEventContent";
 
@@ -129,6 +131,10 @@ export async function POST(req: Request) {
   // Everyone, including clerk and reception, is on the create call so Google
   // emails each of them the invite.
   const attendees = allAttendees;
+  const optionalAttendees = buildOptionalAttendeeList(booking, settings);
+  logger.info(
+    `[SigningAppointments POST] attendees: ${attendees.length} required, optional: ${optionalAttendees.map(maskEmail).join(", ") || "none"}`,
+  );
 
   let eventId: string;
   let meetLink: string | null = null;
@@ -142,6 +148,7 @@ export async function POST(req: Request) {
       end: endAt,
       location,
       attendees,
+      optionalAttendees,
       needsMeet: booking.appointmentType === "virtual",
     });
     eventId = event.eventId;

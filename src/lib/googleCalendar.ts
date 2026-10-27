@@ -109,6 +109,11 @@ export interface CreateEventInput {
   /** Email addresses to add as attendees (lawyer is implicit as the calendar owner). */
   attendees: string[];
   /**
+   * Attendees marked optional. They are on the create call, so Google emails
+   * them the invite (and a cancellation later, since the flag stays on the event).
+   */
+  optionalAttendees?: string[];
+  /**
    * Internal attendees (clerk, reception) added AFTER create with
    * sendUpdates 'none', so they are on the event but Google never emails them.
    */
@@ -127,6 +132,7 @@ export async function createCalendarEvent(
   input: CreateEventInput,
 ): Promise<CalendarEventResult> {
   const calendar = getCalendarClientForLawyer(input.lawyerEmail);
+  const optional = (input.optionalAttendees ?? []).filter((e) => e && !input.attendees.includes(e));
 
   const { data } = await calendar.events.insert({
     calendarId: input.calendarId,
@@ -138,7 +144,10 @@ export async function createCalendarEvent(
       location: input.location,
       start: { dateTime: officeLocalDateTime(input.start), timeZone: OFFICE_TIMEZONE },
       end: { dateTime: officeLocalDateTime(input.end), timeZone: OFFICE_TIMEZONE },
-      attendees: input.attendees.map((email) => ({ email })),
+      attendees: [
+        ...input.attendees.map((email) => ({ email })),
+        ...optional.map((email) => ({ email, optional: true })),
+      ],
       conferenceData: input.needsMeet
         ? {
             createRequest: {
@@ -157,7 +166,9 @@ export async function createCalendarEvent(
     throw new Error("Google Calendar did not return an event id.");
   }
 
-  const silent = (input.silentAttendees ?? []).filter((e) => e && !input.attendees.includes(e));
+  const silent = (input.silentAttendees ?? []).filter(
+    (e) => e && !input.attendees.includes(e) && !optional.includes(e),
+  );
   if (silent.length > 0) {
     // Best-effort: the event and its invites already exist, so a failure here
     // only means clerk/reception are missing from it; it must not fail the booking.
@@ -167,7 +178,11 @@ export async function createCalendarEvent(
         eventId: data.id,
         sendUpdates: "none",
         requestBody: {
-          attendees: [...input.attendees, ...silent].map((email) => ({ email })),
+          attendees: [
+            ...input.attendees.map((email) => ({ email })),
+            ...optional.map((email) => ({ email, optional: true })),
+            ...silent.map((email) => ({ email })),
+          ],
         },
       });
     } catch (err) {

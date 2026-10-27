@@ -33,6 +33,8 @@ export interface SigningSettings {
   office_address: string;
   clerk_email: string;
   reception_email: string;
+  // Added to every signing event as an OPTIONAL attendee. "" = nobody.
+  optional_guest_email: string;
   disclaimer_text: string;
   // Initials of the signing_lawyers calendar clients see unless a file
   // overrides it with deals.signing_with. NULL = not chosen yet.
@@ -106,6 +108,7 @@ const DEFAULT_SETTINGS: Omit<SigningSettings, "id"> = {
   office_address: "10 Milner Business Court Scarborough, ON M1B 3C6",
   clerk_email: "Marcela@navawilson.law",
   reception_email: "reception@navawilson.law",
+  optional_guest_email: "",
   default_signing_with: null,
   min_business_days_before_closing: 1,
   max_business_days_before_closing: 3,
