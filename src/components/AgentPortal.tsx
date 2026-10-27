@@ -1,9 +1,9 @@
 "use client";
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { upload } from "@vercel/blob/client";
-import { ArrowLeft, Bell, CheckCircle2, Circle, ChevronDown, ChevronRight, Eye, Loader2, Save, Search, Upload } from "lucide-react";
+import { ArrowLeft, Bell, CheckCircle2, Circle, ChevronDown, ChevronRight, Eye, Loader2, Lock, LogIn, Mail, PencilLine, RotateCw, Save, Search, Trash2, Upload, X } from "lucide-react";
 import { formatLocalDate } from "@/lib/formatDate";
-import { BLOB_ACCESS } from "@/lib/blobPrivacy";
+import { BLOB_ACCESS, docDownloadHref } from "@/lib/blobPrivacy";
 import {
   daysBetween,
   type ClubbedTask,
@@ -13,12 +13,13 @@ import {
   type PortalStage,
   type PortalStep,
   type StageStatus,
-  type UploadTarget,
   AGENT_UPLOAD_PREFIX,
 } from "@/lib/agentPortal";
+import type { AgentDocument, AgentNote } from "@/lib/agentFileExtras";
+import { allowedUploadContentTypesForDocType, formatFileSize, maxUploadBytesForDocType } from "@/lib/uploadValidation";
 
-/** Lets a task row upload as the agent and refresh the dashboard afterwards. */
-const UploadContext = createContext<{ partnerId: string; reload: () => void } | null>(null);
+/** Lets a file card act as the agent and refresh the dashboard afterwards. */
+const TaskContext = createContext<{ partnerId: string; reload: () => void } | null>(null);
 
 type Partner = {
   id: string;
@@ -52,6 +53,8 @@ const SIDE_BADGE: Record<PortalSide, string> = {
 };
 
 const isClosed = (f: PortalFile) => f.status === "Closed" || f.status === "Cancelled";
+// The agent can't ask for permission or edit tasks on these; the server enforces it too.
+const isLocked = (f: PortalFile) => isClosed(f) || f.status === "Inactive";
 
 // A click that ends a text selection shouldn't toggle, so text stays copyable.
 const selecting = () => !!window.getSelection()?.toString();
@@ -145,7 +148,10 @@ function Portal({ partner }: { partner: Partner }) {
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [version, setVersion] = useState(0);
-  const uploadContext = useMemo(() => ({ partnerId: partner.id, reload: () => setVersion((v) => v + 1) }), [partner.id]);
+  const taskContext = useMemo(
+    () => ({ partnerId: partner.id, reload: () => setVersion((v) => v + 1) }),
+    [partner.id],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -160,7 +166,7 @@ function Portal({ partner }: { partner: Partner }) {
         // Files needing attention open by default; the rest start collapsed.
         const open = new Set<string>();
         for (const f of data.files as PortalFile[]) for (const s of f.sections) if (s.attention) open.add(`${f.rootLeadId}:${s.side}`);
-        // A reload after an upload keeps whatever the viewer has open.
+        // A reload after a task change keeps whatever the viewer has open.
         if (version === 0) setExpanded(open);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
@@ -199,7 +205,7 @@ function Portal({ partner }: { partner: Partner }) {
   }, [files, today]);
 
   return (
-    <UploadContext.Provider value={uploadContext}>
+    <TaskContext.Provider value={taskContext}>
       <div className="space-y-5">
         <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div className="min-w-0">
@@ -269,7 +275,7 @@ function Portal({ partner }: { partner: Partner }) {
           </>
         )}
       </div>
-    </UploadContext.Provider>
+    </TaskContext.Provider>
   );
 }
 
@@ -307,19 +313,12 @@ function FileCard({
   onToggle: () => void;
 }) {
   const { file, section } = row;
-  const [docsOpen, setDocsOpen] = useState(false);
-  const openDocs = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!open) onToggle();
-    setDocsOpen((v) => !open || !v);
-  };
-  const pill = section.attention
-    ? TONE.attention
-    : file.status === "Closed"
-      ? { pill: "bg-slate-100 text-slate-600", label: "Closed" }
-      : file.status === "Cancelled"
-        ? { pill: "bg-slate-100 text-slate-600", label: "Cancelled" }
-        : { pill: "bg-emerald-50 text-emerald-700", label: file.status ?? "Active" };
+  // Closed, Cancelled and Inactive files are grey whatever their tasks say.
+  const pill = isLocked(file)
+    ? { pill: "bg-slate-100 text-slate-600", label: file.status ?? "Inactive" }
+    : section.attention
+      ? TONE.attention
+      : { pill: "bg-emerald-50 text-emerald-700", label: file.status ?? "Active" };
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -332,6 +331,7 @@ function FileCard({
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-base font-bold text-slate-900 md:text-lg">{file.clients.join(" & ") || "Unnamed client"}</span>
                   <SideBadge side={section.side} label={section.label} />
+                  <PermissionActions file={file} />
                 </div>
                 <p className="mt-0.5 text-sm text-slate-500">
                   {file.fileNumber ?? "No file number"}
@@ -339,16 +339,19 @@ function FileCard({
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-2 text-sm md:flex-col md:items-end md:gap-1">
-                <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${pill.pill}`}>{pill.label}</span>
-                <button
-                  type="button"
-                  onClick={openDocs}
-                  onKeyDown={(e) => e.stopPropagation()}
-                  aria-expanded={open && docsOpen}
-                  className="inline-flex h-7 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-xs font-semibold text-brand-primary hover:bg-red-50"
-                >
-                  <Upload size={12} /> Upload documents
-                </button>
+                <span className="flex items-center gap-1.5">
+                  {/* Whether the agent can only follow the file, or also work its tasks in the client portal. */}
+                  {file.permission.status === "granted" && !isLocked(file) ? (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-2.5 py-0.5 text-xs font-semibold text-sky-700">
+                      <PencilLine size={11} /> Update tasks
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 px-2.5 py-0.5 text-xs font-semibold text-slate-500">
+                      <Eye size={11} /> View tasks
+                    </span>
+                  )}
+                  <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${pill.pill}`}>{pill.label}</span>
+                </span>
                 {file.closingDate && (
                   <span className="text-slate-500">
                     Closing {formatLocalDate(file.closingDate)}
@@ -369,10 +372,10 @@ function FileCard({
       </div>
       {open && (
         <div className="space-y-1 border-t border-slate-100 px-2 py-3 md:px-5">
-          {docsOpen && <DocumentsPanel file={file} section={section} />}
           {section.stages.map((s) => (
             <StageRow key={s.id} stage={s} />
           ))}
+          <FileExtras rootLeadId={file.rootLeadId} />
         </div>
       )}
     </div>
@@ -460,187 +463,330 @@ function StepRow({ step }: { step: PortalStep }) {
   );
 }
 
-/** One document the file still accepts: a task's file field for one client (or the whole file). */
-type Slot = { id: string; taskId: string; leadId: string; client: string; task: string; field: string | null; fieldId: string; required: boolean; filled: boolean };
+/** Request -> Requested (resend / cancel) -> Open client login, on the file's name row. */
+function PermissionActions({ file }: { file: PortalFile }) {
+  const ctx = useContext(TaskContext);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  if (!ctx || isLocked(file)) return null;
+  const { status, grantedAt, requestedAt, requestedTo, declinedAt } = file.permission;
 
-const OTHER = "other";
-
-// "Upload Identification" -> "Identification"; the agent is already uploading.
-const docName = (title: string) => title.trim().replace(/^(upload|provide)\s+(your\s+)?/i, "").replace(/^./, (c) => c.toUpperCase());
-
-/** "Primary ID - Front" + "Primary ID - Back" -> "Primary ID (front & back)". */
-function joinFields(fields: string[]) {
-  const out: string[] = [];
-  for (const f of fields) {
-    const m = f.match(/^(.*?)\s*-\s*(front|back)$/i);
-    const pair = m && fields.find((g) => g !== f && g.toLowerCase() === `${m[1]} - ${m[2].toLowerCase() === "front" ? "back" : "front"}`.toLowerCase());
-    if (m && pair) {
-      const both = `${m[1]} (front & back)`;
-      if (!out.includes(both)) out.push(both);
-    } else out.push(f);
-  }
-  return out.join(", ");
-}
-
-function slotsOf(section: PortalSection): Slot[] {
-  const tasks = section.stages.flatMap((st) => st.steps.flatMap((s) => [s.task, ...s.subTasks])).filter((t): t is ClubbedTask => !!t);
-  return tasks.flatMap((t) =>
-    t.uploads.flatMap((u: UploadTarget) =>
-      u.fields.map((f) => ({
-        id: `${u.taskId}:${f.id}`,
-        taskId: u.taskId,
-        leadId: u.leadId,
-        client: u.client,
-        task: docName(t.title),
-        // Only worth naming when the task asks for several files.
-        field: u.fields.length > 1 && docName(f.label).toLowerCase() !== docName(t.title).toLowerCase() ? f.label.trim() : null,
-        fieldId: f.id,
-        required: f.required,
-        filled: f.filled,
-      })),
-    ),
-  );
-}
-
-const slotLabel = (s: Slot) => `${s.field ? `${s.task} – ${s.field}` : s.task}${s.client ? ` (${s.client})` : ""}`;
-
-/** The one place an agent uploads documents for a file, one at a time. */
-function DocumentsPanel({ file, section }: { file: PortalFile; section: PortalSection }) {
-  const ctx = useContext(UploadContext);
-  const slots = useMemo(() => slotsOf(section), [section]);
-  const [choice, setChoice] = useState("");
-  const [label, setLabel] = useState("");
-  const [picked, setPicked] = useState<File | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
-  const input = useRef<HTMLInputElement>(null);
-  if (!ctx) return null;
-
-  // One line per missing document (per client for personal ones), with the parts still missing.
-  const pending = new Map<string, { doc: string; client: string; parts: string[] }>();
-  for (const s of slots) {
-    if (!s.required || s.filled) continue;
-    const key = `${s.task}|${s.client}`;
-    const line = pending.get(key) ?? { doc: s.task, client: s.client, parts: [] };
-    if (s.field) line.parts.push(s.field);
-    pending.set(key, line);
-  }
-
-  const submit = async () => {
-    const slot = slots.find((s) => s.id === choice);
-    if (!picked || (!slot && choice !== OTHER)) return;
-    setBusy(true);
-    setMessage(null);
+  const run = async (key: string, work: () => Promise<void>) => {
+    setBusy(key);
+    setError(null);
     try {
-      const owner = slot ? slot.leadId : file.rootLeadId;
-      const blob = await upload(`${AGENT_UPLOAD_PREFIX}/${owner}/${Date.now()}-${picked.name}`, picked, {
-        access: BLOB_ACCESS,
-        handleUploadUrl: `/api/admin/agent-portal/${ctx.partnerId}/upload/token`,
-        clientPayload: JSON.stringify(slot ? { taskId: slot.taskId } : { leadId: file.rootLeadId }),
-        contentType: picked.type,
-      });
-      const res = await fetch(`/api/admin/agent-portal/${ctx.partnerId}/upload`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          slot
-            ? { taskId: slot.taskId, fieldId: slot.fieldId, fileUrl: blob.url, fileName: picked.name }
-            : { leadId: file.rootLeadId, label, fileUrl: blob.url, fileName: picked.name },
-        ),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
-      setMessage({ ok: true, text: `${picked.name} uploaded${data.taskCompleted ? " and the task is complete" : ""}.` });
-      setPicked(null);
-      setChoice("");
-      setLabel("");
-      if (input.current) input.current.value = "";
-      ctx.reload();
+      await work();
     } catch (err) {
-      setMessage({ ok: false, text: err instanceof Error ? err.message : String(err) });
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
-  const control = "h-8 rounded-md border border-slate-200 bg-white px-2 text-sm focus:border-brand-primary focus:outline-none";
+  const act = (action: "request" | "withdraw") =>
+    run(action, async () => {
+      if (action === "withdraw" && !window.confirm("Cancel the request sent to the client?")) return;
+      const res = await fetch(`/api/admin/agent-portal/${ctx.partnerId}/permission`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId: file.rootLeadId, action }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
+      ctx.reload();
+    });
+
+  // Same as "Log into client view" in All Files: a magic link into the client's portal, in a new tab.
+  const openPortal = () =>
+    run("login", async () => {
+      const res = await fetch(`/api/admin/agent-portal/${ctx.partnerId}/files/${file.rootLeadId}/client-login`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok || !data.success || !data.url) throw new Error(data.error || `HTTP ${res.status}`);
+      window.open(data.url, "_blank", "noopener,noreferrer");
+    });
+
+  const declined = status === "none" && declinedAt && (!requestedAt || declinedAt >= requestedAt);
+  const spin = (key: string, icon: React.ReactNode) => (busy === key ? <Loader2 className="animate-spin" size={12} /> : icon);
+  const outline =
+    "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-xs font-semibold text-brand-primary hover:border-brand-primary/40 hover:bg-red-50 disabled:opacity-50";
+  const iconButton = "inline-flex h-full items-center px-2 text-brand-primary hover:bg-red-50 disabled:opacity-50";
+
   return (
-    <div className="mx-2 mb-3 space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-4 md:mx-0">
-      <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
-        <input
-          ref={input}
-          type="file"
-          accept="application/pdf,image/jpeg,image/png"
-          onChange={(e) => setPicked(e.target.files?.[0] ?? null)}
-          className="min-w-0 text-sm text-slate-700 file:mr-3 file:h-8 file:cursor-pointer file:rounded-md file:border file:border-slate-200 file:bg-white file:px-3 file:text-sm file:font-medium file:text-slate-700"
-        />
-        <select value={choice} onChange={(e) => setChoice(e.target.value)} className={`${control} min-w-0 lg:flex-1`} aria-label="What is this document?">
-          <option value="">What is it?</option>
-          {slots.map((s) => (
-            <option key={s.id} value={s.id}>
-              {slotLabel(s)}
-              {s.filled ? " – uploaded" : !s.required ? " – optional" : ""}
-            </option>
-          ))}
-          <option value={OTHER}>Other document</option>
-        </select>
-        {choice === OTHER && (
-          <input value={label} onChange={(e) => setLabel(e.target.value)} maxLength={120} placeholder="Describe it (optional)" className={`${control} lg:w-56`} />
-        )}
+    <span className="inline-flex flex-wrap items-center gap-2" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+      {status === "granted" && (
         <button
           type="button"
-          onClick={submit}
-          disabled={!picked || !choice || busy}
-          className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-brand-primary px-3 text-sm font-semibold text-white disabled:opacity-50"
+          onClick={openPortal}
+          disabled={!!busy}
+          title={`The client lets you complete tasks for them${grantedAt ? ` since ${formatLocalDate(grantedAt)}` : ""}. Opens their portal in a new tab.`}
+          className={outline}
         >
-          {busy ? <Loader2 className="animate-spin" size={14} /> : <Upload size={14} />}
-          Upload
+          {spin("login", <LogIn size={12} />)}
+          Open client login
         </button>
-      </div>
-      <p className="text-xs text-slate-500">PDF, JPG or PNG, up to 10 MB, uploaded on the client&apos;s behalf. Other documents go to our team only.</p>
-      {message && <p className={`text-sm ${message.ok ? "text-emerald-700" : "text-red-700"}`}>{message.text}</p>}
+      )}
+      {status === "requested" && (
+        // One control: the state, plus resend and cancel as icons.
+        <span className="inline-flex h-7 items-center divide-x divide-slate-200 overflow-hidden rounded-md border border-slate-200 bg-white text-xs font-semibold text-brand-primary">
+          <span
+            className="inline-flex h-full items-center gap-1.5 px-2.5"
+            title={`Requested${requestedAt ? ` on ${formatLocalDate(requestedAt)}` : ""}${requestedTo ? ` from ${requestedTo}` : ""}. Waiting for the client to accept.`}
+          >
+            <Mail size={12} />
+            Requested
+          </span>
+          <button type="button" onClick={() => act("request")} disabled={!!busy} title="Resend the request email" aria-label="Resend permission" className={iconButton}>
+            {spin("request", <RotateCw size={12} />)}
+          </button>
+          <button type="button" onClick={() => act("withdraw")} disabled={!!busy} title="Cancel the request" aria-label="Cancel request" className={iconButton}>
+            {spin("withdraw", <X size={12} />)}
+          </button>
+        </span>
+      )}
+      {status === "none" && (
+        <button
+          type="button"
+          onClick={() => act("request")}
+          disabled={!!busy}
+          title={
+            declined
+              ? `The client declined on ${formatLocalDate(declinedAt)}. Ask again for permission to complete their tasks for them.`
+              : "Ask the client for permission to complete their tasks for them."
+          }
+          className={outline}
+        >
+          {spin("request", <Lock size={12} />)}
+          Request permission
+        </button>
+      )}
+      {error && <span className="text-xs font-normal text-red-700">{error}</span>}
+    </span>
+  );
+}
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Pending documents</p>
-          {pending.size === 0 ? (
-            <p className="mt-1 text-sm text-slate-500">Nothing outstanding.</p>
-          ) : (
-            <ul className="mt-1 space-y-1.5">
-              {[...pending.values()].map((l) => (
-                <li key={`${l.doc}|${l.client}`} className="flex items-start gap-2 text-sm">
-                  <Circle size={12} className="mt-1 shrink-0 text-slate-300" />
-                  <span className="min-w-0">
-                    <span className="text-slate-800">{l.doc}</span>
-                    {l.client && <span className="text-slate-500"> · {l.client}</span>}
-                    {l.parts.length > 0 && <span className="block text-xs text-slate-500">{joinFields(l.parts)}</span>}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Uploaded by you</p>
-          {file.agentUploads.length === 0 ? (
-            <p className="mt-1 text-sm text-slate-500">No uploads yet.</p>
-          ) : (
-            <ul className="mt-1 space-y-1.5 text-sm">
-              {file.agentUploads.map((u, i) => (
-                <li key={i} className="flex items-start gap-2">
-                  <CheckCircle2 size={14} className="mt-0.5 shrink-0 text-emerald-600" />
-                  <span className="min-w-0 flex-1 break-words">
-                    <span className="text-slate-800">{u.fileName}</span>
-                    <span className="text-slate-500"> — {u.label}</span>
-                  </span>
-                  {u.uploadedAt && <span className="shrink-0 text-xs text-slate-400">{formatLocalDate(u.uploadedAt)}</span>}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </div>
+const OTHER_MAX_BYTES = maxUploadBytesForDocType("other");
+const OTHER_ACCEPT = [...allowedUploadContentTypesForDocType("other"), ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"].join(",");
+
+/** A collapsible section styled like a stage row, for the file's Other documents and Notes. */
+function ExtraRow({ title, summary, children }: { title: string; summary: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div>
+      <button onClick={() => setOpen((v) => !v)} className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left hover:bg-slate-50" aria-expanded={open}>
+        <span className="text-slate-400">{open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
+        <span className="h-2 w-2 shrink-0 rounded-full bg-slate-300" />
+        <span className="font-semibold text-slate-900">{title}</span>
+        <span className="ml-auto font-mono text-xs text-slate-400">{summary}</span>
+      </button>
+      {open && <div className="mb-2 ml-6 md:ml-8">{children}</div>}
     </div>
+  );
+}
+
+/** The agent's Other documents and private notes on a file; no client permission needed, as neither is the client's task. */
+function FileExtras({ rootLeadId }: { rootLeadId: string }) {
+  const ctx = useContext(TaskContext);
+  const base = ctx ? `/api/admin/agent-portal/${ctx.partnerId}/files/${rootLeadId}` : "";
+  const [docs, setDocs] = useState<AgentDocument[] | null>(null);
+  const [note, setNote] = useState<AgentNote | null>(null);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [editing, setEditing] = useState<{ id: string; value: string } | null>(null);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const input = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!base) return;
+    (async () => {
+      try {
+        const res = await fetch(base);
+        const data = await res.json();
+        if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
+        setDocs(data.documents);
+        setNote(data.note);
+        setDraft(data.note.note);
+      } catch (err) {
+        setMessage({ ok: false, text: err instanceof Error ? err.message : String(err) });
+        setDocs([]);
+      }
+    })();
+  }, [base]);
+
+  if (!ctx) return null;
+
+  const call = async (key: string, url: string, init: RequestInit) => {
+    setBusy(key);
+    setMessage(null);
+    try {
+      const res = await fetch(url, { ...init, headers: { "Content-Type": "application/json" } });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
+      if (data.documents) setDocs(data.documents);
+      if (data.note) {
+        setNote(data.note);
+        setDraft(data.note.note);
+      }
+      return true;
+    } catch (err) {
+      setMessage({ ok: false, text: err instanceof Error ? err.message : String(err) });
+      return false;
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const uploadFiles = async (list: FileList | null) => {
+    const files = Array.from(list ?? []);
+    if (input.current) input.current.value = "";
+    if (files.length === 0) return;
+    const failed: string[] = [];
+    setMessage(null);
+    setProgress({ done: 0, total: files.length });
+    // One at a time, like the file page, so a failure names its file.
+    for (const [i, f] of files.entries()) {
+      try {
+        if (f.size > OTHER_MAX_BYTES) throw new Error(`must be ${formatFileSize(OTHER_MAX_BYTES)} or smaller`);
+        const blob = await upload(`${AGENT_UPLOAD_PREFIX}/${rootLeadId}/${Date.now()}-${f.name}`, f, {
+          access: BLOB_ACCESS,
+          handleUploadUrl: `${base}/documents/upload`,
+          contentType: f.type,
+        });
+        const res = await fetch(`${base}/documents`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fileUrl: blob.url, fileName: f.name, fileSize: f.size }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
+        setDocs(data.documents);
+      } catch (err) {
+        failed.push(`${f.name} (${err instanceof Error ? err.message : "failed"})`);
+      }
+      setProgress({ done: i + 1, total: files.length });
+    }
+    setProgress(null);
+    setMessage(failed.length ? { ok: false, text: `Upload failed: ${failed.join(", ")}` } : { ok: true, text: `Uploaded ${files.length} document${files.length === 1 ? "" : "s"}.` });
+  };
+
+  const saveLabel = async (doc: AgentDocument) => {
+    const value = editing?.value.trim() ?? "";
+    setEditing(null);
+    if (value !== (doc.label ?? "")) await call(`label-${doc.id}`, `${base}/documents`, { method: "PATCH", body: JSON.stringify({ docId: doc.id, label: value }) });
+  };
+
+  const noteDirty = !!note && draft.trim() !== note.note;
+
+  return (
+    <>
+      <ExtraRow title="Other documents" summary={docs ? `${docs.length}` : ""}>
+        <div className="flex flex-wrap items-center justify-between gap-2 py-2">
+          <p className="text-xs text-slate-500">PDF, images or Office files up to {formatFileSize(OTHER_MAX_BYTES)}.</p>
+          <button
+            type="button"
+            onClick={() => input.current?.click()}
+            disabled={!!progress}
+            className="inline-flex h-7 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 hover:border-brand-primary hover:text-brand-primary disabled:opacity-50"
+          >
+            {progress ? <Loader2 className="animate-spin" size={12} /> : <Upload size={12} />}
+            {progress ? `Uploading ${progress.done + 1} of ${progress.total}…` : "Upload"}
+          </button>
+          <input ref={input} type="file" multiple accept={OTHER_ACCEPT} onChange={(e) => uploadFiles(e.target.files)} className="hidden" />
+        </div>
+        {!docs ? (
+          <p className="flex items-center gap-2 py-2 text-sm text-slate-500">
+            <Loader2 className="animate-spin" size={14} /> Loading…
+          </p>
+        ) : docs.length === 0 ? (
+          <p className="py-2 text-sm text-slate-500">No documents yet.</p>
+        ) : (
+          <ul className="divide-y divide-slate-100">
+            {docs.map((d) => (
+              <li key={d.id} className="flex items-center gap-2.5 py-2 text-sm">
+                <CheckCircle2 size={18} className="shrink-0 text-emerald-600" />
+                <div className="min-w-0 flex-1">
+                  {editing?.id === d.id ? (
+                    <input
+                      autoFocus
+                      value={editing.value}
+                      maxLength={120}
+                      onChange={(e) => setEditing({ id: d.id, value: e.target.value })}
+                      onBlur={() => saveLabel(d)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") saveLabel(d);
+                        if (e.key === "Escape") setEditing(null);
+                      }}
+                      className="h-7 w-full rounded-md border border-slate-200 px-2 text-sm focus:border-brand-primary focus:outline-none"
+                    />
+                  ) : (
+                    <a href={docDownloadHref(d.fileUrl)} target="_blank" rel="noopener noreferrer" className="block truncate font-medium text-emerald-700 hover:underline">
+                      {d.label || d.fileName || "Document"}
+                    </a>
+                  )}
+                  <span className="block truncate text-xs text-slate-400">
+                    {[d.label ? d.fileName : null, d.fileSize ? formatFileSize(d.fileSize) : null, d.createdAt ? formatLocalDate(d.createdAt) : null].filter(Boolean).join(" · ")}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => call(`share-${d.id}`, `${base}/documents`, { method: "PATCH", body: JSON.stringify({ docId: d.id, shared: !d.shared }) })}
+                  disabled={!!busy}
+                  title={d.shared ? "The client can see this. Click to make it internal." : "Only our team can see this. Click to share it with the client."}
+                  className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold disabled:opacity-50 ${d.shared ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}
+                >
+                  {d.shared ? "Shared" : "Internal"}
+                </button>
+                <button type="button" onClick={() => setEditing({ id: d.id, value: d.label || d.fileName || "" })} className="shrink-0 text-slate-400 hover:text-brand-primary" aria-label="Rename">
+                  <PencilLine size={14} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => window.confirm(`Remove ${d.label || d.fileName}?`) && call(`rm-${d.id}`, `${base}/documents?docId=${d.id}`, { method: "DELETE" })}
+                  disabled={!!busy}
+                  className="shrink-0 text-slate-400 hover:text-brand-primary disabled:opacity-50"
+                  aria-label="Remove"
+                >
+                  {busy === `rm-${d.id}` ? <Loader2 className="animate-spin" size={14} /> : <Trash2 size={14} />}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </ExtraRow>
+
+      <ExtraRow title="Notes" summary={note?.updatedAt ? `Saved ${formatLocalDate(note.updatedAt)}` : ""}>
+        <textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          maxLength={500}
+          rows={4}
+          disabled={!note || !note.schemaReady}
+          placeholder={
+            note && !note.schemaReady
+              ? "Notes need migrations/2026-10-27-agent-file-notes.sql"
+              : "Your own reminders for this file: follow up with the buyer's lender, key handover time, lockbox code, what the client asked you to check…"
+          }
+          className="mt-2 w-full resize-none rounded-md border border-slate-200 bg-white px-3 py-2 text-sm focus:border-brand-primary focus:outline-none focus:ring-2 focus:ring-brand-primary/20 disabled:bg-slate-50"
+        />
+        {noteDirty && (
+          <div className="mt-2 flex justify-end gap-2">
+            <button type="button" onClick={() => setDraft(note?.note ?? "")} disabled={!!busy} className="h-8 rounded-md px-3 text-xs font-semibold text-slate-600 hover:bg-slate-100">
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => call("note", base, { method: "PUT", body: JSON.stringify({ note: draft }) })}
+              disabled={!!busy}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md bg-brand-primary px-3 text-xs font-semibold text-white disabled:opacity-50"
+            >
+              {busy === "note" && <Loader2 className="animate-spin" size={12} />}
+              Save note
+            </button>
+          </div>
+        )}
+      </ExtraRow>
+      {message && <p className={`ml-8 text-sm md:ml-10 ${message.ok ? "text-emerald-700" : "text-red-700"}`}>{message.text}</p>}
+    </>
   );
 }
 
