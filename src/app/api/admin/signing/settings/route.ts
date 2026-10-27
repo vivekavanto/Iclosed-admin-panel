@@ -4,6 +4,7 @@ import { logger } from "@/lib/logger";
 import { recordAudit } from "@/lib/recordAudit";
 import { getActingAdmin } from "@/lib/getActingAdmin";
 import { getSettings } from "@/lib/signingConfig";
+import { EMAIL_PATTERN, parseEmailList } from "@/lib/signingEmailList";
 
 // GET /api/admin/signing/settings — the single signing_settings row.
 // PUT /api/admin/signing/settings — update it (creates the row if the
@@ -16,7 +17,7 @@ const EDITABLE_FIELDS = [
   "slot_increment_minutes",
   "office_address",
   "clerk_email",
-  "reception_email",
+  "optional_guest_email",
   "disclaimer_text",
   "default_signing_with",
   "min_business_days_before_closing",
@@ -93,6 +94,34 @@ export async function PUT(req: Request) {
         { status: 400 },
       );
     }
+  }
+
+  // clerk_email holds the whole CC list, comma-separated. Every address must be
+  // a plain email. reception_email is blanked so the list is never stored twice
+  // (getSettings folds old reception addresses into clerk_email on read).
+  if (updates.clerk_email !== undefined) {
+    const list = parseEmailList(String(updates.clerk_email ?? ""));
+    const invalid = list.filter((e) => !EMAIL_PATTERN.test(e));
+    if (invalid.length > 0) {
+      return NextResponse.json(
+        { success: false, error: `Not a valid CC email: ${invalid.join(", ")}` },
+        { status: 400 },
+      );
+    }
+    updates.clerk_email = list.join(", ");
+    updates.reception_email = "";
+  }
+
+  // Blank clears the optional guest; anything else must be a plain email.
+  if (updates.optional_guest_email !== undefined) {
+    const v = String(updates.optional_guest_email ?? "").trim();
+    if (v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) {
+      return NextResponse.json(
+        { success: false, error: "Optional guest must be a valid email address" },
+        { status: 400 },
+      );
+    }
+    updates.optional_guest_email = v;
   }
 
   // A blank default clears it (stored as NULL), never as "".

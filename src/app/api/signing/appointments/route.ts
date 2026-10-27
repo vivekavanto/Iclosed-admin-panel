@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import supabaseAdmin from "@/lib/supabaseAdmin";
 import { logger } from "@/lib/logger";
-import { getLawyerByInitials, getSettings } from "@/lib/signingConfig";
+import { maskEmail } from "@/lib/maskEmail";
+import { getLawyerByInitials, getSettings, normalizeHoursType } from "@/lib/signingConfig";
 import { isSlotStillAvailable } from "@/lib/signingAvailability";
 import { latestSigningDate } from "@/lib/signingCutoff";
 import { todayInTimeZone } from "@/lib/signingTimezone";
@@ -13,6 +14,7 @@ import {
   buildEventDescription,
   buildLocation,
   buildAttendeeList,
+  buildOptionalAttendeeList,
   type SigningBookingInput,
 } from "@/lib/signingEventContent";
 
@@ -98,7 +100,9 @@ export async function POST(req: Request) {
 
   // The close-the-race re-check: recompute availability right now and refuse
   // anything the client's page is stale about.
-  const stillAvailable = await isSlotStillAvailable(lawyer, startAt.toISOString(), closingDate);
+  // Same schedule the page showed: the file's side if given, else the deal type.
+  const hoursType = normalizeHoursType(sideRaw) ?? normalizeHoursType(dealTypeRaw);
+  const stillAvailable = await isSlotStillAvailable(lawyer, startAt.toISOString(), closingDate, hoursType);
   if (!stillAvailable) {
     return NextResponse.json(
       { success: false, error: "That time is no longer available. Please pick another slot." },
@@ -129,6 +133,10 @@ export async function POST(req: Request) {
   // Everyone, including clerk and reception, is on the create call so Google
   // emails each of them the invite.
   const attendees = allAttendees;
+  const optionalAttendees = buildOptionalAttendeeList(booking, settings);
+  logger.info(
+    `[SigningAppointments POST] attendees: ${attendees.length} required, optional: ${optionalAttendees.map(maskEmail).join(", ") || "none"}`,
+  );
 
   let eventId: string;
   let meetLink: string | null = null;
@@ -142,6 +150,7 @@ export async function POST(req: Request) {
       end: endAt,
       location,
       attendees,
+      optionalAttendees,
       needsMeet: booking.appointmentType === "virtual",
     });
     eventId = event.eventId;

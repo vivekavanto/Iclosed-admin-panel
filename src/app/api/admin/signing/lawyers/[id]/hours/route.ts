@@ -4,12 +4,16 @@ import { logger } from "@/lib/logger";
 import { recordAudit } from "@/lib/recordAudit";
 import { getActingAdmin } from "@/lib/getActingAdmin";
 import { isUuid } from "@/lib/isUuid";
-import { getLawyerHours } from "@/lib/signingConfig";
+import { getLawyerHoursExact, lawyerHasAnyHours, normalizeHoursType } from "@/lib/signingConfig";
 
-// GET /api/admin/signing/lawyers/[id]/hours — weekly working-hours template.
-// PUT /api/admin/signing/lawyers/[id]/hours — replace the whole week in one call.
-//   Body: { hours: [{ day_of_week, start_time, end_time }, ...] } — one entry
-//   per working day; a day with no entry has no availability at all that day.
+// GET /api/admin/signing/lawyers/[id]/hours[?dealType=purchase|sale]
+//   — the saved weekly template for that schedule (no dealType = the default).
+//   A purchase/sale schedule with no rows returns [] (booking then uses the default).
+// PUT /api/admin/signing/lawyers/[id]/hours — replace one whole week in one call.
+//   Body: { dealType?: "purchase" | "sale", hours: [{ day_of_week, start_time, end_time }, ...] }
+//   — one entry per working day; a day with no entry has no availability at all
+//   that day. Only the schedule named by dealType is replaced; sending no hours
+//   for a purchase/sale schedule removes it so that type falls back to the default.
 // Gated to admins by src/middleware.ts.
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
@@ -21,15 +25,17 @@ interface HourInput {
 }
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
   if (!isUuid(id)) {
     return NextResponse.json({ success: false, error: "Invalid id" }, { status: 400 });
   }
-  const hours = await getLawyerHours(id);
-  return NextResponse.json({ success: true, data: hours });
+  const hours = await getLawyerHoursExact(id, normalizeHoursType(new URL(req.url).searchParams.get("dealType")));
+  // hasAnyHours lets the editor tell "brand-new lawyer" (pre-tick Mon-Fri) from
+  // "default deliberately emptied, only purchase/sale hours set" (leave it empty).
+  return NextResponse.json({ success: true, data: hours, hasAnyHours: hours.length > 0 || (await lawyerHasAnyHours(id)) });
 }
 
 export async function PUT(
@@ -41,11 +47,16 @@ export async function PUT(
     return NextResponse.json({ success: false, error: "Invalid id" }, { status: 400 });
   }
 
-  let body: { hours?: unknown };
+  let body: { hours?: unknown; dealType?: unknown };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ success: false, error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const dealType = normalizeHoursType(body.dealType);
+  if (body.dealType != null && body.dealType !== "" && !dealType) {
+    return NextResponse.json({ success: false, error: "dealType must be purchase or sale" }, { status: 400 });
   }
 
   if (!Array.isArray(body.hours)) {
@@ -71,13 +82,16 @@ export async function PUT(
     rows.push({ day_of_week: day, start_time: e.start_time, end_time: e.end_time });
   }
 
-  // Replace-the-week: delete existing rows for this lawyer, then insert the
-  // supplied set. Simpler and safer than a diff — the admin UI always submits
-  // the full week.
-  const { error: delError } = await supabaseAdmin
-    .from("signing_lawyer_hours")
-    .delete()
-    .eq("lawyer_id", id);
+  // Replace-the-week: delete existing rows for this lawyer's schedule, then
+  // insert the supplied set. Simpler and safer than a diff — the admin UI always
+  // submits the full week. Scoped to dealType so saving one schedule never
+  // touches another.
+  const scope = supabaseAdmin.from("signing_lawyer_hours").delete().eq("lawyer_id", id);
+  let { error: delError } = await (dealType ? scope.eq("deal_type", dealType) : scope.is("deal_type", null));
+  if (delError?.code === "42703" && !dealType) {
+    // deal_type migration not applied yet: every row is the default schedule.
+    ({ error: delError } = await supabaseAdmin.from("signing_lawyer_hours").delete().eq("lawyer_id", id));
+  }
   if (delError) {
     logger.error("[SigningLawyerHours PUT] delete failed:", delError.message);
     return NextResponse.json({ success: false, error: delError.message }, { status: 400 });
@@ -87,7 +101,7 @@ export async function PUT(
   if (rows.length > 0) {
     const { data, error } = await supabaseAdmin
       .from("signing_lawyer_hours")
-      .insert(rows.map((r) => ({ ...r, lawyer_id: id })))
+      .insert(rows.map((r) => ({ ...r, lawyer_id: id, ...(dealType ? { deal_type: dealType } : {}) })))
       .select("*");
     if (error) {
       logger.error("[SigningLawyerHours PUT] insert failed:", error.message);
@@ -103,7 +117,7 @@ export async function PUT(
     actorUserId: actor.id,
     resourceType: "signing_lawyer",
     resourceId: id,
-    metadata: { day_count: rows.length },
+    metadata: { day_count: rows.length, deal_type: dealType },
     req,
   });
 

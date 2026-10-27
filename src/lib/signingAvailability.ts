@@ -14,7 +14,7 @@
 import supabaseAdmin from "./supabaseAdmin";
 import { logger } from "./logger";
 import { getFreeBusy } from "./googleCalendar";
-import { getLawyerHours, getSettings, type SigningLawyer } from "./signingConfig";
+import { getLawyerHours, getSettings, type SigningHoursType, type SigningLawyer } from "./signingConfig";
 import { earliestSigningDate, latestSigningDate } from "./signingCutoff";
 import {
   OFFICE_TIMEZONE,
@@ -71,11 +71,14 @@ export interface AvailabilityResult {
 /**
  * Bookable start times for `lawyer` on office-local calendar date `dateOnly`
  * ("YYYY-MM-DD"), for the office's configured default appointment duration.
+ * `dealType` selects the lawyer's purchase/sale schedule when one is set;
+ * otherwise (or when omitted) the default schedule applies.
  */
 export async function getAvailableSlots(
   lawyer: SigningLawyer,
   dateOnly: string,
   closingDate?: string | null,
+  dealType: SigningHoursType | null = null,
 ): Promise<AvailabilityResult> {
   const settings = await getSettings();
   const duration = settings.default_duration_minutes;
@@ -98,7 +101,7 @@ export async function getAvailableSlots(
     return { lawyer, date: dateOnly, durationMinutes: duration, bufferMinutes: buffer, slotIncrementMinutes: increment, slots: [] };
   }
 
-  const hours = await getLawyerHours(lawyer.id);
+  const hours = await getLawyerHours(lawyer.id, dealType);
   const today = hours.find((h) => h.day_of_week === dow);
   if (!today) {
     return { lawyer, date: dateOnly, durationMinutes: duration, bufferMinutes: buffer, slotIncrementMinutes: increment, slots: [] };
@@ -186,10 +189,11 @@ export async function isSlotStillAvailable(
   lawyer: SigningLawyer,
   startAtIso: string,
   closingDate?: string | null,
+  dealType: SigningHoursType | null = null,
 ): Promise<boolean> {
   const start = new Date(startAtIso);
   if (isNaN(start.getTime())) return false;
   const dateOnly = new Intl.DateTimeFormat("en-CA", { timeZone: OFFICE_TIMEZONE }).format(start);
-  const result = await getAvailableSlots(lawyer, dateOnly, closingDate);
+  const result = await getAvailableSlots(lawyer, dateOnly, closingDate, dealType);
   return result.slots.includes(start.toISOString());
 }

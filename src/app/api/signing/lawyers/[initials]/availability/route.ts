@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getLawyerByInitials, getSettings } from "@/lib/signingConfig";
+import { getLawyerByInitials, getSettings, normalizeHoursType } from "@/lib/signingConfig";
 import { getAvailableSlots } from "@/lib/signingAvailability";
 import { earliestSigningDate, latestSigningDate, normalizeClosingDate } from "@/lib/signingCutoff";
 import { todayInTimeZone, OFFICE_TIMEZONE } from "@/lib/signingTimezone";
@@ -33,8 +33,12 @@ export async function GET(
   // come back empty; latestBookableDate lets the portal grey those days out.
   const closingDate = normalizeClosingDate(url.searchParams.get("closingDate"));
 
+  // Optional: purchase | sale picks that lawyer's own schedule when they have
+  // one. Absent, refinance or anything else = the default schedule, as before.
+  const hoursType = normalizeHoursType(url.searchParams.get("dealType") ?? url.searchParams.get("side"));
+
   const [result, settings] = await Promise.all([
-    getAvailableSlots(lawyer, date, closingDate),
+    getAvailableSlots(lawyer, date, closingDate, hoursType),
     getSettings(),
   ]);
   const minBusinessDays = settings.min_business_days_before_closing;
@@ -44,6 +48,7 @@ export async function GET(
     data: {
       lawyer: { initials: lawyer.initials, fullName: lawyer.full_name },
       date,
+      hoursType,
       durationMinutes: result.durationMinutes,
       bufferMinutes: result.bufferMinutes,
       slotIncrementMinutes: result.slotIncrementMinutes,

@@ -10,6 +10,7 @@ interface Settings {
   office_address: string;
   clerk_email: string;
   reception_email: string;
+  optional_guest_email: string;
   disclaimer_text: string;
   default_signing_with: string | null;
   min_business_days_before_closing: number;
@@ -190,24 +191,32 @@ export default function SigningGeneralSettings() {
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block text-xs font-semibold text-slate-500 mb-1.5">
-            Clerk email (always CC&apos;d)
+            CC emails (always CC&apos;d)
           </label>
           <input
             className={inputClasses}
+            placeholder="marcela@navawilson.law, reception@navawilson.law"
             value={settings.clerk_email}
             onChange={(e) => setSettings({ ...settings, clerk_email: e.target.value })}
           />
         </div>
         <div>
           <label className="block text-xs font-semibold text-slate-500 mb-1.5">
-            Reception email (always CC&apos;d)
+            Optional guest email
           </label>
           <input
+            type="email"
             className={inputClasses}
-            value={settings.reception_email}
-            onChange={(e) => setSettings({ ...settings, reception_email: e.target.value })}
+            placeholder="Leave blank for none"
+            value={settings.optional_guest_email ?? ""}
+            onChange={(e) => setSettings({ ...settings, optional_guest_email: e.target.value })}
           />
         </div>
+        <p className="col-span-2 -mt-2 text-xs text-slate-400">
+          Separate CC addresses with commas. Every signing appointment includes them as attendees. The
+          optional guest receives an optional calendar invite, and Google emails them the invite and any
+          cancellation.
+        </p>
       </div>
 
       <div>

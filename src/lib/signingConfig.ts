@@ -5,6 +5,7 @@
 
 import supabaseAdmin from "./supabaseAdmin";
 import { logger } from "./logger";
+import { parseEmailList } from "./signingEmailList";
 
 export interface SigningLawyer {
   id: string;
@@ -17,12 +18,23 @@ export interface SigningLawyer {
   updated_at: string;
 }
 
+/** Deal types that can carry their own weekly schedule. Refinance has none: it uses the default. */
+export type SigningHoursType = "purchase" | "sale";
+
+export function normalizeHoursType(value: unknown): SigningHoursType | null {
+  const v = String(value ?? "").trim().toLowerCase();
+  return v === "purchase" || v === "sale" ? v : null;
+}
+
 export interface SigningLawyerHours {
   id: string;
   lawyer_id: string;
   day_of_week: number;
   start_time: string;
   end_time: string;
+  // NULL/absent = the default schedule (also what every row is before the
+  // 2026-10-27 migration, when the column does not exist yet).
+  deal_type?: SigningHoursType | null;
 }
 
 export interface SigningSettings {
@@ -31,8 +43,12 @@ export interface SigningSettings {
   buffer_minutes: number;
   slot_increment_minutes: number;
   office_address: string;
+  // The CC list: one comma-separated string. Older rows also kept a separate
+  // reception address; getSettings folds that into this field.
   clerk_email: string;
   reception_email: string;
+  // Added to every signing event as an OPTIONAL attendee. "" = nobody.
+  optional_guest_email: string;
   disclaimer_text: string;
   // Initials of the signing_lawyers calendar clients see unless a file
   // overrides it with deals.signing_with. NULL = not chosen yet.
@@ -83,7 +99,9 @@ export async function getLawyerById(id: string): Promise<SigningLawyer | null> {
   return (data as SigningLawyer | null) ?? null;
 }
 
-export async function getLawyerHours(lawyerId: string): Promise<SigningLawyerHours[]> {
+// select("*") + filtering in code (rather than .eq("deal_type", ...)) keeps every
+// read working before the deal_type migration is applied.
+async function listAllLawyerHours(lawyerId: string): Promise<SigningLawyerHours[]> {
   const { data, error } = await supabaseAdmin
     .from("signing_lawyer_hours")
     .select("*")
@@ -96,6 +114,36 @@ export async function getLawyerHours(lawyerId: string): Promise<SigningLawyerHou
   return (data ?? []) as SigningLawyerHours[];
 }
 
+/**
+ * The schedule that applies to a booking of `dealType`: that type's own rows if
+ * it has any, otherwise the default schedule. No dealType = the default.
+ */
+export async function getLawyerHours(
+  lawyerId: string,
+  dealType: SigningHoursType | null = null,
+): Promise<SigningLawyerHours[]> {
+  const rows = await listAllLawyerHours(lawyerId);
+  if (dealType) {
+    const own = rows.filter((r) => r.deal_type === dealType);
+    if (own.length > 0) return own;
+  }
+  return rows.filter((r) => !r.deal_type);
+}
+
+/** True once the lawyer has saved any schedule at all (default, purchase or sale). */
+export async function lawyerHasAnyHours(lawyerId: string): Promise<boolean> {
+  return (await listAllLawyerHours(lawyerId)).length > 0;
+}
+
+/** Only the rows saved for exactly this schedule (null = default), with no fallback. For the admin editor. */
+export async function getLawyerHoursExact(
+  lawyerId: string,
+  dealType: SigningHoursType | null,
+): Promise<SigningLawyerHours[]> {
+  const rows = await listAllLawyerHours(lawyerId);
+  return rows.filter((r) => (r.deal_type ?? null) === dealType);
+}
+
 const DEFAULT_SETTINGS: Omit<SigningSettings, "id"> = {
   // 45-min appointments on a 30-min grid: booking 10:00 occupies 10:00-10:45,
   // so 10:30 is taken and the next open start is 11:00. The grid gap already
@@ -106,12 +154,23 @@ const DEFAULT_SETTINGS: Omit<SigningSettings, "id"> = {
   office_address: "10 Milner Business Court Scarborough, ON M1B 3C6",
   clerk_email: "Marcela@navawilson.law",
   reception_email: "reception@navawilson.law",
+  optional_guest_email: "",
   default_signing_with: null,
   min_business_days_before_closing: 1,
   max_business_days_before_closing: 3,
   disclaimer_text:
     "Please schedule your signing appointment 1-3 business days before your closing date. Note: Appointments are subject to our office receiving the required mortgage instructions (for purchases) and payout statement (for sales). If the required documents are not received in time, your appointment may need to be rescheduled.",
 };
+
+/**
+ * The admin edits one CC list. Clerk and reception used to be two inputs, so
+ * fold any reception address into clerk_email and blank reception_email; the
+ * attendee list then reads a single field whatever the row looked like.
+ */
+function withSingleCcList(settings: SigningSettings): SigningSettings {
+  const ccList = parseEmailList([settings.clerk_email, settings.reception_email].join(","));
+  return { ...settings, clerk_email: ccList.join(", "), reception_email: "" };
+}
 
 /** The single settings row, falling back to code defaults pre-migration. */
 export async function getSettings(): Promise<SigningSettings> {
@@ -122,13 +181,14 @@ export async function getSettings(): Promise<SigningSettings> {
     .maybeSingle();
   if (error) {
     logger.error("[signingConfig] getSettings failed:", error.message);
-    return { id: "", ...DEFAULT_SETTINGS };
+    return withSingleCcList({ id: "", ...DEFAULT_SETTINGS });
   }
-  if (!data) return { id: "", ...DEFAULT_SETTINGS };
+  if (!data) return withSingleCcList({ id: "", ...DEFAULT_SETTINGS });
   // Merge onto the defaults rather than returning the row as-is: a column
   // added by a migration that hasn't been applied to this database yet (see
   // CLAUDE.md — migrations are never auto-run) is simply absent from the row,
   // which must fail CLOSED to the safe default rather than silently reading as
   // "no restriction" (min/max business days <= 0 turns the cutoff rule off).
-  return { ...DEFAULT_SETTINGS, ...(data as Partial<SigningSettings>), id: (data as { id: string }).id } as SigningSettings;
+  const merged = { ...DEFAULT_SETTINGS, ...(data as Partial<SigningSettings>), id: (data as { id: string }).id } as SigningSettings;
+  return withSingleCcList(merged);
 }

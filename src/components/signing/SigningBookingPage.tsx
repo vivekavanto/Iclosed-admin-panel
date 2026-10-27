@@ -5,6 +5,7 @@ import React, { useEffect, useState } from "react";
 interface AvailabilityData {
   lawyer: { initials: string; fullName: string };
   date: string;
+  hoursType?: "purchase" | "sale" | null;
   durationMinutes: number;
   officeAddress: string;
   disclaimer: string;
@@ -53,11 +54,6 @@ export default function SigningBookingPage({
   const [availability, setAvailability] = useState<AvailabilityData | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
-  // Derived rather than its own state set synchronously at the top of the
-  // effect below (react-hooks/set-state-in-effect): still loading whenever the
-  // slots on screen don't match the date currently selected.
-  const loadingSlots = availability?.date !== date && !notFound;
-
   const [form, setForm] = useState({
     clientName: prefill?.clientName ?? "",
     clientEmail: prefill?.clientEmail ?? "",
@@ -73,10 +69,20 @@ export default function SigningBookingPage({
   const [error, setError] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState<ConfirmedBooking | null>(null);
 
+  // Only purchase/sale can have their own hours; anything else uses the default.
+  const slotType = form.dealType === "purchase" || form.dealType === "sale" ? form.dealType : "";
+
+  // Derived rather than its own state set synchronously at the top of the
+  // effect below (react-hooks/set-state-in-effect): still loading whenever the
+  // slots on screen don't match the date and deal type currently selected.
+  const loadingSlots =
+    (availability?.date !== date || (availability?.hoursType ?? "") !== slotType) && !notFound;
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const res = await fetch(`/api/signing/lawyers/${lawyerInitials}/availability?date=${date}`);
+      const typeParam = slotType ? `&dealType=${slotType}` : "";
+      const res = await fetch(`/api/signing/lawyers/${lawyerInitials}/availability?date=${date}${typeParam}`);
       if (cancelled) return;
       if (res.status === 404) {
         setNotFound(true);
@@ -90,7 +96,7 @@ export default function SigningBookingPage({
     return () => {
       cancelled = true;
     };
-  }, [date, lawyerInitials]);
+  }, [date, lawyerInitials, slotType]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();

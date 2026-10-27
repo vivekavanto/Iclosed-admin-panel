@@ -4,6 +4,7 @@
 
 import type { SigningLawyer, SigningSettings } from "./signingConfig";
 import { OFFICE_TIMEZONE } from "./signingTimezone";
+import { parseEmailList } from "./signingEmailList";
 
 export interface SigningBookingInput {
   clientName: string;
@@ -59,13 +60,25 @@ export function buildAttendeeList(
 ): string[] {
   const set = new Set<string>([
     booking.clientEmail.toLowerCase(),
-    settings.clerk_email.toLowerCase(),
-    settings.reception_email.toLowerCase(),
+    ...parseEmailList(settings.clerk_email),
     ...booking.extraGuests.map((e) => e.toLowerCase()),
     ...booking.extraCohosts.map((e) => e.toLowerCase()),
   ]);
   set.delete("");
   return Array.from(set);
+}
+
+/**
+ * The standing optional guest, or [] when none is set or the address is already
+ * a required attendee (required wins, so nobody is listed twice).
+ */
+export function buildOptionalAttendeeList(
+  booking: SigningBookingInput,
+  settings: SigningSettings,
+): string[] {
+  const email = (settings.optional_guest_email ?? "").trim().toLowerCase();
+  if (!email) return [];
+  return buildAttendeeList(booking, settings).includes(email) ? [] : [email];
 }
 
 export { OFFICE_TIMEZONE };
