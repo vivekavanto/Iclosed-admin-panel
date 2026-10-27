@@ -8,6 +8,7 @@ import { formatPostalCode } from "@/lib/addressFields";
 import { docDownloadHref, docFetchCredentials } from "@/lib/blobPrivacy";
 import { openDocForViewing } from "@/lib/docViewer";
 import { markNewLeadsSeen } from "@/lib/newLeadBadge";
+import { hasQuote } from "@/lib/quoteLink";
 import {
   FIRMS,
   FIRM_KEYS,
@@ -775,6 +776,21 @@ const Leads: React.FC = () => {
     setConvertFileNumber("");
     setConvertClosingDate(lead.closingDate ?? "");
     setConvertModalOpen(true);
+  };
+
+  // Tab opened before the fetch so the popup blocker treats it as the click's.
+  const openQuote = async (leadId: string) => {
+    const tab = window.open("", "_blank");
+    try {
+      const res = await fetch(`/api/admin/leads/${leadId}/quote-link`);
+      const data = await res.json();
+      if (!res.ok || !data?.url) throw new Error(data?.error || "Could not open the quote.");
+      if (tab) tab.location.href = data.url;
+      else window.open(data.url, "_blank");
+    } catch (err) {
+      tab?.close();
+      setFirmToast({ success: false, message: err instanceof Error ? err.message : "Could not open the quote." });
+    }
   };
 
   const openLeadForEdit = (lead: LeadUser) => {
@@ -3202,6 +3218,7 @@ const Leads: React.FC = () => {
                       <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${
                         lead.lead_type === "Purchase" ? "bg-blue-100 text-blue-700 border-blue-200"
                           : lead.lead_type === "Sale" ? "bg-orange-100 text-orange-700 border-orange-200"
+                          : lead.lead_type === "Refinance" ? "bg-yellow-100 text-yellow-800 border-yellow-300"
                           : "bg-slate-900 text-white border-slate-900"
                       }`}>{lead.lead_type}</span>
                     ) : "—"}
@@ -3270,6 +3287,16 @@ const Leads: React.FC = () => {
                           aria-label={`Convert ${lead.firstName ?? ""} ${lead.lastName ?? ""} to a deal`}
                         >
                           <Zap size={14} />
+                        </button>
+                      )}
+                      {hasQuote(lead.lead_type) && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); void openQuote(lead.id); }}
+                          className="text-slate-400 hover:text-brand-primary transition-colors p-1"
+                          title="View quote"
+                          aria-label={`View quote for ${lead.firstName ?? ""} ${lead.lastName ?? ""}`}
+                        >
+                          <Eye size={14} />
                         </button>
                       )}
                       <button

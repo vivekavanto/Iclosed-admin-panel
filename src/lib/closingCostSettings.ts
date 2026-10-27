@@ -136,12 +136,11 @@ export type LetterheadColumn = (typeof LETTERHEAD_COLUMNS)[number];
 
 /**
  * Nava Wilson's letterhead. iClosed is a DIVISION of the same firm, so it
- * shares the address, telephone, fax and HST number — only the name, badge and
- * brand colour differ.
+ * shares the telephone, fax and HST number; the name, badge, brand colour and
+ * suite (209 for iClosed, 210 for Nava Wilson) differ.
  */
 const SHARED_LETTERHEAD = {
   firm_subtitle: "Barristers and Solicitors",
-  firm_address: "Suite 210, 10 Milner Business Court, Toronto, Ontario, M1B 3C6",
   firm_phone: "416-321-1100",
   firm_fax: "416-321-1107",
   firm_hst_number: "829252303RT0001",
@@ -154,13 +153,14 @@ const SHARED_LETTERHEAD = {
  */
 const FIRM_IDENTITY: Record<
   FirmKey,
-  { label: string; firm_name: string; firm_badge: string; brand_color: string; sort_order: number }
+  { label: string; firm_name: string; firm_badge: string; brand_color: string; firm_address: string; sort_order: number }
 > = {
   navawilson: {
     label: "Nava Wilson",
     firm_name: "NAVA WILSON PROFESSIONAL CORPORATION",
     firm_badge: "NAVA WILSON PC",
     brand_color: "#CE2028",
+    firm_address: "Suite 210, 10 Milner Business Court, Toronto, Ontario, M1B 3C6",
     sort_order: 0,
   },
   iclosed: {
@@ -168,6 +168,7 @@ const FIRM_IDENTITY: Record<
     firm_name: "ICLOSED",
     firm_badge: "ICLOSED",
     brand_color: "#C10007",
+    firm_address: "Suite 209, 10 Milner Business Court, Toronto, Ontario, M1B 3C6",
     sort_order: 1,
   },
 };
@@ -214,6 +215,7 @@ export function defaultFirmRow(firmKey: FirmKey): Record<string, unknown> {
     sheriff: d.sheriff,
     firm_name: identity.firm_name,
     ...SHARED_LETTERHEAD,
+    firm_address: identity.firm_address,
     // Only the incumbent is active out of the box. A second active row would
     // break the OLD `.maybeSingle()` read still running in production until the
     // new build ships, so iClosed is activated deliberately from the settings
