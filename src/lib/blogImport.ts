@@ -492,10 +492,15 @@ const SEPARATOR_NAV = /^\s*[«‹<]{0,2}\s*(?:previous|prev|next|back)\s*:\s*\S.
  */
 const NAV_LIKE = /(?:^|[«‹|·•—–\-\s])(?:previous|prev|next|back)\s*:/i;
 
-/** A separator's inline title, unless it is really navigation. */
+/**
+ * A separator's inline title, unless it is really navigation. A `|` is refused
+ * too: no post is titled "A | B", and a series footer written without the
+ * Previous/Next labels ("Continue the series: A | B") is exactly that shape —
+ * it names the NEIGHBOURING posts, never the one that follows.
+ */
 function inlineTitle(raw: string | undefined): string | null {
   const title = (raw ?? "").trim().replace(/^[«‹<\s]+/, "").trim();
-  if (!title || NAV_LIKE.test(title)) return null;
+  if (!title || NAV_LIKE.test(title) || title.includes("|")) return null;
   return title;
 }
 
@@ -504,15 +509,17 @@ function inlineTitle(raw: string | undefined): string | null {
  * The single place every separator family is recognised, so explicitSplit(),
  * stripSeparatorLines() and titleFromSection() can never drift apart.
  */
-function separatorMatch(line: string): { title: string | null } | null {
+function separatorMatch(line: string): { title: string | null; weak: boolean } | null {
   if (!line.trim()) return null;
   // Navigation first: it carries a colon and words that would otherwise read
   // as a title, and a title is the one thing it must never supply.
-  if (SEPARATOR_NAV.test(line)) return { title: null };
+  if (SEPARATOR_NAV.test(line)) return { title: null, weak: true };
+  // A series footer sits at the END of a post and links to its neighbours, so
+  // its inline text is only a fallback: the post's own heading wins.
   const series = line.match(SEPARATOR_SERIES);
-  if (series) return { title: inlineTitle(series[1]) };
+  if (series) return { title: inlineTitle(series[1]), weak: true };
   const word = line.match(SEPARATOR_WORD);
-  if (word) return { title: inlineTitle(word[1]) };
+  if (word) return { title: inlineTitle(word[1]), weak: false };
   return null;
 }
 
@@ -651,7 +658,12 @@ function titleFromSection(raw: string): RawSection {
   if (separator) {
     lines.splice(firstIdx, 1);
     const rest = normaliseBlankLines(lines.join("\n"));
-    return separator.title ? { text: rest, title: separator.title } : titleFromSection(rest);
+    if (!separator.title) return titleFromSection(rest);
+    if (separator.weak) {
+      const own = titleFromSection(rest);
+      return own.title ? own : { text: rest, title: separator.title };
+    }
+    return { text: rest, title: separator.title };
   }
 
   const heading = first.match(/^#{1,6}\s+(.+?)\s*$/);
