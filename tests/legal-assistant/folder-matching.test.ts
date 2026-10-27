@@ -23,3 +23,11 @@ test("ambiguous reports and future-dated extracts are not silently selected",()=
  assert.throws(()=>selectReport([file,{...file,id:"b"}],"2026-10-20","2026-10-21","2026-12-31",true),/Multiple/);
  assert.throws(()=>selectReport([{...file,name:file.name.replace("run_2026-10-20","run_2026-10-21")}],"2026-10-20","2026-10-21","2026-12-31",false),/No detailed/);
 });
+
+test('omitted road types retain file number, street name, building and unit identity',()=>{
+ const matter={number:'26P-0904',address:'606-100 Sample Road, Mississauga, ON'};
+ assert.equal(folderMatchesMatter(matter,'26P-0904 - 606-100 Sample - Oct 26'),true);
+ assert.equal(folderMatchesMatter(matter,'26P-0904 - 607-100 Sample - Oct 26'),false);
+ assert.equal(folderMatchesMatter(matter,'26P-0904 - 606-100 Sample Avenue'),false);
+ assert.equal(folderMatchesMatter({number:'26P-0905',address:'1807-29 Example Trail Court, North York'},'26P-0905 - 1807-29 Example tr - Sep 25'),true);
+});

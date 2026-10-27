@@ -76,6 +76,7 @@ const nextConfig: NextConfig = {
   // divergence you would only discover in production.
   serverExternalPackages: ["nodemailer"],
   outputFileTracingIncludes: {
+    "/api/admin/legal-assistant/coo/transfer": ["./scripts/coo/inspect_transfer.py"],
     "/api/admin/legal-assistant/coo/preview": ["./scripts/coo/render_preview.py", "./scripts/coo/assets/nw-letterhead.jpg"],
     "/api/admin/deals/[id]/deposit-task": ["./assets/funds-transfer-instructions.pdf"],
     "/api/admin/deals/[id]/package": ["./public/email-logo.png"],

@@ -10,7 +10,10 @@ export interface Matter {
   address: string;
   clients: string;
   clientEmail: string;
+  clientEmails?: string[];
+  referralAgentEmails?: string[];
   clientPhone: string;
+  lenders?: string[];
   clerk: string;
   lawyer: string;
   closingDate: string;
@@ -20,6 +23,7 @@ export interface Matter {
   driveFolderId: string | null;
   sourceDate: string;
   sourcePresent: boolean;
+  mortgageClientsInformed?: {at:string;actor:string;email:string};
   mortgageInstructions?: {at:string;actor:string;email:string};
   auditReport?: AuditReportLink;
   propertyType?: string;

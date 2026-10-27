@@ -4,9 +4,14 @@ import { getStaff } from "@/lib/orchestrator/server-auth";
 import { getSnapshot } from "@/lib/orchestrator/store";
 import { initialCooDraft } from "@/lib/coo/prepare";
 import {workflowSettings,resolveMunicipality} from "@/lib/orchestrator/workflow-settings";
+import {cooDriveDocuments} from "@/lib/coo/drive-documents";
+import {latestCooReview} from "@/lib/coo/delivery-store";
+import {cooSendReadiness} from "@/lib/coo/send";
 export const dynamic="force-dynamic";
 export default async function CooFilePage({params}:{params:Promise<{fileId:string}>}){
  if(!await getStaff())redirect("/admin/login");const{fileId}=await params;const snapshot=await getSnapshot();const m=snapshot.matters.find(x=>x.id===fileId||x.id===decodeURIComponent(fileId));if(!m)notFound();
  const settings=await workflowSettings();const draft=initialCooDraft(m,resolveMunicipality(m.address,settings.municipalities));
- return <CooWorkspace initialDraft={draft}/>;
+ const drive=await cooDriveDocuments(m.driveFolderId).catch(()=>({documents:[],message:'The linked Drive folder could not be read. Existing notices have not been assessed.'}));
+ const savedReview=await latestCooReview(m.id);
+ return <CooWorkspace savedReview={savedReview??undefined} sendEnabled={cooSendReadiness().enabled} initialDraft={savedReview?.draft??draft} driveDocuments={drive.documents} driveMessage={drive.message} driveFolderId={m.driveFolderId} fileStatus={m.status}/>;
 }

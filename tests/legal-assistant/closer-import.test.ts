@@ -71,3 +71,10 @@ test("Closer refresh preserves the verified signing report link", () => {
  const next=reconcile([prior],batch(row.replace("2026-10-21","2026-10-22")));
  assert.deepEqual(next.matters[0].auditReport,prior.auditReport);
 });
+
+test('detailed import retains each explicit mortgagee name for dashboard exclusions',()=>{
+ const parsed=parseCloserReport(filename,header+',mortgages.list.0.mortgagees.0.name,mortgages.list.1.mortgagees.0.name\n'+row+',Antrim Investments Ltd.,Other Lender');
+ assert.deepEqual(parsed.matters[0].lenders,['Antrim Investments Ltd.','Other Lender']);
+});
+
+test("fresh unchanged extracts preserve business rows despite JSON property ordering",()=>{const original=batch().matters[0];const reordered=Object.fromEntries(Object.entries(original).reverse()) as typeof original;const next=batch(row,filename.replace('run_2026-10-20','run_2026-10-21'));const result=reconcile([reordered],next);assert.equal(result.unchanged,1);assert.equal(result.updated,0);assert.equal(result.matters[0].sourceDate,'2026-10-20');assert.deepEqual(result.matters[0],original);});

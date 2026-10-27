@@ -8,7 +8,7 @@ import { formatPostalCode } from "@/lib/addressFields";
 import { docDownloadHref, docFetchCredentials } from "@/lib/blobPrivacy";
 import { openDocForViewing } from "@/lib/docViewer";
 import { markNewLeadsSeen } from "@/lib/newLeadBadge";
-import { hasQuote } from "@/lib/quoteLink";
+import { hasQuote } from "@/lib/quoteEligibility";
 import {
   FIRMS,
   FIRM_KEYS,

@@ -43,3 +43,7 @@ test("verified refresh token is encrypted at rest and state is single-use",async
 test("origins and state strings cannot point the connection off-site",async()=>fixture(async()=>{
  assert.equal(validMailboxState("../../connection","../../connection"),false);process.env.ORCHESTRATOR_APP_URL="http://evil.example";assert.throws(mailboxAppOrigin,/origin/);process.env.ORCHESTRATOR_APP_URL="https://files.iclosed.ca/other";assert.throws(mailboxAppOrigin,/origin/);
 }));
+
+test("unconfigured local origin defaults to the current Admin preview, not retired Operations",async()=>fixture(async()=>{
+ delete process.env.ORCHESTRATOR_APP_URL;assert.equal(mailboxAppOrigin(),'http://localhost:3004');
+}));

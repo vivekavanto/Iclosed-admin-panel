@@ -1,0 +1,12 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { dailyCloserRefresh } from '@/lib/orchestrator/daily-refresh';
+import { latestDetailedExtract } from '@/lib/orchestrator/google-extracts';
+import { applyBatch, getSnapshot, reportChecksum } from '@/lib/orchestrator/store';
+export const runtime='nodejs';
+export const maxDuration=120;
+export async function GET(request:NextRequest) {
+  const result=await dailyCloserRefresh(request.headers.get('authorization'),{
+    secret:process.env.CRON_SECRET,enabled:process.env.ORCHESTRATOR_IMPORT_ENABLED==='true',scheduled:true,
+  },{snapshot:getSnapshot,extract:latestDetailedExtract,checksum:reportChecksum,apply:applyBatch});
+  return NextResponse.json(result.body,{status:result.status,headers:{'Cache-Control':'private, no-store'}});
+}
