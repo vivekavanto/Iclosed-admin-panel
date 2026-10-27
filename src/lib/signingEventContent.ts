@@ -4,6 +4,7 @@
 
 import type { SigningLawyer, SigningSettings } from "./signingConfig";
 import { OFFICE_TIMEZONE } from "./signingTimezone";
+import { parseEmailList } from "./signingEmailList";
 
 export interface SigningBookingInput {
   clientName: string;
@@ -59,8 +60,7 @@ export function buildAttendeeList(
 ): string[] {
   const set = new Set<string>([
     booking.clientEmail.toLowerCase(),
-    settings.clerk_email.toLowerCase(),
-    settings.reception_email.toLowerCase(),
+    ...parseEmailList(settings.clerk_email),
     ...booking.extraGuests.map((e) => e.toLowerCase()),
     ...booking.extraCohosts.map((e) => e.toLowerCase()),
   ]);

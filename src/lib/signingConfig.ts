@@ -5,6 +5,7 @@
 
 import supabaseAdmin from "./supabaseAdmin";
 import { logger } from "./logger";
+import { parseEmailList } from "./signingEmailList";
 
 export interface SigningLawyer {
   id: string;
@@ -42,6 +43,8 @@ export interface SigningSettings {
   buffer_minutes: number;
   slot_increment_minutes: number;
   office_address: string;
+  // The CC list: one comma-separated string. Older rows also kept a separate
+  // reception address; getSettings folds that into this field.
   clerk_email: string;
   reception_email: string;
   // Added to every signing event as an OPTIONAL attendee. "" = nobody.
@@ -159,6 +162,16 @@ const DEFAULT_SETTINGS: Omit<SigningSettings, "id"> = {
     "Please schedule your signing appointment 1-3 business days before your closing date. Note: Appointments are subject to our office receiving the required mortgage instructions (for purchases) and payout statement (for sales). If the required documents are not received in time, your appointment may need to be rescheduled.",
 };
 
+/**
+ * The admin edits one CC list. Clerk and reception used to be two inputs, so
+ * fold any reception address into clerk_email and blank reception_email; the
+ * attendee list then reads a single field whatever the row looked like.
+ */
+function withSingleCcList(settings: SigningSettings): SigningSettings {
+  const ccList = parseEmailList([settings.clerk_email, settings.reception_email].join(","));
+  return { ...settings, clerk_email: ccList.join(", "), reception_email: "" };
+}
+
 /** The single settings row, falling back to code defaults pre-migration. */
 export async function getSettings(): Promise<SigningSettings> {
   const { data, error } = await supabaseAdmin
@@ -168,13 +181,14 @@ export async function getSettings(): Promise<SigningSettings> {
     .maybeSingle();
   if (error) {
     logger.error("[signingConfig] getSettings failed:", error.message);
-    return { id: "", ...DEFAULT_SETTINGS };
+    return withSingleCcList({ id: "", ...DEFAULT_SETTINGS });
   }
-  if (!data) return { id: "", ...DEFAULT_SETTINGS };
+  if (!data) return withSingleCcList({ id: "", ...DEFAULT_SETTINGS });
   // Merge onto the defaults rather than returning the row as-is: a column
   // added by a migration that hasn't been applied to this database yet (see
   // CLAUDE.md — migrations are never auto-run) is simply absent from the row,
   // which must fail CLOSED to the safe default rather than silently reading as
   // "no restriction" (min/max business days <= 0 turns the cutoff rule off).
-  return { ...DEFAULT_SETTINGS, ...(data as Partial<SigningSettings>), id: (data as { id: string }).id } as SigningSettings;
+  const merged = { ...DEFAULT_SETTINGS, ...(data as Partial<SigningSettings>), id: (data as { id: string }).id } as SigningSettings;
+  return withSingleCcList(merged);
 }
