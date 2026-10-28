@@ -63,6 +63,7 @@ try {
   for (const name of ['src', 'tests']) await cp(path.join(repo, name), path.join(scratch, name), {recursive: true, filter: source => !path.basename(source).startsWith('.')});
   await mkdir(path.join(scratch, 'scripts'), {recursive: true});
   await cp(path.join(repo, 'scripts/testing'), path.join(scratch, 'scripts/testing'), {recursive: true});
+  await cp(path.join(repo, 'scripts/legal-assistant-hosted'), path.join(scratch, 'scripts/legal-assistant-hosted'), {recursive: true});
   await cp(path.join(repo, 'scripts/sync-pdfjs-assets.mjs'), path.join(scratch, 'scripts/sync-pdfjs-assets.mjs'));
   await mkdir(path.join(scratch, 'public'), {recursive: true});
   await cp(path.join(repo, 'public/email-logo.png'), path.join(scratch, 'public/email-logo.png'));
