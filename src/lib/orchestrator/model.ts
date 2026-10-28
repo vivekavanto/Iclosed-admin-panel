@@ -23,6 +23,7 @@ export interface Matter {
   driveFolderId: string | null;
   sourceDate: string;
   sourcePresent: boolean;
+  fundsClientsInformed?: {at:string};
   mortgageClientsInformed?: {at:string;actor:string;email:string};
   mortgageInstructions?: {at:string;actor:string;email:string};
   auditReport?: AuditReportLink;
