@@ -76,6 +76,11 @@ interface PendingTask {
   deal_id: string;
 }
 
+/** A family shares one file_number; a deal without one is its own file. */
+function fileKeyOf(d: { id: string; file_number: string | null }): string {
+  return d.file_number ?? `deal:${d.id}`;
+}
+
 function joinNames(names: string[]): string {
   const clean = names.map((n) => n.trim()).filter(Boolean);
   if (clean.length <= 1) return clean[0] ?? "";
@@ -87,7 +92,7 @@ function joinNames(names: string[]): string {
  * rollup's rules: deleted tasks and not-yet-activated ("Inactive") tasks never
  * count — the client cannot act on either.
  */
-async function loadPendingTasks(clientIds: string[]): Promise<{
+async function loadPendingTasks(clientIds: string[], fileKey: string): Promise<{
   tasks: PendingTask[];
   fileNumber: string | null;
   leadId: string | null;
@@ -102,7 +107,12 @@ async function loadPendingTasks(clientIds: string[]): Promise<{
     .in("client_id", clientIds)
     .eq("is_deleted", false);
 
-  const live = (deals ?? []).filter((d) => !FINISHED_DEAL_STATUSES.includes(d.status ?? ""));
+  // One file only: a client can hold several files (different properties, each
+  // with its own leads/emails). Mixing them put two addresses in one email and
+  // sent it to people who are not on this file.
+  const live = (deals ?? []).filter(
+    (d) => !FINISHED_DEAL_STATUSES.includes(d.status ?? "") && fileKeyOf(d) === fileKey,
+  );
   const leadIds = [...new Set(live.map((d) => d.lead_id).filter(Boolean) as string[])];
   if (live.length === 0) {
     return { tasks: [], fileNumber: null, leadId: null, leadIds: [], taskLeadIds: [] };
@@ -211,7 +221,51 @@ function fallbackBody(v: Record<string, string>): string {
  * throws. Stamps task_reminder_sent_at on success so the automatic reminder
  * cannot follow a manual one.
  */
-export async function sendClientTaskReminder(clientIds: string[]): Promise<TaskReminderResult> {
+export async function sendClientTaskReminder(
+  clientIds: string[],
+  opts: { fileNumber?: string | null; dealId?: string } = {},
+): Promise<TaskReminderResult> {
+  const NO_PENDING = "This client has no pending tasks.";
+  if (!process.env.RESEND_API_KEY) {
+    return { ok: false, sent: [], pendingCount: 0, reason: "Email is not configured (RESEND_API_KEY missing)." };
+  }
+  if (clientIds.length === 0) return { ok: false, sent: [], pendingCount: 0, reason: "No client on this file." };
+
+  // A specific file was asked for (admin button): remind that file alone.
+  if (opts.fileNumber || opts.dealId) {
+    return sendFileReminder(clientIds, opts.fileNumber ?? `deal:${opts.dealId}`);
+  }
+
+  // Automatic run: one email per file, each to that file's own leads only.
+  const { data: deals } = await supabaseAdmin
+    .from("deals")
+    .select("id, file_number, status")
+    .in("client_id", clientIds)
+    .eq("is_deleted", false);
+  const keys = [
+    ...new Set(
+      (deals ?? [])
+        .filter((d) => !FINISHED_DEAL_STATUSES.includes(d.status ?? ""))
+        .map(fileKeyOf),
+    ),
+  ];
+  const agg: TaskReminderResult = { ok: false, sent: [], pendingCount: 0 };
+  let firstFailure: string | undefined;
+  for (const key of keys) {
+    const r = await sendFileReminder(clientIds, key);
+    if (r.ok) {
+      agg.ok = true;
+      agg.sent.push(...r.sent);
+      agg.pendingCount += r.pendingCount;
+    } else if (r.reason !== NO_PENDING) {
+      firstFailure ??= r.reason;
+    }
+  }
+  if (!agg.ok) agg.reason = firstFailure ?? NO_PENDING;
+  return agg;
+}
+
+async function sendFileReminder(clientIds: string[], fileKey: string): Promise<TaskReminderResult> {
   const fail = (reason: string, pendingCount = 0): TaskReminderResult => ({
     ok: false,
     sent: [],
@@ -219,16 +273,13 @@ export async function sendClientTaskReminder(clientIds: string[]): Promise<TaskR
     reason,
   });
 
-  if (!process.env.RESEND_API_KEY) return fail("Email is not configured (RESEND_API_KEY missing).");
-  if (clientIds.length === 0) return fail("No client on this file.");
-
   const { data: clients } = await supabaseAdmin
     .from("clients")
     .select("id, first_name, last_name, email")
     .in("id", clientIds);
   const people = ((clients ?? []) as ReminderClient[]).filter((c) => (c.email ?? "").trim());
 
-  const { tasks, fileNumber, leadId, leadIds, taskLeadIds } = await loadPendingTasks(clientIds);
+  const { tasks, fileNumber, leadId, leadIds, taskLeadIds } = await loadPendingTasks(clientIds, fileKey);
   if (tasks.length === 0) return fail("This client has no pending tasks.");
 
   // The file's own addresses win; the client row is only the fallback.

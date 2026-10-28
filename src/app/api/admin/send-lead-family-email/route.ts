@@ -709,13 +709,16 @@ export async function POST(req: NextRequest) {
       const firstName = `${first.first_name ?? ""} ${first.last_name ?? ""}`.trim() || "(no name)";
       const { data: dealRows } = await supabaseAdmin
         .from("deals")
-        .select("client_id")
+        .select("id, client_id, file_number")
         .in("lead_id", recipients.map((x) => x.id))
         .eq("is_deleted", false);
       const clientIds = [
         ...new Set((dealRows ?? []).map((d: { client_id: string | null }) => d.client_id).filter(Boolean) as string[]),
       ];
-      const res = await sendClientTaskReminder(clientIds);
+      const res = await sendClientTaskReminder(clientIds, {
+        fileNumber: dealRows?.[0]?.file_number ?? null,
+        dealId: dealRows?.[0]?.id,
+      });
       results.push({
         lead_id: first.id,
         name: firstName,

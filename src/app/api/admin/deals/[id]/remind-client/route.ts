@@ -40,7 +40,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       for (const d of family ?? []) if (d.client_id) clientIds.add(d.client_id);
     }
 
-    const result = await sendClientTaskReminder([...clientIds]);
+    const result = await sendClientTaskReminder([...clientIds], {
+      fileNumber: deal.file_number,
+      dealId: id,
+    });
 
     if (result.ok) {
       const actor = await getActingAdmin();
