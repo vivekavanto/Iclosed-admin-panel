@@ -369,17 +369,14 @@ export default function SigningLawyersSettings({ initialTab = "lawyers" }: Signi
 }
 
 type HoursTab = "default" | "purchase" | "sale";
-const HOURS_TABS: { key: HoursTab; label: string }[] = [
-  { key: "default", label: "Default" },
+type HoursMode = "default" | "custom";
+// Default mode edits one schedule; custom mode edits Purchase and Sale. Never both.
+const CUSTOM_TABS: { key: HoursTab; label: string }[] = [
   { key: "purchase", label: "Purchase" },
   { key: "sale", label: "Sale" },
 ];
 
 type DayHours = Record<number, { enabled: boolean; start: string; end: string }>;
-
-function hoursQuery(tab: HoursTab) {
-  return tab === "default" ? "" : `?dealType=${tab}`;
-}
 
 function rowsToDays(rows: LawyerHour[], hasAnyHours: boolean): DayHours {
   const byDay: DayHours = {};
@@ -401,40 +398,55 @@ function rowsToDays(rows: LawyerHour[], hasAnyHours: boolean): DayHours {
   return byDay;
 }
 
+type Schedules = { rows: Record<HoursTab, LawyerHour[]>; hasAny: boolean };
+
 function LawyerHoursModal({ lawyer, onClose }: { lawyer: Lawyer; onClose: () => void }) {
   const [tab, setTab] = useState<HoursTab>("default");
+  // null until the load tells us which mode the lawyer is saved in.
+  const [mode, setMode] = useState<HoursMode | null>(null);
+  // All three saved schedules arrive in one request; switching tab/mode after that is local.
+  const [schedules, setSchedules] = useState<Schedules | null>(null);
   const [hours, setHours] = useState<DayHours>({});
-  // A purchase/sale tab with no schedule of its own is booked with the default
-  // hours; the form is seeded from them so an admin only changes what differs.
+  // A purchase/sale tab with no schedule of its own is seeded from the default
+  // hours so an admin only changes what differs.
   const [usingDefault, setUsingDefault] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  function show(next: HoursTab, s: Schedules) {
+    let rows = s.rows[next];
+    const fallback = next !== "default" && rows.length === 0;
+    if (fallback) rows = s.rows.default;
+    setTab(next);
+    setHours(rowsToDays(rows, s.hasAny));
+    setUsingDefault(fallback);
+  }
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const base = `/api/admin/signing/lawyers/${lawyer.id}/hours`;
-        const res = await fetch(`${base}${hoursQuery(tab)}`);
+        const res = await fetch(`/api/admin/signing/lawyers/${lawyer.id}/hours?all=1`);
         const json = await res.json();
-        if (!json.success) throw new Error(json.error || `Could not load ${tab} hours`);
-        let rows = json.data as LawyerHour[];
-        const hasAnyHours = json.hasAnyHours === true;
-        let fallback = false;
-        if (tab !== "default" && rows.length === 0) {
-          const defRes = await fetch(base);
-          const defJson = await defRes.json();
-          if (!defJson.success) throw new Error(defJson.error || "Could not load default hours");
-          rows = defJson.data as LawyerHour[];
-          fallback = true;
-        }
+        if (!json.success) throw new Error(json.error || "Could not load hours");
         if (cancelled) return;
-        setHours(rowsToDays(rows, hasAnyHours));
-        setUsingDefault(fallback);
+        const s: Schedules = {
+          rows: {
+            default: json.schedules.default as LawyerHour[],
+            purchase: json.schedules.purchase as LawyerHour[],
+            sale: json.schedules.sale as LawyerHour[],
+          },
+          hasAny: json.hasAnyHours === true,
+        };
+        // hoursMode is null before the migration: legacy lawyers with Purchase/Sale
+        // rows still open on Default and can switch to Custom from there.
+        const m: HoursMode = json.hoursMode === "custom" ? "custom" : "default";
+        setSchedules(s);
+        setMode(m);
+        show(m === "custom" ? "purchase" : "default", s);
         setLoadError(null);
       } catch (err) {
-        // Never leave the previous tab's hours on screen under this tab's label.
         if (cancelled) return;
         setHours({});
         setLoadError(err instanceof Error ? err.message : "Could not load hours");
@@ -445,12 +457,17 @@ function LawyerHoursModal({ lawyer, onClose }: { lawyer: Lawyer; onClose: () => 
     return () => {
       cancelled = true;
     };
-  }, [lawyer.id, tab]);
+  }, [lawyer.id]);
 
   function switchTab(next: HoursTab) {
-    if (next === tab) return;
-    setLoading(true);
-    setTab(next);
+    if (next === tab || !schedules) return;
+    show(next, schedules);
+  }
+
+  function switchMode(next: HoursMode) {
+    if (next === mode || !schedules) return;
+    setMode(next);
+    show(next === "custom" ? "purchase" : "default", schedules);
   }
 
   async function save() {
@@ -462,15 +479,26 @@ function LawyerHoursModal({ lawyer, onClose }: { lawyer: Lawyer; onClose: () => 
     if (early.length > 0 && !window.confirm(`Start time is before 6:00 AM (${early.join(", ")}). Clients will be offered slots from then. Save anyway?`)) {
       return;
     }
+    const payload = Object.entries(hours)
+      .filter(([, v]) => v.enabled)
+      .map(([day, v]) => ({ day_of_week: Number(day), start_time: v.start, end_time: v.end }));
+    if (
+      mode === "custom" &&
+      payload.length === 0 &&
+      !window.confirm(`No days are ticked, so ${tab} signings will have no availability. Save anyway?`)
+    ) {
+      return;
+    }
     setSaving(true);
     try {
-      const payload = Object.entries(hours)
-        .filter(([, v]) => v.enabled)
-        .map(([day, v]) => ({ day_of_week: Number(day), start_time: v.start, end_time: v.end }));
       const res = await fetch(`/api/admin/signing/lawyers/${lawyer.id}/hours`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ hours: payload, ...(tab === "default" ? {} : { dealType: tab }) }),
+        body: JSON.stringify({
+          hours: payload,
+          hoursMode: mode ?? "default",
+          ...(tab === "default" ? {} : { dealType: tab }),
+        }),
       });
       const json = await res.json();
       if (!json.success) {
@@ -506,27 +534,52 @@ function LawyerHoursModal({ lawyer, onClose }: { lawyer: Lawyer; onClose: () => 
         </div>
 
         <div className="px-6 py-6 overflow-y-auto flex-1">
-          <div className="flex gap-1 mb-4 p-1 bg-slate-100 rounded-lg">
-            {HOURS_TABS.map((t) => (
-              <button
-                key={t.key}
-                type="button"
-                onClick={() => switchTab(t.key)}
-                className={`flex-1 px-3 py-1.5 rounded-md text-sm font-semibold transition-colors ${
-                  tab === t.key ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
-                }`}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
+          {mode && (
+            <div className="grid grid-cols-2 gap-1 mb-3 p-1 bg-slate-100 rounded-lg" role="tablist" aria-label="Availability mode">
+              {(
+                [
+                  { key: "default", label: "Same for all signings" },
+                  { key: "custom", label: "Purchase / Sale" },
+                ] as const
+              ).map((o) => (
+                <button
+                  key={o.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={mode === o.key}
+                  onClick={() => switchMode(o.key)}
+                  className={`px-3 py-2 rounded-md text-sm font-semibold transition-colors ${
+                    mode === o.key ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                  }`}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          )}
+          {mode === "custom" && (
+            <div className="flex gap-1 mb-3 p-1 bg-slate-100 rounded-lg">
+              {CUSTOM_TABS.map((t) => (
+                <button
+                  key={t.key}
+                  type="button"
+                  onClick={() => switchTab(t.key)}
+                  className={`flex-1 px-3 py-1.5 rounded-md text-sm font-semibold transition-colors ${
+                    tab === t.key ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          )}
           {loadError && <p className="text-xs text-red-600 mb-4">{loadError}</p>}
-          <p className="text-xs text-slate-500 mb-4">
-            {tab === "default"
-              ? "Used for every signing unless a Purchase or Sale schedule is set below."
-              : usingDefault
-                ? `No separate ${tab} hours yet, so ${tab} signings use the Default hours. Edit and save to set ${tab}-specific hours.`
-                : `Used for ${tab} signings only. Untick every day and save to go back to the Default hours.`}
+          <p className="text-xs text-slate-500 bg-slate-50 rounded-lg px-3 py-2 mb-5">
+            {mode === "custom"
+              ? usingDefault
+                ? `No ${tab} hours saved yet. Pre-filled from the default hours; ${tab} signings can't be booked until you save.`
+                : `Used for ${tab} signings only. A side with no hours can't be booked. Refinance keeps using the default hours.`
+              : "Used for every signing. Saved Purchase / Sale hours are kept but ignored."}
           </p>
           {loading ? (
             <div className="flex items-center justify-center py-12">

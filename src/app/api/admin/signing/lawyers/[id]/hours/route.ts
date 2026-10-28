@@ -4,7 +4,14 @@ import { logger } from "@/lib/logger";
 import { recordAudit } from "@/lib/recordAudit";
 import { getActingAdmin } from "@/lib/getActingAdmin";
 import { isUuid } from "@/lib/isUuid";
-import { getLawyerHoursExact, lawyerHasAnyHours, normalizeHoursType } from "@/lib/signingConfig";
+import {
+  getLawyerById,
+  getLawyerHoursExact,
+  lawyerHasAnyHours,
+  listAllLawyerHours,
+  normalizeHoursMode,
+  normalizeHoursType,
+} from "@/lib/signingConfig";
 
 // GET /api/admin/signing/lawyers/[id]/hours[?dealType=purchase|sale]
 //   — the saved weekly template for that schedule (no dealType = the default).
@@ -12,8 +19,10 @@ import { getLawyerHoursExact, lawyerHasAnyHours, normalizeHoursType } from "@/li
 // PUT /api/admin/signing/lawyers/[id]/hours — replace one whole week in one call.
 //   Body: { dealType?: "purchase" | "sale", hours: [{ day_of_week, start_time, end_time }, ...] }
 //   — one entry per working day; a day with no entry has no availability at all
-//   that day. Only the schedule named by dealType is replaced; sending no hours
-//   for a purchase/sale schedule removes it so that type falls back to the default.
+//   that day. Only the schedule named by dealType is replaced. hoursMode
+//   ("default" | "custom", optional) switches the lawyer between the Default
+//   schedule and custom Purchase/Sale schedules; the inactive mode's rows are
+//   kept, just not used.
 // Gated to admins by src/middleware.ts.
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
@@ -32,10 +41,31 @@ export async function GET(
   if (!isUuid(id)) {
     return NextResponse.json({ success: false, error: "Invalid id" }, { status: 400 });
   }
-  const hours = await getLawyerHoursExact(id, normalizeHoursType(new URL(req.url).searchParams.get("dealType")));
+  // ?all=1: every saved schedule in one round trip, so the editor's tabs and
+  // mode switch need no further requests.
+  if (new URL(req.url).searchParams.get("all") === "1") {
+    const [rows, lawyer] = await Promise.all([listAllLawyerHours(id), getLawyerById(id)]);
+    const pick = (t: "purchase" | "sale" | null) => rows.filter((r) => (r.deal_type ?? null) === t);
+    return NextResponse.json({
+      success: true,
+      schedules: { default: pick(null), purchase: pick("purchase"), sale: pick("sale") },
+      hoursMode: lawyer?.hours_mode ?? null,
+      hasAnyHours: rows.length > 0,
+    });
+  }
+  const [hours, lawyer] = await Promise.all([
+    getLawyerHoursExact(id, normalizeHoursType(new URL(req.url).searchParams.get("dealType"))),
+    getLawyerById(id),
+  ]);
   // hasAnyHours lets the editor tell "brand-new lawyer" (pre-tick Mon-Fri) from
   // "default deliberately emptied, only purchase/sale hours set" (leave it empty).
-  return NextResponse.json({ success: true, data: hours, hasAnyHours: hours.length > 0 || (await lawyerHasAnyHours(id)) });
+  // hoursMode is null until the 2026-10-28 migration is applied.
+  return NextResponse.json({
+    success: true,
+    data: hours,
+    hoursMode: lawyer?.hours_mode ?? null,
+    hasAnyHours: hours.length > 0 || (await lawyerHasAnyHours(id)),
+  });
 }
 
 export async function PUT(
@@ -47,7 +77,7 @@ export async function PUT(
     return NextResponse.json({ success: false, error: "Invalid id" }, { status: 400 });
   }
 
-  let body: { hours?: unknown; dealType?: unknown };
+  let body: { hours?: unknown; dealType?: unknown; hoursMode?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -57,6 +87,11 @@ export async function PUT(
   const dealType = normalizeHoursType(body.dealType);
   if (body.dealType != null && body.dealType !== "" && !dealType) {
     return NextResponse.json({ success: false, error: "dealType must be purchase or sale" }, { status: 400 });
+  }
+
+  const hoursMode = normalizeHoursMode(body.hoursMode);
+  if (body.hoursMode != null && !hoursMode) {
+    return NextResponse.json({ success: false, error: "hoursMode must be default or custom" }, { status: 400 });
   }
 
   if (!Array.isArray(body.hours)) {
@@ -110,6 +145,26 @@ export async function PUT(
     inserted = data ?? [];
   }
 
+  if (hoursMode) {
+    const { error: modeError } = await supabaseAdmin
+      .from("signing_lawyers")
+      .update({ hours_mode: hoursMode })
+      .eq("id", id);
+    if (modeError) {
+      logger.error("[SigningLawyerHours PUT] hours_mode update failed:", modeError.message);
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            modeError.code === "42703"
+              ? "Hours were saved, but the availability mode needs migrations/2026-10-28-signing-hours-mode.sql to be run first."
+              : modeError.message,
+        },
+        { status: 400 },
+      );
+    }
+  }
+
   const actor = await getActingAdmin();
   await recordAudit({
     action: "signing_lawyer_hours.update",
@@ -117,7 +172,7 @@ export async function PUT(
     actorUserId: actor.id,
     resourceType: "signing_lawyer",
     resourceId: id,
-    metadata: { day_count: rows.length, deal_type: dealType },
+    metadata: { day_count: rows.length, deal_type: dealType, hours_mode: hoursMode },
     req,
   });
 

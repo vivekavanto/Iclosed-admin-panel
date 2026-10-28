@@ -14,8 +14,17 @@ export interface SigningLawyer {
   email: string;
   calendar_id: string;
   is_active: boolean;
+  // Absent before the 2026-10-28 migration: reads then keep the old behaviour.
+  hours_mode?: SigningHoursMode;
   created_at: string;
   updated_at: string;
+}
+
+/** `default`: one schedule for everything. `custom`: Purchase/Sale have their own and the default is not used for them. */
+export type SigningHoursMode = "default" | "custom";
+
+export function normalizeHoursMode(value: unknown): SigningHoursMode | null {
+  return value === "default" || value === "custom" ? value : null;
 }
 
 /** Deal types that can carry their own weekly schedule. Refinance has none: it uses the default. */
@@ -101,7 +110,7 @@ export async function getLawyerById(id: string): Promise<SigningLawyer | null> {
 
 // select("*") + filtering in code (rather than .eq("deal_type", ...)) keeps every
 // read working before the deal_type migration is applied.
-async function listAllLawyerHours(lawyerId: string): Promise<SigningLawyerHours[]> {
+export async function listAllLawyerHours(lawyerId: string): Promise<SigningLawyerHours[]> {
   const { data, error } = await supabaseAdmin
     .from("signing_lawyer_hours")
     .select("*")
@@ -115,19 +124,24 @@ async function listAllLawyerHours(lawyerId: string): Promise<SigningLawyerHours[
 }
 
 /**
- * The schedule that applies to a booking of `dealType`: that type's own rows if
- * it has any, otherwise the default schedule. No dealType = the default.
+ * The schedule that applies to a booking of `dealType`.
+ *  - default mode: always the default rows (Purchase/Sale rows are ignored).
+ *  - custom mode: a purchase/sale booking gets ONLY that type's rows, so a side
+ *    with none has no availability. Refinance / no type still uses the default rows.
+ *  - mode unknown (pre-migration): that type's own rows if any, else default.
  */
 export async function getLawyerHours(
   lawyerId: string,
   dealType: SigningHoursType | null = null,
 ): Promise<SigningLawyerHours[]> {
-  const rows = await listAllLawyerHours(lawyerId);
-  if (dealType) {
-    const own = rows.filter((r) => r.deal_type === dealType);
-    if (own.length > 0) return own;
-  }
-  return rows.filter((r) => !r.deal_type);
+  const [rows, lawyer] = await Promise.all([listAllLawyerHours(lawyerId), getLawyerById(lawyerId)]);
+  const defaults = rows.filter((r) => !r.deal_type);
+  if (!dealType) return defaults;
+  const own = rows.filter((r) => r.deal_type === dealType);
+  const mode = lawyer?.hours_mode;
+  if (mode === "default") return defaults;
+  if (mode === "custom") return own;
+  return own.length > 0 ? own : defaults;
 }
 
 /** True once the lawyer has saved any schedule at all (default, purchase or sale). */
