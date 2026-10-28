@@ -1,3 +1,4 @@
+import {withOperationContext} from '@/lib/orchestrator/hosted/runtime';
 import {workflowBody,workflowResult} from "@/lib/orchestrator/hosted/payload";
 import {NextResponse} from 'next/server';
 import {getStaff} from '@/lib/orchestrator/server-auth';
@@ -9,7 +10,7 @@ import {initialCooDraft} from '@/lib/coo/prepare';
 const headers={'Cache-Control':'private, no-store'};
 export const runtime='nodejs';
 export async function GET(request:Request){
- if(!await getStaff())return NextResponse.json({error:'Staff access required.'},{status:403});
+ const user=await getStaff();if(!user)return NextResponse.json({error:'Staff access required.'},{status:403});
  const params=new URL(request.url).searchParams;
  const matter=(await getSnapshot()).matters.find(m=>m.id===params.get('fileId'));
  if(!matter?.driveFolderId)return NextResponse.json({error:'A verified property folder is required.'},{status:404,headers});
@@ -21,7 +22,7 @@ export async function GET(request:Request){
   for(const candidate of candidates){
    try{
     const result=await attachCooTransfer(matter.driveFolderId,candidate.id).catch(()=>{throw Error('The Drive deed is unavailable, changed, or exceeds the size limit. Re-select it or upload the complete copy.');});
-    const facts=await cooTransferHeading(result.base64);
+    const facts=await withOperationContext({requester:user.id,fileId:matter.id,fileNumber:matter.number,workflow:'coo'},()=>cooTransferHeading(result.base64));
     if(!facts)throw Error('The registered deed could not be read. Choose a searchable registered copy.');
     prepopulateCoo(initialCooDraft(matter),facts);
     matches.push({...result,facts,documentId:candidate.id});
@@ -33,13 +34,13 @@ export async function GET(request:Request){
  }catch(error){return NextResponse.json({error:error instanceof Error?error.message:'The selected deed could not be read.'},{status:409,headers});}
 }
 export async function POST(request:Request){
- if(!await getStaff())return NextResponse.json({error:'Staff access required.'},{status:403});
+ const user=await getStaff();if(!user)return NextResponse.json({error:'Staff access required.'},{status:403});
  if(request.headers.get('origin')!==new URL(request.url).origin)return NextResponse.json({error:'Request origin could not be verified.'},{status:403});
  try{
   const body=await workflowBody(request);
   const matter=(await getSnapshot()).matters.find(m=>m.id===body.fileId);
   if(!matter||typeof body.base64!=='string')throw Error('File or deed not found.');
-  const facts=await cooTransferHeading(body.base64);if(!facts)throw Error('The registered deed could not be read. Choose a searchable registered copy.');
+  const facts=await withOperationContext({requester:user.id,fileId:matter.id,fileNumber:matter.number,workflow:'coo'},()=>cooTransferHeading(body.base64));if(!facts)throw Error('The registered deed could not be read. Choose a searchable registered copy.');
   prepopulateCoo(initialCooDraft(matter),facts);
   return NextResponse.json({facts},{headers});
  }catch(error){return NextResponse.json({error:error instanceof Error?error.message:'The deed could not be read.'},{status:409,headers});}

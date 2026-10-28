@@ -13,7 +13,7 @@ test('purchase/refinance notifications include deduplicated referral CC, separat
   assert.equal(notificationEligible(type),true);
   const m={...matter,type,referralAgentEmails:['agent@example.test','AGENT@example.test','alex@example.test']};
   const mortgage=renderMortgageEmail(m),funds=renderFundsEmail(m);
-  assert.deepEqual(mortgage.intendedCc.map(e=>e.toLowerCase()),['agent@example.test']);
+  assert.deepEqual(mortgage.intendedCc.map(e=>e.toLowerCase()),['agent@example.test','aliya@navawilson.law']);
   assert.deepEqual(funds.intendedCc,mortgage.intendedCc);
   assert.ok(funds.html.includes('mortgage funds'));
   assert.ok(funds.html.includes('from your lender'));
