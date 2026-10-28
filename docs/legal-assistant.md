@@ -183,3 +183,12 @@ A separate Gmail sender connection at /admin/legal-assistant/connections/sender 
 ## Repeatable regression suite
 
 `npm test` now runs all existing Node regressions plus the pinned standalone daily-sync tests in disposable source/state with credentials stripped and live networking blocked. See [Testing](testing/README.md) for focused commands, provenance, the scenario matrix, read-only/UI checks and explicit live/quality blockers. No ordinary suite command sends email, calls paid models or touches the approved register.
+
+
+## Client notification previews
+
+The register starts with closing date and file number. Mortgage instructions and Funds received actions are available only for purchases and refinances; the API also rejects sale files. Funds received refers to mortgage funds from the lender. Both previews show intended clients and deduplicated referral-source CC addresses from the register.
+
+Mortgage previews include the portal-style insurance checklist and selectable lender chips. A single exact recognized lender defaults; ambiguous/unknown lenders require a clerk selection. The common mortgagee addresses come from the supplied portal checklist and must be checked against file-specific instructions. Other lender omits an assumed address. Changing a lender regenerates the preview and its approval hash. No environment variables or database migrations are required.
+
+These actions retain the existing internal-test delivery mode: only communication@navawilson.law receives test messages, with no client or referral CC, and no Clients informed status change. Mortgage and funds tests have independent deduplication keys and uncertain outcomes cannot be automatically retried. This feature does not enable external client delivery.
