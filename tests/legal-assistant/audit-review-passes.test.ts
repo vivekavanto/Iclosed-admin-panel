@@ -12,3 +12,8 @@ test('small page counts still split large native PDFs without dropping supports'
  const m:AuditManifest={matterId:'test',matterNumber:'26P-0001',cutoff:'2026-10-28',packageHash:'a'.repeat(64),ruleset:'test',limitations:[],sources:[source('p','package',24_000_000),source('a','support',19_000_000),source('b','support',19_000_000)]};
  const passes=auditReviewPasses(m);assert.equal(passes.length,3);assert.deepEqual(passes.flatMap(p=>p.sources.slice(1).map(s=>s.id)),['a','b']);
 });
+test('text-only correspondence is batched by evidence size rather than eight messages per call',()=>{
+ const source=(id:string,kind:'package'|'email')=>({id,name:id,kind,sha256:'a'.repeat(64),capturedAt:'2026-10-28',pages:[{number:1,text:'Evidence '.repeat(1000),rendered:kind==='package',inkRatio:kind==='package'?.1:null}]});
+ const m:AuditManifest={matterId:'test',matterNumber:'26P-0001',cutoff:'2026-10-28',packageHash:'a'.repeat(64),ruleset:'test',limitations:[],sources:[source('p','package'),...Array.from({length:100},(_,i)=>source('mail-'+i,'email'))]};
+ const passes=auditReviewPasses(m);assert.ok(passes.length<5);assert.equal(passes.flatMap(p=>p.sources.slice(1)).length,100);assert.ok(passes.every(p=>JSON.stringify(p).length<600000));
+});

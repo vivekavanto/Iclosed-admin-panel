@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type {AuditFailureInfo} from './audit-failure.ts';
-export const AUDIT_RULESET = "signing-audit-2026-10-28.1";
+export const AUDIT_RULESET = "signing-audit-2026-10-28.2";
 export type FindingKind = "discrepancy" | "question" | "follow_up" | "unable_to_assess";
 export type Disposition = "Open" | "Implemented" | "Incorrectly flagged" | "Needs lawyer review";
 export interface AuditPage { number: number; text: string; rendered: boolean; inkRatio: number | null; textMethod?:'ocr'; ocrConfidence?:number; textNeedsReview?:boolean; }
