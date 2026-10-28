@@ -79,11 +79,15 @@ test('network failures fail closed and disposal cancels pending event work', asy
   src.setRead(async () => { throw new Error('offline'); });
   const seen: (User | null)[] = [];
   const stop = watchAuthUser(src.auth, user => seen.push(user));
-  await tick(5);
+  await tick(1600);
   assert.deepEqual(seen, [null]);
+  const reads=src.reads;
   src.emit('SIGNED_IN', staff(['finance']));
   stop();
   await tick(5);
-  assert.equal(src.reads, 1);
+  assert.equal(src.reads, reads);
   assert.equal(src.unsubscribed, true);
 });
+
+ test('a temporary failed fetch retries verified Auth without publishing cached token grants',async()=>{const src=source(staff(['finance']));let calls=0;src.setRead(async()=>{if(++calls===1)throw Error('temporary');return {data:{user:staff([])},error:null};});const seen:(User|null)[]=[];const stop=watchAuthUser(src.auth,u=>seen.push(u));await tick(550);assert.equal(calls,2);assert.equal(seen.length,1);assert.deepEqual(moduleIds(seen[0]),[]);stop();});
+ test('sign-out cancels a pending network retry',async()=>{const src=source(null);src.setRead(async()=>{throw Error('temporary');});const seen:(User|null)[]=[];const stop=watchAuthUser(src.auth,u=>seen.push(u));await tick(5);src.emit('SIGNED_OUT',null);await tick(550);assert.equal(src.reads,1);assert.deepEqual(seen,[null]);stop();});

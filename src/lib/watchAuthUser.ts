@@ -8,13 +8,21 @@ export function watchAuthUser(auth: Auth, onUser: (user: User | null) => void): 
   let revision = 0;
   let pending: ReturnType<typeof setTimeout> | undefined;
 
-  async function load() {
+  async function load(attempt = 0) {
     const requestRevision = ++revision;
     try {
       const { data, error } = await auth.getUser();
-      if (!stopped && requestRevision === revision) onUser(error ? null : data.user);
+      if (stopped || requestRevision !== revision) return;
+      if (error && (error.status === 0 || error.status === 429 || (error.status ?? 0) >= 500 || error.name === 'AuthRetryableFetchError') && attempt < 2) {
+        pending = setTimeout(() => { void load(attempt + 1); }, 500 * (attempt + 1));
+        return;
+      }
+      onUser(error ? null : data.user);
     } catch {
-      if (!stopped && requestRevision === revision) onUser(null);
+      if (!stopped && requestRevision === revision) {
+        if (attempt < 2) pending = setTimeout(() => { void load(attempt + 1); }, 500 * (attempt + 1));
+        else onUser(null);
+      }
     }
   }
 

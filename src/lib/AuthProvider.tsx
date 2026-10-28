@@ -39,7 +39,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(isStaff(verifiedUser) ? verifiedUser : null);
       setLoading(false);
     });
-  }, [pathname]);
+  }, []);
 
   // Redirect to login if not authenticated (or not authorized as admin).
   // Public pages (src/lib/publicRoutes.ts) are exempt: a visitor there has no

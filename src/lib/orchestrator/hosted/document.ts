@@ -7,14 +7,33 @@ export interface DocumentBackend {
 }
 export function encodeHostedDocument(value:unknown){const json=JSON.stringify(value);if(typeof json!=="string")throw Error("Workflow document cannot be serialized.");return {encoding:"json-v1",json,sha256:createHash("sha256").update(json).digest("hex")};}
 export function decodeHostedDocument(value:unknown):unknown{const envelope=value as {encoding?:string;json?:string;sha256?:string};if(!envelope||envelope.encoding!=="json-v1"||typeof envelope.json!=="string"||envelope.sha256!==createHash("sha256").update(envelope.json).digest("hex"))throw Error("Hosted workflow document integrity check failed.");return JSON.parse(envelope.json);}
+// Keep large private JSON out of PostgREST's row serializer. The database CAS
+// atomically selects a content-addressed, read-back-verified immutable artifact.
+export async function storeDocumentValue(value:unknown){
+ const envelope=encodeHostedDocument(value);
+ if(Buffer.byteLength(envelope.json,'utf8')<=256_000)return envelope;
+ const {putHostedBlob}=await import('./blob.ts');
+ const sha256=await putHostedBlob(Buffer.from(envelope.json));
+ return {encoding:'blob-v1',sha256};
+}
+export async function loadDocumentValue(value:unknown){
+ const ref=value as {encoding?:string;sha256?:string};
+ if(ref?.encoding!=='blob-v1')return decodeHostedDocument(value);
+ if(!/^[a-f0-9]{64}$/.test(ref.sha256??''))throw Error('Hosted workflow document integrity check failed.');
+ const {getHostedBlob}=await import('./blob.ts');
+ return JSON.parse((await getHostedBlob(ref.sha256!)).toString('utf8')) as unknown;
+}
 export class DocumentConflict extends Error {constructor(){super('Workflow changed concurrently. Reload and retry the same request.');}}
 export async function changeDocument<T,R>(backend:DocumentBackend,name:string,initial:()=>T,change:(value:T)=>R,attempts=8):Promise<R>{
  for(let attempt=0;attempt<attempts;attempt++){
   const saved=await backend.read<T>(name);
   const value=structuredClone(saved?.value??initial());
+  const before=JSON.stringify(value);
   const result=change(value);
   // Transaction callbacks must be synchronous; sending/network work belongs after commit.
   if(result instanceof Promise)throw Error('Workflow transaction callbacks must be synchronous.');
+  // A read-only claim must not rewrite the entire history or advance its revision.
+  if(saved&&JSON.stringify(value)===before)return result;
   if(await backend.compareAndSwap(name,saved?.revision??0,value))return result;
  }
  throw new DocumentConflict();
@@ -31,16 +50,37 @@ export function hostedConfiguration(env:NodeJS.ProcessEnv=process.env){
  return {url:parsed.origin,key,namespace};
 }
 export function hostedDocumentsEnabled(){return process.env.ORCHESTRATOR_STATE_BACKEND==='supabase';}
+// Process-local acceleration only. Revalidate the database revision on every read;
+// never serve cached records when storage is unavailable or mutate a cached value.
+const documentCaches=new WeakMap<typeof fetch,Map<string,DocumentVersion<unknown>>>();
 export function documentBackend():DocumentBackend {
  const config=hostedConfiguration();if(!config)throw Error('Hosted workflow storage is not selected.');
+ let documentCache=documentCaches.get(fetch);if(!documentCache){documentCache=new Map();documentCaches.set(fetch,documentCache);}
  const request=async (pathname:string,init:RequestInit)=>{
   const response=await fetch(config.url+'/rest/v1/'+pathname,{...init,headers:{apikey:config.key,Authorization:'Bearer '+config.key,'Content-Type':'application/json'},cache:'no-store',signal:AbortSignal.timeout(20_000)});
   if(!response.ok)throw Error('Hosted workflow storage is unavailable. Existing records were retained.');
   return response.json();
  };
  return {
-  async read<T>(name:string){checkName(name);const query=new URLSearchParams({namespace:'eq.'+config.namespace,name:'eq.'+name,select:'revision,value'});const rows=await request('legal_assistant_documents?'+query,{method:'GET'});if(!Array.isArray(rows)||rows.length>1)throw Error('Invalid workflow storage response.');const row=rows[0];if(!row)return null;if(!Number.isSafeInteger(row.revision)||row.revision<1)throw Error("Invalid workflow revision.");return {revision:row.revision,value:decodeHostedDocument(row.value) as T};},
-  async compareAndSwap(name,revision,value){checkName(name);const result=await request('rpc/legal_assistant_document_cas',{method:'POST',body:JSON.stringify({p_namespace:config.namespace,p_name:name,p_revision:revision,p_value:encodeHostedDocument(value)})});if(typeof result!=='boolean')throw Error('Invalid workflow transaction response.');return result;},
+  async read<T>(name:string){
+   checkName(name);const cacheKey=config.url+'/'+config.namespace+'/'+name;
+   const query=new URLSearchParams({namespace:'eq.'+config.namespace,name:'eq.'+name,select:'revision'});
+   const versions=await request('legal_assistant_documents?'+query,{method:'GET'});
+   if(!Array.isArray(versions)||versions.length>1)throw Error('Invalid workflow storage response.');
+   if(!versions.length){documentCache.delete(cacheKey);return null;}
+   const revision=versions[0].revision;
+   if(!Number.isSafeInteger(revision)||revision<1)throw Error('Invalid workflow revision.');
+   const cached=documentCache.get(cacheKey);
+   if(cached?.revision===revision)return structuredClone(cached) as DocumentVersion<T>;
+   query.set('select','revision,value');
+   const rows=await request('legal_assistant_documents?'+query,{method:'GET'});
+   if(!Array.isArray(rows)||rows.length!==1||!Number.isSafeInteger(rows[0].revision)||rows[0].revision<revision)throw Error('Invalid workflow storage response.');
+   const saved={revision:rows[0].revision,value:await loadDocumentValue(rows[0].value)};
+   // Bound the number of cached documents; private artifacts remain in blob storage.
+   if(documentCache.size>=16)documentCache.delete(documentCache.keys().next().value!);
+   documentCache.set(cacheKey,structuredClone(saved));return saved as DocumentVersion<T>;
+  },
+  async compareAndSwap(name,revision,value){checkName(name);const result=await request('rpc/legal_assistant_document_cas',{method:'POST',body:JSON.stringify({p_namespace:config.namespace,p_name:name,p_revision:revision,p_value:await storeDocumentValue(value)})});if(typeof result!=='boolean')throw Error('Invalid workflow transaction response.');return result;},
  };
 }
 function checkName(name:string){if(!/^[a-z0-9][a-z0-9/._-]{0,180}$/.test(name)||name.includes('..'))throw Error('Invalid private workflow document name.');}
