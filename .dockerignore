@@ -1,0 +1,8 @@
+# Positive allowlist: no .env, private state, Git credentials or local artifacts.
+**
+!src/
+!src/**
+!scripts/
+!scripts/**
+**/__pycache__/
+**/*.pyc
