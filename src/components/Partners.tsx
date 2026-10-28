@@ -29,6 +29,10 @@ interface Partner {
   clients_referred?: number;
   comment: string | null;
   created_at: string;
+  // Partner portal sign-in (partner.iclosed.ca); absent until its migration runs.
+  auth_user_id?: string | null;
+  portal_joined_at?: string | null;
+  portal_disabled_at?: string | null;
 }
 
 // Extra people belonging to a partner (partner_contacts). CC'd on the partner's
@@ -84,6 +88,7 @@ const Partners: React.FC = () => {
 
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [sendingId, setSendingId] = useState<string | null>(null);
+  const [accessId, setAccessId] = useState<string | null>(null);
 
   // Additional people for this partner. partners.agent_email above stays the
   // PRIMARY contact; these are the extra ones (assistant, team inbox) who get
@@ -295,6 +300,26 @@ const Partners: React.FC = () => {
     }
   };
 
+  // Removing access signs the partner out of the partner portal on their next request.
+  const setPortalAccess = async (p: Partner, enabled: boolean) => {
+    if (!enabled && !window.confirm(`Remove ${p.agent_name}'s partner portal access? They won't be able to sign in until you restore it.`)) return;
+    setAccessId(p.id);
+    try {
+      const res = await fetch(`/api/admin/partners/${p.id}/portal-access`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
+      setPartners((list) => list.map((x) => (x.id === p.id ? { ...x, ...data.partner } : x)));
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Could not update portal access.");
+    } finally {
+      setAccessId(null);
+    }
+  };
+
   // ── Derived data ──────────────────────────────────────────────────────────
   const agentCount = partners.filter((p) => p.brokerage_type === "Real Estate Agent").length;
   const brokerCount = partners.filter((p) => p.brokerage_type === "Mortgage Broker").length;
@@ -388,7 +413,7 @@ const Partners: React.FC = () => {
 
       {/* List */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-x-auto">
-        <table className="w-full min-w-[1150px] text-left text-sm">
+        <table className="w-full min-w-[1290px] text-left text-sm">
           <thead className="bg-slate-50/30 border-b border-slate-100">
             <tr className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">
               <th className="px-6 py-5 w-12">#</th>
@@ -398,6 +423,7 @@ const Partners: React.FC = () => {
               <th className="px-4 py-5">Phone</th>
               <th className="px-4 py-5">Referral Code</th>
               <th className="px-4 py-5 text-center w-24">Clients</th>
+              <th className="px-4 py-5 w-36">Portal</th>
               <th className="px-4 py-5 w-40">Date Added</th>
               <th className="px-4 py-5">Comment</th>
               <th className="px-4 py-5 text-center w-28">Actions</th>
@@ -471,6 +497,33 @@ const Partners: React.FC = () => {
                   </span>
                 </td>
                 <td className="px-4 py-4">
+                  {!p.auth_user_id ? (
+                    <span className="text-xs italic text-slate-300" title="Hasn't signed up to the partner portal">Not joined</span>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                          p.portal_disabled_at ? "bg-slate-100 text-slate-500" : "bg-emerald-50 text-emerald-700"
+                        }`}
+                        title={
+                          p.portal_disabled_at
+                            ? `Access removed ${formatLocalDate(p.portal_disabled_at)}`
+                            : `Joined ${formatLocalDate(p.portal_joined_at ?? null) || "the partner portal"}`
+                        }
+                      >
+                        {p.portal_disabled_at ? "Removed" : "Active"}
+                      </span>
+                      <button
+                        onClick={() => setPortalAccess(p, !!p.portal_disabled_at)}
+                        disabled={accessId === p.id}
+                        className="text-xs font-semibold text-brand-primary hover:underline disabled:opacity-50"
+                      >
+                        {p.portal_disabled_at ? "Restore" : "Remove"}
+                      </button>
+                    </div>
+                  )}
+                </td>
+                <td className="px-4 py-4">
                   <span className="text-xs text-slate-400 font-medium">
                     {formatLocalDate(p.created_at) || "—"}
                   </span>
@@ -510,7 +563,7 @@ const Partners: React.FC = () => {
             ))}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={9} className="px-12 py-20 text-center text-slate-400">
+                <td colSpan={11} className="px-12 py-20 text-center text-slate-400">
                   <Handshake size={48} className="text-slate-100 mb-4 mx-auto" />
                   <p className="font-medium text-lg">No partners found.</p>
                   <button
