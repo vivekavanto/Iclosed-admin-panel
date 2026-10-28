@@ -10,6 +10,7 @@ export function selectHistoricalMailEvidence(message: HistoricalMailEvidence, in
   cutoffExclusiveMs: number;
   matterNumber: string;
   subjectAliases?: string[];
+  addressThreadVerified?:boolean;
 }): MailEvidenceDecision {
   const timestamp = Number(message.internalDate);
   if (!message.internalDate || !Number.isSafeInteger(timestamp) || timestamp <= 0 || !Number.isSafeInteger(input.cutoffExclusiveMs)) return { eligible: false, reason: "invalid-time" };
@@ -18,7 +19,7 @@ export function selectHistoricalMailEvidence(message: HistoricalMailEvidence, in
   const from = header("from"), subject = header("subject");
   // Do not use audit reports, firm-wide summaries or Slack digests to corroborate an audit.
   if (/@(?:[a-z0-9-]+\.)*slack\.(?:com|email)\b/i.test(from)
-    || /\b(?:weekly closing report|signing.package (?:audit|qa)|audit results?|workflow digest)\b/i.test(subject)
+    || /\b(?:internal test|test only|weekly closing report|signing.package (?:audit|qa)|audit results?|workflow digest)\b/i.test(subject)
     || /\b(?:bulk|list)\b/i.test(header("precedence")) || header("list-id")) return { eligible: false, reason: "derived-or-bulk" };
   const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
   const matter = normalize(input.matterNumber);
@@ -27,6 +28,6 @@ export function selectHistoricalMailEvidence(message: HistoricalMailEvidence, in
   const normalizedSubject = normalize(subject);
   const aliases = input.subjectAliases?.map(normalize).filter(a => a.length >= 10) ?? [];
   const matterPattern = new RegExp(`(^|[^a-z0-9])${matter.slice(0,2)}[\\s-]*${matter[2]}[\\s-]*${matter.slice(3)}(?![a-z0-9])`, "i");
-  if (!matterPattern.test(subject) && !aliases.some(a => normalizedSubject.includes(a))) return { eligible: false, reason: "matter-not-established" };
+  if (!matterPattern.test(subject) && !aliases.some(a => normalizedSubject.includes(a)) && !input.addressThreadVerified) return { eligible: false, reason: "matter-not-established" };
   return { eligible: true, kind: "matter-correspondence" };
 }

@@ -38,10 +38,11 @@ def source_reader(d,raw,demo):
     actual='-'.join(match.group(i) for i in (2,3,4))
     if match.group(1).upper()!=d['instrument'].upper() or actual!=d['registrationDate']:raise ValueError('The instrument number or registration date does not match the attached transfer.')
     return r,hashlib.sha256(data).hexdigest()
-def cover(d,kind,combined=False):
+def cover(d,kind,combined=False,delivery_ready=False):
     b=io.BytesIO();c=Canvas(b,pagesize=letter,invariant=1)
     c.drawImage(str(Path(__file__).parent/'assets'/'nw-letterhead.jpg'),52,699,width=508,height=72,preserveAspectRatio=True,mask='auto')
-    c.setFillColorRGB(.40,.43,.48);c.setFont('Helvetica',8);c.drawString(52,682,'REVIEW COPY - NOT FOR SENDING');c.setFillColorRGB(0,0,0)
+    if not delivery_ready:
+        c.setFillColorRGB(.40,.43,.48);c.setFont('Helvetica',8);c.drawString(52,682,'REVIEW COPY - NOT FOR SENDING');c.setFillColorRGB(0,0,0)
     y=659;style=ParagraphStyle('body',fontName='Times-Roman',fontSize=11,leading=14,spaceAfter=0)
     def paragraph(text,after=9,bold=False):
         nonlocal y
@@ -58,6 +59,7 @@ def cover(d,kind,combined=False):
     paragraph('Dear Sir/Madam:',8)
     paragraph(('Re: Change of Ownership - Tax and Water' if combined else 'Re: Change of Ownership')+'<br/>'+lines(d['property'])+'<br/>Our File No.: '+escape(d['fileNumber']),9,True)
     if d['legalDescription']:paragraph(lines(d['legalDescription']),8)
+    paragraph('Registered transfer: '+escape(d['instrument'])+'<br/>Registration date: '+pretty(d['registrationDate']),8)
     c.setStrokeColorRGB(.7,.72,.75);c.line(52,y+3,560,y+3);y-=9
     if d['transaction']=='sale':
         statement=f"Please be advised that we are the solicitors for {lines(d['clients'])}, who, effective {pretty(d['effectiveDate'])}, sold the property described above to the following new owner(s):"
@@ -77,7 +79,7 @@ def cover(d,kind,combined=False):
         paragraph(lines(d['purchaserSolicitor']),10)
     paragraph('Thank you for your co-operation in this matter.',10)
     paragraph('Yours very truly,<br/>Nava Wilson Professional Corporation',6)
-    paragraph('<i>Unsigned review copy</i><br/>Kubeskaran Navaratnam<br/>KN:'+escape(d['initials'].lower())+'<br/>Enclosure: complete registered transfer',0)
+    paragraph(('' if delivery_ready else '<i>Unsigned review copy</i><br/>')+'Kubeskaran Navaratnam<br/>KN:'+escape(d['initials'].lower())+'<br/>Enclosure: complete registered transfer',0)
     c.save();return b.getvalue()
 def render(payload):
     d=payload['draft'];demo=payload.get('demo') is True
@@ -94,9 +96,9 @@ def render(payload):
     for kind in LABELS:
         if combined and kind=='water':continue
         if not d['recipients'][kind]['enabled']:continue
-        writer=PdfWriter();writer.append(PdfReader(io.BytesIO(cover(d,kind,combined and kind=='tax'))));writer.append(reader)
+        writer=PdfWriter();writer.append(PdfReader(io.BytesIO(cover(d,kind,combined and kind=='tax',payload.get('deliveryReady') is True and not demo))));writer.append(reader)
         output=io.BytesIO();writer.write(output);data=output.getvalue()
-        packets.append({'department':kind,'coveredDepartments':['tax','water'] if combined and kind=='tax' else [kind],'filename':f"{d['fileNumber']}-COO-{'tax-water' if combined and kind=='tax' else kind}-REVIEW.pdf",'pdfBase64':base64.b64encode(data).decode(),'sha256':hashlib.sha256(data).hexdigest(),'pages':1+len(reader.pages)})
+        packets.append({'department':kind,'coveredDepartments':['tax','water'] if combined and kind=='tax' else [kind],'filename':f"{d['fileNumber']}-COO-{'tax-water' if combined and kind=='tax' else kind}{'' if payload.get('deliveryReady') and not demo else '-REVIEW'}.pdf",'pdfBase64':base64.b64encode(data).decode(),'sha256':hashlib.sha256(data).hexdigest(),'pages':1+len(reader.pages)})
     return {'packets':packets,'sourceTransferHash':source_hash,'sourcePages':len(reader.pages),'sendingEnabled':False,'signed':False}
 if __name__=='__main__':
     try:print(json.dumps(render(json.load(sys.stdin))))

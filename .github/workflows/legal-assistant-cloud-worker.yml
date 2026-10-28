@@ -1,0 +1,28 @@
+name: Legal Assistant Linux worker
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - 'scripts/legal-assistant-cloud/**'
+      - 'scripts/legal-assistant-hosted/**'
+      - 'scripts/audit-*.py'
+      - 'scripts/coo/**'
+      - 'src/lib/coo/**'
+      - 'src/lib/orchestrator/**'
+      - '.dockerignore'
+      - '.github/workflows/legal-assistant-cloud-worker.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build private worker image without runtime credentials
+        run: docker build -f scripts/legal-assistant-cloud/Dockerfile -t legal-assistant-worker:test .
+      - name: Test OCR parsing with synthetic data
+        run: docker run --rm --network none --entrypoint python legal-assistant-worker:test scripts/legal-assistant-cloud/test-ocr-interface.py
+      - name: Verify real native PDF and scanned-page OCR without network
+        run: docker run --rm --network none -e ORCHESTRATOR_STATE_BACKEND=supabase --entrypoint node legal-assistant-worker:test --experimental-strip-types scripts/legal-assistant-hosted/preflight-native.mjs --check

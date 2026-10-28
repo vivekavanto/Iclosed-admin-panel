@@ -1,12 +1,26 @@
+import {hostedDocumentsEnabled,readHostedDocument,changeHostedDocument} from "./hosted/document.ts";
+import {putHostedBlob,getHostedBlob} from "./hosted/blob.ts";
 import { mkdir, readFile, writeFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { localStateDirectory } from "./local-store.ts";
-import { digest, reconcileAudit, type AuditJob, type AuditManifest, type AuditReport, type Disposition, type ReviewResult } from "./audit-model.ts";
+import {auditFailureMessage,type AuditFailureInfo} from './audit-failure.ts';
+import { digest, reconcileAudit, type AuditJob, type AuditManifest, type AuditReport, type Disposition, type ReviewResult,type AuditReviewProgress } from "./audit-model.ts";
 interface State { jobs: AuditJob[]; reports: Record<string,AuditReport>; requests: Record<string,{signature:string;jobId:string}>; }
-export function auditDirectory() { const root = localStateDirectory(); if (!root) throw new Error("Persistent shadow audit storage is not configured. Production submissions remain disabled."); return path.join(root,"audits"); }
-async function read(): Promise<State> { try { return JSON.parse(await readFile(path.join(auditDirectory(),"jobs.json"),"utf8")); } catch(e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e; return {jobs:[],reports:{},requests:{}}; } }
+export function auditDirectory() { if(hostedDocumentsEnabled()){const cache=process.env.ORCHESTRATOR_WORKER_CACHE_DIR;if(process.env.ORCHESTRATOR_HOSTED_WORKER!=="true"||!cache||!path.isAbsolute(cache))throw Error("A private worker cache directory is required.");return path.join(cache,"audits");}const root = localStateDirectory(); if (!root) throw new Error("Persistent audit storage is not configured. Production submissions remain disabled."); return path.join(root,"audits"); }
+export async function recordAuditProviderStatus(failure:AuditFailureInfo|null){
+  if(hostedDocumentsEnabled()){await changeHostedDocument("audit-provider",()=>({at:"",failure:null as AuditFailureInfo|null}),s=>{s.at=new Date().toISOString();s.failure=failure;});return;}
+  const root=auditDirectory();await mkdir(root,{recursive:true,mode:0o700});
+  const temp=path.join(root,`.provider-${randomUUID()}.tmp`);
+  await writeFile(temp,JSON.stringify({at:new Date().toISOString(),failure}),{mode:0o600});
+  await rename(temp,path.join(root,'provider-status.json'));
+}
+export async function auditProviderStatus():Promise<{at:string;error:string|null}|null>{
+  try{const value=hostedDocumentsEnabled()?await readHostedDocument("audit-provider",()=>({at:"",failure:null as AuditFailureInfo|null})):JSON.parse(await readFile(path.join(auditDirectory(),'provider-status.json'),'utf8'));return {at:value.at,error:value.failure?auditFailureMessage(value.failure):null};}catch{return null;}
+}
+async function read(): Promise<State> { if(hostedDocumentsEnabled())return readHostedDocument("audit-jobs",()=>({jobs:[],reports:{},requests:{}}));try { return JSON.parse(await readFile(path.join(auditDirectory(),"jobs.json"),"utf8")); } catch(e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e; return {jobs:[],reports:{},requests:{}}; } }
 async function transaction<T>(fn:(state:State)=>T) {
+  if(hostedDocumentsEnabled())return changeHostedDocument<State,T>("audit-jobs",()=>({jobs:[],reports:{},requests:{}}),fn);
   const root=auditDirectory();await mkdir(root,{recursive:true,mode:0o700});const lock=path.join(root,".lock");let acquired=false;
   for(let i=0;i<50;i++){try{await mkdir(lock,{mode:0o700});acquired=true;break;}catch(e){if((e as NodeJS.ErrnoException).code!=="EEXIST")throw e;await new Promise(r=>setTimeout(r,20));}}
   if(!acquired)throw new Error("Audit storage is busy. Retry the same request; do not submit a new one.");
@@ -14,9 +28,9 @@ async function transaction<T>(fn:(state:State)=>T) {
   try { const state=await read(),result=fn(state);await writeFile(tmp,JSON.stringify(state),{mode:0o600});await rename(tmp,path.join(root,"jobs.json"));return result; }
   finally{await rm(tmp,{force:true});await rm(lock,{recursive:true,force:true});}
 }
-export async function putAuditBlob(bytes:Buffer) { const hash=digest(bytes),root=path.join(auditDirectory(),"blobs");await mkdir(root,{recursive:true,mode:0o700});try{await writeFile(path.join(root,hash),bytes,{flag:"wx",mode:0o600});}catch(e){if((e as NodeJS.ErrnoException).code!=="EEXIST")throw e;const prior=await readFile(path.join(root,hash));if(digest(prior)!==hash)throw new Error("Source integrity check failed.");}return hash; }
-export async function getAuditBlob(hash:string) {if(!/^[a-f0-9]{64}$/.test(hash))throw new Error("Invalid source hash.");const bytes=await readFile(path.join(auditDirectory(),"blobs",hash));if(digest(bytes)!==hash)throw new Error("Frozen audit source changed.");return bytes;}
-export async function enqueueAudit(input: Pick<AuditJob,"matterId"|"matterNumber"|"packageId"|"packageHash"|"packageName"|"folderId"|"ruleset"|"actor"> & {requestId:string;rerunOf?:string}) {
+export async function putAuditBlob(bytes:Buffer) { if(hostedDocumentsEnabled())return putHostedBlob(bytes);const hash=digest(bytes),root=path.join(auditDirectory(),"blobs");await mkdir(root,{recursive:true,mode:0o700});try{await writeFile(path.join(root,hash),bytes,{flag:"wx",mode:0o600});}catch(e){if((e as NodeJS.ErrnoException).code!=="EEXIST")throw e;const prior=await readFile(path.join(root,hash));if(digest(prior)!==hash)throw new Error("Source integrity check failed.");}return hash; }
+export async function getAuditBlob(hash:string) {if(hostedDocumentsEnabled())return getHostedBlob(hash);if(!/^[a-f0-9]{64}$/.test(hash))throw new Error("Invalid source hash.");const bytes=await readFile(path.join(auditDirectory(),"blobs",hash));if(digest(bytes)!==hash)throw new Error("Frozen audit source changed.");return bytes;}
+export async function enqueueAudit(input: Pick<AuditJob,"mailScope"|"matterId"|"matterNumber"|"packageId"|"packageHash"|"packageName"|"folderId"|"ruleset"|"actor"> & {requestId:string;rerunOf?:string}) {
   if(!/^[a-f0-9-]{36}$/i.test(input.requestId))throw new Error("A unique submission request ID is required.");
   const signature=digest(JSON.stringify([input.matterId,input.packageHash,input.ruleset,input.rerunOf??null]));
   return transaction(state=>{
@@ -39,6 +53,10 @@ export async function claimAudit() {return transaction(s=>{const job=s.jobs.find
 export async function checkpointAudit(id:string,lease:string,manifest:AuditManifest){return transaction(s=>{const job=s.jobs.find(j=>j.id===id);assertLease(job,lease);if(manifest.matterId!==job!.matterId||manifest.packageHash!==job!.packageHash||manifest.cutoff!==job!.cutoff||manifest.ruleset!==job!.ruleset||!manifest.sources.some(source=>source.kind==="package"&&source.sha256===job!.packageHash))throw new Error("Manifest does not match the frozen job.");job!.manifest=manifest;job!.status="reviewing";job!.updatedAt=new Date().toISOString();});}
 function assertLease(job:AuditJob|undefined,lease:string){if(!job||job.lease!==lease||!['capturing','reviewing'].includes(job.status)||Date.parse(job.leaseUntil??'')<=Date.now())throw new Error("Audit lease expired; publication refused.");}
 export async function renewAuditLease(id:string,lease:string){return transaction(s=>{const job=s.jobs.find(j=>j.id===id);assertLease(job,lease);job!.leaseUntil=new Date(Date.now()+15*60_000).toISOString();job!.updatedAt=new Date().toISOString();});}
-export async function finishAudit(id:string,lease:string,review:ReviewResult) {return transaction(s=>{const job=s.jobs.find(j=>j.id===id);assertLease(job,lease);if(!job!.manifest)throw new Error("Frozen source manifest is required.");const report=reconcileAudit(s.reports[job!.matterId],job!,job!.manifest,review,Object.fromEntries(s.jobs.filter(j=>j.matterId===job!.matterId&&j.manifest).map(j=>[j.id,j.manifest!])));s.reports[job!.matterId]=report;job!.reviewerCoverage=review.coverage;job!.status="completed";job!.updatedAt=new Date().toISOString();delete job!.lease;return report;});}
-export async function failAudit(id:string,lease:string){return transaction(s=>{const job=s.jobs.find(j=>j.id===id);assertLease(job,lease);job!.status="failed";job!.error="Audit did not complete. Existing reports and notes were retained; use manual rerun after checking the connection.";job!.updatedAt=new Date().toISOString();delete job!.lease;});}
+export async function recordAuditReviewProgress(id:string,lease:string,progress:AuditReviewProgress){
+ if(!Number.isInteger(progress.step)||!Number.isInteger(progress.total)||progress.step<1||progress.step>progress.total||progress.total>100||!['source_review','consolidation'].includes(progress.phase))throw new Error('Invalid audit progress.');
+ return transaction(s=>{const job=s.jobs.find(j=>j.id===id);assertLease(job,lease);job!.reviewProgress=progress;job!.updatedAt=new Date().toISOString();job!.leaseUntil=new Date(Date.now()+15*60_000).toISOString();});
+}
+export async function finishAudit(id:string,lease:string,review:ReviewResult) {return transaction(s=>{const job=s.jobs.find(j=>j.id===id);assertLease(job,lease);if(!job!.manifest)throw new Error("Frozen source manifest is required.");const report=reconcileAudit(s.reports[job!.matterId],job!,job!.manifest,review,Object.fromEntries(s.jobs.filter(j=>j.matterId===job!.matterId&&j.manifest).map(j=>[j.id,j.manifest!])));s.reports[job!.matterId]=report;job!.reviewerCoverage=review.coverage;job!.coverageScope=review.coverageScope;job!.sourcePassCoverage=review.sourcePassCoverage;job!.status="completed";job!.updatedAt=new Date().toISOString();delete job!.lease;return report;});}
+export async function failAudit(id:string,lease:string,failure?:AuditFailureInfo){return transaction(s=>{const job=s.jobs.find(j=>j.id===id);assertLease(job,lease);job!.status="failed";job!.failure=failure;job!.error=failure?auditFailureMessage(failure):"Audit did not complete. Existing reports and notes were retained; use manual rerun after checking the connection.";job!.updatedAt=new Date().toISOString();delete job!.lease;});}
 export async function updateAuditDisposition(matterId:string,findingId:string,expectedRevision:number,disposition:Disposition,notes:string,actor="local-test"){return transaction(s=>{const report=s.reports[matterId];if(!report||report.revision!==expectedRevision)throw new Error("Report changed. Refresh before saving notes.");if(!["Open","Implemented","Incorrectly flagged","Needs lawyer review"].includes(disposition)||typeof notes!=="string"||notes.length>4000)throw new Error("Invalid clerk feedback.");const f=report.findings.find(f=>f.id===findingId);if(!f)throw new Error("Finding not found.");f.disposition=disposition;f.notes=notes;(report.feedbackHistory??=[]).push({at:new Date().toISOString(),actor,findingId,disposition,notes});report.revision++;return report;});}

@@ -1,0 +1,124 @@
+{
+  "date": "2026-10-27",
+  "timezone": "America/Toronto",
+  "sourceFingerprint": "816c1f4adb0a8af46cc149db2c419a0feeb8fb2c701c41c8f990df0198ad1476",
+  "testedBaselineCommit": "24ac75d53cbe9468b8ab7d710f3f1780b25c0866",
+  "synthetic": {
+    "status": "passed",
+    "node": "v24.19.0",
+    "components": [
+      {
+        "name": "safety",
+        "tests": 6,
+        "passed": 6,
+        "failed": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      {
+        "name": "legal-assistant",
+        "tests": 171,
+        "passed": 171,
+        "failed": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      {
+        "name": "admin",
+        "tests": 264,
+        "passed": 264,
+        "failed": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      {
+        "name": "local-sync",
+        "tests": 5,
+        "passed": 5,
+        "failed": 0,
+        "skipped": 0,
+        "todo": 0
+      }
+    ],
+    "totalPassed": 446,
+    "ambientCredentialSentinelTest": "passed; fake parent Google/Resend values absent in test children"
+  },
+  "validation": {
+    "typescript": "passed (--noEmit --incremental false)",
+    "lint": {
+      "errors": 0,
+      "warnings": 443
+    },
+    "diffCheck": "passed"
+  },
+  "coverage": {
+    "passed-synthetic": 28,
+    "passed-read-only": 1,
+    "not-run": 3,
+    "passed-signed-in-ui": 1,
+    "blocked": 5
+  },
+  "readOnlyApi": {
+    "status": "passed",
+    "checks": [
+      {
+        "route": "/api/admin/legal-assistant/file-opening/inbox",
+        "status": 401,
+        "result": "passed"
+      },
+      {
+        "route": "/api/admin/legal-assistant/audits/status",
+        "status": 401,
+        "result": "passed"
+      }
+    ]
+  },
+  "signedInUi": {
+    "status": "passed",
+    "manual": true,
+    "checks": [
+      {
+        "name": "Owner session and register visible",
+        "status": "passed"
+      },
+      {
+        "name": "Register survives reload with source freshness and date controls",
+        "status": "passed"
+      },
+      {
+        "name": "Add New File controls and disconnected execution blockers visible; no save",
+        "status": "passed"
+      },
+      {
+        "name": "Settings and discovery-only consent pause visible",
+        "status": "passed"
+      },
+      {
+        "name": "Existing report view renders feedback and exactly one Run history and coverage section; no Package PDF selection",
+        "status": "passed"
+      }
+    ],
+    "limitations": [
+      "No alternate-user authorization test",
+      "No opening, audit rerun, import, settings change, send or live AI extraction performed"
+    ]
+  },
+  "notRun": [
+    "Python/PDF runtime suites",
+    "Fresh mailbox/Tickler/Closer live readiness checks",
+    "Alternate staff browser session",
+    "Live provider sends or creation",
+    "Fresh ten-file AI versus Slack evaluation"
+  ],
+  "preserved": [
+    "Canonical private register and local configuration",
+    "Running app, worker, discovery-only monitor and scheduler",
+    "Existing test assertions and workflow behavior"
+  ],
+  "notes": [
+    "Two existing prefer-const test lint errors corrected without assertion changes.",
+    "PDF asset copying no longer walks outside allowed parent paths; the original byte-integrity test passed.",
+    "No dependency or lockfile changes, migrations, deployment, client messages or real-email model transmission.",
+    "Scenario coverage is not a line-coverage metric; synthetic passes establish no live delivery or Slack parity."
+  ]
+}

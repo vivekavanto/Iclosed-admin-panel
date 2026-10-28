@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getStaff } from "@/lib/orchestrator/server-auth";
 import { canManageOrchestrator } from "@/lib/orchestrator/permissions";
 import { getSnapshot, linkVerifiedFolder } from "@/lib/orchestrator/store";
-import { inDashboard } from "@/lib/orchestrator/model";
+import { inClosingView, torontoDate } from "@/lib/orchestrator/closing-views";
 import { discoverMatterFolders } from "@/lib/orchestrator/folder-discovery";
 
 export async function POST(request: NextRequest) {
@@ -14,7 +14,8 @@ export async function POST(request: NextRequest) {
     if (body.afterId !== undefined && typeof body.afterId !== "string") throw new Error("Invalid verification cursor.");
     const snapshot = await getSnapshot();
     // Bounded groups keep the request recoverable. Existing links are never moved.
-    const remaining = snapshot.matters.filter(m => inDashboard(m) && !m.driveFolderId && m.id > (body.afterId || "")).sort((a,b) => a.id.localeCompare(b.id));
+    const today=torontoDate();
+    const remaining = snapshot.matters.filter(m => (inClosingView(m,"month",today) || inClosingView(m,"past",today)) && !m.driveFolderId && m.id > (body.afterId || "")).sort((a,b) => a.id.localeCompare(b.id));
     const pending = remaining.slice(0,10);
     const result = await discoverMatterFolders(pending);
     let revision = snapshot.revision;

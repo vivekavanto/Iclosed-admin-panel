@@ -13,7 +13,7 @@ export interface CooPacket { department: CooDepartment; filename: string; pdfBas
 export const departmentLabels: Record<CooDepartment,string> = {tax:"Municipal tax",water:"Water",condo:"Condo management"};
 export const initialLetters = (name: string) => name.trim().split(/\s+/).filter(Boolean).map(s=>s[0]).join("").toUpperCase();
 export function emailAddresses(value:string){return value.split(/[,;]/).map(s=>s.trim()).filter(Boolean);}
-export function validEmails(value:string,optional=false){const addresses=emailAddresses(value);return !/[\r\n]/.test(value)&& (optional||addresses.length>0)&&addresses.length<=8&&addresses.every(s=>s.length<=254&&/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(s));}
+export function validEmails(value:string,optional=false,maxAddresses=8){const addresses=emailAddresses(value);return !/[\r\n]/.test(value)&& (optional||addresses.length>0)&&addresses.length<=maxAddresses&&addresses.every(s=>s.length<=254&&/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(s));}
 export function unionEmails(...values:string[]){return [...new Map(values.flatMap(emailAddresses).map(s=>[s.toLowerCase(),s])).values()].join(", ");}
 export function sameServiceDepartment(a:CooRecipient,b:CooRecipient){const norm=(v:string)=>v.trim().toLowerCase().replace(/\s+/g," ");return !!a.organization.trim()&&["organization","attention","address"].every(k=>norm(a[k as "organization"|"attention"|"address"])===norm(b[k as "organization"|"attention"|"address"]));}
 export function deliveryRecipient(d:CooDraft,k:CooDepartment){return d.combineTaxWater&&(k==="tax"||k==="water")?{...d.recipients.tax,email:unionEmails(d.recipients.tax.email,d.recipients.water.email)}:d.recipients[k];}
@@ -37,7 +37,7 @@ export function validateCooDraft(d: CooDraft): string[] {
   if(d.effectiveDate!==d.registrationDate&&!d.differentDatesConfirmed)errors.push("Confirm the effective date differs from the registration date.");
   const selected=(Object.keys(departmentLabels)as CooDepartment[]).filter(k=>d.recipients[k].enabled);
   if(!selected.length)errors.push("Select at least one notice to prepare.");
-  if(!validEmails(d.cc??"",true))errors.push("Enter valid CC email addresses.");
+  if(!validEmails(d.cc??"",true,20))errors.push("Enter valid CC email addresses.");
   if(d.condominium&&d.recipients.condo.enabled&&!d.condoCorporation?.trim())errors.push("Condo corporation name is required.");
   for(const k of selected){const r=d.recipients[k];if(k==="condo"&&!d.condominium)errors.push("Condo management notices require a condominium file.");if(!r.organization.trim())errors.push(`${departmentLabels[k]}: recipient organization is required.`);if(!validEmails(r.email))errors.push(`${departmentLabels[k]}: enter a valid recipient email.`);if([r.organization,r.attention,r.address].some(v=>v.length>600))errors.push(`${departmentLabels[k]}: shorten the recipient details.`);}
   if(d.combineTaxWater){const a=d.recipients.tax,b=d.recipients.water;if(!a.enabled||!b.enabled||!sameServiceDepartment(a,b))errors.push("A combined tax and water notice requires both services and the same verified recipient details.");}

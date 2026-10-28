@@ -94,12 +94,18 @@ export function parseCloserReport(filename: string, text: string): ImportBatch {
     return {
       id, number, name: field("file.name", "File Name"), type: type as FileType,
       firm: "navawilson", address, clients: obj["clients.names"] || obj["clients.list.0.name"] || "",
+      ...(detailed ? {
+        clientEmails: [...new Set(Object.entries(obj).filter(([key])=>/^clients\.list\.\d+\.email$/.test(key)).map(([,value])=>value).filter(Boolean))],
+        // Own-side referring agents only; never CC the opposing party's brokerage.
+        referralAgentEmails: [...new Set(Object.entries(obj).filter(([key])=>/^(?:brokerage(?:\.list\.\d+)?\.agent(?:s\.\d+)?\.email|clients\.list\.\d+\.(?:referralAgent|brokerage\.agent)\.email)$/.test(key)).map(([,value])=>value).filter(Boolean))],
+      } : {}),
       clientEmail: obj["clients.list.0.email"] || "", clientPhone: obj["clients.list.0.phoneNumber"] || "",
       clerk: field("file.clerk", "Clerk"), lawyer: field("file.lawyer", "Lawyer"), closingDate,
       openingDate: dateValue(field("dates.opening", "Opening date"), true), status,
       closerUrl: closerId ? `https://app.closer.ca/app/matter/${closerId}` : null,
       driveFolderId: null, sourceDate, sourcePresent: true,
       ...(detailed?{
+        lenders:[...new Set(Object.entries(obj).filter(([key,value])=>/^mortgages\.list\.\d+\.mortgagees\.\d+\.name$/.test(key)&&value).map(([,value])=>value))],
         propertyType:obj["property.type"]||"",propertyPrice:obj["property.price"]||"",condoType:obj["property.condoType"]||"",condoPlan:obj["property.condoPlan"]||"",
         ...(["condo","home"].includes(obj["property.type"])?{condominium:obj["property.type"]==="condo"}:{}),
         condoCorporation:obj["property.condoCorporation.name"]||obj["condominium.corporation.name"]||"",condoEmail:obj["property.condoCorporation.email"]||obj["condominium.corporation.email"]||"",
@@ -111,6 +117,10 @@ export function parseCloserReport(filename: string, text: string): ImportBatch {
   return { filename, sourceDate, coverageStart, coverageEnd, kind: detailed ? "detailed" : "summary", matters, warnings };
 }
 
+function canonicalJson(value:unknown):string {
+ const normalize=(entry:unknown):unknown=>Array.isArray(entry)?entry.map(normalize):entry&&typeof entry==="object"?Object.fromEntries(Object.entries(entry as Record<string,unknown>).sort(([a],[b])=>a.localeCompare(b)).map(([key,item])=>[key,normalize(item)])):entry;
+ return JSON.stringify(normalize(value));
+}
 export function reconcile(existing: Matter[], batch: ImportBatch) {
   if (existing.some(m => m.sourceDate > batch.sourceDate)) throw new Error("A newer extract has already been imported.");
   const result = existing.map(m => ({ ...m }));
@@ -125,8 +135,8 @@ export function reconcile(existing: Matter[], batch: ImportBatch) {
     else {
       const prior = result[index];
       const merged = { ...incoming, firm: prior.firm, driveFolderId: prior.driveFolderId, ...(prior.auditReport ? { auditReport: prior.auditReport } : {}) };
-      if (JSON.stringify({ ...prior, sourceDate: incoming.sourceDate, sourcePresent: true }) === JSON.stringify(merged)) unchanged++; else updated++;
-      result[index] = merged;
+      if (canonicalJson({ ...prior, sourceDate: incoming.sourceDate }) === canonicalJson(merged)) {unchanged++;result[index]=prior;}
+      else {updated++;result[index]=merged;}
     }
   }
   const incomingIds = new Set(batch.matters.map(m => m.id));

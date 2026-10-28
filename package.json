@@ -7,7 +7,16 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --experimental-strip-types --test \"tests/**/*.test.ts\""
+    "test": "node scripts/testing/run.mjs all",
+    "pdfjs:assets": "node scripts/sync-pdfjs-assets.mjs",
+    "predev": "npm run pdfjs:assets",
+    "prebuild": "npm run pdfjs:assets",
+    "test:legal-assistant": "node scripts/testing/run.mjs legal-assistant",
+    "test:admin": "node scripts/testing/run.mjs admin",
+    "test:sync": "node scripts/testing/run.mjs sync",
+    "test:safety": "node scripts/testing/run.mjs safety",
+    "test:coverage": "node scripts/testing/coverage.mjs",
+    "test:integration:read-only": "node scripts/testing/http-smoke.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.39.0",
@@ -35,7 +44,8 @@
     "react-webcam": "^7.2.0",
     "recharts": "^3.7.0",
     "resend": "^6.9.3",
-    "sanitize-html": "^2.17.7"
+    "sanitize-html": "^2.17.7",
+    "pdfjs-dist": "6.2.108"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
