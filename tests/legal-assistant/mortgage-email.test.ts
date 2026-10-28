@@ -1,5 +1,5 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,rm,readFile} from 'node:fs/promises';import {tmpdir} from 'node:os';import path from 'node:path';import {randomUUID} from 'node:crypto';
-import {renderMortgageEmail,MORTGAGE_TEMPLATE} from '../../src/lib/orchestrator/mortgage-email.ts';
+import {renderMortgageEmail,renderFundsEmail,MORTGAGE_TEMPLATE,notificationEligible} from '../../src/lib/orchestrator/mortgage-email.ts';
 import {sendMortgageInternalTest} from '../../src/lib/orchestrator/mortgage-email-outbox.ts';
 import {gmailMime,emailMessageId} from '../../src/lib/orchestrator/gmail-sender.ts';
 const matter={id:'synthetic-mortgage-test',number:'26P-0901',address:'42 Example Lane, Toronto',clients:'Alex Example, Jamie Example',clientEmail:'alex@example.test',clientEmails:['alex@example.test','jamie@example.test']};
@@ -7,3 +7,31 @@ test('mortgage template is populated once, HTML-escaped, clearly a test and tied
 test('internal tests override every client recipient, persist receipts, deduplicate retries and never update Clients Informed',async()=>{const root=await mkdtemp(path.join(tmpdir(),'mortgage-test-')),old=process.env.ORCHESTRATOR_LOCAL_STATE_DIR;process.env.ORCHESTRATOR_LOCAL_STATE_DIR=root;try{const p=renderMortgageEmail(matter),id=randomUUID();let calls=0;const send=async(message:Parameters<typeof gmailMime>[0])=>{calls++;assert.deepEqual(message.to,['communication@navawilson.law']);assert.equal(message.cc,undefined);assert.equal(message.html,p.html);return {id:'test-provider-receipt'};};assert.equal((await sendMortgageInternalTest(p,id,'tester',send)).status,'sent');assert.equal((await sendMortgageInternalTest(p,id,'tester',send)).duplicate,true);assert.equal(calls,1);await assert.rejects(sendMortgageInternalTest({...p,hash:'changed'},id,'tester',send),/changed/);await assert.rejects(readFile(path.join(root,'workflow-settings.json')),/ENOENT/);}finally{if(old===undefined)delete process.env.ORCHESTRATOR_LOCAL_STATE_DIR;else process.env.ORCHESTRATOR_LOCAL_STATE_DIR=old;await rm(root,{recursive:true,force:true});}});
 test('uncertain internal test results are blocked from automatic retries',async()=>{const root=await mkdtemp(path.join(tmpdir(),'mortgage-test-')),old=process.env.ORCHESTRATOR_LOCAL_STATE_DIR;process.env.ORCHESTRATOR_LOCAL_STATE_DIR=root;try{const p=renderMortgageEmail(matter),id=randomUUID();let calls=0;const send=async()=>{calls++;throw Error('timeout');};await assert.rejects(sendMortgageInternalTest(p,id,'tester',send),/outcome/);await assert.rejects(sendMortgageInternalTest(p,id,'tester',send),/reconciliation/);assert.equal(calls,1);}finally{if(old===undefined)delete process.env.ORCHESTRATOR_LOCAL_STATE_DIR;else process.env.ORCHESTRATOR_LOCAL_STATE_DIR=old;await rm(root,{recursive:true,force:true});}});
 test('Gmail MIME fixes the sender, encodes HTML and subjects, binds a stable message ID, and rejects injected headers',()=>{const p=renderMortgageEmail(matter),m={to:[p.testTo],subject:p.subject,text:p.text,html:p.html};const raw=gmailMime(m,'test-key');assert.ok(raw.includes('From: communication@navawilson.law'));assert.ok(raw.includes('Message-ID: '+emailMessageId('test-key')));assert.ok(raw.includes(Buffer.from(p.html).toString('base64').slice(0,60)));assert.throws(()=>gmailMime({...m,subject:'subject\r\nBcc: bad@example.test'},'key'),/Invalid/);});
+
+test('purchase/refinance notifications include deduplicated referral CC, separate funds content and frozen recipients',()=>{
+ for(const type of ['purchase','refinance'] as const){
+  assert.equal(notificationEligible(type),true);
+  const m={...matter,type,referralAgentEmails:['agent@example.test','AGENT@example.test','alex@example.test']};
+  const mortgage=renderMortgageEmail(m),funds=renderFundsEmail(m);
+  assert.deepEqual(mortgage.intendedCc.map(e=>e.toLowerCase()),['agent@example.test']);
+  assert.deepEqual(funds.intendedCc,mortgage.intendedCc);
+  assert.ok(funds.html.includes('mortgage funds'));
+  assert.ok(funds.html.includes('from your lender'));
+  assert.ok(!funds.html.includes('Home insurance requirements'));
+  assert.notEqual(funds.hash,mortgage.hash);
+  assert.notEqual(renderMortgageEmail({...m,referralAgentEmails:['another@example.test']}).hash,mortgage.hash);
+ }
+ assert.equal(notificationEligible('sale'),false);
+ assert.throws(()=>renderMortgageEmail({...matter,type:'sale'}),/only for purchases and refinances/);
+ assert.throws(()=>renderFundsEmail({...matter,type:'sale'}),/only for purchases and refinances/);
+});
+test('funds tests have independent receipts and never CC real referrals',async()=>{
+ const root=await mkdtemp(path.join(tmpdir(),'funds-test-')),old=process.env.ORCHESTRATOR_LOCAL_STATE_DIR;process.env.ORCHESTRATOR_LOCAL_STATE_DIR=root;
+ try{const id=randomUUID(),m={...matter,referralAgentEmails:['agent@example.test']};let calls=0;
+ const send=async(message:Parameters<typeof gmailMime>[0])=>{calls++;assert.equal(message.cc,undefined);assert.deepEqual(message.to,['communication@navawilson.law']);return {id:'synthetic-'+calls};};
+ await sendMortgageInternalTest(renderMortgageEmail(m),id,'tester',send);
+ await sendMortgageInternalTest(renderFundsEmail(m),id,'tester',send);
+ assert.equal(calls,2);
+ assert.equal((await sendMortgageInternalTest(renderFundsEmail(m),id,'tester',send)).duplicate,true);
+ }finally{if(old===undefined)delete process.env.ORCHESTRATOR_LOCAL_STATE_DIR;else process.env.ORCHESTRATOR_LOCAL_STATE_DIR=old;await rm(root,{recursive:true,force:true});}
+});
