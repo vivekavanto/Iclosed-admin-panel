@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Offline OCR adapter for Linux workers; same interface as the macOS helper."""
-import csv,io,json,pathlib,subprocess,sys
+import csv,io,json,os,pathlib,subprocess,sys
 
 def read_tsv(tsv):
     lines={};scores=[]
@@ -22,7 +22,7 @@ def main():
         if not isinstance(number,int) or number<1:raise ValueError('Invalid page number')
         image=pathlib.Path(images[str(number)])
         if not image.is_absolute() or not image.is_file():raise ValueError('A rendered page image is required')
-        result=subprocess.run(['tesseract',str(image),'stdout','-l','eng','--psm','3','tsv'],capture_output=True,text=True,check=True,timeout=90)
+        result=subprocess.run(['tesseract',str(image),'stdout','-l','eng','--psm','3','tsv'],capture_output=True,text=True,check=True,timeout=90,env={**os.environ,'OMP_THREAD_LIMIT':'1'})
         text,confidence=read_tsv(result.stdout)
         output.append({'number':number,'text':text,'confidence':confidence})
     json.dump(output,sys.stdout)
