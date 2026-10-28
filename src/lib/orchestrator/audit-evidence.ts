@@ -10,6 +10,7 @@ export function selectHistoricalMailEvidence(message: HistoricalMailEvidence, in
   cutoffExclusiveMs: number;
   matterNumber: string;
   subjectAliases?: string[];
+  addressThreadVerified?:boolean;
 }): MailEvidenceDecision {
   const timestamp = Number(message.internalDate);
   if (!message.internalDate || !Number.isSafeInteger(timestamp) || timestamp <= 0 || !Number.isSafeInteger(input.cutoffExclusiveMs)) return { eligible: false, reason: "invalid-time" };
@@ -27,6 +28,6 @@ export function selectHistoricalMailEvidence(message: HistoricalMailEvidence, in
   const normalizedSubject = normalize(subject);
   const aliases = input.subjectAliases?.map(normalize).filter(a => a.length >= 10) ?? [];
   const matterPattern = new RegExp(`(^|[^a-z0-9])${matter.slice(0,2)}[\\s-]*${matter[2]}[\\s-]*${matter.slice(3)}(?![a-z0-9])`, "i");
-  if (!matterPattern.test(subject) && !aliases.some(a => normalizedSubject.includes(a))) return { eligible: false, reason: "matter-not-established" };
+  if (!matterPattern.test(subject) && !aliases.some(a => normalizedSubject.includes(a)) && !input.addressThreadVerified) return { eligible: false, reason: "matter-not-established" };
   return { eligible: true, kind: "matter-correspondence" };
 }

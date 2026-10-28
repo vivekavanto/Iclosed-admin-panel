@@ -28,3 +28,9 @@ test("undated evidence cannot prove historical facts; legitimate lender notices 
 });
 
 test('internal test mail cannot establish client notification',()=>{assert.equal(selectHistoricalMailEvidence(mail('[INTERNAL TEST] 26P-0612 Mortgage instructions received'),scope).eligible,false);});
+
+test('verified address threads still exclude derived reports and cutoff violations',()=>{
+ assert.equal(selectHistoricalMailEvidence(mail('Re: 12 Janray Dr Closing'),{...scope,addressThreadVerified:true}).eligible,true);
+ assert.equal(selectHistoricalMailEvidence(mail('Signing package audit 12 Janray Dr'),{...scope,addressThreadVerified:true}).eligible,false);
+ assert.equal(selectHistoricalMailEvidence(mail('12 Janray Dr',undefined,String(cutoff)),{...scope,addressThreadVerified:true}).eligible,false);
+});

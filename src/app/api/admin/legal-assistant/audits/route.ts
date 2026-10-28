@@ -30,6 +30,6 @@ export async function POST(request:NextRequest){try{
   const drive=await ReadOnlyDrive.connect(),before=await drive.metadata(selected.id),bytes=await drive.pdf(before),after=await drive.metadata(selected.id);
   if(before.modifiedTime!==after.modifiedTime)return json({error:"Package changed during capture. Refresh and select it again."},409);
   const packageHash=await putAuditBlob(bytes);
-  const result=await enqueueAudit({matterId:ctx.matter.id,matterNumber:ctx.matter.number,folderId:ctx.matter.driveFolderId,packageId:selected.id,packageName:selected.name,packageHash,ruleset:AUDIT_RULESET,actor:ctx.user.id,requestId:input.requestId,rerunOf:input.rerunOf});
+  const result=await enqueueAudit({mailScope:{address:ctx.matter.address,clients:ctx.matter.clients,clientEmails:[...(ctx.matter.clientEmails??[]),...ctx.matter.clientEmail.split(/[;,\s]+/)].filter(Boolean)},matterId:ctx.matter.id,matterNumber:ctx.matter.number,folderId:ctx.matter.driveFolderId,packageId:selected.id,packageName:selected.name,packageHash,ruleset:AUDIT_RULESET,actor:ctx.user.id,requestId:input.requestId,rerunOf:input.rerunOf});
   return json({job:result.job,duplicate:result.duplicate},result.duplicate?200:202);
 }catch{return json({error:"Submission or feedback could not be saved. Refresh the report; retry the same request if its outcome is unknown."},409);}}

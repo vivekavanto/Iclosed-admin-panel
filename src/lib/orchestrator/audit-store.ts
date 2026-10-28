@@ -30,7 +30,7 @@ async function transaction<T>(fn:(state:State)=>T) {
 }
 export async function putAuditBlob(bytes:Buffer) { if(hostedDocumentsEnabled())return putHostedBlob(bytes);const hash=digest(bytes),root=path.join(auditDirectory(),"blobs");await mkdir(root,{recursive:true,mode:0o700});try{await writeFile(path.join(root,hash),bytes,{flag:"wx",mode:0o600});}catch(e){if((e as NodeJS.ErrnoException).code!=="EEXIST")throw e;const prior=await readFile(path.join(root,hash));if(digest(prior)!==hash)throw new Error("Source integrity check failed.");}return hash; }
 export async function getAuditBlob(hash:string) {if(hostedDocumentsEnabled())return getHostedBlob(hash);if(!/^[a-f0-9]{64}$/.test(hash))throw new Error("Invalid source hash.");const bytes=await readFile(path.join(auditDirectory(),"blobs",hash));if(digest(bytes)!==hash)throw new Error("Frozen audit source changed.");return bytes;}
-export async function enqueueAudit(input: Pick<AuditJob,"matterId"|"matterNumber"|"packageId"|"packageHash"|"packageName"|"folderId"|"ruleset"|"actor"> & {requestId:string;rerunOf?:string}) {
+export async function enqueueAudit(input: Pick<AuditJob,"mailScope"|"matterId"|"matterNumber"|"packageId"|"packageHash"|"packageName"|"folderId"|"ruleset"|"actor"> & {requestId:string;rerunOf?:string}) {
   if(!/^[a-f0-9-]{36}$/i.test(input.requestId))throw new Error("A unique submission request ID is required.");
   const signature=digest(JSON.stringify([input.matterId,input.packageHash,input.ruleset,input.rerunOf??null]));
   return transaction(state=>{
