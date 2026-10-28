@@ -1,0 +1,581 @@
+{
+  "schemaVersion": 1,
+  "description": "Scenario inventory, not line coverage or release certification. Mapped means linked tests exist, not passed.",
+  "rows": [
+    {
+      "id": "LA-01",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "Genuine carriage/opening instructions, quotes, acknowledgements and signatures",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/email-intake.test.ts",
+          "selectors": [
+            "detect staff instructions",
+            "confidentiality footers",
+            "acknowledgements do not"
+          ]
+        }
+      ],
+      "limitation": ""
+    },
+    {
+      "id": "LA-02",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "Sender display-name spoofing",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/email-intake.test.ts",
+          "selectors": [
+            "a trusted address in a display name"
+          ]
+        }
+      ],
+      "limitation": ""
+    },
+    {
+      "id": "LA-03",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "Latest addressed clerk versus CC and old assignment",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/email-intake.test.ts",
+          "selectors": [
+            "a copied clerk is not the assignee"
+          ]
+        }
+      ],
+      "limitation": ""
+    },
+    {
+      "id": "LA-04",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "Multiple linked purchase/sale requests",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/email-intake.test.ts",
+          "selectors": [
+            "one conversation stages distinct sale and purchase"
+          ]
+        }
+      ],
+      "limitation": ""
+    },
+    {
+      "id": "LA-05",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "Source conflicts and fabricated evidence",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/email-intake.test.ts",
+          "selectors": [
+            "explicit property and tenancy conflicts",
+            "reject fabricated extraction"
+          ]
+        }
+      ],
+      "limitation": "Validation only; live semantic extraction accuracy has not been measured."
+    },
+    {
+      "id": "LA-06",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "Participant visibility and concurrent approvals",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/email-intake.test.ts",
+          "selectors": [
+            "lawyer requester and clerk share visibility",
+            "any participant approves once"
+          ]
+        }
+      ],
+      "limitation": ""
+    },
+    {
+      "id": "LA-07",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "Changed source approval revocation including failed extraction and discovery only",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/email-intake.test.ts",
+          "selectors": [
+            "a changed email invalidates approval",
+            "discovery alone revokes",
+            "new evidence invalidates approval"
+          ]
+        }
+      ],
+      "limitation": ""
+    },
+    {
+      "id": "LA-08",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "Changed extraction identity cannot retain old approval",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/email-intake.test.ts",
+          "selectors": [
+            "a source extraction key change"
+          ]
+        }
+      ],
+      "limitation": ""
+    },
+    {
+      "id": "LA-09",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "Cached retries and daily paid-call cap",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/email-intake.test.ts",
+          "selectors": [
+            "cached recovery remains possible",
+            "daily model-call cap",
+            "paid failures and ambiguous"
+          ]
+        }
+      ],
+      "limitation": ""
+    },
+    {
+      "id": "LA-10",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "Short updates and thanks containing new facts or attachments",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/email-intake.test.ts",
+          "selectors": [
+            "thanks with a material update"
+          ]
+        }
+      ],
+      "limitation": ""
+    },
+    {
+      "id": "LA-11",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "Duplicate PDF bytes, same-name amendments and truncated capture",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/email-intake.test.ts",
+          "selectors": [
+            "attachments deduplicate",
+            "a truncated attachment capture"
+          ]
+        }
+      ],
+      "limitation": ""
+    },
+    {
+      "id": "LA-12",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "Gmail checkpoint failure, expiry and recovery",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/email-intake.test.ts",
+          "selectors": [
+            "expired Gmail history",
+            "failed Gmail reads retain"
+          ]
+        }
+      ],
+      "limitation": ""
+    },
+    {
+      "id": "LA-13",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "Shared annual P/S/R numbering, rollover and reviewed baseline",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/file-opening.test.ts",
+          "selectors": [
+            "shared sequence",
+            "future closing year",
+            "year rollover"
+          ]
+        }
+      ],
+      "limitation": "Planning only; no number reservation or live write."
+    },
+    {
+      "id": "LA-14",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "Opening requests preserve approved register and remain idempotent",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/file-opening-store.test.ts",
+          "selectors": [
+            "saved request readback"
+          ]
+        }
+      ],
+      "limitation": "Does not cover partial creation across providers."
+    },
+    {
+      "id": "LA-15",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "Fresh complete extracts, ambiguity, checksums, deltas and local field preservation",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/closer-import.test.ts",
+          "selectors": [
+            "date and clerk changes",
+            "missing files retained",
+            "older extracts",
+            "same file number"
+          ]
+        }
+      ],
+      "limitation": ""
+    },
+    {
+      "id": "LA-16",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "Canonical standalone daily import behavior",
+      "evidence": [
+        {
+          "file": "tests/fixtures/local-sync/sync.test.mjs",
+          "selectors": [
+            "unchanged business rows retain",
+            "business deltas persist",
+            "missing source leaves",
+            "freshness, full coverage",
+            "all client/referring-agent emails"
+          ]
+        }
+      ],
+      "limitation": "Checksum-pinned copy of canonical runtime; scheduled runtime is unchanged."
+    },
+    {
+      "id": "LA-17",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "Daily scheduler activation/freshness/completeness guards",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/daily-refresh.test.ts",
+          "selectors": [
+            "deployment flag prevents",
+            "stale, partial or unavailable",
+            "a partial manual import"
+          ]
+        }
+      ],
+      "limitation": ""
+    },
+    {
+      "id": "LA-18",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "Signing jobs deduplicate and preserve immutable source/feedback on reruns",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/audit-jobs.test.ts",
+          "selectors": [
+            "concurrent clicks",
+            "completed content is deduplicated",
+            "rerun completion preserves",
+            "stale feedback and wrong source manifests",
+            "shadow worker completes"
+          ]
+        }
+      ],
+      "limitation": "Reruns still use model review; delta-only model review is not implemented."
+    },
+    {
+      "id": "LA-19",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "OCR/native PDF coverage and evidence quotations",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/audit-coverage.test.ts",
+          "selectors": [
+            "OCR quotations",
+            "explained arithmetic",
+            "rendering failures"
+          ]
+        }
+      ],
+      "limitation": "Synthetic manifest checks; actual Python renderers are a separate optional suite."
+    },
+    {
+      "id": "LA-20",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "Exact-byte inspection cache and runtime binding",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/pdf-inspection-cache.test.ts",
+          "selectors": [
+            "inspection reuse is bound"
+          ]
+        }
+      ],
+      "limitation": ""
+    },
+    {
+      "id": "LA-21",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "Pending, declined and unrelated feedback excluded",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/audit-jobs.test.ts",
+          "selectors": [
+            "OpenAI adapter uses scoped frozen PDF"
+          ]
+        }
+      ],
+      "limitation": "Mocked model request, not live AI quality."
+    },
+    {
+      "id": "LA-22",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "Clerk notes and report revisions survive updates",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/audit-connections.test.ts",
+          "selectors": [
+            "rerun cannot overwrite",
+            "reject replacements"
+          ]
+        }
+      ],
+      "limitation": ""
+    },
+    {
+      "id": "LA-23",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "COO recipient/sender/PDF revision binding, tampering and changes during send",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/coo-delivery.test.ts",
+          "selectors": [
+            "editing a recipient",
+            "tampered persisted",
+            "a revision changed during"
+          ]
+        }
+      ],
+      "limitation": ""
+    },
+    {
+      "id": "LA-24",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "COO partial or ambiguous outcomes preserve receipts and suppress resend",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/coo-delivery.test.ts",
+          "selectors": [
+            "ambiguous provider results",
+            "partial sends preserve"
+          ]
+        }
+      ],
+      "limitation": ""
+    },
+    {
+      "id": "LA-25",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "Mississauga client-only handling",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/coo-delivery.test.ts",
+          "selectors": [
+            "Mississauga is Client Only"
+          ]
+        }
+      ],
+      "limitation": ""
+    },
+    {
+      "id": "LA-26",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "Tax/water routes and condo exceptions",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/coo-integration.test.ts",
+          "selectors": [
+            "Toronto uses one department",
+            "condominium requires",
+            "a missing optional water"
+          ]
+        }
+      ],
+      "limitation": ""
+    },
+    {
+      "id": "LA-27",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "Internal mortgage recipients, duplicates and Clients Informed separation",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/mortgage-email.test.ts",
+          "selectors": [
+            "internal tests override every client recipient",
+            "uncertain internal test results",
+            "Gmail MIME fixes"
+          ]
+        }
+      ],
+      "limitation": ""
+    },
+    {
+      "id": "LA-28",
+      "module": "legal-assistant",
+      "layer": "automated-synthetic",
+      "status": "mapped",
+      "scenario": "Admin access policy helper",
+      "evidence": [
+        {
+          "file": "tests/legal-assistant/access.test.ts",
+          "selectors": [
+            "Legal Assistant inherits"
+          ]
+        }
+      ],
+      "limitation": "Helper coverage only; middleware/API and alternate-user checks tracked separately."
+    },
+    {
+      "id": "LA-I1",
+      "module": "legal-assistant",
+      "layer": "read-only-integration",
+      "status": "not-run",
+      "scenario": "Anonymous API protection",
+      "reason": "Run separately against existing localhost service.",
+      "next": "npm run test:integration:read-only; expect 401 at both routes.",
+      "resultFile": "http-smoke.json"
+    },
+    {
+      "id": "LA-I2",
+      "module": "legal-assistant",
+      "layer": "read-only-integration",
+      "status": "not-run",
+      "scenario": "Canonical register/import and mailbox/Tickler readiness",
+      "reason": "Prior read-only evidence exists; no fresh provider check in ordinary suite.",
+      "next": "Use private verify-only configuration after scope review; record date and receipts, canEdit separately."
+    },
+    {
+      "id": "LA-U1",
+      "module": "legal-assistant",
+      "layer": "signed-in-ui",
+      "status": "not-run",
+      "scenario": "Register, Add New File, Settings and report display",
+      "reason": "Requires existing signed-in browser; no cookie export.",
+      "next": "Follow docs/testing/README.md UI checklist; retain only bounded metadata.",
+      "resultFile": "ui-smoke.json"
+    },
+    {
+      "id": "LA-U2",
+      "module": "legal-assistant",
+      "layer": "signed-in-ui",
+      "status": "blocked",
+      "scenario": "Alternate staff/participant access through actual APIs",
+      "reason": "No alternate signed-in staff session verified.",
+      "next": "Use separately authorized staff sessions; assert participant isolation without sharing profiles."
+    },
+    {
+      "id": "LA-L1",
+      "module": "legal-assistant",
+      "layer": "live-provider",
+      "status": "blocked",
+      "scenario": "Shared numbering and end-to-end opening/partial recovery",
+      "reason": "Tickler canEdit=false; no shared allocator or complete Drive/Closer create adapters.",
+      "next": "Implement revision-bound intents, allocator and independent provider readback before opt-in synthetic opening test."
+    },
+    {
+      "id": "LA-L2",
+      "module": "legal-assistant",
+      "layer": "live-provider",
+      "status": "blocked",
+      "scenario": "Email-to-OpenAI extraction",
+      "reason": "Explicit consent required after earlier automatic approval review; discovery-only service must remain.",
+      "next": "Resolve existing consent gate; approve exact source/destination before enabling extraction."
+    },
+    {
+      "id": "LA-L3",
+      "module": "legal-assistant",
+      "layer": "live-provider",
+      "status": "blocked",
+      "scenario": "COO actual municipality/client delivery",
+      "reason": "Provider activation incomplete; mocked sends prove no live delivery.",
+      "next": "Complete activation and approve exact recipients/revision; independently verify provider receipt and readback."
+    },
+    {
+      "id": "LA-L4",
+      "module": "legal-assistant",
+      "layer": "live-provider",
+      "status": "not-run",
+      "scenario": "Internal synthetic mortgage transport",
+      "reason": "Historical authorized send/readback exists; no fresh send authorized by this suite.",
+      "next": "Obtain explicit test-send authorization and request ID; internal recipient only; verify duplicate retry and Clients Informed unchanged."
+    },
+    {
+      "id": "LA-Q1",
+      "module": "legal-assistant",
+      "layer": "quality-evaluation",
+      "status": "blocked",
+      "scenario": "Fresh ten-file AI versus Slack benchmark",
+      "reason": "No fresh benchmark; real email transmission consent pending.",
+      "next": "Approve frozen private dataset/cutoffs and rubric; blinded independent review; report unsupported claims, omissions, citation accuracy and cost."
+    },
+    {
+      "id": "LA-P1",
+      "module": "legal-assistant",
+      "layer": "automated-python",
+      "status": "not-run",
+      "scenario": "Native rendering, OCR handoff and deterministic COO PDFs",
+      "reason": "Requires separate pinned Python/PDF runtime; excluded from dependency-free Node pass.",
+      "next": "Run documented Python suites in isolated synthetic environment; record versions and counts."
+    }
+  ]
+}

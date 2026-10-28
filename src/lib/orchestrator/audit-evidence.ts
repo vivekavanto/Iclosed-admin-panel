@@ -18,7 +18,7 @@ export function selectHistoricalMailEvidence(message: HistoricalMailEvidence, in
   const from = header("from"), subject = header("subject");
   // Do not use audit reports, firm-wide summaries or Slack digests to corroborate an audit.
   if (/@(?:[a-z0-9-]+\.)*slack\.(?:com|email)\b/i.test(from)
-    || /\b(?:weekly closing report|signing.package (?:audit|qa)|audit results?|workflow digest)\b/i.test(subject)
+    || /\b(?:internal test|test only|weekly closing report|signing.package (?:audit|qa)|audit results?|workflow digest)\b/i.test(subject)
     || /\b(?:bulk|list)\b/i.test(header("precedence")) || header("list-id")) return { eligible: false, reason: "derived-or-bulk" };
   const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
   const matter = normalize(input.matterNumber);

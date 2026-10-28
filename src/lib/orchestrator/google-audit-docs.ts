@@ -20,7 +20,7 @@ export class AuditGoogleDocs {
   static async update(input: { documentId: string; matterFolderId: string; auditFolderId: string; expectedRevision: string; requests: object[] }) {
     if (![input.documentId,input.matterFolderId,input.auditFolderId].every(safeDriveId) || !input.expectedRevision || !input.requests.length || input.requests.length > 500) throw new Error("A verified report destination, current revision and bounded update are required.");
     const token=await auditGoogleToken("docsWrite");
-    const metadata=(id:string)=>auditGoogleJson(`https://www.googleapis.com/drive/v3/admin/legal-assistant/files/${id}?fields=id,name,mimeType,parents,trashed,capabilities(canEdit)&supportsAllDrives=true`,token);
+    const metadata=(id:string)=>auditGoogleJson(`https://www.googleapis.com/drive/v3/files/${id}?fields=id,name,mimeType,parents,trashed,capabilities(canEdit)&supportsAllDrives=true`,token);
     const folder=await metadata(input.auditFolderId),report=await metadata(input.documentId);
     const allowed=(process.env.ORCHESTRATOR_AUDIT_OUTPUT_FOLDER_IDS??"").split(",").map(v=>v.trim()).filter(Boolean);
     if(!allowed.includes(folder.id) || folder.trashed || folder.mimeType!=="application/vnd.google-apps.folder" || !folder.parents?.includes(input.matterFolderId) || report.trashed || report.mimeType!=="application/vnd.google-apps.document" || !report.parents?.includes(folder.id) || !report.capabilities?.canEdit)throw new Error("This report is outside the authorized audit output folder or cannot be edited.");

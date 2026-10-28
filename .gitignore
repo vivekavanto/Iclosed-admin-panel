@@ -52,3 +52,10 @@ next-env.d.ts
 
 # Private Legal Assistant state
 .orchestrator-state/
+
+# Generated PDF.js assets from pinned dependency
+/public/vendor/pdfjs/
+__pycache__/
+
+# Synthetic test output (may include local diagnostic details)
+/test-results/

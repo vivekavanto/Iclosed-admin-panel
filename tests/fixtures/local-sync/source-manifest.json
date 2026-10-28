@@ -1,0 +1,17 @@
+{
+  "source": "iclosed-admin/scripts/legal-assistant-local-sync",
+  "revision": "4e9293bee630745772277724f6176380f839ca92",
+  "sha256": {
+    "sync.mjs": "a47b8ac9b7a2ffce115fab1f7c3737b19aa77474e58439d09a219552bb869f85",
+    "sync.test.mjs": "b8533b80c3aacd7622b032e92055125505b662b05c7222485b2ffd5921f3cf84",
+    "closer-import.ts": "0049783bd1f3d14b45164f9a2d9a6d27913192d8ca7d8a15242ff814b76da517",
+    "closing-views.ts": "4b70fc93e428d92f387be85477cbdc39e07c8726f0d843b727ca027fae28a4e7",
+    "google-drive.ts": "9fe524c956694a66dea0d8a5da4288fe0076e7c537906a01bf9ef287d49febd5",
+    "google-extracts.ts": "21e34eb6b26418180f3acd1a2def74d75b57b07aacc2de47abd7256446647405",
+    "local-store.ts": "64a53c5aca153c8aff0900640b826e4069aafeb3f9ed8f10245f8d5e813a9707",
+    "model.ts": "ccaa339e7cd00ebb8535de35147c3d0cc596392fce55ce98b77bee55161111ff",
+    "report-selection.ts": "a8fc776027ebbaf1ad2b08b36d71a436b8b598ad4028b5b3f9139b117f792537",
+    "package.json": "a90fc33418afa2b9cbf4768524b021135b965ecdf993457505bfae3ac44a8428"
+  },
+  "purpose": "Unmodified synthetic test snapshot; never the scheduled runtime. Refresh with --source and review checksums."
+}

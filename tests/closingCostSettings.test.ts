@@ -93,10 +93,11 @@ test("a null/undefined shared value falls through to the firm row", () => {
   assert.equal(merged.hst_rate, 0.14);
 });
 
-test("iClosed inherits the division letterhead but not the identity", () => {
+test("iClosed retains its Suite 209 letterhead and separate identity", () => {
   const nava = defaultFirmRow("navawilson");
   const iclosed = defaultFirmRow("iclosed");
-  assert.equal(iclosed.firm_address, nava.firm_address);
+  assert.equal(iclosed.firm_address, "Suite 209, 10 Milner Business Court, Toronto, Ontario, M1B 3C6");
+  assert.notEqual(iclosed.firm_address, nava.firm_address);
   assert.equal(iclosed.firm_hst_number, nava.firm_hst_number);
   assert.notEqual(iclosed.firm_name, nava.firm_name);
   assert.notEqual(iclosed.brand_color, nava.brand_color);

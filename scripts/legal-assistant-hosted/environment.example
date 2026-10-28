@@ -1,0 +1,27 @@
+# Web + workers: verified isolated dev project; private workflow tables are independent of authentication.
+ORCHESTRATOR_STATE_BACKEND=supabase
+ORCHESTRATOR_STATE_NAMESPACE=dev-legal-assistant
+ORCHESTRATOR_DEV_PROJECT_REF=awygszzpyotaddnspikt
+ORCHESTRATOR_SUPABASE_URL=
+ORCHESTRATOR_SUPABASE_SERVICE_ROLE_KEY=
+ORCHESTRATOR_PRIVATE_BUCKET=legal-assistant-dev-artifacts
+ORCHESTRATOR_BASELINE_SHA256=
+ORCHESTRATOR_APP_URL=https://devadmin.iclosed.ca
+ORCHESTRATOR_GOOGLE_SERVICE_ACCOUNT_JSON=
+ORCHESTRATOR_GMAIL_CLIENT_ID=
+ORCHESTRATOR_GMAIL_CLIENT_SECRET=
+ORCHESTRATOR_TOKEN_ENCRYPTION_KEY=
+ORCHESTRATOR_AUDIT_MODEL=
+ORCHESTRATOR_AUDIT_SHADOW_ENABLED=false
+ORCHESTRATOR_IMPORT_ENABLED=false
+# Keep COO provider sends disabled until provider-specific acceptance testing.
+ORCHESTRATOR_COO_SEND_ENABLED=false
+# Workers only. Do not set these paths/mode or the API key on Vercel.
+# ORCHESTRATOR_HOSTED_WORKER=true
+# ORCHESTRATOR_WORKER_CACHE_DIR=<owner-only persistent cache>
+# ORCHESTRATOR_AUDIT_OPENAI_KEY=<private existing key>
+# ORCHESTRATOR_AUDIT_PYTHON=<absolute venv python>
+# ORCHESTRATOR_COO_PYTHON=<absolute venv python>
+# ORCHESTRATOR_AUDIT_OCR=<absolute tested OCR helper>
+# Never set ORCHESTRATOR_LOCAL_STATE_DIR in hosted mode.
+# Existing NEXT_PUBLIC_SUPABASE_* / SUPABASE_SERVICE_ROLE_KEY stay as Admin auth config.

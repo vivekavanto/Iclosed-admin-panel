@@ -1,7 +1,10 @@
+import {hostedDocumentsEnabled} from "../orchestrator/hosted/document.ts";
+import {hostedOperation,onHostedWorker} from "../orchestrator/hosted/runtime.ts";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import type { CooDraft, CooPacket } from "./model";
-export async function renderCooReview(draft:CooDraft,transferBase64:string|undefined,demo:boolean):Promise<{packets:CooPacket[];sourcePages:number;sendingEnabled:false;signed:false}> {
+export async function renderCooReview(draft:CooDraft,transferBase64:string|undefined,demo:boolean,deliveryReady=false):Promise<{packets:CooPacket[];sourcePages:number;sendingEnabled:false;signed:false}> {
+  if(hostedDocumentsEnabled()&&!onHostedWorker())return hostedOperation("coo-render",{draft,transferBase64,demo,deliveryReady});
   const executable=process.env.ORCHESTRATOR_COO_PYTHON;
   if(!executable||!path.isAbsolute(executable))throw new Error("COO review generation is not configured in this environment.");
   return new Promise((resolve,reject)=>{
@@ -13,6 +16,6 @@ export async function renderCooReview(draft:CooDraft,transferBase64:string|undef
     child.stderr.on("data",()=>{/* Never log document text or subprocess internals. */});
     child.stdin.on("error",()=>fail(new Error("COO review generation was interrupted.")));
     child.on("close",code=>{if(settled)return;try{const result=JSON.parse(Buffer.concat(chunks).toString("utf8"));if(code!==0||result.error)throw new Error(result.error||"COO review generation failed.");if(!Array.isArray(result.packets)||result.sendingEnabled!==false||result.signed!==false)throw new Error("Invalid review packet response.");settled=true;resolve(result);}catch(e){fail(e instanceof Error?e:new Error("COO review generation failed."));}});
-    child.stdin.end(JSON.stringify({draft,transferBase64,demo}));
+    child.stdin.end(JSON.stringify({draft,transferBase64,demo,deliveryReady}));
   });
 }

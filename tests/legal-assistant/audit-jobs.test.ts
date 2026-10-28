@@ -48,6 +48,13 @@ test("shadow worker completes a queued job and a corrected-source rerun retains 
 });
 test("OpenAI adapter uses scoped frozen PDF, no response storage, strict schema, no tools", async () => {
   await putAuditBlob(bytes);
+  const {addReportComment,reviewReportComment}=await import('../../src/lib/orchestrator/workflow-settings.ts');
+  const feedback=await addReportComment('matter-a',1,'The clerk has explained the scheduled payout timing.','staff','clerk@example.com');
+  await reviewReportComment(feedback.id,'approved','pending','Verified for this file.','reviewer','owner@example.com');
+  await addReportComment('matter-a',1,'Pending instruction must not be used.','staff','clerk@example.com');
+  const declined=await addReportComment('matter-a',1,'Declined instruction must not be used.','staff','clerk@example.com');
+  await reviewReportComment(declined.id,'declined','pending','Not accepted.','reviewer','owner@example.com');
+  await addReportComment('other-matter',1,'Unrelated private comment must not leak.','staff','other@example.com');
   process.env.ORCHESTRATOR_AUDIT_OPENAI_KEY = 'synthetic-test-key';
   process.env.ORCHESTRATOR_AUDIT_MODEL = 'test-model';
   process.env.ORCHESTRATOR_AUDIT_PYTHON = '/test/python';
@@ -59,9 +66,16 @@ test("OpenAI adapter uses scoped frozen PDF, no response storage, strict schema,
     assert.equal(url, 'https://api.openai.com/v1/responses');
     const body = JSON.parse(String(init!.body));
     assert.equal(body.store, false);
+    assert.ok(!JSON.stringify(body).includes("Pending instruction must not be used."));
+    assert.ok(!JSON.stringify(body).includes("Declined instruction must not be used."));
     assert.equal(body.text.format.strict, true);
     assert.equal(body.tools, undefined);
-    assert.equal(body.input[0].content[1].type, 'input_file');
+    assert.equal(body.input[0].content[2].type, 'input_file');
+    const payload=JSON.parse(body.input[0].content[0].text);
+    assert.equal(payload.clerkContext.length,1);
+    assert.equal(payload.clerkContext[0].comment,'The clerk has explained the scheduled payout timing.');
+    assert.equal(JSON.stringify(payload).includes('Unrelated private comment'),false);
+    assert.equal(JSON.stringify(payload).includes('clerk@example.com'),false);
     const text = JSON.stringify({ findings: [candidate], resolutions: [], coverage: [] });
     return new Response(JSON.stringify({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text }] }] }));
   };
@@ -70,4 +84,76 @@ test("OpenAI adapter uses scoped frozen PDF, no response storage, strict schema,
     assert.equal((await new OpenAIAuditReviewer().review(manifest(job))).findings.length, 1);
     assert.equal(called, true);
   } finally { globalThis.fetch = saved; }
+});
+
+test('quota failures retain safe actionable diagnostics and preserve the report',async()=>{
+ const {AuditFailure}=await import('../../src/lib/orchestrator/audit-failure.ts');
+ const {job,report}=await complete();await enqueueAudit({...input(),rerunOf:job.id});
+ const result=await runAuditWorker({review:async()=>{throw new AuditFailure({code:'credit_balance_exhausted',httpStatus:429,requestId:'req_test'});}},async j=>manifest(j));
+ assert.equal(result.status,'failed');
+ const snapshot=await auditSnapshot(job.matterId),failed=snapshot.jobs.at(-1)!;
+ assert.equal(failed.failure?.stage,'review');assert.equal(failed.failure?.code,'credit_balance_exhausted');
+ assert.match(failed.error!,/credit balance is exhausted/);assert.equal(snapshot.report!.revision,report.revision);
+});
+test('provider error bodies never enter job state or connection status',async()=>{
+ await putAuditBlob(bytes);
+ Object.assign(process.env,{ORCHESTRATOR_AUDIT_OPENAI_KEY:'synthetic',ORCHESTRATOR_AUDIT_MODEL:'test-model',ORCHESTRATOR_AUDIT_PYTHON:'/test/python',ORCHESTRATOR_AUDIT_SHADOW_ENABLED:'true'});
+ const saved=globalThis.fetch;
+ globalThis.fetch=async()=>new Response(JSON.stringify({error:{code:'credit_balance_exhausted',type:'insufficient_quota',message:'PRIVATE TEST DATA MUST NOT LEAK'}}),{status:429,headers:{'x-request-id':'req_test'}});
+ try{await enqueueAudit(input());const result=await runAuditWorker(new OpenAIAuditReviewer(),async j=>manifest(j));assert.equal(result.status,'failed');
+ const jobs=await readFile(path.join(auditDirectory(),'jobs.json'),'utf8'),health=await readFile(path.join(auditDirectory(),'provider-status.json'),'utf8');
+ assert.equal((jobs+health).includes('PRIVATE TEST DATA'),false);assert.match(jobs,/credit_balance_exhausted/);
+ }finally{globalThis.fetch=saved;}
+});
+
+test('large reviews visually inspect the package once, cover every supporting PDF and consolidate all text',async()=>{
+ await putAuditBlob(bytes);Object.assign(process.env,{ORCHESTRATOR_AUDIT_OPENAI_KEY:'synthetic',ORCHESTRATOR_AUDIT_MODEL:'test-model',ORCHESTRATOR_AUDIT_PYTHON:'/test/python',ORCHESTRATOR_AUDIT_SHADOW_ENABLED:'true'});
+ const m=manifest({...input(),cutoff:new Date().toISOString()}as AuditJob);
+ m.sources.push(...Array.from({length:24},(_,i)=>({...m.sources[0],id:'support-'+i,kind:'support' as const,name:'Supporting document '+i,pages:Array.from({length:10},(_,number)=>({...m.sources[0].pages[0],number:number+1}))})));
+ const saved=globalThis.fetch,bodies:{input:{content:{type:string;filename?:string;text?:string}[]}[]}[]=[];let progress=0;
+ globalThis.fetch=async(_url,init)=>{bodies.push(JSON.parse(String(init!.body)));return new Response(JSON.stringify({status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify({findings:[],resolutions:[],coverage:[]})}]}]}));};
+ try{await new OpenAIAuditReviewer().review(m,async()=>{progress++;});assert.equal(bodies.length,4);assert.equal(progress,4);assert.equal(bodies.flatMap(b=>b.input[0].content).filter(c=>c.filename==='submitted-signing-package.pdf').length,1);assert.equal(bodies.slice(0,-1).flatMap(b=>b.input[0].content).filter(c=>c.type==='input_file').length,25);assert.equal(bodies.at(-1)!.input[0].content.some(c=>c.type==='input_file'),false);assert.equal(JSON.parse(bodies.at(-1)!.input[0].content[0].text!).manifest.sources.length,25);}finally{globalThis.fetch=saved;}
+});
+
+test('staged progress is durable and rejects an incorrect lease or invalid step',async()=>{
+ const {recordAuditReviewProgress}=await import('../../src/lib/orchestrator/audit-store.ts');
+ const {job}=await enqueueAudit(input());const claimed=(await claimAudit())!;
+ await checkpointAudit(job.id,claimed.lease!,manifest(job));
+ await recordAuditReviewProgress(job.id,claimed.lease!,{step:2,total:4,phase:'source_review'});
+ assert.deepEqual((await auditSnapshot(job.matterId)).jobs[0].reviewProgress,{step:2,total:4,phase:'source_review'});
+ await assert.rejects(recordAuditReviewProgress(job.id,'wrong',{step:3,total:4,phase:'source_review'}));
+ await assert.rejects(recordAuditReviewProgress(job.id,claimed.lease!,{step:5,total:4,phase:'consolidation'}));
+});
+
+test('consolidation retains native PDFs for pages whose OCR text is unusable',async()=>{
+ process.env.ORCHESTRATOR_AUDIT_OPENAI_KEY='synthetic-test-key';process.env.ORCHESTRATOR_AUDIT_MODEL='test-model';process.env.ORCHESTRATOR_AUDIT_PYTHON='/test/python';process.env.ORCHESTRATOR_AUDIT_SHADOW_ENABLED='true';
+ const request=input(),m=manifest({...request,cutoff:new Date().toISOString()} as AuditJob);
+ await putAuditBlob(bytes);
+ for(const id of ['readable','image-only']){
+  const hash=await putAuditBlob(Buffer.from('%PDF-1.7 synthetic '+id));
+  m.sources.push({id,name:id+'.pdf',kind:'support',sha256:hash,capturedAt:m.cutoff,pages:Array.from({length:80},(_,i)=>({number:i+1,text:id==='image-only'&&i===0?'':'Synthetic readable page text.',rendered:true,inkRatio:.1,...(id==='image-only'&&i===0?{textNeedsReview:true}:{})}))});
+ }
+ const saved=globalThis.fetch;const requests:{input:{content:{type:string;text?:string;filename?:string}[]}[]}[]=[];
+ globalThis.fetch=async(_url,init)=>{requests.push(JSON.parse(String(init!.body)));return new Response(JSON.stringify({status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify({findings:[],resolutions:[],coverage:requests.length<3?['A source is outside this bounded pass.']:['Global coverage summary.']})}]}]}));};
+ let reviewed;try{reviewed=await new OpenAIAuditReviewer().review(m);}finally{globalThis.fetch=saved;}
+ assert.equal(reviewed.coverageScope,"consolidated");assert.equal(reviewed.sourcePassCoverage?.length,2);assert.ok(!reviewed.coverage.some(line=>line.includes("outside this bounded pass")));assert.ok(reviewed.sourcePassCoverage![0].coverage.some(line=>line.includes("outside this bounded pass")));
+ assert.equal(requests.length,3);
+ const content=requests.at(-1)!.input[0].content,payload=JSON.parse(content[0].text!);
+ assert.deepEqual(payload.visualSourceIds,['image-only']);
+ assert.equal(content.filter(c=>c.type==='input_file').length,1);
+});
+
+test("initial report view loads saved findings without Drive or source manifests",async()=>{
+ const {job,report}=await complete();
+ const {auditViewSnapshot}=await import('../../src/lib/orchestrator/audit-view.ts');
+ const originalFetch=globalThis.fetch;
+ globalThis.fetch=async()=>{throw new Error('Report display must not access a network service');};
+ try{
+  const view=await auditViewSnapshot(job.matterId);
+  assert.deepEqual(view.report,report);
+  assert.equal(view.jobs.length,1);
+  assert.equal('manifest' in view.jobs[0],false);
+  assert.equal(view.jobs[0].sourceSummary?.packagePages,1);
+  assert.equal('sources' in view,false);
+ }finally{globalThis.fetch=originalFetch;}
 });

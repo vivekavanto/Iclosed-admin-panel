@@ -12,7 +12,5 @@ export function signQuoteToken(leadId: string): string {
   return `${payload}.${sig}`;
 }
 
-/** Lead types the customer app prices a quote for. */
-export function hasQuote(leadType: string | null | undefined): boolean {
-  return /purchase|sale|refinance|condo/i.test(leadType ?? "");
-}
+// Eligibility is also used by the browser; keep crypto confined to this signer.
+export {hasQuote} from "./quoteEligibility";

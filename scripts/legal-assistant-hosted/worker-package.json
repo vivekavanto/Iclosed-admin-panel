@@ -1,0 +1,1 @@
+{"name":"iclosed-legal-assistant-worker","private":true,"version":"0.1.0","type":"module","engines":{"node":">=24"},"dependencies":{"@supabase/supabase-js":"2.98.0","googleapis":"166.0.0"}}

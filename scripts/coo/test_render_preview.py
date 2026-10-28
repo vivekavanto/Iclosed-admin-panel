@@ -1,9 +1,9 @@
 import base64, copy, io, json, unittest
 from pathlib import Path
 from pypdf import PdfReader
-from render_preview import render
+from render_preview import render, sample_transfer
 ROOT=Path(__file__).resolve().parents[2]
-def draft():return json.loads((ROOT/'tests/fixtures/coo-demo.json').read_text())
+def draft():return json.loads((ROOT/'tests/legal-assistant/fixtures/coo-demo.json').read_text())
 class ReviewPackets(unittest.TestCase):
  def test_all_notices_keep_attachment_and_condo_wording(self):
   result=render({'draft':draft(),'demo':True})
@@ -39,4 +39,9 @@ class ReviewPackets(unittest.TestCase):
  def test_overflow_is_reported_instead_of_clipping(self):
   d=draft();d['legalDescription']='Very long legal description. '*300
   with self.assertRaisesRegex(ValueError,'exceeds one page'):render({'draft':d,'demo':True})
+ def test_delivery_ready_preview_matches_final_packet_without_review_markers(self):
+  d=draft();transfer=base64.b64encode(sample_transfer(d)).decode()
+  result=render({'draft':d,'transferBase64':transfer,'demo':False,'deliveryReady':True})
+  packet=result['packets'][0];pdf=PdfReader(io.BytesIO(base64.b64decode(packet['pdfBase64'])))
+  self.assertEqual(len(pdf.pages),2);self.assertNotIn('REVIEW COPY',pdf.pages[0].extract_text());self.assertNotIn('Unsigned review copy',pdf.pages[0].extract_text());self.assertNotIn('-REVIEW',packet['filename']);self.assertIn(d['instrument'],pdf.pages[0].extract_text());self.assertFalse(result['signed'])
 if __name__=='__main__':unittest.main()

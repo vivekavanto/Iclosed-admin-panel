@@ -1,3 +1,5 @@
+import {hostedDocumentsEnabled,hostedConfiguration} from "./hosted/document.ts";
+import {readConnectionSecret,saveConnectionSecret,consumeConnectionSecret} from "./hosted/connection.ts";
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, writeFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
@@ -11,7 +13,7 @@ interface Attempt { operatorId: string; verifier: string; redirectUri: string; c
 interface Connection { email: string; clientId: string; refreshToken: string; scope: string; connectedAt: string; connectedBy: string; }
 
 export function mailboxAppOrigin() {
-  const url = new URL(process.env.ORCHESTRATOR_APP_URL || (process.env.NODE_ENV !== "production" ? "http://127.0.0.1:3002" : ""));
+  const url = new URL(process.env.ORCHESTRATOR_APP_URL || (process.env.NODE_ENV !== "production" ? "http://localhost:3004" : ""));
   if (url.username || url.password || url.pathname !== "/" || url.search || url.hash || (url.protocol !== "https:" && !(process.env.NODE_ENV !== "production" && url.protocol === "http:" && ["127.0.0.1", "localhost"].includes(url.hostname)))) throw new Error("Invalid Orchestrator connection origin.");
   return url.origin;
 }
@@ -21,6 +23,7 @@ export function mailboxClientConfig() {
   return {clientId, clientSecret, redirectUri: mailboxAppOrigin() + MAILBOX_CALLBACK_PATH};
 }
 async function directory() {
+  if(hostedDocumentsEnabled()){hostedConfiguration();if(Buffer.from(process.env.ORCHESTRATOR_TOKEN_ENCRYPTION_KEY??"","base64").length!==32)throw Error("A stable hosted token encryption key is required.");return "hosted-mailbox";}
   const root = localStateDirectory();
   if (!root || process.env.NODE_ENV === "production") throw new Error("Secure mailbox token storage is not configured for this environment.");
   const dir = path.join(root, "mailbox-connection"); await mkdir(dir, { recursive:true, mode:0o700 }); return dir;
@@ -29,6 +32,7 @@ async function encryptionKey(dir: string) {
   if (process.env.ORCHESTRATOR_TOKEN_ENCRYPTION_KEY) {
     const key = Buffer.from(process.env.ORCHESTRATOR_TOKEN_ENCRYPTION_KEY, "base64"); if(key.length!==32)throw new Error("Invalid mailbox encryption key."); return key;
   }
+  if(hostedDocumentsEnabled())throw Error("A stable hosted token encryption key is required.");
   const file=path.join(dir,"encryption.key");
   try { const key=await readFile(file);if(key.length!==32)throw new Error("Invalid mailbox encryption key.");return key; }
   catch(error) {
@@ -55,21 +59,24 @@ export async function beginMailboxOAuth(operatorId: string) {
   if(!operatorId)throw new Error("An authenticated administrator is required.");
   const config=mailboxClientConfig(),dir=await directory(),state=randomBytes(32).toString("base64url"),verifier=randomBytes(48).toString("base64url");
   const attempt:Attempt={operatorId,verifier,redirectUri:config.redirectUri,clientId:config.clientId,expiresAt:Date.now()+MAX_AGE_MS};
-  await writeFile(path.join(dir,attemptName(state)),await seal(dir,attempt),{mode:0o600,flag:"wx"});
+  const envelope=await seal(dir,attempt);if(hostedDocumentsEnabled())await saveConnectionSecret("mailbox",attemptName(state),envelope,true);else await writeFile(path.join(dir,attemptName(state)),envelope,{mode:0o600,flag:"wx"});
   const query=new URLSearchParams({client_id:config.clientId,redirect_uri:config.redirectUri,response_type:"code",scope:GMAIL_READ_SCOPE,state,code_challenge:createHash("sha256").update(verifier).digest("base64url"),code_challenge_method:"S256",access_type:"offline",prompt:"consent select_account",include_granted_scopes:"false",login_hint:AUDIT_MAILBOX,hd:"navawilson.law"});
   return {state,url:`https://accounts.google.com/o/oauth2/v2/auth?${query}`};
 }
 async function consumeAttempt(operatorId: string, state: string) {
-  const dir=await directory(),pending=path.join(dir,attemptName(state)),used=path.join(dir,`used-${randomUUID()}.json`);
+  const dir=await directory();
+  if(hostedDocumentsEnabled()){const raw=await consumeConnectionSecret("mailbox",attemptName(state));const attempt=await unseal<Attempt>(dir,raw);if(attempt.expiresAt<Date.now()||attempt.operatorId!==operatorId)throw Error("Authorization attempt expired or belongs to another administrator.");const config=mailboxClientConfig();if(attempt.clientId!==config.clientId||attempt.redirectUri!==config.redirectUri)throw Error("OAuth client configuration changed. Start again.");return attempt;}
+  const pending=path.join(dir,attemptName(state)),used=path.join(dir,`used-${randomUUID()}.json`);
   // Atomic claim: a second callback cannot exchange the same authorization code.
   try {await rename(pending,used);}catch{throw new Error("Authorization attempt expired or was already used.");}
   try {const attempt=await unseal<Attempt>(dir,await readFile(used,"utf8"));if(attempt.expiresAt<Date.now()||attempt.operatorId!==operatorId)throw new Error("Authorization attempt expired or belongs to another administrator.");const config=mailboxClientConfig();if(attempt.clientId!==config.clientId||attempt.redirectUri!==config.redirectUri)throw new Error("OAuth client configuration changed. Start again.");return attempt;}finally{await rm(used,{force:true});}
 }
 async function storeConnection(connection:Connection) {
-  const dir=await directory(),temporary=path.join(dir,`connection-${randomUUID()}.tmp`);
+  const dir=await directory();if(hostedDocumentsEnabled()){await saveConnectionSecret("mailbox","connection",await seal(dir,connection));return;}const temporary=path.join(dir,`connection-${randomUUID()}.tmp`);
   try {await writeFile(temporary,await seal(dir,connection),{mode:0o600,flag:"wx"});await rename(temporary,path.join(dir,"connection.json"));}finally{await rm(temporary,{force:true});}
 }
 export async function readMailboxConnection(): Promise<Connection|null> {
+  if(hostedDocumentsEnabled()){const dir=await directory(),raw=await readConnectionSecret("mailbox","connection");return raw?unseal<Connection>(dir,raw):null;}
   if(!process.env.ORCHESTRATOR_LOCAL_STATE_DIR)return null;
   const dir=await directory();try {return await unseal<Connection>(dir,await readFile(path.join(dir,"connection.json"),"utf8"));}catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")return null;throw new Error("Saved mailbox connection cannot be read securely. Reconnect the mailbox.");}
 }
