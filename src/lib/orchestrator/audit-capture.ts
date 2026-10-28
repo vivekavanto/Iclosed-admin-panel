@@ -1,3 +1,4 @@
+import {auditMailBody,auditMailEvidenceText,type AuditMailPart} from "./audit-mail-content.ts";
 import {auditMailQuery,verifiedAddressThread} from "./audit-mail-scope.ts";
 import {readPdfInspection,savePdfInspection} from "./pdf-inspection-cache.ts";
 import { spawn } from "node:child_process";
@@ -31,8 +32,7 @@ export async function inventoryAuditPdfs(folderId:string) {
   }}await walk(folderId,0);const ordered=orderedAuditSources(results);if(ordered.length>256)limitations.push('PDF inventory limit reached; additional sources were not inspected.');return {items:ordered.slice(0,256),limitations:[...new Set(limitations)]};
 }
 export async function matterPdfs(folderId:string){return (await inventoryAuditPdfs(folderId)).items;}
-interface MailPart {mimeType?:string;filename?:string;body?:{data?:string;attachmentId?:string};parts?:MailPart[];headers?:{name:string;value:string}[];}
-function mailText(p:MailPart):string {if((p.mimeType==="text/plain"||p.mimeType==="text/html")&&p.body?.data)return Buffer.from(p.body.data,"base64url").toString("utf8").replace(/<script[\s\S]*?<\/script>/gi,"").replace(/<style[\s\S]*?<\/style>/gi,"").replace(/<[^>]+>/g," ").replace(/&nbsp;/g," ").replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">");return (p.parts??[]).map(mailText).join("\n");}
+type MailPart=AuditMailPart;
 export async function captureAudit(job:AuditJob,inspect=inspectPdf):Promise<AuditManifest>{
   const sources:AuditSource[]=[],limitations:string[]=[];let budget=0;
   console.info(JSON.stringify({auditCapture:"started"}));
@@ -40,7 +40,7 @@ export async function captureAudit(job:AuditJob,inspect=inspectPdf):Promise<Audi
   await pdf(job.packageId,job.packageName,"package",await getAuditBlob(job.packageHash));
   sources[0].versionAt=job.cutoff;
   const drive=await ReadOnlyDrive.connect();const inventory=await inventoryAuditPdfs(job.folderId);limitations.push(...inventory.limitations);const items=inventory.items;
-  for(const item of items){if(item.id===job.packageId)continue;
+  for(const item of items){if(job.lease)await renewAuditLease(job.id,job.lease);if(item.id===job.packageId)continue;
     if(!item.modifiedTime||Date.parse(item.modifiedTime)>Date.parse(job.cutoff)){limitations.push(`${item.name}: historic version before the evidence cutoff was not established.`);continue;}
     if(Number(item.size)>20_000_000){limitations.push(`${item.name}: exceeds supporting source limit.`);continue;}
     try{const before=await drive.metadata(item.id),bytes=await drive.pdf(before),after=await drive.metadata(item.id);
@@ -70,11 +70,12 @@ export async function captureAudit(job:AuditJob,inspect=inspectPdf):Promise<Audi
       await pdf(id,part.filename,"support",bytes);sources.at(-1)!.occurredAt=occurredAt;attachmentCount++;
     }
     for(const id of ids){const thread=await mailbox.thread(id);
-      const scoped=verifiedAddressThread((thread.messages??[]).filter((m:{internalDate:string})=>Number(m.internalDate)<Date.parse(job.cutoff)).map((m:{payload:MailPart})=>({subject:(m.payload.headers??[]).find(h=>h.name.toLowerCase()==='subject')?.value??'',contacts:(m.payload.headers??[]).filter(h=>/^(from|to|cc)$/i.test(h.name)).map(h=>h.value).join(' '),text:mailText(m.payload)})),job);
+      const scoped=verifiedAddressThread((thread.messages??[]).filter((m:{internalDate:string})=>Number(m.internalDate)<Date.parse(job.cutoff)).map((m:{payload:MailPart})=>({subject:(m.payload.headers??[]).find(h=>h.name.toLowerCase()==='subject')?.value??'',contacts:(m.payload.headers??[]).filter(h=>/^(from|to|cc)$/i.test(h.name)).map(h=>h.value).join(' '),text:auditMailBody(m.payload)})),job);
       for(const m of thread.messages??[]){if(seen.has(m.id))continue;seen.add(m.id);
       const decision=selectHistoricalMailEvidence(m,{matterNumber:job.matterNumber,addressThreadVerified:scoped,cutoffExclusiveMs:Date.parse(job.cutoff)});if(!decision.eligible)continue;
-      const body=mailText(m.payload).split(/\nOn .{0,300}wrote:|\nFrom:/)[0].split("\n").filter(l=>!l.trimStart().startsWith(">")).join("\n").slice(0,15000);
-      if(!body.trim())continue;const bytes=Buffer.from(body),hash=await putAuditBlob(bytes);sources.push({id:`mail-${m.id}`,name:"Matter correspondence",kind:"email",sha256:hash,capturedAt:new Date().toISOString(),occurredAt:new Date(Number(m.internalDate)).toISOString(),pages:[{number:1,text:body,rendered:false,inkRatio:null}]});
+      const content=auditMailEvidenceText(m.payload);if(!content.hasBody)continue;
+      if(content.truncated)limitations.push(`Email ${m.id}: body exceeded 64,000 characters; quoted history may be incomplete.`);
+      const bytes=Buffer.from(content.text),hash=await putAuditBlob(bytes);sources.push({id:`mail-${m.id}`,name:"Matter correspondence",kind:"email",sha256:hash,capturedAt:new Date().toISOString(),occurredAt:new Date(Number(m.internalDate)).toISOString(),pages:[{number:1,text:content.text,rendered:false,inkRatio:null}]});
       await attachments(m.payload,m.id,new Date(Number(m.internalDate)).toISOString());
     }}
     if(!sources.some(s=>s.kind==='email'))limitations.push("No live email messages were captured. Current extensions, deposits and correspondence follow-ups may be missing; review mailbox coverage before relying on this report.");
