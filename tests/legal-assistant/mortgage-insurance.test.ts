@@ -7,6 +7,8 @@ test('only a single recognized lender defaults; aliases are exact and competing 
  assert.equal(defaultInsuranceLender(['RBC']),'rbc');assert.equal(defaultInsuranceLender(['BNS']),'scotia');
  assert.equal(defaultInsuranceLender(['Toronto-Dominion Bank']),'td');
  assert.equal(defaultInsuranceLender(['RBC','TD']),'');
+ assert.equal(defaultInsuranceLender(['RBC','Unrecognized second lender']),'');
+ assert.equal(defaultInsuranceLender(['RBC','Royal Bank of Canada']),'rbc');
  assert.equal(defaultInsuranceLender(['Unknown Bank']),'');
  assert.equal(defaultInsuranceLender(['Fake RBC']),'');
  assert.equal(defaultInsuranceLender(['Computershare Trust Company of Canada']),'computershare');

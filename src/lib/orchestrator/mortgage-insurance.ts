@@ -14,8 +14,10 @@ export const INSURANCE_LENDERS = [
 ] as const;
 const normalized=(s:string)=>s.toLowerCase().replace(/[^a-z0-9]/g,'');
 export function defaultInsuranceLender(names:readonly string[]=[]){
- const matches=INSURANCE_LENDERS.filter(l=>names.some(n=>l.aliases.some(a=>normalized(n)===normalized(a))));
- return matches.length===1?matches[0].id:'';
+ const matches=names.map(n=>INSURANCE_LENDERS.find(l=>l.aliases.some(a=>normalized(n)===normalized(a))));
+ if(!matches.length||matches.some(l=>!l))return '';
+ const ids=[...new Set(matches.map(l=>l!.id))];
+ return ids.length===1?ids[0]:'';
 }
 const escape=(s:string)=>s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
 export function insuranceEmailDetails(lenderId:string,address:string,closingDate?:string){
