@@ -1,6 +1,6 @@
 # Legal Assistant dev promotion
 
-Status: prepared for review and integration testing; NOT activated on devadmin.iclosed.ca.
+Status: owner-approved dev deployment; cloud persistence and current-Mac workers verified; dev alias cutover and signed-in verification in progress.
 
 ## Source baseline and conflicts
 
@@ -59,9 +59,11 @@ Applied and verified in existing iclosed-dev only: additive table/CAS schema wit
 
 Live cloud checks verified single-winner CAS, saved document readback, anonymous table/artifact denial, signed private upload and exact 5 MB result download. Large COO uploads, results and saved reviews now use private artifact transport so they do not cross Vercel as oversized JSON. Download links expire after two minutes; upload preparation and workflow validation remain staff-authenticated.
 
-Mac mini enrollment could not run: this Mac is off the mini's network (confirmed by the owner), so its pinned .local SSH address cannot resolve. No hosted worker services were installed or activated. Resume on the same network or through an explicitly configured secure remote connection, refresh the runner from the final reviewed source, and verify workers before enabling submissions/imports or promoting the dev alias. Do not expose SSH publicly or weaken host verification. The local app remains available.
+Mac mini enrollment could not run because this Mac is off its network (confirmed by the owner). The worker architecture does not require that specific machine. In response to the owner's request to proceed, four isolated persistent hosted-dev services now run on the available Mac under Application Support/HostedDevWorker. Both document/audit workers passed native PDF and scanned-page OCR preflight; the live cloud queue completed a synthetic three-notice COO with exact PDF hash readback. Gmail discovery succeeded, the migrated mailbox identity was confirmed, and daily sync skipped today's duplicate extract. Dev web submissions/imports are enabled after these checks. Client COO sends remain disabled.
 
-Local discovery continues after the verified snapshot, so cutover must reconcile later local changes with the hosted baseline rather than overwrite either side or reuse an outdated manifest. Until the workers and signed-in hosted flows are checked, the full hosted workflow is not complete and the alias stays on the existing deployment.
+These workers require this Mac to remain awake and online. Closer opening remains dependent on the separately prepared Mac mini script. Migrating workers to an always-on host is a later infrastructure improvement; it does not require changing the website workflow. Do not expose SSH publicly or weaken pinned host verification.
+
+The local app remains intact and uses its existing local state. Hosted dev uses the verified cloud snapshot and independently saved later revisions; do not overwrite either with a stale baseline. Future synchronization must reconcile source and receipts explicitly. Signed-in hosted route verification remains required before calling promotion fully verified. A proposed rerun chosen from the latest completed report was blocked by automatic review because it did not prove membership in the ten specifically authorized historical files; it did not execute. The live cloud queue test used synthetic COO data instead.
 
 ## Final verification findings
 
