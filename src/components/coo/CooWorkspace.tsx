@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Download, FileText, Building2, Pencil, X, Send } from "lucide-react";
 import PdfPreview from "./PdfPreview";
+import {cooPost,cooResponse} from "./transport";
 import Button from "@/components/ui/Button";
 import { departmentLabels, deliveryRecipient, sameServiceDepartment, validateCooDraft, type CooDraft, type CooDepartment, type CooPacket } from "@/lib/coo/model";
 import "./coo.css";
@@ -14,20 +15,22 @@ import {applyCondoContact} from "@/lib/coo/condo-contact-model";
 import type {CooDriveDocument} from "@/lib/coo/drive-documents";
 import type {CooReview} from "@/lib/coo/delivery-store";
 import type {CooReviewSummary} from "@/lib/coo/delivery-model";
-interface Props{savedReview?:CooReview;sendEnabled?:boolean;initialDraft:CooDraft;demo?:boolean;driveDocuments?:CooDriveDocument[];driveMessage?:string;driveFolderId?:string|null;fileStatus?:string;}
+interface Props{savedReviewUrl?:string;savedReview?:CooReview;sendEnabled?:boolean;initialDraft:CooDraft;demo?:boolean;driveDocuments?:CooDriveDocument[];driveMessage?:string;driveFolderId?:string|null;fileStatus?:string;}
 async function preparePackets(draft:CooDraft,transfer:{base64:string}|null,demo:boolean,signal?:AbortSignal):Promise<{packets:CooPacket[];review:CooReviewSummary|null}>{
- const response=await fetch(`/api/admin/legal-assistant/coo/preview${demo?"?demo=true":""}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({draft,...(!demo?{transferBase64:transfer?.base64}:{})}),signal});
- const result=await response.json();if(!response.ok)throw new Error(result.error||"Unable to prepare the draft.");return result;
+ return cooPost(`/api/admin/legal-assistant/coo/preview${demo?"?demo=true":""}`,{draft,...(!demo?{transferBase64:transfer?.base64}:{})},signal);
 }
-export default function CooWorkspace({savedReview,sendEnabled=false,initialDraft,demo=false,driveDocuments=[],driveMessage,driveFolderId,fileStatus}:Props){
+export default function CooWorkspace({savedReview,savedReviewUrl,sendEnabled=false,initialDraft,demo=false,driveDocuments=[],driveMessage,driveFolderId,fileStatus}:Props){
  const[draft,setDraft]=useState(initialDraft),[packets,setPackets]=useState<CooPacket[]>(savedReview?.messages.map(m=>m.packet)??[]),[selected,setSelected]=useState<CooDepartment>("tax"),[errors,setErrors]=useState<string[]>([]),[busy,setBusy]=useState(()=>demo&&validateCooDraft(initialDraft).length===0),[transfer,setTransfer]=useState<{name:string;base64:string}|null>(savedReview?.transferBase64?{name:"Saved registered transfer",base64:savedReview.transferBase64}:null);
  const [review,setReview]=useState<CooReviewSummary|null>(savedReview??null),[confirmSend,setConfirmSend]=useState(false),[sending,setSending]=useState(false),[approved,setApproved]=useState(false);
+ const hasSavedReview=!!savedReview||!!savedReviewUrl;
+ useEffect(()=>{if(!savedReviewUrl)return;const controller=new AbortController();
+ cooResponse(Response.json({privateResultUrl:savedReviewUrl})).then((loaded:CooReview)=>{if(controller.signal.aborted)return;setDraft(loaded.draft);setPackets(loaded.messages.map(m=>m.packet));setReview(loaded);if(loaded.transferBase64)setTransfer({name:"Saved registered transfer",base64:loaded.transferBase64});}).catch(()=>{if(!controller.signal.aborted)setErrors(['The saved COO could not be loaded. Reload this page.']);});return()=>controller.abort();},[savedReviewUrl]);
  const sendDialogRef=useRef<HTMLElement>(null);
  useEffect(()=>{if(!confirmSend)return;const previous=document.activeElement as HTMLElement|null,overflow=document.body.style.overflow;document.body.style.overflow='hidden';const controls=()=>Array.from(sendDialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),a[href]')??[]);controls()[0]?.focus();const onKey=(event:KeyboardEvent)=>{if(event.key==='Escape'&&!sending)setConfirmSend(false);if(event.key==='Tab'){const list=controls(),first=list[0],last=list.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}}};document.addEventListener('keydown',onKey);return()=>{document.body.style.overflow=overflow;document.removeEventListener('keydown',onKey);previous?.focus();};},[confirmSend,sending]);
  const errorRef=useRef<HTMLDivElement>(null);
  const transferCandidates=driveDocuments.filter(d=>d.kind==='transfer');
  const [driveTransferId,setDriveTransferId]=useState(()=>transferCandidates.length===1?transferCandidates[0].id:'');
- const [attaching,setAttaching]=useState(!demo&&!!driveFolderId&&!savedReview);
+ const [attaching,setAttaching]=useState(!demo&&!!driveFolderId&&!hasSavedReview);
  const guidance=cooSubmissionGuidance(initialDraft.property);
  const [condoResult,setCondoResult]=useState<CondoContactResult|null>(null);
  const readingCondo=!demo&&!!driveFolderId&&draft.condominium&&!!draft.condoCorporation&&!!driveTransferId&&!condoResult;
@@ -35,7 +38,7 @@ export default function CooWorkspace({savedReview,sendEnabled=false,initialDraft
  function applyDeed(result:{facts:TransferFacts;name:string;base64:string;documentId?:string},current:CooDraft){
   const populated=prepopulateCoo(current,result.facts);setDraft(latest=>prepopulateCoo(latest,result.facts).draft);setPackets([]);setErrors([]);setReview(null);setDeedSummary(populated);setTransfer({name:result.name,base64:result.base64});if(result.documentId)setDriveTransferId(result.documentId);
  }
- async function attachFromDrive(){if(!driveTransferId||attaching)return;setAttaching(true);setErrors([]);try{const response=await fetch(`/api/admin/legal-assistant/coo/transfer?fileId=${encodeURIComponent(draft.fileId)}&documentId=${encodeURIComponent(driveTransferId)}`,{cache:'no-store'});const result=await response.json();if(!response.ok)throw Error(result.error);applyDeed(result,draft);}catch(error){setErrors([error instanceof Error?error.message:'The Drive deed could not be attached.']);}finally{setAttaching(false);}}
+ async function attachFromDrive(){if(!driveTransferId||attaching)return;setAttaching(true);setErrors([]);try{const response=await fetch(`/api/admin/legal-assistant/coo/transfer?fileId=${encodeURIComponent(draft.fileId)}&documentId=${encodeURIComponent(driveTransferId)}`,{cache:'no-store'});const result=await cooResponse(response);applyDeed(result,draft);}catch(error){setErrors([error instanceof Error?error.message:'The Drive deed could not be attached.']);}finally{setAttaching(false);}}
  const [editing,setEditing]=useState(false);
  const backup=useRef<{review:CooReviewSummary|null;draft:CooDraft;packets:CooPacket[];transfer:typeof transfer;deedSummary:typeof deedSummary;driveTransferId:string}|null>(null);
  const editButton=useRef<HTMLButtonElement>(null);
@@ -49,19 +52,19 @@ export default function CooWorkspace({savedReview,sendEnabled=false,initialDraft
   return()=>controller.abort();
  },[initialDraft,demo]);
  useEffect(()=>{
-  if(demo||!driveFolderId||savedReview)return;
+  if(demo||!driveFolderId||hasSavedReview)return;
   const controller=new AbortController();
-  fetch(`/api/admin/legal-assistant/coo/transfer?fileId=${encodeURIComponent(initialDraft.fileId)}`,{cache:'no-store',signal:controller.signal}).then(async response=>{const result=await response.json();if(!response.ok)throw Error(result.error);if(!edited.current&&!controller.signal.aborted)applyDeed(result,initialDraft);}).catch(error=>{if(!controller.signal.aborted&&!edited.current)setErrors([error instanceof Error?error.message:'Automatic deed preparation failed.']);}).finally(()=>{if(!controller.signal.aborted)setAttaching(false);});
+  fetch(`/api/admin/legal-assistant/coo/transfer?fileId=${encodeURIComponent(initialDraft.fileId)}`,{cache:'no-store',signal:controller.signal}).then(async response=>{const result=await cooResponse(response);if(!edited.current&&!controller.signal.aborted)applyDeed(result,initialDraft);}).catch(error=>{if(!controller.signal.aborted&&!edited.current)setErrors([error instanceof Error?error.message:'Automatic deed preparation failed.']);}).finally(()=>{if(!controller.signal.aborted)setAttaching(false);});
   return()=>controller.abort();
   // Initial source resolution runs once for this file; editing must not trigger or be overwritten by it.
   // eslint-disable-next-line react-hooks/exhaustive-deps
- },[initialDraft.fileId,demo,driveFolderId,savedReview]);
+ },[initialDraft.fileId,demo,driveFolderId,hasSavedReview]);
  useEffect(()=>{
-  if(demo||savedReview||!driveFolderId||!draft.condominium||!draft.condoCorporation||!driveTransferId)return;
+  if(demo||hasSavedReview||!driveFolderId||!draft.condominium||!draft.condoCorporation||!driveTransferId)return;
   const controller=new AbortController();
   fetch('/api/admin/legal-assistant/coo/condo-contact',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fileId:initialDraft.fileId,documentId:driveTransferId}),signal:controller.signal}).then(async response=>{const result=await response.json();if(!response.ok)throw Error(result.error);if(!controller.signal.aborted){setCondoResult(result);if(!edited.current)setDraft(current=>applyCondoContact(current,result));}}).catch(()=>{if(!controller.signal.aborted)setCondoResult({message:'Status-certificate details could not be verified. Add a verified management contact only if preparing a condo notice.',sources:[]});});
   return()=>controller.abort();
- },[initialDraft.fileId,draft.condominium,draft.condoCorporation,demo,driveFolderId,driveTransferId,savedReview]);
+ },[initialDraft.fileId,draft.condominium,draft.condoCorporation,demo,driveFolderId,driveTransferId,hasSavedReview]);
  function openEditor(){edited.current=true;generationVersion.current++;backup.current={review,draft:structuredClone(draft),packets,transfer,deedSummary,driveTransferId};setEditing(true);}
  function cancelEdit(){if(backup.current){setReview(backup.current.review);setDraft(backup.current.draft);setPackets(backup.current.packets);setTransfer(backup.current.transfer);setDeedSummary(backup.current.deedSummary);setDriveTransferId(backup.current.driveTransferId);}setErrors([]);setEditing(false);}
  useEffect(()=>{
@@ -85,7 +88,7 @@ export default function CooWorkspace({savedReview,sendEnabled=false,initialDraft
  const active=links.find(p=>p.department===selected)??links[0];
  const enabled=(Object.keys(departmentLabels)as CooDepartment[]).filter(k=>draft.recipients[k].enabled&&!(draft.combineTaxWater&&k==="water"));
  const noticeLabel=(k:CooDepartment)=>draft.combineTaxWater&&k==="tax"?"Municipal tax and water":departmentLabels[k];
- async function upload(file:File){setPackets([]);setTransfer(null);setDeedSummary(null);change({completeTransferConfirmed:false});if(file.size>10_000_000||file.type!=="application/pdf"){setErrors(["Choose a registered transfer PDF smaller than 10 MB."]);return;}setAttaching(true);try{const base64=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onerror=()=>reject(Error('The PDF could not be read.'));reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.readAsDataURL(file);});const response=await fetch('/api/admin/legal-assistant/coo/transfer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fileId:draft.fileId,base64})});const result=await response.json();if(!response.ok)throw Error(result.error);applyDeed({...result,name:file.name,base64},draft);}catch(error){setErrors([error instanceof Error?error.message:'The deed could not be read.']);}finally{setAttaching(false);}}
+ async function upload(file:File){setPackets([]);setTransfer(null);setDeedSummary(null);change({completeTransferConfirmed:false});if(file.size>10_000_000||file.type!=="application/pdf"){setErrors(["Choose a registered transfer PDF smaller than 10 MB."]);return;}setAttaching(true);try{const base64=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onerror=()=>reject(Error('The PDF could not be read.'));reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.readAsDataURL(file);});const result=await cooPost('/api/admin/legal-assistant/coo/transfer',{fileId:draft.fileId,base64});applyDeed({...result,name:file.name,base64},draft);}catch(error){setErrors([error instanceof Error?error.message:'The deed could not be read.']);}finally{setAttaching(false);}}
  async function reviewDeed(){edited.current=true;generationVersion.current++;const confirmed={...draft,completeTransferConfirmed:true};const found=validateCooDraft(confirmed);if(found.length){setErrors(found);openEditor();return;}setDraft(confirmed);setBusy(true);setErrors([]);try{const result=await preparePackets(confirmed,transfer,demo);setPackets(result.packets);setReview(result.review);}catch(error){setErrors([error instanceof Error?error.message:'Review generation failed.']);}finally{setBusy(false);}}
  async function generate(){edited.current=true;generationVersion.current++;const found=validateCooDraft(draft);if(!demo&&!transfer)found.push("Attach the complete registered transfer PDF.");if(found.length){setErrors(found);requestAnimationFrame(()=>errorRef.current?.focus());return;}setBusy(true);setErrors([]);try{const prepared=await preparePackets(draft,transfer,demo);setPackets(prepared.packets);setReview(prepared.review);if(!prepared.packets.some(p=>p.department===selected))setSelected(prepared.packets[0].department);setEditing(false);}catch(e){setPackets([]);setErrors([e instanceof Error?e.message:"Review generation failed."]);}finally{setBusy(false);}}
  async function sendApproved(){if(!review||!approved||sending)return;setSending(true);setErrors([]);try{const response=await fetch('/api/admin/legal-assistant/coo/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:review.id,hash:review.hash,fileId:draft.fileId,approved:true})});const result=await response.json();if(!response.ok)throw Error(result.error);setReview(result.review);setConfirmSend(false);}catch(e){setErrors([e instanceof Error?e.message:'Delivery could not be confirmed.']);}finally{setSending(false);}}

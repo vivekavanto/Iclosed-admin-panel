@@ -43,7 +43,7 @@ Sensitive Vercel settings are unreadable after creation and can appear blank in 
 
 ## Limits requiring acceptance before rollout
 
-The deployment scripts are prepared; native runner smoke tests passed, while cloud integration checks remain pending. SQL execution, full baseline transfer, Vercel secret updates, service enrollment and signed-in dev workflow checks remain open. Large COO responses must be tested against the hosting response-size limit; move packet download to authenticated private-object delivery if representative packets exceed it. Native worker dependency versions and OCR quality must be verified on the actual selected runner. A code build or mocked database test does not complete these gates.
+The deployment scripts are prepared; native runner smoke tests passed, while cloud integration checks remain pending. Schema, baseline and dev-only settings are verified below. Service enrollment and signed-in dev workflow checks remain open. Large COO transport now uses private-object delivery and passed a live synthetic 5 MB check. Native worker dependency versions and OCR quality must be verified on the actual selected runner. A code build or mocked database test does not complete these gates.
 
 ## Runner preparation verified October 27
 
@@ -51,12 +51,20 @@ An isolated runner was prepared on the existing Mac mini at `~/Library/Applicati
 
 The read-only source transfer plan found revision 52 with 67 matters, 78 frozen artifacts, two COO revisions and two saved mailbox connections. This is an inventory, not a hosted transfer or a database success claim. The private manifest is not committed and must be regenerated if source bytes change.
 
-## Current activation gate
+## Approved deployment and remaining cutover
 
-Automatic approval review rejected applying the additive schema/privilege migration to the shared `iclosed-dev` database because the retained repository instructions require a separate reviewed deployment gate. No schema migration ran. The owner-only pending environment configuration is staged locally with audit submissions/imports/sending disabled; it has not been applied to Vercel or distributed to running services. The reviewed rollout must cover the SQL, private bucket, verified baseline transfer, dev-only environment settings and worker enrollment before the alias is promoted. Production and existing local workflows remain unchanged.
+The owner approved the reviewed dev-only deployment scope on October 27, 2026, after the conflict summary. The earlier automatic-review migration gate is satisfied. Production changes and client email sending remain outside scope.
+
+Applied and verified in existing iclosed-dev only: additive table/CAS schema with RLS and service-role-only access; private artifact bucket under the project's existing 50 MB object limit; exact-hash transfer and readback of revision 52, 67 matters, 78 artifacts, two COO revisions and two encrypted mailbox connections. Owner-only receipts retain the exact manifest. No local source data was deleted or reset. Vercel settings were added only for Preview branch dev, with submissions/imports/sending still disabled pending worker checks.
+
+Live cloud checks verified single-winner CAS, saved document readback, anonymous table/artifact denial, signed private upload and exact 5 MB result download. Large COO uploads, results and saved reviews now use private artifact transport so they do not cross Vercel as oversized JSON. Download links expire after two minutes; upload preparation and workflow validation remain staff-authenticated.
+
+Mac mini enrollment could not run: this Mac is off the mini's network (confirmed by the owner), so its pinned .local SSH address cannot resolve. No hosted worker services were installed or activated. Resume on the same network or through an explicitly configured secure remote connection, refresh the runner from the final reviewed source, and verify workers before enabling submissions/imports or promoting the dev alias. Do not expose SSH publicly or weaken host verification. The local app remains available.
+
+Local discovery continues after the verified snapshot, so cutover must reconcile later local changes with the hosted baseline rather than overwrite either side or reuse an outdated manifest. Until the workers and signed-in hosted flows are checked, the full hosted workflow is not complete and the alias stays on the existing deployment.
 
 ## Final verification findings
 
-- Full repository checks now pass 479 tests; the production build, TypeScript and scoped lint pass. Full lint's two imported fixture errors were corrected; remaining warnings are non-blocking.
+- Full repository checks now pass 491 tests; the production build, TypeScript and scoped lint pass. Full lint's two imported fixture errors were corrected; remaining warnings are non-blocking.
 - Signed-in local verification uncovered a real discovery stall: one added message had been deleted before retrieval. Discovery now recovers remaining thread content where possible, records unavailable-message coverage explicitly and prevents approval from surviving an unverifiable existing source. The isolated fix was backported and committed to the active local app; discovery resumed with zero model calls, preserved its queue and displayed its coverage gap on the signed-in screen. The source manifest must be regenerated after quiescing writers for transfer.
 - Vercel blocked the draft branch's automatic previews because it could not find a Git account for the commit author. This is separate from the reviewed schema gate. Resolve deployment through an existing linked operator account after approval; do not add paid members, rewrite contributor identity or weaken project permissions. The dev alias has not changed.
