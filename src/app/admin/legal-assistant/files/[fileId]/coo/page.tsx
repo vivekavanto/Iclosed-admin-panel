@@ -16,5 +16,6 @@ export default async function CooFilePage({params}:{params:Promise<{fileId:strin
  const savedReview=await latestCooReview(m.id);
  const payload=savedReview?await workflowResult(savedReview):null;
  const privateUrl=payload&&typeof payload==='object'&&'privateResultUrl' in payload?String(payload.privateResultUrl):undefined;
- return <CooWorkspace savedReview={privateUrl?undefined:savedReview??undefined} savedReviewUrl={privateUrl} sendEnabled={cooSendReadiness().enabled} initialDraft={savedReview?.draft??draft} driveDocuments={drive.documents} driveMessage={drive.message} driveFolderId={m.driveFolderId} fileStatus={m.status}/>;
+ const sender=await cooSendReadiness();
+ return <CooWorkspace savedReview={privateUrl?undefined:savedReview??undefined} savedReviewUrl={privateUrl} sendEnabled={sender.enabled} sendUnavailableMessage={sender.message} initialDraft={savedReview?.draft??draft} driveDocuments={drive.documents} driveMessage={drive.message} driveFolderId={m.driveFolderId} fileStatus={m.status}/>;
 }
