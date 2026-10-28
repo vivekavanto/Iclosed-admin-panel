@@ -9,7 +9,19 @@ export type PortalLead = {
   first_name: string | null;
   last_name: string | null;
   parent_lead_id: string | null;
+  // Shown on intakes staff haven't converted to a deal yet.
+  lead_type?: string | null;
+  address_street?: string | null;
+  address_unit?: string | null;
+  address_city?: string | null;
+  selling_address_street?: string | null;
+  selling_address_unit?: string | null;
+  selling_address_city?: string | null;
+  closing_date?: string | null;
 };
+
+/** Status of a referred intake that hasn't been opened as a file yet. */
+export const PENDING_STATUS = "Intake submitted";
 
 export type PortalDeal = {
   id: string;
@@ -446,5 +458,39 @@ export function buildAgentFiles(input: BuildInput): PortalFile[] {
     });
   }
 
-  return files.sort((a, b) => (b.fileNumber ?? "").localeCompare(a.fileNumber ?? ""));
+  // Intakes not yet converted: no deal or tasks, just who and where.
+  const address = (...parts: (string | null | undefined)[]) => parts.map((p) => p?.trim()).filter(Boolean).join(", ") || null;
+  for (const lead of input.leads) {
+    if (lead.parent_lead_id || dealsByRoot.has(lead.id)) continue;
+    const both = lead.lead_type === "Purchase & Sale";
+    const sides: PortalSide[] = both ? ["purchase", "sale"] : lead.lead_type === "Purchase" ? ["purchase"] : lead.lead_type === "Sale" ? ["sale"] : ["other"];
+    const main = address(lead.address_street, lead.address_unit, lead.address_city);
+    const selling = address(lead.selling_address_street, lead.selling_address_unit, lead.selling_address_city);
+    files.push({
+      rootLeadId: lead.id,
+      fileNumber: null,
+      type: lead.lead_type ?? null,
+      status: PENDING_STATUS,
+      clients: input.leads
+        .filter((l) => l.id === lead.id || l.parent_lead_id === lead.id)
+        .map((l) => nameOf(l))
+        .filter((n, i, arr) => n && arr.indexOf(n) === i),
+      closingDate: lead.closing_date ?? null,
+      sections: sides.map((side) => ({
+        side,
+        label: sideLabel(side, lead.lead_type ?? null),
+        address: both && side === "sale" ? selling : main,
+        stages: [],
+        done: 0,
+        total: 0,
+        pendingTasks: 0,
+        attention: false,
+        nextUp: null,
+      })),
+      permission: { status: "none", grantedAt: null, requestedAt: null, requestedTo: null, declinedAt: null },
+    });
+  }
+
+  // Pending intakes first, then files newest number first.
+  return files.sort((a, b) => Number(!!a.fileNumber) - Number(!!b.fileNumber) || (b.fileNumber ?? "").localeCompare(a.fileNumber ?? ""));
 }

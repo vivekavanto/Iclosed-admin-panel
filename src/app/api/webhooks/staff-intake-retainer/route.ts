@@ -11,7 +11,7 @@ export const maxDuration = 60;
 
 const MAX_LEAD_AGE_MS = 60 * 60 * 1000;
 
-// Portal intake filled by staff (admin "New intake"): email the retainer instead of the quote.
+// Intake filled by staff or a partner-portal agent: email the retainer instead of the quote.
 export function OPTIONS() {
   return new NextResponse(null, { status: 405 });
 }
@@ -39,10 +39,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: error.message }, { status: 500 });
     }
 
-    // Only fresh staff intakes, so a leaked token can't mail retainers to arbitrary leads.
+    // Only fresh staff/agent intakes, so a leaked token can't mail retainers to arbitrary leads.
     const eligible = (leads ?? []).filter(
       (l) =>
-        l.intake_source === "staff" &&
+        (l.intake_source === "staff" || l.intake_source === "agent") &&
         l.email &&
         Date.now() - new Date(l.created_at).getTime() < MAX_LEAD_AGE_MS,
     );
