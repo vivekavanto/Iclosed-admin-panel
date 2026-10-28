@@ -9,6 +9,7 @@ import {auditDashboardSummaries} from "@/lib/orchestrator/audit-store";
 import {workflowSettings} from "@/lib/orchestrator/workflow-settings";
 import { torontoDate } from "@/lib/orchestrator/closing-views";
 import {cooDashboardSummaries} from "@/lib/coo/delivery-store";
+import {clientNotificationSummaries} from "@/lib/orchestrator/mortgage-email-outbox";
 export const dynamic = "force-dynamic";
 export default async function DashboardPage() {
   const user = await getStaff();
@@ -22,6 +23,7 @@ export default async function DashboardPage() {
   }
   const workflow=await workflowSettings().catch(()=>null);
   const auditSummaries=await auditDashboardSummaries().catch(()=>({}));
+  const notifications=await clientNotificationSummaries();
   const cooSummaries=await cooDashboardSummaries();
-  return <Orchestrator cooSummaries={cooSummaries} initialToday={torontoDate()} auditSummaries={auditSummaries} initialMatters={(snapshot?.matters ?? []).map(m=>({...m,mortgageInstructions:workflow?.mortgage[m.id],mortgageClientsInformed:workflow?.mortgageClientsInformed?.[m.id]}))} initialRevision={snapshot?.revision} initialImportDate={snapshot?.sourceDate} initialCoverageEnd={snapshot?.coverageEnd} email={user.email} manage={canManageOrchestrator(user)} initialError={error} />;
+  return <Orchestrator cooSummaries={cooSummaries} initialToday={torontoDate()} auditSummaries={auditSummaries} initialMatters={(snapshot?.matters ?? []).map(m=>({...m,mortgageInstructions:workflow?.mortgage[m.id],fundsClientsInformed:notifications[m.id]?.funds?{at:notifications[m.id].funds!}:undefined,mortgageClientsInformed:notifications[m.id]?.mortgage?{at:notifications[m.id].mortgage!,actor:'provider',email:''}:workflow?.mortgageClientsInformed?.[m.id]}))} initialRevision={snapshot?.revision} initialImportDate={snapshot?.sourceDate} initialCoverageEnd={snapshot?.coverageEnd} email={user.email} manage={canManageOrchestrator(user)} initialError={error} />;
 }
