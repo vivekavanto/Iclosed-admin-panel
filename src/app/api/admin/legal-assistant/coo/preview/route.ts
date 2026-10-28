@@ -5,6 +5,7 @@ import { getSnapshot } from "@/lib/orchestrator/store";
 import { decodeCooDraft, initialLetters, validateCooDraft } from "@/lib/coo/model";
 import { renderCooReview } from "@/lib/coo/render";
 import {storeCooReview} from "@/lib/coo/delivery-store";
+import {withOperationContext} from '@/lib/orchestrator/hosted/runtime';
 export const runtime="nodejs";
 export const maxDuration=300;
 export async function POST(request:Request){
@@ -22,7 +23,7 @@ export async function POST(request:Request){
   else{const snapshot=await getSnapshot();const matter=snapshot.matters.find(m=>m.id===draft.fileId);if(!matter)throw new Error("File not found in the register.");draft.fileNumber=matter.number;draft.firm=matter.firm;draft.transaction=matter.type;draft.clerk=matter.clerk;draft.initials=initialLetters(matter.clerk);}
   const errors=validateCooDraft(draft);if(errors.length)return NextResponse.json({error:errors.join(" "),errors},{status:400});
   if(body.transferBase64!==undefined&&(typeof body.transferBase64!=="string"||body.transferBase64.length>13_333_340))throw new Error("Invalid transfer upload.");
-  const result=await renderCooReview(draft,body.transferBase64,demo,!demo);
+  const result=await withOperationContext({requester:user?.id??'demo',fileId:draft.fileId,fileNumber:draft.fileNumber,workflow:'coo'},()=>renderCooReview(draft,body.transferBase64,demo,!demo));
   const review=!demo?await storeCooReview(draft,result.packets,user!.id,body.transferBase64):null;
   return NextResponse.json(await workflowResult({...result,reviewOnly:true,review:review?{id:review.id,hash:review.hash,status:review.status,createdAt:review.createdAt}:null}),{headers:{"Cache-Control":"no-store"}});
  }catch(e){return NextResponse.json({error:e instanceof SyntaxError?"Invalid notice details.":e instanceof Error?e.message:"Unable to generate the review packet."},{status:400,headers:{"Cache-Control":"no-store"}});}

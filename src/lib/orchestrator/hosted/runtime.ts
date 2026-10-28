@@ -1,8 +1,12 @@
 import {randomUUID} from 'node:crypto';
+import {AsyncLocalStorage} from 'node:async_hooks';
 import {changeHostedDocument,readHostedDocument,hostedDocumentsEnabled} from './document.ts';
 import {putHostedBlob,getHostedBlob} from './blob.ts';
 export type Operation='coo-render'|'deed-inspect'|'condo-contact';
-interface Job{id:string;operation:Operation;input:string;status:'queued'|'running'|'completed'|'failed';createdAt:string;lease?:string;leaseUntil?:string;output?:string;}
+export interface OperationContext{requester:string;fileId?:string;fileNumber?:string;workflow:'coo'|'other';}
+const operationContext=new AsyncLocalStorage<OperationContext>();
+export const withOperationContext=<T>(context:OperationContext,fn:()=>Promise<T>)=>operationContext.run(context,fn);
+interface Job{id:string;operation:Operation;input:string;status:'queued'|'running'|'completed'|'failed';createdAt:string;lease?:string;leaseUntil?:string;output?:string;context?:OperationContext;}
 interface Runtime{workers?:Record<string,{at:string;version:string}>;jobs:Job[];}
 const initial=():Runtime=>({jobs:[]});
 export function onHostedWorker(){return process.env.ORCHESTRATOR_HOSTED_WORKER==='true';}
@@ -11,7 +15,8 @@ export async function assertHostedWorker(role='operations'){if(hostedDocumentsEn
 export async function heartbeatHostedWorker(role='operations'){return changeHostedDocument('runtime',initial,s=>{(s.workers??={})[role]={at:new Date().toISOString(),version:'hosted-v1'};});}
 export async function hostedOperation<T>(operation:Operation,input:unknown):Promise<T>{
  await assertHostedWorker();const hash=await putHostedBlob(Buffer.from(JSON.stringify(input))),id=randomUUID();
- await changeHostedDocument('runtime',initial,s=>{s.jobs.push({id,operation,input:hash,status:'queued',createdAt:new Date().toISOString()});});
+ const context=operationContext.getStore();
+ await changeHostedDocument('runtime',initial,s=>{s.jobs.push({id,operation,input:hash,status:'queued',createdAt:new Date().toISOString(),...(context?{context}:{})});});
  const until=Date.now()+240_000;
  while(Date.now()<until){const job=(await readHostedDocument('runtime',initial)).jobs.find(j=>j.id===id);if(!job)throw Error('The hosted operation record is missing.');if(job.status==='failed')throw Error('The hosted document operation did not complete. Existing records were retained.');if(job.status==='completed'){if(!job.output)throw Error('The hosted operation has no verified result.');return JSON.parse((await getHostedBlob(job.output)).toString('utf8'));}await new Promise(r=>setTimeout(r,1500));}
  throw Error('Document processing is still pending. No notice has been sent. Retry after checking the worker.');

@@ -21,7 +21,7 @@ export function renderMortgageEmail(matter:Pick<Matter,'id'|'number'|'address'|'
  if(!names.length||!matter.address.trim())throw Error('Confirm client names and the property address before preparing this email.');
  const greeting=names.length===1?names[0]:names.slice(0,-1).join(', ')+' and '+names.at(-1);
  const intendedTo=emailAddresses(unionEmails(...(matter.clientEmails??[]),matter.clientEmail??''));
- const intendedCc=emailAddresses(unionEmails(...(matter.referralAgentEmails??[]))).filter(email=>!intendedTo.some(to=>to.toLowerCase()===email.toLowerCase()));
+ const intendedCc=emailAddresses(unionEmails(...(matter.referralAgentEmails??[]),'aliya@navawilson.law')).filter(email=>!intendedTo.some(to=>to.toLowerCase()===email.toLowerCase()));
  if(intendedCc.length&&!validEmails(intendedCc.join(','),true,20))throw Error('The register contains invalid referral email addresses. Review the file before preparing notifications.');
  const values:Record<string,string>={'user.first_name':greeting,lead_address:matter.address,file_number:matter.number,'lead.file_number':matter.number};
  const resolve=(name:string)=>name in values?{value:values[name]}:null;
