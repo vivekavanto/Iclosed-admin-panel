@@ -8,6 +8,7 @@ export function portalStageName(matter:Pick<Matter,'type'>,receipt:PortalReceipt
  if(!['mortgage','funds'].includes(receipt.kind??'')||matter.type==='sale')throw Error('This notification has no receipt milestone.');
  return names[matter.type][receipt.kind as 'mortgage'|'funds'];
 }
+export function portalDealTypeMatches(type:string,matterType:Matter['type']){const value=normalized(type);return value===matterType||(matterType==='purchase'&&value==='purchase & sale');}
 export function selectPortalStage(stages:{id:string;name:string;lead_type:string;is_deleted?:boolean}[],matter:Pick<Matter,'type'>,receipt:PortalReceipt){
  const name=portalStageName(matter,receipt),matches=stages.filter(s=>!s.is_deleted&&normalized(s.name)===normalized(name)&&normalized(s.lead_type)===matter.type);
  if(matches.length!==1)throw Error('The portal receipt milestone mapping is missing or ambiguous.');return matches[0].id;
@@ -19,10 +20,10 @@ export async function synchronizePortalMilestone(matter:Matter,receipt:PortalRec
  const config=hostedConfiguration()!;
  const request=async(table:string,query:Record<string,string>,init:RequestInit={})=>{const r=await fetch(config.url+'/rest/v1/'+table+'?'+new URLSearchParams(query),{...init,headers:{apikey:config.key,Authorization:'Bearer '+config.key,'Content-Type':'application/json',Prefer:'return=representation'},signal:AbortSignal.timeout(20000)});if(!r.ok)throw Error('Portal synchronization could not be confirmed.');return r.json();};
  const stages=await request('stage_templates',{select:'id,name,lead_type,is_deleted',is_deleted:'eq.false'});const stageId=selectPortalStage(stages,matter,receipt);
- const compact=matter.number.replace(/-/g,'');if(!/^\d{2}[PSR]\d{4}$/.test(compact))throw Error('A verified file number is required for portal matching.');
+ const compact=matter.number.replace(/-/g,'');if(!(matter.type==='purchase'?/^\d{2}P\d{4}$/:/^\d{2}R\d{4}$/).test(compact))throw Error('A verified file number is required for portal matching.');
  const numbers=[compact,compact.slice(0,3)+'-'+compact.slice(3)];
  const all=await request('deals',{select:'id,file_number,type,lead_id',file_number:'in.('+numbers.join(',')+')',is_deleted:'eq.false'});
- const deals=all.filter((d:{type:string})=>normalized(d.type)===matter.type);if(!deals.length)throw Error('No matching portal deal was found.');
+ const deals=all.filter((d:{type:string})=>portalDealTypeMatches(d.type,matter.type));if(!deals.length)throw Error('No matching portal deal was found.');
  const leads=await request('leads',{select:'id,parent_lead_id',id:'in.('+deals.map((d:{lead_id:string})=>d.lead_id).join(',')+')',is_deleted:'eq.false'});
  const roots=new Set(leads.map((l:{id:string;parent_lead_id:string|null})=>l.parent_lead_id??l.id));if(roots.size!==1||leads.length!==new Set(deals.map((d:{lead_id:string})=>d.lead_id)).size)throw Error('Portal file matching is ambiguous.');
  const rows=await request('milestones',{select:'id,deal_id,status,completed_at,email_sent',deal_id:'in.('+deals.map((d:{id:string})=>d.id).join(',')+')',stage_template_id:'eq.'+stageId,is_deleted:'eq.false'});

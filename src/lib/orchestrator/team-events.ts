@@ -18,12 +18,13 @@ export const SARU_SLACK_ID='U0629UW3YN4';
 export function teamMessage(event:TeamEvent,requesterId:string,origin:string){
  if(!/^U[A-Z0-9]+$/.test(requesterId))throw Error('Requester Slack identity is missing.');
  if(!['https://admin.iclosed.ca','https://devadmin.iclosed.ca'].includes(origin))throw Error('Select an approved notification origin.');
+ const test=event.id.startsWith('integration-test:');
  const mentions=[...new Set(event.workflow==='other'?[SARU_SLACK_ID,requesterId]:[requesterId])].map(id=>`<@${id}>`).join(' ');
  const categoryTitle=event.category==='portal-sync'?'Email delivered; portal milestone needs attention (do not resend the email)':event.category==='email-delivery'?'Client email delivery needs reconciliation':event.category==='file-opening'?'File opening needs attention':undefined;
  const title=categoryTitle??(event.workflow==='audit'?(event.outcome==='completed'?'Signing audit completed':'Signing audit needs attention'):event.workflow==='coo'?(event.outcome==='sent'?'COO sent':'COO needs attention'):'Workflow needs attention');
  const number=event.fileNumber?.replace(/[^a-zA-Z0-9-]/g,'').slice(0,24);
  const suffix=event.fileId&&event.workflow!=='other'?`/files/${encodeURIComponent(event.fileId)}/${event.workflow==='audit'?'audit':'coo'}`:'';
- return {channel:TEAM_CHANNELS[event.workflow],text:`${origin.includes('devadmin')?'[DEV TEST] ':''}${mentions} ${title}${number?' — '+number:''}. <${origin}/admin/legal-assistant${suffix}|Open in iClosed>`,unfurl_links:false,unfurl_media:false};
+ return {channel:TEAM_CHANNELS[event.workflow],text:`${test?'[INTEGRATION TEST ONLY] ':origin.includes('devadmin')?'[DEV TEST] ':''}${mentions} ${title}${number?' — '+number:''}. <${origin}/admin/legal-assistant${suffix}|Open in iClosed>${test?' This verifies status delivery only; no client workflow ran.':''}`,unfurl_links:false,unfurl_media:false};
 }
 /** Claim before posting. Unknown provider outcomes never get blindly retried. */
 export async function deliverTeamEvent(id:string,resolve:(actor:string)=>Promise<string>,post:(event:TeamEvent,message:ReturnType<typeof teamMessage>)=>Promise<{ts:string;channel:string}>,origin:string){
