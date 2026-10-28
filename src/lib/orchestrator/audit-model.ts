@@ -1,20 +1,20 @@
 import { createHash } from "node:crypto";
 import type {AuditFailureInfo} from './audit-failure.ts';
-export const AUDIT_RULESET = "signing-audit-2026-10-27.1";
+export const AUDIT_RULESET = "signing-audit-2026-10-28.1";
 export type FindingKind = "discrepancy" | "question" | "follow_up" | "unable_to_assess";
 export type Disposition = "Open" | "Implemented" | "Incorrectly flagged" | "Needs lawyer review";
 export interface AuditPage { number: number; text: string; rendered: boolean; inkRatio: number | null; textMethod?:'ocr'; ocrConfidence?:number; textNeedsReview?:boolean; }
-export interface AuditSource { id: string; name: string; kind: "package" | "support" | "email"; sha256: string; capturedAt: string; versionAt?:string; occurredAt?: string; pages: AuditPage[]; }
+export interface AuditSource { byteLength?:number; id: string; name: string; kind: "package" | "support" | "email"; sha256: string; capturedAt: string; versionAt?:string; occurredAt?: string; pages: AuditPage[]; }
 export interface AuditManifest { matterId: string; matterNumber: string; packageHash: string; cutoff: string; ruleset: string; sources: AuditSource[]; limitations: string[]; }
 export interface FindingEvidence { sourceId: string; page: number; quote: string; }
 export interface FinancialComparison { type:"per_diem"|"tax_reserve"|"brokerage_deposit"; baseCents:number; comparedCents:number; adjustmentCents:number; }
-export interface AuditCandidate { key: string; kind: FindingKind; summary: string; action: string; proposedBlocker: boolean; claim: "text" | "blank_page" | "missing_evidence" | "manual"; financial?:FinancialComparison|null; evidence: FindingEvidence[]; }
+export interface AuditCandidate { priority?:"High"|"Normal"|"Low"; owner?:string; duePoint?:string; key: string; kind: FindingKind; summary: string; action: string; proposedBlocker: boolean; claim: "text" | "blank_page" | "missing_evidence" | "manual"; financial?:FinancialComparison|null; evidence: FindingEvidence[]; }
 export interface ReviewResult { findings: AuditCandidate[]; resolutions: { key: string; evidence: FindingEvidence[] }[]; coverage: string[]; coverageScope?:"consolidated"; sourcePassCoverage?:{pass:number;sourceIds:string[];coverage:string[]}[]; }
 export interface AuditFinding extends AuditCandidate { id: string; evidenceJobId?: string; resolutionEvidence?:{jobId:string;evidence:FindingEvidence[]}; disposition: Disposition; notes: string; movement: "New" | "Unchanged" | "Resolved" | "Unable to reassess"; validation: string[]; }
 export interface AuditReport { matterId: string; revision: number; nextFinding: number; findings: AuditFinding[]; feedbackHistory?: {at:string;actor:string;findingId:string;disposition:Disposition;notes:string}[]; history: { jobId: string; at: string; packageHash: string; ruleset: string; cutoff: string }[]; }
 export type AuditStatus = "queued" | "capturing" | "reviewing" | "completed" | "failed";
 export interface AuditReviewProgress {step:number;total:number;phase:"source_review"|"consolidation";}
-export interface AuditJob { id: string; matterId: string; matterNumber: string; packageId: string; packageHash: string; packageName: string; folderId: string; cutoff: string; ruleset: string; status: AuditStatus; actor: string; createdAt: string; updatedAt: string; lease?: string; leaseUntil?: string; error?: string; failure?:AuditFailureInfo; manifest?: AuditManifest; reviewerCoverage?:string[];coverageScope?:"consolidated";sourcePassCoverage?:{pass:number;sourceIds:string[];coverage:string[]}[]; reviewProgress?:AuditReviewProgress; }
+export interface AuditJob { mailScope?:{address:string;clients:string;clientEmails:string[]}; id: string; matterId: string; matterNumber: string; packageId: string; packageHash: string; packageName: string; folderId: string; cutoff: string; ruleset: string; status: AuditStatus; actor: string; createdAt: string; updatedAt: string; lease?: string; leaseUntil?: string; error?: string; failure?:AuditFailureInfo; manifest?: AuditManifest; reviewerCoverage?:string[];coverageScope?:"consolidated";sourcePassCoverage?:{pass:number;sourceIds:string[];coverage:string[]}[]; reviewProgress?:AuditReviewProgress; }
 export const digest = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
 const compact = (s: string) => s.replace(/\s+/g, " ").trim();
 export function evidenceSupported(evidence: FindingEvidence[], manifest: AuditManifest) {
