@@ -3194,6 +3194,9 @@ const Leads: React.FC = () => {
                       {lead.intakeSource === "staff" && (
                         <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-100 text-blue-700 border border-blue-200" title="Intake filled in by staff">Internal</span>
                       )}
+                      {lead.intakeSource === "agent" && (
+                        <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-100 text-purple-700 border border-purple-200" title="Intake filled in by the referring agent from the partner portal">Agent</span>
+                      )}
                     </div>
                   </td>
                   <td className="px-4 py-3 max-w-xs" title={isCombined ? `Purchase: ${purchaseAddrFull || "—"}\nSale: ${sellingAddrFull || "—"}` : purchaseAddrFull}>

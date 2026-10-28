@@ -14,7 +14,8 @@ export type AgentPortalPartner = {
 };
 
 const PARTNER_COLUMNS = "id, agent_name, agent_email, brokerage_type, brokerage_name, referral_code";
-const LEAD_COLUMNS = "id, first_name, last_name, parent_lead_id";
+const LEAD_COLUMNS =
+  "id, first_name, last_name, parent_lead_id, lead_type, address_street, address_unit, address_city, selling_address_street, selling_address_unit, selling_address_city, closing_date";
 const DEAL_COLUMNS = "id, lead_id, file_number, type, status, property_address, selling_property_address, closing_date";
 
 export async function loadAgentPortalPartner(partnerId: string): Promise<AgentPortalPartner | null> {
@@ -74,19 +75,25 @@ export async function loadAgentRootLead(partnerId: string, leadId: string): Prom
 export async function loadAgentFiles(partnerId: string): Promise<PortalFile[]> {
   const { leads, deals } = await loadPartnerFamilies(partnerId);
   const dealIds = deals.map((d) => d.id);
-  if (dealIds.length === 0) return [];
+  if (leads.length === 0) return [];
 
+  // Unconverted intakes have no deal, so there may be nothing to load.
+  const none = { data: [], error: null };
   const [{ data: milestones, error: msErr }, { data: tasks, error: taskErr }] = await Promise.all([
-    supabaseAdmin
-      .from("milestones")
-      .select("id, deal_id, title, status, order_index, stage_template_id, side, completed_at")
-      .in("deal_id", dealIds)
-      .eq("is_deleted", false),
-    supabaseAdmin
-      .from("tasks")
-      .select("id, deal_id, milestone_id, title, status, completed, completed_at, due_date, task_template_id, is_shared, side, order_index")
-      .in("deal_id", dealIds)
-      .eq("is_deleted", false),
+    dealIds.length
+      ? supabaseAdmin
+          .from("milestones")
+          .select("id, deal_id, title, status, order_index, stage_template_id, side, completed_at")
+          .in("deal_id", dealIds)
+          .eq("is_deleted", false)
+      : none,
+    dealIds.length
+      ? supabaseAdmin
+          .from("tasks")
+          .select("id, deal_id, milestone_id, title, status, completed, completed_at, due_date, task_template_id, is_shared, side, order_index")
+          .in("deal_id", dealIds)
+          .eq("is_deleted", false)
+      : none,
   ]);
   if (msErr) throw msErr;
   if (taskErr) throw taskErr;
