@@ -60,6 +60,8 @@ export function requiredModules(path: string, method = "GET"): string[] {
   if (within(path, "/api/admin/blog") || within(path, "/admin/blogs")) return ["blogs"];
   if (within(path, "/api/admin/messages") || within(path, "/admin/messages")) return ["messages"];
   if (within(path, "/api/admin/partners") || within(path, "/admin/partners")) return ["partners"];
+  // New staff tracking writes require the same grant as task/file writes.
+  if (/^\/api\/admin\/agent-portal\/[^/]+\/files\/[^/]+\/journey(?:\/|$)/.test(path)) return ["tasks", "deals"];
   if (within(path, "/api/admin/agent-portal") || within(path, "/admin/agent-portal")) return ["agent-portal", "partners"];
   if (within(path, "/admin/templates")) return ["templates"];
   if (["email-templates", "milestone-templates", "task-templates", "task-form-fields"].some(x => within(path, "/api/admin/" + x))) {

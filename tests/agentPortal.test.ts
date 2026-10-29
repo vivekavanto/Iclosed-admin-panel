@@ -82,7 +82,9 @@ test('separate families stay separate; a task with no milestone is its own step'
   });
   assert.deepEqual(files.map(f => f.fileNumber), ['26R-0001', '26P-0002']);
   assert.equal(files[0].sections[0].label, 'Refinance');
-  assert.deepEqual(files[1].sections[0].stages.map(s => [s.id, s.steps[0].title, s.steps[0].task?.title]), [['client', 'Confirm your property details', 'Confirm your property details']]);
+  const information = files[1].sections[0].stages[0].steps.find(s => s.title === 'Client information')!;
+  assert.equal(information.task?.title, 'Confirm your property details');
+  assert.equal(information.completed, false);
 });
 
 test('side falls back from the row, to the template, to a single-sided deal type', () => {
@@ -126,4 +128,88 @@ test('stages follow the file\'s milestone order and never jump back', () => {
     milestones: sale.map((t, i) => ms(`m${i}`, 'd1', `s${i}`, t, i)),
   });
   assert.deepEqual(file.sections[0].stages.flatMap(s => s.steps.map(x => x.title)), sale);
+});
+
+
+const purchaseStep = (file: ReturnType<typeof build>[number], title: string) => file.sections.find(s => s.side === 'purchase')!.stages.flatMap(s => s.steps).find(s => s.title === title)!;
+
+test('purchase has eight fixed sections and separates tasks from unrelated milestone parents', () => {
+  const [file] = build({leads: [lead('a'), lead('b', 'a')], deals: [deal('d1', 'a', 'Purchase'), deal('d2', 'b', 'Purchase')],
+    milestones: [ms('aps', 'd1', 'aps', 'Agreement of Purchase and Sale', 0), ms('ins', 'd1', 'insurance', 'Home Insurance Policy', 11)],
+    tasks: [task('a1', 'd1', 'aps', 'aps-task', 'Agreement of Purchase and Sale and Amendments', true, {is_shared: true}),
+      task('tax', 'd1', 'aps', 'tax-task', 'Tax Certificate', true, {is_shared: true}),
+      task('insurance', 'd1', 'ins', 'ins-task', 'Home Insurance Policy', true, {is_shared: true}),
+      task('cheque1', 'd1', 'ins', 'cheque', 'Void Cheque', true), task('cheque2', 'd2', null, 'cheque', 'Void Cheque', false)],
+    answers: [{task_id: 'tax', field_label: 'Would you like us to obtain a property tax certificate?', value: 'yes'}],
+  });
+  assert.deepEqual(file.sections[0].stages.map(s => s.label), ['INTAKE','DUE DILIGENCE','MORTGAGE INSTRUCTIONS','CLIENT DOCUMENTS','SIGNING','CLOSING FUNDS','KEYS TRANSFERRED','POST CLOSING']);
+  assert.equal(purchaseStep(file, 'Purchase agreement received').completed, true);
+  assert.equal(purchaseStep(file, 'Insurance').completed, true);
+  assert.equal(purchaseStep(file, 'Void Cheque').completed, false);
+  assert.equal(purchaseStep(file, 'Property tax certificate').completed, false, 'yes does not mean certificate obtained');
+  assert.equal(purchaseStep(file, 'Property tax certificate').trackingKey, 'tax');
+});
+
+test('purchase keeps signing in its own section despite the client milestone sequence', () => {
+  const [file] = build({leads: [lead('a')], deals: [deal('d1', 'a', 'Purchase')], milestones: [
+    ms('sig', 'd1', 'sig', 'Appointment Scheduled', 8, 'Completed'), ms('fund', 'd1', 'fund', 'Closing Funds Confirmed', 9),
+    ms('signed', 'd1', 'signed', 'Documents Signed', 10), ms('ins', 'd1', 'ins', 'Home Insurance Policy', 11),
+    ms('funds', 'd1', 'funds', 'Lender Funds Received', 12), ms('final', 'd1', 'final', 'Final Report Received', 15),
+  ]});
+  const stages = file.sections[0].stages;
+  assert.deepEqual(stages.find(s => s.id === 'signing')!.steps.map(s => [s.title,s.completed]), [['Scheduled',true],['Completed',false]]);
+  assert.ok(stages.find(s => s.id === 'client_documents')!.steps.some(s => s.title === 'Insurance'));
+  assert.equal(purchaseStep(file, 'Lender funds').completed, false);
+  assert.equal(purchaseStep(file, 'Closing package sent').completed, false);
+});
+
+test('tax certificate only appears on an explicit opt-in for this purchase side', () => {
+  for (const value of ['no', '', null]) {
+    const [file] = build({leads: [lead('a')], deals: [deal('d1', 'a', 'Purchase')],
+      tasks: [task('tax', 'd1', null, 'tax', 'Tax Certificate', true)],
+      answers: [{task_id:'tax', field_label:'Would you like us to obtain a property tax certificate?', value}]});
+    assert.equal(purchaseStep(file, 'Property tax certificate'), undefined);
+  }
+  const [file] = build({leads:[lead('a')], deals:[deal('d1','a')], tasks:[
+    task('tax','d1',null,'sale-tax','Tax Certificate',true,{side:'sale'}), task('pi','d1',null,'pi','Personal Information',false,{side:'purchase'})],
+    answers:[{task_id:'tax',field_label:'Would you like us to obtain a property tax certificate?',value:'yes'}]});
+  assert.equal(purchaseStep(file,'Property tax certificate'),undefined);
+});
+
+test('cash purchases exclude mortgage steps from totals; unanswered mortgage remains pending', () => {
+  for (const value of ['No','Yes','']) {
+    const [file] = build({leads:[lead('a')],deals:[deal('d1','a','Purchase')],tasks:[task('mort','d1',null,'mort','Mortgage Representative Details',true)],
+      answers:[{task_id:'mort',field_label:'Are you getting a mortgage?',value}]});
+    const row = purchaseStep(file,'Received mortgage instructions');
+    assert.equal(row.state,value === 'No' ? 'not_applicable' : 'untracked');
+    assert.equal(file.sections[0].stages.find(s=>s.id==='mortgage')!.total,value === 'No' ? 0 : 1);
+  }
+});
+
+test('inactive deposit is visible as not yet active and cannot hold progress totals', () => {
+  const [file] = build({leads:[lead('a')],deals:[deal('d1','a','Purchase')],
+    milestones:[ms('m','d1','fund','Closing Funds Confirmed',9)],
+    tasks:[task('t','d1','m','dep','Deposit Funds Into Our Trust Account',false,{activation_required:true,activated_at:null})]});
+  assert.equal(purchaseStep(file,'Client funds').state,'inactive');
+  assert.equal(file.sections[0].stages.find(s=>s.id==='funds')!.total,1, 'only lender funds count before activation');
+});
+
+test('staff tracking is distinct from client work and ownership responsibility follows municipality', () => {
+  for (const city of ['Mississauga','Toronto']) {
+    const [file] = build({leads:[{...lead('a'),address_city:city}],deals:[deal('d1','a','Purchase')],
+      tasks:[task('w','d1',null,'w','[Agent journey] Writ search (iClosed)',true,{role_type:'Admin',activation_required:true,activated_at:null})]});
+    assert.equal(purchaseStep(file,'Writ search').completed,true);
+    assert.equal(purchaseStep(file,'Writ search').state,undefined);
+    assert.equal(purchaseStep(file,'Change of ownership submitted').responsible, city==='Mississauga'?'Client':'iClosed');
+    assert.equal(purchaseStep(file,'Lockbox code / keys transferred').completed,false);
+    assert.equal(purchaseStep(file,'Lockbox code / keys transferred').trackingKey,'keys');
+  }
+});
+
+
+test('closing package needs send evidence rather than a checked final-report milestone', () => {
+  for(const stamps of [[],[{lead_id:'a',emailed_at:null}],[{lead_id:'a',emailed_at:'2026-10-20'}]]) {
+    const [file]=build({leads:[lead('a')],deals:[deal('d1','a','Purchase')],milestones:[ms('m','d1','final','Final Report Received',15,'Completed')],finalReportSends:stamps});
+    assert.equal(purchaseStep(file,'Closing package sent').completed,stamps.length>0 && !!stamps[0].emailed_at);
+  }
 });

@@ -121,3 +121,12 @@ test('agent portal preview is open to agent-portal or partners holders only', ()
   }
   assert.equal(canVisit(staff('clerk@iclosed.ca', { staff_modules: ['deals'] }), '/api/admin/agent-portal'), false);
 });
+
+
+test('journey tracking writes preserve task/file permission boundaries', () => {
+  const path='/api/admin/agent-portal/partner/files/lead/journey';
+  for(const id of ['agent-portal','partners','search','legal-assistant']) {
+    for(const suffix of ['', '/']) assert.equal(canVisit(staff('clerk@iclosed.ca',{staff_modules:[id]}),path+suffix,'PUT'),false);
+  }
+  for(const id of ['tasks','deals']) assert.equal(canVisit(staff('clerk@iclosed.ca',{staff_modules:[id]}),path,'PUT'),true);
+});

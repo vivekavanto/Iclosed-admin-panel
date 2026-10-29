@@ -90,7 +90,7 @@ export async function loadAgentFiles(partnerId: string): Promise<PortalFile[]> {
     dealIds.length
       ? supabaseAdmin
           .from("tasks")
-          .select("id, deal_id, milestone_id, title, status, completed, completed_at, due_date, task_template_id, is_shared, side, order_index")
+          .select("id, deal_id, milestone_id, title, status, completed, completed_at, due_date, task_template_id, is_shared, side, order_index, role_type, activation_required, activated_at")
           .in("deal_id", dealIds)
           .eq("is_deleted", false)
       : none,
@@ -105,6 +105,19 @@ export async function loadAgentFiles(partnerId: string): Promise<PortalFile[]> {
     templateIds.length ? supabaseAdmin.from("task_templates").select("id, lead_type").in("id", templateIds) : { data: [] },
   ]);
 
+  // Fetch only the two journey decisions and mortgage amount; never return
+  // arbitrary personal task responses in the agent-facing payload.
+  const taskIds = (tasks ?? []).map(t => t.id);
+  const { data: answers, error: answerError } = taskIds.length
+    ? await supabaseAdmin.from("task_responses").select("task_id, field_label, value").in("task_id", taskIds)
+        .or("field_label.eq.Would you like us to obtain a property tax certificate?,field_label.ilike.Are you getting a mortgage*,field_label.ilike.Mortgage amount")
+    : { data: [], error: null };
+  if (answerError) throw answerError;
+
+  const { data: finalReportSends, error: reportError } = await supabaseAdmin.from("lead_corporate_docs")
+    .select("lead_id, emailed_at").in("lead_id", leads.map(l => l.id)).eq("doc_type", "final_report");
+  if (reportError) throw reportError;
+
   const files = buildAgentFiles({
     leads,
     deals,
@@ -113,6 +126,8 @@ export async function loadAgentFiles(partnerId: string): Promise<PortalFile[]> {
     stageLeadTypes: new Map((stages ?? []).map((s: { id: string; lead_type: string | null }) => [s.id, s.lead_type])),
     taskLeadTypes: new Map((templates ?? []).map((t: { id: string; lead_type: string | null }) => [t.id, t.lead_type])),
     today: torontoToday(),
+    answers: answers ?? [],
+    finalReportSends: finalReportSends ?? [],
   });
 
   const permissions = await loadAgentPermissions(partnerId, files.map((f) => f.rootLeadId));

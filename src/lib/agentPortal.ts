@@ -1,5 +1,6 @@
+import { buildPurchaseJourney } from "./purchaseJourney.ts";
 // Agent portal view model: an agent's referred files, with each family's
-// duplicated milestones/tasks clubbed into one step, grouped into six stages
+// duplicated milestones/tasks clubbed into one step, grouped for each journey
 // and split by side. Dependency-free so tests/agentPortal.test.ts can pin it.
 
 export type PortalSide = "purchase" | "sale" | "other";
@@ -58,6 +59,9 @@ export type PortalTask = {
   is_shared: boolean | null;
   side: string | null;
   order_index: number | null;
+  role_type?: string | null;
+  activation_required?: boolean | null;
+  activated_at?: string | null;
 };
 
 export type ClubbedTask = {
@@ -85,9 +89,13 @@ export type PortalStep = {
   /** Other tasks inside the step. */
   subTasks: ClubbedTask[];
   attention: boolean;
+  responsible?: "Client" | "iClosed" | "Lender";
+  state?: "not_applicable" | "inactive" | "untracked";
+  detail?: string;
+  trackingKey?: "writ" | "tax" | "keys" | "ownership";
 };
 
-export type StageId = "intake" | "client" | "documents" | "signing" | "closing" | "reporting";
+export type StageId = "intake" | "client" | "documents" | "signing" | "closing" | "reporting" | "diligence" | "mortgage" | "client_documents" | "funds" | "keys" | "post_closing";
 export type StageStatus = "complete" | "attention" | "progress" | "not_started";
 
 export const STAGES: { id: StageId; label: string; short: string }[] = [
@@ -157,6 +165,9 @@ export type BuildInput = {
   taskLeadTypes: Map<string, string | null>;
   /** YYYY-MM-DD; injected so tests are deterministic. */
   today: string;
+  /** Only the decision fields needed for the journey, never full client responses. */
+  finalReportSends?: { lead_id: string; emailed_at: string | null }[];
+  answers?: { task_id: string; field_label: string | null; value: unknown }[];
 };
 
 /** Open pre-closing steps flag the file this many days before closing. */
@@ -420,11 +431,22 @@ export function buildAgentFiles(input: BuildInput): PortalFile[] {
         byStage.set(stage, [...(byStage.get(stage) ?? []), { key: acc.key, title: acc.title, completed, completedAt, task, subTasks, attention }]);
       }
 
-      const stages: PortalStage[] = STAGES.filter((s) => byStage.has(s.id)).map((s) => {
+      let stages: PortalStage[] = STAGES.filter((s) => byStage.has(s.id)).map((s) => {
         const steps = byStage.get(s.id)!;
         return { ...s, steps, done: steps.filter((x) => x.completed).length, total: steps.length, status: stageStatus(steps) };
       });
-      const steps = stages.flatMap((s) => s.steps);
+      if (side === "purchase") {
+        const purchaseTasks = deals.flatMap(d => tasksByDeal.get(d.id) ?? []).filter(t => {
+          const parent = t.milestone_id ? input.milestones.find(m => m.id === t.milestone_id) : undefined;
+          return sideFrom(t.side ?? parent?.side, t.task_template_id ? input.taskLeadTypes.get(t.task_template_id) : parent?.stage_template_id ? input.stageLeadTypes.get(parent.stage_template_id) : null, primary.type) === "purchase";
+        });
+        stages = buildPurchaseJourney({ steps: stages.flatMap(s => s.steps), tasks: purchaseTasks,
+          answers: input.answers ?? [], city: leadById.get(rootLeadId)?.address_city ?? null,
+          today: input.today, closingSoon,
+          dealOrder: [primary.id, ...deals.filter(d => d.id !== primary.id).map(d => d.id)],
+          finalReportSends: input.finalReportSends?.filter(doc => deals.some(d => d.lead_id === doc.lead_id)) });
+      }
+      const steps = stages.flatMap((s) => s.steps).filter(s => s.state !== "not_applicable" && s.state !== "inactive");
       const next = steps.find((s) => !s.completed);
       return {
         side,
@@ -433,7 +455,7 @@ export function buildAgentFiles(input: BuildInput): PortalFile[] {
         stages,
         done: steps.filter((s) => s.completed).length,
         total: steps.length,
-        pendingTasks: steps.reduce((n, s) => n + (s.completed ? 0 : 1) + s.subTasks.filter((t) => !t.completed).length, 0),
+        pendingTasks: side === "purchase" ? steps.filter(s => !s.completed).length : steps.reduce((n, s) => n + (s.completed ? 0 : 1) + s.subTasks.filter((t) => !t.completed).length, 0),
         attention: steps.some((s) => s.attention),
         nextUp: next?.title ?? null,
       };
