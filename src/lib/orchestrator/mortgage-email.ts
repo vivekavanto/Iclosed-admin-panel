@@ -1,3 +1,4 @@
+import {CLIENT_NOTIFICATION_REPLY_TO,ALIYA_EMAIL_LINK} from './client-email-contact.ts';
 import {notificationEmailFrame,notificationPlainText} from './notification-email-layout.ts';
 import {defaultInsuranceLender,insuranceEmailDetails,notificationEligible} from "./mortgage-insurance.ts";
 import {createHash} from "node:crypto";
@@ -11,10 +12,10 @@ export const MORTGAGE_TEMPLATE=`<p>Dear {{ user.first_name }},</p>
 <img src="https://devadmin.iclosed.ca/email-logo.png" alt="iClosed" width="85" style="width:85px;max-width:100%;height:auto;display:block;border:0;" />`;
 export type ClientNotificationKind='mortgage'|'funds';
 export {notificationEligible} from './mortgage-insurance.ts';
-export const FUNDS_TEMPLATE=MORTGAGE_TEMPLATE.replace('We are pleased to inform you that we have received your mortgage instructions for {{ lead_address }} from your lender.','We are pleased to inform you that we have received your mortgage funds for {{ lead_address }} from your lender.').replace('Please login to iclosed.ca and complete your home insurance task and schedule your signing appointment.','Please contact Aliya if you have any questions about the next steps for your closing.');
+export const FUNDS_TEMPLATE=MORTGAGE_TEMPLATE.replace('We are pleased to inform you that we have received your mortgage instructions for {{ lead_address }} from your lender.','We are pleased to inform you that we have received your mortgage funds for {{ lead_address }} from your lender.').replace('Please login to iclosed.ca and complete your home insurance task and schedule your signing appointment.','Please contact Aliya at '+ALIYA_EMAIL_LINK+' if you have any questions about the next steps for your closing.');
 export const MORTGAGE_TEST_RECIPIENT='communication@navawilson.law';
 export interface MortgageTemplate{body:string;subject:string|null;source:string;}
-export interface MortgageEmailPreview{kind?:ClientNotificationKind;lenderId:string;fileId:string;hash:string;subject:string;html:string;text:string;greeting:string;intendedTo:string[];intendedCc:string[];testTo:string;source:string;senderConnected:boolean;clientSendEnabled?:boolean;baseHash?:string;edits?:{to?:string;cc?:string;subject:string;body:string};editableText?:string;}
+export interface MortgageEmailPreview{kind?:ClientNotificationKind;lenderId:string;fileId:string;hash:string;subject:string;html:string;text:string;greeting:string;intendedTo:string[];intendedCc:string[];testTo:string;source:string;senderConnected:boolean;clientSendEnabled?:boolean;replyTo?:string;baseHash?:string;edits?:{to?:string;cc?:string;subject:string;body:string};editableText?:string;}
 export function renderMortgageEmail(matter:Pick<Matter,'id'|'number'|'address'|'clients'|'clientEmail'|'clientEmails'> & Partial<Pick<Matter,'type'|'referralAgentEmails'|'lenders'|'closingDate'>>,template:MortgageTemplate={body:MORTGAGE_TEMPLATE,subject:null,source:'Provided mortgage-instructions template'},kind:ClientNotificationKind='mortgage',lenderChoice?:string,mode:'internal-test'|'client'='internal-test'):Omit<MortgageEmailPreview,'senderConnected'>{
  if(matter.type&&!notificationEligible(matter.type))throw Error('Client notifications are available only for purchases and refinances.');
  const lenderId=kind==='mortgage'?(lenderChoice??defaultInsuranceLender(matter.lenders)):'';
@@ -39,9 +40,9 @@ export function renderMortgageEmail(matter:Pick<Matter,'id'|'number'|'address'|'
  const subject=mode==='client'?`${matter.number} — ${baseSubject}`:`[INTERNAL TEST] ${matter.number} — ${baseSubject}`;
  const html=notificationEmailFrame((mode==='client'?'':'<p style="padding:12px;background:#fff3cd;"><strong>INTERNAL TEST ONLY</strong> — This message was sent to the shared mailbox for review. No client notification has been sent.</p>')+body);
  const text=notificationPlainText(html);
- const hash=createHash('sha256').update(JSON.stringify({fileId:matter.id,subject,html,intendedTo,intendedCc,kind,source:template.source,testTo:MORTGAGE_TEST_RECIPIENT,mode})).digest('hex');
+ const hash=createHash('sha256').update(JSON.stringify({replyTo:CLIENT_NOTIFICATION_REPLY_TO,fileId:matter.id,subject,html,intendedTo,intendedCc,kind,source:template.source,testTo:MORTGAGE_TEST_RECIPIENT,mode})).digest('hex');
  if(intendedTo.length&&!validEmails(intendedTo.join(','),true,20))throw Error('The register contains invalid client email addresses. Review the file before preparing notifications.');
- return {kind,lenderId,fileId:matter.id,hash,subject,html,text,greeting,intendedTo,intendedCc,testTo:MORTGAGE_TEST_RECIPIENT,source:template.source};
+ return {replyTo:CLIENT_NOTIFICATION_REPLY_TO,kind,lenderId,fileId:matter.id,hash,subject,html,text,greeting,intendedTo,intendedCc,testTo:MORTGAGE_TEST_RECIPIENT,source:template.source};
 }
 
 export function renderFundsEmail(matter:Parameters<typeof renderMortgageEmail>[0]){return renderMortgageEmail(matter,{body:FUNDS_TEMPLATE,subject:null,source:'Funds-received template'},'funds');}

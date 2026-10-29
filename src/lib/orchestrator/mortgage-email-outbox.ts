@@ -1,3 +1,4 @@
+import {CLIENT_NOTIFICATION_REPLY_TO} from './client-email-contact.ts';
 import {internalNotificationTestHtml} from './notification-email-layout.ts';
 import {hostedDocumentsEnabled,changeHostedDocument} from "./hosted/document.ts";
 import {mkdir,readFile,writeFile,rename,rm} from "node:fs/promises";
@@ -14,7 +15,7 @@ export async function sendMortgageInternalTest(preview:Omit<MortgageEmailPreview
  const key=(preview.kind==='funds'?'funds-test-':'mortgage-test-')+createHash('sha256').update(operator+':'+requestId).digest('hex');
  const intent=await locked(state=>{const prior=state[key];if(prior){if(prior.hash!==preview.hash||prior.fileId!==preview.fileId)throw Error('The email preview changed. Reopen it before sending.');if(prior.status!=='sent')throw Error('This email test is in progress or needs reconciliation. Do not submit another copy.');return {prior,duplicate:true};}const created:TestReceipt={fileId:preview.fileId,hash:preview.hash,operator,requestId,status:'sending',createdAt:new Date().toISOString()};state[key]=created;return {prior:created,duplicate:false};});
  if(intent.duplicate)return {...intent.prior,duplicate:true};
- try{const result=await send({to:[MORTGAGE_TEST_RECIPIENT],subject:preview.subject,html:preview.html,text:preview.text},key);if(!result.id)throw Error('No send receipt.');return await locked(state=>{const receipt=state[key];receipt.status='sent';receipt.sentAt=new Date().toISOString();receipt.providerId=result.id;receipt.messageId=result.messageId;return {...receipt,duplicate:false};});}catch{await locked(state=>{state[key].status='uncertain';});throw Error('The email test outcome could not be confirmed. Check the shared mailbox before retrying.');}
+ try{const result=await send({replyTo:CLIENT_NOTIFICATION_REPLY_TO,to:[MORTGAGE_TEST_RECIPIENT],subject:preview.subject,html:preview.html,text:preview.text},key);if(!result.id)throw Error('No send receipt.');return await locked(state=>{const receipt=state[key];receipt.status='sent';receipt.sentAt=new Date().toISOString();receipt.providerId=result.id;receipt.messageId=result.messageId;return {...receipt,duplicate:false};});}catch{await locked(state=>{state[key].status='uncertain';});throw Error('The email test outcome could not be confirmed. Check the shared mailbox before retrying.');}
 }
 
 export function emailTestRecipient(env:NodeJS.ProcessEnv=process.env){
@@ -27,7 +28,7 @@ export async function sendReviewedMessages(input:{fileId:string;kind:'mortgage'|
  if(!['client','test'].includes(input.mode)||!['mortgage','funds','coo'].includes(input.kind)||!/^[a-f0-9-]{36}$/.test(input.requestId)||!input.messages.length||input.messages.length>3)throw Error('Invalid reviewed email request.');
  if(input.kind==='coo'&&input.mode==='client')throw Error('COO live delivery requires its dedicated approval workflow.');
  if(input.mode==='client'&&process.env.ORCHESTRATOR_CLIENT_SEND_ENABLED!=='true')throw Error('Client email sending is disabled.');
- const messages=input.messages.map(m=>input.mode==='test'?{...m,to:[emailTestRecipient()],cc:[],subject:'[INTERNAL TEST] '+m.subject,text:'INTERNAL TEST ONLY — no client notice has been sent.\n\n'+m.text,html:m.html?internalNotificationTestHtml(m.html):undefined}:m);
+ const messages=input.messages.map(message=>{const m=input.kind==='coo'?message:{...message,replyTo:CLIENT_NOTIFICATION_REPLY_TO};return input.mode==='test'?{...m,to:[emailTestRecipient()],cc:[],subject:'[INTERNAL TEST] '+m.subject,text:'INTERNAL TEST ONLY — no client notice has been sent.\n\n'+m.text,html:m.html?internalNotificationTestHtml(m.html):undefined}:m;});
  // Validate before persisting an intent or contacting the provider.
  for(const message of messages)gmailMime(message,'validation');
  const hash=createHash('sha256').update(JSON.stringify({approvalHash:input.approvalHash,messages})).digest('hex');
