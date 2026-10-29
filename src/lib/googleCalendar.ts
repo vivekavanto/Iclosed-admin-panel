@@ -92,7 +92,22 @@ export async function getFreeBusy(
       items: [{ id: calendarId }],
     },
   });
-  const busy = data.calendars?.[calendarId]?.busy ?? [];
+  // Google answers a calendar it could not read (not found, no access) with an
+  // `errors` list and an empty `busy` — not an HTTP error. Reading that as "no
+  // busy time" offers slots the lawyer's calendar already blocks, so surface it.
+  // The response is keyed by the id we sent; fall back to the only entry in case
+  // an alias such as "primary" comes back under the resolved address.
+  const calendars = data.calendars ?? {};
+  const entry = calendars[calendarId] ?? (Object.keys(calendars).length === 1 ? Object.values(calendars)[0] : undefined);
+  if (!entry) {
+    throw new Error(`freebusy returned no data for calendar ${calendarId}`);
+  }
+  if (entry.errors?.length) {
+    throw new Error(
+      `freebusy error for calendar ${calendarId}: ${entry.errors.map((e) => e.reason ?? e.domain).join(", ")}`,
+    );
+  }
+  const busy = entry.busy ?? [];
   return busy
     .filter((b) => b.start && b.end)
     .map((b) => ({ start: b.start as string, end: b.end as string }));
