@@ -5,7 +5,7 @@ import {notificationEmailContent,notificationEmailFrame,notificationEditedBody,n
 export interface EmailEdits{to?:string;cc?:string;subject:string;body:string;}
 /** Keep editable headings, lists, emphasis and friendly links through the review round trip. */
 export function editableEmailText(html:string){return decodeEmailEntities(notificationEmailContent(html).split(/<p[^>]*>\s*Warm regards,/i)[0]
- .replace(/<a\b[^>]*href=['"](https:\/\/[^'"]+)['"][^>]*>([\s\S]*?)<\/a>/gi,'[$2]($1)')
+ .replace(/<a\b[^>]*href=['"]((?:https:\/\/|mailto:)[^'"]+)['"][^>]*>([\s\S]*?)<\/a>/gi,'[$2]($1)')
  .replace(/<h[1-6]\b[^>]*>([\s\S]*?)<\/h[1-6]>/gi,'\n\n## $1\n\n')
  .replace(/<(?:strong|b)\b[^>]*>([\s\S]*?)<\/(?:strong|b)>/gi,'**$1**')
  .replace(/<li\b[^>]*>/gi,'\n- ').replace(/<\/li>/gi,'\n').replace(/<\/(?:ul|ol)>/gi,'\n\n')
