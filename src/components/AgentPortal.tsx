@@ -1,5 +1,7 @@
 "use client";
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useAuth } from "@/lib/AuthProvider";
+import { hasModule } from "@/lib/staffAccess";
 import { upload } from "@vercel/blob/client";
 import { ArrowLeft, Bell, CheckCircle2, Circle, ChevronDown, ChevronRight, Eye, Loader2, Lock, LogIn, Mail, PencilLine, RotateCw, Save, Search, Trash2, Upload, X } from "lucide-react";
 import { formatLocalDate } from "@/lib/formatDate";
@@ -20,6 +22,7 @@ import { allowedUploadContentTypesForDocType, formatFileSize, maxUploadBytesForD
 
 /** Lets a file card act as the agent and refresh the dashboard afterwards. */
 const TaskContext = createContext<{ partnerId: string; reload: () => void } | null>(null);
+const JourneyFileContext = createContext<{ rootLeadId: string; locked: boolean; status: string | null } | null>(null);
 
 type Partner = {
   id: string;
@@ -285,7 +288,7 @@ function SideBadge({ side, label }: { side: PortalSide; label: string }) {
 
 function StageBar({ stages }: { stages: PortalStage[] }) {
   return (
-    <div className="grid grid-cols-3 gap-x-2 gap-y-3 md:grid-cols-6">
+    <div className={`grid grid-cols-2 gap-x-2 gap-y-3 sm:grid-cols-4 ${stages.length === 8 ? "xl:grid-cols-8" : "md:grid-cols-6"}`}>
       {stages.map((s) => (
         <div key={s.id} className="min-w-0">
           <div className="h-1.5 rounded-full bg-slate-200">
@@ -372,9 +375,11 @@ function FileCard({
       </div>
       {open && (
         <div className="space-y-1 border-t border-slate-100 px-2 py-3 md:px-5">
-          {section.stages.map((s) => (
-            <StageRow key={s.id} stage={s} />
-          ))}
+          <JourneyFileContext.Provider value={{rootLeadId: file.rootLeadId, locked: isLocked(file), status: file.status}}>
+            {section.stages.map((s) => (
+              <StageRow key={s.id} stage={s} defaultOpen={section.side === "purchase" ? s.id === (section.stages.find(stage => stage.done < stage.total) ?? section.stages[0])?.id : s.status !== "complete"} />
+            ))}
+          </JourneyFileContext.Provider>
           <FileExtras rootLeadId={file.rootLeadId} />
         </div>
       )}
@@ -382,8 +387,8 @@ function FileCard({
   );
 }
 
-function StageRow({ stage }: { stage: PortalStage }) {
-  const [open, setOpen] = useState(stage.status !== "complete");
+function StageRow({ stage, defaultOpen }: { stage: PortalStage; defaultOpen: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
   const steps = stage.steps;
   if (steps.length === 0) return null;
   const tone = TONE[stage.status];
@@ -427,6 +432,27 @@ function StepIcon({ done, size }: { done: boolean; size: number }) {
 
 function StepRow({ step }: { step: PortalStep }) {
   const subTasks = step.subTasks;
+  const [open, setOpen] = useState(!step.responsible);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const ctx = useContext(TaskContext);
+  const file = useContext(JourneyFileContext);
+  const { user } = useAuth();
+  const canTrack = (hasModule(user, "tasks") || hasModule(user, "deals")) && !!file && (!file.locked || (file.status === "Closed" && ["keys", "ownership"].includes(step.trackingKey ?? "")));
+  const updateTracking = async (completed = !step.completed, responsible = step.responsible) => {
+    if (!ctx || !file || !step.trackingKey) return;
+    setBusy(true); setError("");
+    try {
+      const res = await fetch(`/api/admin/agent-portal/${ctx.partnerId}/files/${file.rootLeadId}/journey`, {
+        method: "PUT", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({key: step.trackingKey, completed, expectedCompletedAt: step.completedAt, ...(step.trackingKey === "ownership" ? {responsible} : {})}),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw Error(data.error || "Could not update progress");
+      ctx.reload();
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    finally { setBusy(false); }
+  };
   return (
     <li className="py-2">
       <div className="flex items-start gap-2.5">
@@ -434,15 +460,37 @@ function StepRow({ step }: { step: PortalStep }) {
           <StepIcon done={step.completed} size={18} />
         </span>
         <div className="flex min-w-0 flex-1 flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-3">
-          <span className={`text-sm ${step.completed ? "text-slate-500" : "font-medium text-slate-900"}`}>{step.title}</span>
+          <button type="button" onClick={() => setOpen(v => !v)} aria-expanded={open}
+            className={`inline-flex items-center gap-1.5 text-left text-sm ${step.completed ? "text-slate-500" : "font-medium text-slate-900"}`}>
+            {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}{step.title}
+          </button>
+          {step.responsible && <span className="text-xs text-slate-500">{step.responsible}</span>}
+          {step.state && <span className="text-xs text-slate-500">{step.state === "not_applicable" ? "Not applicable" : step.state === "inactive" ? "Not yet active" : "Awaiting update"}</span>}
           <span className="flex flex-wrap gap-x-3">
             <TaskMeta task={step.task} />
           </span>
           {step.completedAt && <span className="text-xs text-slate-400 sm:ml-auto">{formatLocalDate(step.completedAt)}</span>}
         </div>
       </div>
-      {subTasks.length > 0 && (
-        <ul className="ml-7 mt-1.5 space-y-1">
+      {open && (
+        <div className="ml-7 mt-1.5 space-y-2">
+          {step.detail && <p className="text-xs text-slate-500">{step.detail}</p>}
+          {step.trackingKey && canTrack && file && step.state !== "not_applicable" && (
+            <button type="button" onClick={() => updateTracking()} disabled={busy} className="text-xs font-medium text-brand-primary disabled:opacity-50">
+              {busy ? "Saving…" : step.completed ? "Reopen (staff)" : "Record completion (staff)"}
+            </button>
+          )}
+          {step.trackingKey === "ownership" && canTrack && file && (
+            <label className="flex items-center gap-2 text-xs text-slate-500">Responsible party
+              <select aria-label="Ownership notice responsibility" value={step.responsible} disabled={busy}
+                onChange={e => updateTracking(step.completed, e.target.value as "Client" | "iClosed")}
+                className="rounded border border-slate-200 bg-white px-2 py-1">
+                <option value="iClosed">iClosed</option><option value="Client">Client</option>
+              </select>
+            </label>
+          )}
+          {error && <p role="alert" className="text-xs text-red-700">{error}</p>}
+        <ul className="space-y-1">
           {subTasks.map((t) => (
             <li key={t.key} className="flex items-start gap-2 text-sm">
               <span className="mt-0.5">
@@ -458,6 +506,7 @@ function StepRow({ step }: { step: PortalStep }) {
             </li>
           ))}
         </ul>
+        </div>
       )}
     </li>
   );
